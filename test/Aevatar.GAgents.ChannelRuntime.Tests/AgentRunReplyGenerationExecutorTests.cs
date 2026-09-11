@@ -269,6 +269,66 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task ChannelRuntimeCatalog_WhenToolVisibilityRestrictsNames_ShouldExposeOnlyAllowedRouteTools()
+    {
+        var allowedTool = new CountingTool("allowed_route_tool");
+        var hiddenTool = new CountingTool("hidden_route_tool");
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.booking", new StaticToolSource([allowedTool, hiddenTool]));
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(registry);
+
+        var catalog = await materializer.MaterializeAsync(
+            new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.booking" } },
+            [],
+            AgentToolExecutionContext.Empty with
+            {
+                ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["allowed_route_tool"]),
+            },
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("allowed_route_tool");
+        catalog.Proof.ToolDescriptors.Select(static descriptor => descriptor.Name)
+            .Should().BeEquivalentTo("allowed_route_tool");
+    }
+
+    [Fact]
+    public async Task ChannelRuntimeCatalog_WhenToolSetContainsConnectedOperations_ShouldExposeOnlySelectorMatches()
+    {
+        var routeTool = new CountingTool("route_tool");
+        var selectedOperation = new ConnectedOperationTool(
+            "calendar_create_event",
+            "api-google-workspace",
+            "calendar_create_event");
+        var hiddenOperation = new ConnectedOperationTool(
+            "mail_send",
+            "api-google-workspace",
+            "mail_send");
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.booking", new StaticToolSource([routeTool, selectedOperation, hiddenOperation]));
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(registry);
+
+        var runtimeConfig = new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.booking" } };
+        runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "calendar_create_event" },
+        });
+
+        var catalog = await materializer.MaterializeAsync(
+            runtimeConfig,
+            [],
+            AgentToolExecutionContext.Empty,
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool", "calendar_create_event");
+        catalog.Proof.ToolDescriptors.Select(static descriptor => descriptor.Name)
+            .Should().BeEquivalentTo("route_tool", "calendar_create_event");
+        catalog.Proof.ToolDescriptors.Single(static descriptor => descriptor.Name == "calendar_create_event")
+            .Origin.Should().Be(AgentTurnToolOrigin.ConnectedService);
+        catalog.Proof.ToolDescriptors.Should().NotContain(static descriptor => descriptor.Name == "mail_send");
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenTurnCatalogIsMissing_ShouldUseRestrictedEmptyCatalogProof()
     {
         var provider = new RecordingProvider();
@@ -2809,6 +2869,39 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ExecuteCount++;
             return Task.FromResult("{}");
         }
+    }
+
+    private sealed class ConnectedOperationTool : IAgentTool, IAgentToolOperationAdmissionOwner
+    {
+        public ConnectedOperationTool(string name, string serviceSlug, string endpointId)
+        {
+            Name = name;
+            OperationAdmission = new AgentToolOperationAdmission(
+                "svc-1",
+                serviceSlug,
+                new AgentToolOperationIdentity.PublishedEndpoint(endpointId),
+                AgentToolOperationAuthorizationBasis.PublishedContract,
+                "POST",
+                "/v1/events",
+                "sha256:contract",
+                [],
+                null,
+                AgentToolOperationResponsePolicy.TextOnly,
+                new AgentToolOperationExecutionPolicy(
+                    AgentToolOperationRisk.Write,
+                    AgentToolOperationApproval.Required,
+                    AgentToolOperationEnforcementOwner.NyxId,
+                    [AgentToolOperationExecutionMode.Interactive]),
+                CatalogServiceSlug: serviceSlug);
+        }
+
+        public string Name { get; }
+        public string Description => Name;
+        public string ParametersSchema => "{}";
+        public AgentToolOperationAdmission OperationAdmission { get; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     private sealed class CredentialCapturingTool : IAgentTool

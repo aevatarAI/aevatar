@@ -567,6 +567,17 @@ public sealed class ChannelWorkflowResultDeliveryRepairServiceTests
             return Task.FromResult(owner.Registration?.Clone());
         }
 
+        public Task<ChannelBotRegistrationSnapshot?> GetSnapshotAsync(
+            string registrationId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            owner.Operations.Add("query");
+            return Task.FromResult(owner.Registration is null
+                ? null
+                : new ChannelBotRegistrationSnapshot(owner.Registration.Clone(), 1));
+        }
+
         public Task<long?> GetStateVersionAsync(
             string registrationId,
             CancellationToken ct = default) =>

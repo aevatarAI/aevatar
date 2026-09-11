@@ -354,7 +354,10 @@ public sealed partial class ConversationGAgent :
             // Refactor (iter98/cluster-002): Old=ConversationGAgent filled run_id from correlation_id; New=producer must supply run_id before this handoff.
             runCopy.RunId = NormalizeOptional(runCopy.RunId)!;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);
-            RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
+            if (ShouldUseSenderBindingCredentials(channelRuntimeConfig))
+                RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
+            else
+                ClearSenderBindingCredentials(runCopy);
             await AttachRelayRuntimeSecretReferencesAsync(runCopy, runtimeContext, CancellationToken.None);
             runCopy.PriorHistory.Clear();
             if (!ShouldIsolatePriorConversationHistory(runCopy))
@@ -505,6 +508,44 @@ public sealed partial class ConversationGAgent :
             .SkillRecovery
             .IsolatePriorConversationHistory;
 
+    private static bool ShouldUseSenderBindingCredentials(ChannelRuntimeConfigProof? runtimeConfig) =>
+        runtimeConfig?.CredentialSourceMode is not
+            ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
+
+    private static void ClearSenderBindingCredentials(NeedsLlmReplyEvent request)
+    {
+        if (request.Activity?.TransportExtras is not null)
+            request.Activity.TransportExtras.NyxUserAccessToken = string.Empty;
+        request.RelayUserAccessTokenRef = null;
+        ClearSenderBindingToolContextCredentials(request);
+    }
+
+    private static void ClearSenderBindingToolContextCredentials(NeedsLlmReplyEvent request)
+    {
+        if (request.ToolContext is null)
+            return;
+
+        var context = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+        var credentials = context.Credentials;
+        if (credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.AgentKey)
+            return;
+
+        context = context with
+        {
+            Credentials = credentials with
+            {
+                NyxIdAccessToken = null,
+                SenderNyxIdAccessToken = null,
+                SourceReadableNyxIdAccessToken = null,
+                NyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
+                NyxIdCredentialAuthority = AgentToolNyxIdCredentialAuthority.Unspecified,
+            },
+            DurableNyxIdCredential = null,
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+        };
+        request.ToolContext = context.ToPayload();
+    }
+
     private async Task<ChannelRuntimeConfigProof?> ResolveChannelRuntimeConfigProofAsync(
         NeedsLlmReplyEvent request,
         CancellationToken ct)
@@ -527,8 +568,12 @@ public sealed partial class ConversationGAgent :
         }
         else
         {
-            registration = await queryPort.GetAsync(registrationId, ct);
-            configRevision = await queryPort.GetStateVersionAsync(registrationId, ct) ?? 0;
+            var snapshot = await queryPort.GetSnapshotAsync(registrationId, ct);
+            if (snapshot is null)
+                return null;
+
+            registration = snapshot.Registration;
+            configRevision = snapshot.StateVersion;
         }
 
         if (registration is null)
@@ -2922,7 +2967,8 @@ public sealed partial class ConversationGAgent :
                     ct)).Reference;
             }
 
-            if (string.IsNullOrWhiteSpace(request.RelayUserAccessTokenRef?.Ref) &&
+            if (ShouldUseSenderBindingCredentials(request.ChannelRuntimeConfig) &&
+                string.IsNullOrWhiteSpace(request.RelayUserAccessTokenRef?.Ref) &&
                 NormalizeOptional(runtimeContext.NyxUserAccessToken) is { } userAccessToken)
             {
                 request.RelayUserAccessTokenRef = (await secretStore.PutAsync(

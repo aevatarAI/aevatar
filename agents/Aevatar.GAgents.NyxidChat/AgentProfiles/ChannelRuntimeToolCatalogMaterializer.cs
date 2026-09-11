@@ -59,12 +59,19 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
         foreach (var tool in registeredTools)
             AddRegisteredTool(tool, availableTools, toolContext, diagnostics);
 
-        var selectedNames = new HashSet<string>(availableTools.Keys, StringComparer.OrdinalIgnoreCase);
+        var selectedNames = availableTools
+            .Where(pair => IsSelectableRouteTool(pair.Key, pair.Value, toolContext))
+            .Select(static pair => pair.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var toolName in runtimeConfig.ExtraToolNames)
         {
             var normalized = Normalize(toolName);
-            if (normalized is not null && availableTools.ContainsKey(normalized))
+            if (normalized is not null &&
+                availableTools.TryGetValue(normalized, out var tool) &&
+                IsSelectableRouteTool(normalized, tool, toolContext))
+            {
                 selectedNames.Add(normalized);
+            }
         }
 
         var connectedNames = runtimeConfig.NyxidServiceSelectors
@@ -240,6 +247,12 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
     private static bool MatchesServiceSlug(AgentToolOperationAdmission admission, string serviceSlug) =>
         string.Equals(admission.CatalogServiceSlug, serviceSlug, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(admission.ServiceSlug, serviceSlug, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSelectableRouteTool(
+        string name,
+        IAgentTool tool,
+        AgentToolExecutionContext toolContext) =>
+        tool is not IAgentToolOperationAdmissionOwner && toolContext.ToolVisibility.Allows(name);
 
     private static string? Normalize(string? value)
     {

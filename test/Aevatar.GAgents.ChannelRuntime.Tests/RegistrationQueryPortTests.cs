@@ -158,6 +158,11 @@ public sealed class RegistrationQueryPortTests
         result.ChannelAgentKey.Should().NotBeSameAs(credential);
         result.ChannelAgentKey.Grant.ScopePlanDigest.Should().Be(credential.Grant.ScopePlanDigest);
         (await queryPort.GetStateVersionAsync("bot-explicit")).Should().Be(43);
+        var snapshot = await queryPort.GetSnapshotAsync("bot-explicit");
+        snapshot.Should().NotBeNull();
+        snapshot!.StateVersion.Should().Be(43);
+        snapshot.Registration.ChannelAgentKey.Should().Be(credential);
+        snapshot.Registration.ChannelAgentKey.Should().NotBeSameAs(credential);
     }
 
     [Fact]
