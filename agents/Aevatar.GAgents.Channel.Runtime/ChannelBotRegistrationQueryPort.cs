@@ -160,6 +160,7 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             RegistrationServiceAllowlist = document.RegistrationServiceAllowlist?.Clone(),
             ChannelAgentKey = document.ChannelAgentKey?.Clone(),
             AuthorizationMode = document.AuthorizationMode,
+            RuntimeConfig = document.RuntimeConfig?.Clone(),
             LastInboundAtUtc = document.LastInboundAtUtc,
             DefaultSkillName = document.DefaultSkillName ?? string.Empty,
             WorkflowResultDeliveryRepair = document.WorkflowResultDeliveryRepair?.Clone(),

@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
+using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -130,6 +131,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return;
         }
 
+        var runtimeConfig = NormalizeRuntimeConfig(cmd.RuntimeConfig, cmd.DefaultSkillName);
         var entry = new ChannelBotRegistrationEntry
         {
             Id = registrationId,
@@ -144,9 +146,8 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             RegistrationServiceAllowlist = cmd.RegistrationServiceAllowlist?.Clone(),
             ChannelAgentKey = cmd.ChannelAgentKey?.Clone(),
             AuthorizationMode = cmd.AuthorizationMode,
-            // Canonical skill-name form matches SkillInvocationTriggerParser output
-            // (lowercase, no leading trigger token) so inbound routing compares 1:1.
-            DefaultSkillName = (cmd.DefaultSkillName ?? string.Empty).Trim().TrimStart('/').ToLowerInvariant(),
+            RuntimeConfig = runtimeConfig,
+            DefaultSkillName = runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
@@ -748,6 +749,55 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
                 ? rejectedAtUnixMs
                 : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         });
+    }
+
+    private static ChannelBotRuntimeConfig? NormalizeRuntimeConfig(
+        ChannelBotRuntimeConfig? config,
+        string? legacyDefaultSkillName)
+    {
+        var normalizedDefaultSkillName = NormalizeDefaultSkillName(config?.DefaultSkill?.Name);
+        if (string.IsNullOrEmpty(normalizedDefaultSkillName))
+            normalizedDefaultSkillName = NormalizeDefaultSkillName(legacyDefaultSkillName);
+
+        if (config is null && string.IsNullOrEmpty(normalizedDefaultSkillName))
+            return null;
+
+        var normalized = config?.Clone() ?? new ChannelBotRuntimeConfig();
+        if (!string.IsNullOrEmpty(normalizedDefaultSkillName))
+        {
+            normalized.DefaultSkill ??= new ChannelBotRuntimeDefaultSkillConfig();
+            normalized.DefaultSkill.Name = normalizedDefaultSkillName;
+            normalized.DefaultSkill.Version = Normalize(normalized.DefaultSkill.Version);
+        }
+
+        normalized.Instructions = Normalize(normalized.Instructions);
+        NormalizeRepeated(normalized.ToolSetRefs);
+        NormalizeRepeated(normalized.ExtraToolNames, lowerInvariant: true);
+        NormalizeRepeated(normalized.AgentKeyServiceRequirements?.AllowedServiceSlugs, lowerInvariant: true);
+        foreach (var selector in normalized.NyxidServiceSelectors)
+        {
+            selector.ServiceSlug = Normalize(selector.ServiceSlug).ToLowerInvariant();
+            NormalizeRepeated(selector.EndpointNames);
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeDefaultSkillName(string? value) =>
+        Normalize(value).TrimStart('/').ToLowerInvariant();
+
+    private static void NormalizeRepeated(RepeatedField<string>? values, bool lowerInvariant = false)
+    {
+        if (values is null || values.Count == 0)
+            return;
+
+        var normalized = values
+            .Select(value => lowerInvariant ? Normalize(value).ToLowerInvariant() : Normalize(value))
+            .Where(static value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        values.Clear();
+        values.AddRange(normalized);
     }
 
     private static string Normalize(string? value) => value?.Trim() ?? string.Empty;

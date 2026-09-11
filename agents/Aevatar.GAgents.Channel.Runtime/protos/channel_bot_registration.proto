@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
 
 import "google/protobuf/timestamp.proto";
 import "Credentials/credential_secret_references.proto";
+import "ai_messages.proto";
 
 // ─── Persistent State ───
 
@@ -50,6 +51,7 @@ message ChannelBotRegistrationEntry {
   ChannelRegistrationServiceAllowlist registration_service_allowlist = 18;
   ChannelAgentKeyCredential channel_agent_key = 19;
   ChannelRegistrationAuthorizationMode authorization_mode = 20;
+  ChannelBotRuntimeConfig runtime_config = 21;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -80,6 +82,51 @@ message ChannelAgentKeyGrantSnapshot {
   optional bool allow_all_nodes = 5;
 }
 
+enum ChannelBotRuntimeCredentialSourceMode {
+  CHANNEL_BOT_RUNTIME_CREDENTIAL_SOURCE_MODE_UNSPECIFIED = 0;
+  CHANNEL_BOT_RUNTIME_CREDENTIAL_SOURCE_MODE_REGISTRATION_AGENT_KEY = 1;
+  CHANNEL_BOT_RUNTIME_CREDENTIAL_SOURCE_MODE_SENDER_BINDING = 2;
+}
+
+message ChannelBotRuntimeDefaultSkillConfig {
+  string name = 1;
+  string version = 2;
+}
+
+message ChannelBotRuntimeNyxIdServiceSelector {
+  string service_slug = 1;
+  repeated string endpoint_names = 2;
+}
+
+message ChannelBotRuntimeAgentKeyServiceRequirements {
+  repeated string allowed_service_slugs = 1;
+}
+
+message ChannelBotRuntimeConfig {
+  string instructions = 1;
+  ChannelBotRuntimeDefaultSkillConfig default_skill = 2;
+  repeated string tool_set_refs = 3;
+  repeated string extra_tool_names = 4;
+  repeated ChannelBotRuntimeNyxIdServiceSelector nyxid_service_selectors = 5;
+  ChannelBotRuntimeCredentialSourceMode credential_source_mode = 6;
+  ChannelBotRuntimeAgentKeyServiceRequirements agent_key_service_requirements = 7;
+}
+
+message ChannelRuntimeConfigProof {
+  string registration_id = 1;
+  int64 config_revision = 2;
+  string config_digest = 3;
+  string instructions_digest = 4;
+  string default_skill_name = 5;
+  string default_skill_version = 6;
+  repeated string tool_set_refs = 7;
+  repeated string extra_tool_names = 8;
+  repeated ChannelBotRuntimeNyxIdServiceSelector nyxid_service_selectors = 9;
+  ChannelBotRuntimeCredentialSourceMode credential_source_mode = 10;
+  aevatar.ai.AgentTurnToolCatalogProofPayload exposed_tool_catalog = 11;
+  string instructions = 12;
+}
+
 // Domain events for ChannelBotRegistrationGAgent
 message ChannelBotRegisteredEvent {
   ChannelBotRegistrationEntry entry = 1;
@@ -108,6 +155,7 @@ message ChannelBotRegisterCommand {
   ChannelRegistrationServiceAllowlist registration_service_allowlist = 13;
   ChannelAgentKeyCredential channel_agent_key = 14;
   ChannelRegistrationAuthorizationMode authorization_mode = 15;
+  ChannelBotRuntimeConfig runtime_config = 16;
 }
 
 message ChannelBotUnregisterCommand {
@@ -322,6 +370,7 @@ message ChannelBotRegistrationDocument {
   ChannelRegistrationServiceAllowlist registration_service_allowlist = 19;
   ChannelAgentKeyCredential channel_agent_key = 20;
   ChannelRegistrationAuthorizationMode authorization_mode = 21;
+  ChannelBotRuntimeConfig runtime_config = 22;
 }
 
 // ─── Relay / conversation normalization ───

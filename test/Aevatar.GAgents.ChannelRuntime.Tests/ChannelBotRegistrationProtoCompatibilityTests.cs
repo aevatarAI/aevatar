@@ -2,6 +2,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Xunit;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.NyxidChat;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -30,6 +31,7 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("registration_service_allowlist")!.FieldNumber.Should().Be(18);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("channel_agent_key")!.FieldNumber.Should().Be(19);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("authorization_mode")!.FieldNumber.Should().Be(20);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("runtime_config")!.FieldNumber.Should().Be(21);
     }
 
     [Fact]
@@ -50,6 +52,7 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("registration_service_allowlist")!.FieldNumber.Should().Be(13);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("channel_agent_key")!.FieldNumber.Should().Be(14);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("authorization_mode")!.FieldNumber.Should().Be(15);
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("runtime_config")!.FieldNumber.Should().Be(16);
     }
 
     [Fact]
@@ -76,6 +79,7 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("registration_service_allowlist")!.FieldNumber.Should().Be(19);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("channel_agent_key")!.FieldNumber.Should().Be(20);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("authorization_mode")!.FieldNumber.Should().Be(21);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("runtime_config")!.FieldNumber.Should().Be(22);
     }
 
     [Fact]
@@ -98,6 +102,41 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
             ("scope_plan_digest", 3),
             ("allow_all_services", 4),
             ("allow_all_nodes", 5));
+
+        AssertEnum(
+            "ChannelBotRuntimeCredentialSourceMode",
+            ("CHANNEL_BOT_RUNTIME_CREDENTIAL_SOURCE_MODE_UNSPECIFIED", 0),
+            ("CHANNEL_BOT_RUNTIME_CREDENTIAL_SOURCE_MODE_REGISTRATION_AGENT_KEY", 1),
+            ("CHANNEL_BOT_RUNTIME_CREDENTIAL_SOURCE_MODE_SENDER_BINDING", 2));
+        AssertFields<ChannelBotRuntimeDefaultSkillConfig>(
+            ("name", 1),
+            ("version", 2));
+        AssertFields<ChannelBotRuntimeNyxIdServiceSelector>(
+            ("service_slug", 1),
+            ("endpoint_names", 2));
+        AssertFields<ChannelBotRuntimeAgentKeyServiceRequirements>(
+            ("allowed_service_slugs", 1));
+        AssertFields<ChannelBotRuntimeConfig>(
+            ("instructions", 1),
+            ("default_skill", 2),
+            ("tool_set_refs", 3),
+            ("extra_tool_names", 4),
+            ("nyxid_service_selectors", 5),
+            ("credential_source_mode", 6),
+            ("agent_key_service_requirements", 7));
+        AssertFields<ChannelRuntimeConfigProof>(
+            ("registration_id", 1),
+            ("config_revision", 2),
+            ("config_digest", 3),
+            ("instructions_digest", 4),
+            ("default_skill_name", 5),
+            ("default_skill_version", 6),
+            ("tool_set_refs", 7),
+            ("extra_tool_names", 8),
+            ("nyxid_service_selectors", 9),
+            ("credential_source_mode", 10),
+            ("exposed_tool_catalog", 11),
+            ("instructions", 12));
 
         var original = new ChannelAgentKeyGrantSnapshot
         {
@@ -245,6 +284,13 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
             ("completed", 3),
             ("failed", 4),
             ("rejected", 5));
+    }
+
+    [Fact]
+    public void ChannelRuntimeConfigRunContracts_ShouldUseStableFieldNumbers()
+    {
+        NeedsLlmReplyEvent.Descriptor.FindFieldByName("channel_runtime_config")!.FieldNumber.Should().Be(19);
+        AgentRunReplyStepState.Descriptor.FindFieldByName("channel_runtime_config")!.FieldNumber.Should().Be(32);
     }
 
     [Fact]

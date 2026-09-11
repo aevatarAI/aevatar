@@ -54,6 +54,7 @@ public sealed class ChannelBotRegistrationProjector
             RegistrationServiceAllowlist = entry.RegistrationServiceAllowlist?.Clone(),
             ChannelAgentKey = entry.ChannelAgentKey?.Clone(),
             AuthorizationMode = entry.AuthorizationMode,
+            RuntimeConfig = entry.RuntimeConfig?.Clone(),
             LastInboundAtUtc = entry.LastInboundAtUtc,
             DefaultSkillName = entry.DefaultSkillName ?? string.Empty,
             WorkflowResultDeliveryRepair = entry.WorkflowResultDeliveryRepair?.Clone(),

@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.NyxidChat";
 
 import "chat_activity.proto";
 import "conversation_events.proto";
+import "channel_bot_registration.proto";
 import "delivery_ledger.proto";
 import "ai_messages.proto";
 import "workflow_execution_messages.proto";
@@ -355,6 +356,7 @@ message AgentRunReplyStepState {
   aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 29;
   aevatar.ai.AgentTurnToolCatalogProofPayload tool_catalog_proof = 30;
   string tool_catalog_policy_version = 31;
+  aevatar.gagents.channel.runtime.ChannelRuntimeConfigProof channel_runtime_config = 32;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these

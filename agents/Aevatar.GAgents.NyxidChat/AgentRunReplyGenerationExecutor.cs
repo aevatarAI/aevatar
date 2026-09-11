@@ -16,6 +16,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
@@ -48,6 +49,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private readonly IFileArtifactReadPort? _fileArtifactReadPort;
     private readonly IAgentProfileTurnSnapshotResolver? _profileSnapshotResolver;
     private readonly IAgentProfileTurnToolCatalogPlanner? _profileCatalogPlanner;
+    private readonly IChannelRuntimeToolCatalogMaterializer? _channelRuntimeCatalogMaterializer;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunReplyGenerationExecutor> _logger;
 
@@ -64,7 +66,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IBindingRevocationReconciler? bindingRevocationReconciler = null,
         IFileArtifactReadPort? fileArtifactReadPort = null,
         IAgentProfileTurnSnapshotResolver? profileSnapshotResolver = null,
-        IAgentProfileTurnToolCatalogPlanner? profileCatalogPlanner = null)
+        IAgentProfileTurnToolCatalogPlanner? profileCatalogPlanner = null,
+        IChannelRuntimeToolCatalogMaterializer? channelRuntimeCatalogMaterializer = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -77,6 +80,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _fileArtifactReadPort = fileArtifactReadPort;
         _profileSnapshotResolver = profileSnapshotResolver;
         _profileCatalogPlanner = profileCatalogPlanner;
+        _channelRuntimeCatalogMaterializer = channelRuntimeCatalogMaterializer;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -159,6 +163,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 state.AgentProfileSnapshot = catalogPlan.ProfileSnapshot.Clone();
             if (catalogPlan.Authority is not null)
                 state.AgentProfileTurnAuthority = catalogPlan.Authority.Clone();
+            if (catalogPlan.ChannelRuntimeConfig is not null)
+                state.ChannelRuntimeConfig = catalogPlan.ChannelRuntimeConfig.Clone();
             foreach (var pair in plan.Metadata)
                 state.ExternalMetadata[pair.Key] = pair.Value;
             state.Messages.AddRange(plan.InitialMessages.Select(AgentRunReplyStepMappers.ToProto));
@@ -1316,7 +1322,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private sealed record AgentRunTurnCatalogPlan(
         AgentTurnToolCatalog Catalog,
         AgentProfileSnapshot? ProfileSnapshot = null,
-        AgentProfileTurnAuthorityState? Authority = null);
+        AgentProfileTurnAuthorityState? Authority = null,
+        ChannelRuntimeConfigProof? ChannelRuntimeConfig = null);
 
     private async Task<AgentRunTurnCatalogPlan> ResolveInitialTurnCatalogAsync(
         AgentRunReplyGenerationExecutionRequest request,
@@ -1324,6 +1331,18 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         ReplyGenerationContext generationContext,
         CancellationToken ct)
     {
+        if (replyRequest.ChannelRuntimeConfig is not null)
+        {
+            var catalog = request.TurnCatalog ?? await MaterializeChannelRuntimeCatalogAsync(
+                    replyRequest.ChannelRuntimeConfig,
+                    generationContext.ToolContext,
+                    ct)
+                .ConfigureAwait(false);
+            return new AgentRunTurnCatalogPlan(
+                catalog,
+                ChannelRuntimeConfig: WithExposedToolCatalog(replyRequest.ChannelRuntimeConfig, catalog));
+        }
+
         if (request.TurnCatalog is not null)
             return new AgentRunTurnCatalogPlan(request.TurnCatalog);
 
@@ -1466,6 +1485,23 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             materialization.ReconcileProposal);
     }
 
+    private Task<AgentTurnToolCatalog> MaterializeChannelRuntimeCatalogAsync(
+        ChannelRuntimeConfigProof runtimeConfig,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct) =>
+        _channelRuntimeCatalogMaterializer is null
+            ? Task.FromResult(AgentTurnToolCatalogFactory.RestrictedEmpty())
+            : _channelRuntimeCatalogMaterializer.MaterializeAsync(runtimeConfig, [], toolContext, ct);
+
+    private static ChannelRuntimeConfigProof WithExposedToolCatalog(
+        ChannelRuntimeConfigProof proof,
+        AgentTurnToolCatalog catalog)
+    {
+        var clone = proof.Clone();
+        clone.ExposedToolCatalog = catalog.Proof.ToPayload();
+        return clone;
+    }
+
     private async Task<AgentTurnToolCatalog> ResolvePersistedTurnCatalogAsync(
         AgentRunReplyStepExecutionRequest workItem,
         AgentToolExecutionContext toolContext,
@@ -1474,6 +1510,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var state = workItem.StepState;
         if (workItem.TurnCatalog is not null)
             return VerifyPersistedTurnCatalog(state, workItem.TurnCatalog);
+
+        if (state.ChannelRuntimeConfig is not null)
+        {
+            var catalog = await MaterializeChannelRuntimeCatalogAsync(
+                    state.ChannelRuntimeConfig,
+                    toolContext,
+                    ct)
+                .ConfigureAwait(false);
+            return VerifyPersistedTurnCatalog(state, catalog);
+        }
 
         var profile = state.AgentProfileSnapshot;
         var authority = state.AgentProfileTurnAuthority;

@@ -115,6 +115,10 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IAgentProfileConnectedOperationSelector>()));
         services.TryAddSingleton<IAgentProfileTurnToolCatalogPlanner>(sp =>
             sp.GetRequiredService<AgentTurnToolCatalogMaterializer>());
+        services.TryAddSingleton<IChannelRuntimeToolCatalogMaterializer>(sp =>
+            new ChannelRuntimeToolCatalogMaterializer(
+                sp.GetRequiredService<IToolSetRegistry>(),
+                sp.GetRequiredService<IAgentToolDiscoveryService>()));
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();

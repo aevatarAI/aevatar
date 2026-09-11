@@ -12,6 +12,7 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
@@ -20,6 +21,7 @@ using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -215,6 +217,55 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         AgentProfileSnapshotCodec.ByteEquivalent(state.AgentProfileSnapshot, fixture.Profile).Should().BeTrue();
         state.ToolCatalogProof.Should().Be(fixture.Catalog.Proof.ToPayload());
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WhenChannelRuntimeConfigIsPresent_ShouldBypassAgentProfileResolution()
+    {
+        var fixture = CreateProfiledChannelExecutor();
+        var request = fixture.Request.Clone();
+        request.ChannelRuntimeConfig = new ChannelRuntimeConfigProof
+        {
+            RegistrationId = "bot-reg-1",
+            ConfigRevision = 7,
+            ConfigDigest = "sha256:config",
+            InstructionsDigest = "sha256:instructions",
+            Instructions = "Only answer booking capacity questions.",
+            DefaultSkillName = "booking-capacity",
+            DefaultSkillVersion = "2.3",
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+        };
+        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.booking");
+        request.ChannelRuntimeConfig.ExtraToolNames.Add("ask_user");
+        request.ChannelRuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "calendar_create_event" },
+        });
+
+        var state = await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
+            CancellationToken.None);
+
+        state.AgentProfileSnapshot.Should().BeNull();
+        state.AgentProfileTurnAuthority.Should().BeNull();
+        state.ChannelRuntimeConfig.Should().NotBeNull();
+        state.ChannelRuntimeConfig.RegistrationId.Should().Be("bot-reg-1");
+        state.ChannelRuntimeConfig.ConfigRevision.Should().Be(7);
+        state.ChannelRuntimeConfig.Instructions.Should().Be("Only answer booking capacity questions.");
+        state.ChannelRuntimeConfig.ExposedToolCatalog.Should().Be(state.ToolCatalogProof);
+        state.ToolCatalogProof.ToolDescriptors.Select(static descriptor => descriptor.Name)
+            .Should().BeEquivalentTo("ask_user", fixture.Tool.Name);
+        fixture.Generator.ReceivedCatalog.Should().NotBeNull();
+        fixture.Generator.ReceivedCatalog!.FinalAllowedToolNames.Should()
+            .BeEquivalentTo("ask_user", fixture.Tool.Name);
+        fixture.Generator.ReceivedCatalog.ProfilePromptLayer.Should().NotBeNull();
+        fixture.Generator.ReceivedCatalog.ProfilePromptLayer!.Content.Should()
+            .Contain("Only answer booking capacity questions.");
+        fixture.Generator.ReceivedCatalog.ProfilePromptLayer.Provenance.Source.Should()
+            .Be("channel-registration:bot-reg-1@7");
+        fixture.ProfileResolver.ReceivedCalls().Should().BeEmpty();
+        fixture.ProfilePlanner.ReceivedCalls().Should().BeEmpty();
     }
 
     [Fact]
@@ -2271,6 +2322,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         string routeToolSet = AgentProfilePolicies.ChannelReplyRouteToolSet)
     {
         var tool = new CountingTool("workspace_profile_tool");
+        var askUserTool = new CountingTool("ask_user");
         var provider = new RecordingProvider();
         var generator = new CatalogAwareStepPlanReplyGenerator(tool, provider);
         var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
@@ -2325,6 +2377,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 Arg.Any<AgentToolExecutionContext>(),
                 Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(AgentTurnToolCatalogMaterialization.Create(catalog, authority)));
+        var toolSetRegistry = new RecordingToolSetRegistry();
+        toolSetRegistry.Add("channel.reply.booking", new StaticToolSource([tool, askUserTool]));
+        var channelRuntimeCatalogMaterializer = new ChannelRuntimeToolCatalogMaterializer(toolSetRegistry);
         var executor = new AgentRunReplyGenerationExecutor(
             Substitute.For<IActorDispatchPort>(),
             generator,
@@ -2332,7 +2387,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance,
             profileSnapshotResolver: profileResolver,
-            profileCatalogPlanner: profilePlanner);
+            profileCatalogPlanner: profilePlanner,
+            channelRuntimeCatalogMaterializer: channelRuntimeCatalogMaterializer);
         var toolContext = AgentToolExecutionContext.Empty with
         {
             Caller = new AgentToolCallerContext("scope-alpha", "scope-alpha", "run-1"),
@@ -2710,6 +2766,35 @@ public sealed class AgentRunReplyGenerationExecutorTests
             context.Terminate = true;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class RecordingToolSetRegistry : IToolSetRegistry
+    {
+        private readonly Dictionary<string, IReadOnlyList<IAgentToolSource>> _sources =
+            new(StringComparer.Ordinal);
+
+        public void Add(string name, params IAgentToolSource[] sources) =>
+            _sources.Add(name, sources);
+
+        public IReadOnlyList<string> GetRegisteredNames() => _sources.Keys.ToArray();
+
+        public ToolSetResolveResult Resolve(string? name)
+        {
+            name ??= string.Empty;
+            return _sources.TryGetValue(name, out var sources)
+                ? ToolSetResolveResult.Success(name, sources)
+                : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                    ToolSetResolveError.UnknownNameCode,
+                    name,
+                    "missing",
+                    GetRegisteredNames()));
+        }
+    }
+
+    private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult(tools);
     }
 
     private sealed class CountingTool(string name) : IAgentTool
