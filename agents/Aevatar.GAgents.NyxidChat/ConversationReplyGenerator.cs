@@ -2115,7 +2115,19 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         // the bot owner's route from the upstream-pinned metadata. If a
         // sender-owned attempt fails, we retry once with this owner snapshot.
         var senderBindingId = toolContext?.SenderBinding.BindingId?.Trim();
-        var disableTools = IsChannelTurn(effective) && string.IsNullOrWhiteSpace(senderBindingId);
+        var defaultSkillBinding = toolContext?.SkillRecovery.FromChannelDefaultSkillBinding == true;
+        var disableTools = IsChannelTurn(effective) &&
+                            string.IsNullOrWhiteSpace(senderBindingId) &&
+                            !defaultSkillBinding;
+        if (defaultSkillBinding && string.IsNullOrWhiteSpace(senderBindingId) && effectiveToolContext is not null)
+        {
+            // An unbound sender may enter the registration's deterministic default skill, but
+            // cannot use that registration authority to discover or invoke arbitrary tools.
+            effectiveToolContext = effectiveToolContext with
+            {
+                ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["use_skill"]),
+            };
+        }
         if (!string.IsNullOrWhiteSpace(senderBindingId))
         {
             var ownerSnapshot = CreateOwnerFallbackSnapshot(effective);

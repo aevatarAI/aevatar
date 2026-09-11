@@ -313,7 +313,8 @@ public sealed record AgentSkillRecoveryContext(
     string? CommandArguments = null,
     bool DiscoveryRequested = false,
     bool IsolatePriorConversationHistory = false,
-    bool MountWorkflowsRequested = false)
+    bool MountWorkflowsRequested = false,
+    bool FromChannelDefaultSkillBinding = false)
 {
     public static AgentSkillRecoveryContext Empty { get; } = new(
         RequireInitialOrnnSearch: false,

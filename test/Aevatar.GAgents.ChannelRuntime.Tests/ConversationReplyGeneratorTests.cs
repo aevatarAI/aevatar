@@ -10,6 +10,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -1456,7 +1457,7 @@ public sealed class ConversationReplyGeneratorTests
         OfferedToolNames(plan).Should().ContainSingle(name => name == "nyxid_service_inventory");
     }
 
-    private static IReadOnlyList<string> OfferedToolNames(AgentRunReplyStepPlan plan)
+    private static IReadOnlyList<string> OfferedToolNames(AgentRunReplyStepPlan plan, bool finalNoTools = false)
     {
         var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
             [ChatMessage.User("hi")],
@@ -1465,7 +1466,7 @@ public sealed class ConversationReplyGeneratorTests
             plan.ToolContext,
             plan.LlmControl,
             round: 0,
-            finalNoTools: false);
+            finalNoTools);
         return (llmRequest.Tools ?? []).Select(tool => tool.Name).ToArray();
     }
 
@@ -2756,7 +2757,7 @@ public sealed class ConversationReplyGeneratorTests
             },
             remoteSkillAccessTokenResolver: new ChannelRemoteSkillAccessTokenResolver(
                 skillCapabilityIssuer,
-                NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance),
+                logger: NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance),
             toolExecutionPort: toolExecutionPort);
         var sink = new RecordingStreamingSink();
         var toolContext = AgentToolExecutionContext.Empty with
@@ -3309,6 +3310,117 @@ public sealed class ConversationReplyGeneratorTests
         request.Tools.Should().BeNull();
         toolSource.DiscoverCount.Should().Be(0);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GenerateReplyAsync_ForDefaultSkill_LoadsWithRegistrationKeyBeforeStreaming(bool senderBound)
+    {
+        var vault = new InMemorySecretVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-default-alpha", "key-default-alpha", "registration-skill-token", "test"));
+        var fetcher = Substitute.For<IRemoteSkillFetcher>();
+        fetcher.FetchSkillAsync("registration-skill-token", "private-default-skill", Arg.Any<CancellationToken>())
+            .Returns(new SkillDefinition
+            {
+                Name = "private-default-skill",
+                Instructions = "PRIVATE_DEFAULT_SKILL_INSTRUCTIONS",
+                Description = "The registration owner's private skill.",
+                Source = SkillSource.Remote,
+                RemoteId = "skill-private-alpha",
+            });
+        var provider = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            provider, BuiltInPromptFloorProvider,
+            toolSources: [new SingleToolSource(new FixedResultTool("other_service", "unused"))],
+            localSkillCatalog: new LocalSkillCatalog(),
+            remoteSkillFetcher: fetcher,
+            remoteSkillAccessTokenResolver: new ChannelRemoteSkillAccessTokenResolver(secretVault: vault),
+            toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
+        var context = DefaultSkillContext(new ChannelWorkflowResultDeliveryCredential
+        {
+            SubjectId = "key-default-alpha",
+            SecretReference = stored.Reference.Clone(),
+        });
+        if (senderBound)
+            context = context with { SenderBinding = new AgentToolSenderBindingContext("bnd-other-user") };
+        var sink = new RecordingStreamingSink();
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "message-default-alpha",
+                Conversation = new ConversationReference { CanonicalKey = "telegram:dm:default-alpha" },
+                Content = new MessageContent { Text = "default-route-proof-1" },
+            },
+            new Dictionary<string, string> { [ChannelMetadataKeys.Platform] = "telegram" },
+            Control(token: "owner-llm-token", senderToken: senderBound ? "unrelated-sender-token" : null),
+            context, sink, CancellationToken.None);
+
+        await fetcher.Received(1).FetchSkillAsync(
+            "registration-skill-token", "private-default-skill", Arg.Any<CancellationToken>());
+        var request = provider.Requests.Should().ContainSingle().Subject;
+        request.Messages.Should().Contain(message => message.Role == "tool" &&
+            message.Content != null && message.Content.Contains("PRIVATE_DEFAULT_SKILL_INSTRUCTIONS"));
+        request.Messages.Should().Contain(message => message.ToolCalls != null && message.ToolCalls.Any(call =>
+            call.Name == "use_skill" && call.ArgumentsJson.Contains("default-route-proof-1")));
+        if (!senderBound)
+            request.Tools!.Select(tool => tool.Name).Should().Equal("use_skill");
+        reply.Text.Should().Be("ok");
+        sink.Emissions.Should().Contain("ok");
+        AgentToolRequestContext.Current.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task BuildStepPlanAsync_ForUnboundDefaultSkill_PreservesToolCeilings(
+        bool forceDisable, bool stripMetadata)
+    {
+        var useSkill = new FixedResultTool("use_skill", "loaded");
+        var other = new FixedResultTool("other_service", "unused");
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory(), BuiltInPromptFloorProvider);
+        var context = DefaultSkillContext();
+        var catalog = new AgentTurnToolCatalog(
+            [useSkill.Name, other.Name],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            exactTools: [useSkill, other]);
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "message-default-alpha",
+                Conversation = new ConversationReference { CanonicalKey = "telegram:dm:default-alpha" },
+                Content = new MessageContent { Text = "default-route-proof-1" },
+            },
+            stripMetadata ? new Dictionary<string, string>() :
+                new Dictionary<string, string> { [ChannelMetadataKeys.Platform] = "telegram" },
+            Control(), context, priorHistory: null, attachmentContext: null,
+            forceDisableTools: forceDisable, ct: CancellationToken.None, turnCatalog: catalog);
+
+        plan.DisableTools.Should().Be(forceDisable);
+        OfferedToolNames(plan, plan.DisableTools).Should().Equal(
+            forceDisable ? [] : new[] { "use_skill" });
+    }
+
+    private static AgentToolExecutionContext DefaultSkillContext(
+        ChannelWorkflowResultDeliveryCredential? credential = null) =>
+        AgentToolExecutionContext.Empty with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration("reg-default-alpha"),
+            Channel = new AgentToolChannelContext(
+                "telegram", "sender-alpha", "scope-default-alpha", "message-default-alpha", null,
+                WorkflowResultDeliveryCredential: credential, BotRegistrationId: "reg-default-alpha"),
+            SkillRecovery = new AgentSkillRecoveryContext(
+                true, true, "private-default-skill", "default-route-proof-1", "private-default-skill", 2,
+                CommandArguments: "default-route-proof-1", FromChannelDefaultSkillBinding: true),
+        };
 
     // The unbound-sender gate detaches every tool while the kernel prompt still documents
     // them; the system prompt must carry the honest override so the model reports "tools

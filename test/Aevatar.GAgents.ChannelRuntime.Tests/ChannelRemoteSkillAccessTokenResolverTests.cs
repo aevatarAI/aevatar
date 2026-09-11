@@ -1,5 +1,8 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat;
@@ -68,6 +71,177 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
         resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.ChannelBindingRequired);
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ForUnboundDefaultSkillBinding_UsesChannelRegistrationAgentKey()
+    {
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-channel-alpha",
+            "agent-key-channel-alpha",
+            "channel-agent-key-token",
+            "test"));
+        var issuer = Substitute.For<INyxIdSkillCapabilityIssuer>();
+        var resolver = NewResolver(issuer, secretVault);
+        using var context = PushContext(
+            bindingId: null,
+            senderToken: null,
+            ownerToken: null,
+            channelCredential: new ChannelWorkflowResultDeliveryCredential
+            {
+                SecretReference = stored.Reference.Clone(),
+                SubjectId = "agent-key-channel-alpha",
+            },
+            executionOwner: AgentToolExecutionOwners.ChannelRegistration("reg-channel-alpha"),
+            botRegistrationId: "reg-channel-alpha",
+            skillRecovery: new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: "test-default-skill",
+                OriginalCommand: "default-route-proof-1",
+                PrimarySkillName: "test-default-skill",
+                MaxOrnnSearchAttempts: 2,
+                CommandArguments: "default-route-proof-1",
+                DiscoveryRequested: false,
+                IsolatePriorConversationHistory: false,
+                MountWorkflowsRequested: false,
+                FromChannelDefaultSkillBinding: true));
+
+        var resolution = await resolver.ResolveAsync("test-default-skill");
+
+        resolution.Succeeded.Should().BeTrue();
+        resolution.AccessToken.Should().Be("channel-agent-key-token");
+        await issuer.DidNotReceiveWithAnyArgs()
+            .IssueByBindingIdAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ForBoundDefaultSkillBinding_PrefersChannelRegistrationAgentKeyOverSenderToken()
+    {
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-channel-alpha",
+            "agent-key-channel-alpha",
+            "channel-agent-key-token",
+            "test"));
+        var issuer = Substitute.For<INyxIdSkillCapabilityIssuer>();
+        var resolver = NewResolver(issuer, secretVault);
+        using var context = PushContext(
+            bindingId: "bnd-other-user",
+            senderToken: "sender-token-that-cannot-read-private-skill",
+            ownerToken: null,
+            channelCredential: new ChannelWorkflowResultDeliveryCredential
+            {
+                SecretReference = stored.Reference.Clone(),
+                SubjectId = "agent-key-channel-alpha",
+            },
+            executionOwner: AgentToolExecutionOwners.ChannelRegistration("reg-channel-alpha"),
+            botRegistrationId: "reg-channel-alpha",
+            skillRecovery: new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: "test-default-skill",
+                OriginalCommand: "default-route-proof-1",
+                PrimarySkillName: "test-default-skill",
+                MaxOrnnSearchAttempts: 2,
+                CommandArguments: "default-route-proof-1",
+                DiscoveryRequested: false,
+                IsolatePriorConversationHistory: false,
+                MountWorkflowsRequested: false,
+                FromChannelDefaultSkillBinding: true));
+
+        var resolution = await resolver.ResolveAsync("test-default-skill");
+
+        resolution.Succeeded.Should().BeTrue();
+        resolution.AccessToken.Should().Be("channel-agent-key-token");
+        await issuer.DidNotReceiveWithAnyArgs()
+            .IssueByBindingIdAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ForExplicitSkillTrigger_DoesNotUseChannelRegistrationAgentKey()
+    {
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-channel-alpha",
+            "agent-key-channel-alpha",
+            "channel-agent-key-token",
+            "test"));
+        var issuer = Substitute.For<INyxIdSkillCapabilityIssuer>();
+        var resolver = NewResolver(issuer, secretVault);
+        using var context = PushContext(
+            bindingId: null,
+            senderToken: null,
+            ownerToken: null,
+            channelCredential: new ChannelWorkflowResultDeliveryCredential
+            {
+                SecretReference = stored.Reference.Clone(),
+                SubjectId = "agent-key-channel-alpha",
+            },
+            executionOwner: AgentToolExecutionOwners.ChannelRegistration("reg-channel-alpha"),
+            botRegistrationId: "reg-channel-alpha",
+            skillRecovery: new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: "other-private-skill",
+                OriginalCommand: "/other-private-skill attempt",
+                PrimarySkillName: "other-private-skill",
+                MaxOrnnSearchAttempts: 2,
+                CommandArguments: "attempt",
+                DiscoveryRequested: false,
+                IsolatePriorConversationHistory: true,
+                MountWorkflowsRequested: false,
+                FromChannelDefaultSkillBinding: false));
+
+        var resolution = await resolver.ResolveAsync("other-private-skill");
+
+        resolution.Succeeded.Should().BeFalse();
+        resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.ChannelBindingRequired);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ForDefaultSkillBindingWithMismatchedSkill_DoesNotUseChannelRegistrationAgentKey()
+    {
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-channel-alpha",
+            "agent-key-channel-alpha",
+            "channel-agent-key-token",
+            "test"));
+        var resolver = NewResolver(null, secretVault);
+        using var context = PushContext(
+            bindingId: null,
+            senderToken: null,
+            ownerToken: null,
+            channelCredential: new ChannelWorkflowResultDeliveryCredential
+            {
+                SecretReference = stored.Reference.Clone(),
+                SubjectId = "agent-key-channel-alpha",
+            },
+            executionOwner: AgentToolExecutionOwners.ChannelRegistration("reg-channel-alpha"),
+            botRegistrationId: "reg-channel-alpha",
+            skillRecovery: new AgentSkillRecoveryContext(
+                RequireInitialOrnnSearch: true,
+                RequireOrnnSearchOnBlocker: true,
+                CommandName: "test-default-skill",
+                OriginalCommand: "default-route-proof-1",
+                PrimarySkillName: "test-default-skill",
+                MaxOrnnSearchAttempts: 2,
+                CommandArguments: "default-route-proof-1",
+                DiscoveryRequested: false,
+                IsolatePriorConversationHistory: false,
+                MountWorkflowsRequested: false,
+                FromChannelDefaultSkillBinding: true));
+
+        var resolution = await resolver.ResolveAsync("other-private-skill");
+
+        resolution.Succeeded.Should().BeFalse();
+        resolution.FailureKind.Should().Be(RemoteSkillAccessTokenFailureKind.ChannelBindingRequired);
     }
 
     [Fact]
@@ -307,9 +481,11 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
     }
 
     private static ChannelRemoteSkillAccessTokenResolver NewResolver(
-        INyxIdSkillCapabilityIssuer? capabilityIssuer) =>
+        INyxIdSkillCapabilityIssuer? capabilityIssuer,
+        ISecretVault? secretVault = null) =>
         new(
             capabilityIssuer,
+            secretVault,
             NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance);
 
     private static AgentToolContextScope PushContext(
@@ -318,7 +494,11 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
         string? ownerToken,
         AgentToolNyxIdAuthorityContext? authority = null,
         AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified,
-        string? sourceReadableToken = null) =>
+        string? sourceReadableToken = null,
+        ChannelWorkflowResultDeliveryCredential? channelCredential = null,
+        AgentToolExecutionOwner? executionOwner = null,
+        string? botRegistrationId = null,
+        AgentSkillRecoveryContext? skillRecovery = null) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials(
@@ -332,7 +512,10 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
                 "ou-channel-alpha",
                 "scope-channel-alpha",
                 "message-alpha",
-                null),
+                null,
+                null,
+                channelCredential,
+                botRegistrationId),
             SenderBinding = bindingId is null
                 ? AgentToolSenderBindingContext.Empty
                 : new AgentToolSenderBindingContext(
@@ -340,6 +523,8 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
                     NyxUserId: "nyx-user-legacy-alpha",
                     SenderTenant: "tenant-channel-alpha"),
             NyxIdAuthority = authority ?? CompleteAuthority(),
+            ExecutionOwner = executionOwner ?? new AgentToolExecutionOwner(),
+            SkillRecovery = skillRecovery ?? AgentSkillRecoveryContext.Empty,
         });
 
     private static AgentToolNyxIdAuthorityContext CompleteAuthority() =>

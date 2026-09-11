@@ -19,6 +19,7 @@ using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
@@ -199,6 +200,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ChannelRemoteSkillAccessTokenResolver>(sp =>
             new ChannelRemoteSkillAccessTokenResolver(
                 sp.GetService<INyxIdSkillCapabilityIssuer>(),
+                sp.GetService<ISecretVault>(),
                 sp.GetService<ILogger<ChannelRemoteSkillAccessTokenResolver>>()));
         services.TryAddSingleton<IRemoteSkillAccessTokenResolver>(sp =>
             sp.GetRequiredService<ChannelRemoteSkillAccessTokenResolver>());

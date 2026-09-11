@@ -2608,18 +2608,20 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         bool allowDefaultSkillRouting = false)
     {
         var allowSkillInvocationPrompt = _identityBindingQueryPort is null || senderBinding is not null;
-        // Registration-level channel→skill binding: a plain text message on a bound bot runs the
-        // bound Ornn skill deterministically with the message as its arguments. Only the plain-text
-        // turn opts in — card actions continue their own conversations — and the same sender gate
-        // as explicit skill triggers applies (unbound senders have tool dispatch disabled).
-        var defaultSkillName = allowDefaultSkillRouting && allowSkillInvocationPrompt
+        // Explicit skill commands still require a verified sender binding. A registration default
+        // is a different authority: it is the bot owner's configured entry point and may load its
+        // exact skill through the Channel Agent Key even when this sender has no binding.
+        var defaultSkillName = allowDefaultSkillRouting
             ? NormalizeOptional(registration.DefaultSkillName)
             : null;
+        var defaultSkillBindingEligible = defaultSkillName is not null &&
+            !SkillInvocationTriggerParser.TryParse(inboundEvent.Text, inboundEvent.Platform, out _);
+        var allowSkillPromptForTurn = allowSkillInvocationPrompt || defaultSkillBindingEligible;
         var requestActivity = BuildLlmRequestActivity(
             activity,
             inboundEvent.Text,
             inboundEvent.Platform,
-            allowSkillInvocationPrompt,
+            allowSkillPromptForTurn,
             defaultSkillName);
         // Stamp the inbound bot's outbound proxy slug onto the request activity so the deferred
         // reply run (and its CardKit/im streaming sender) proxies through the bot that RECEIVED
@@ -2687,7 +2689,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration(registration.Id),
         }).ToPayload();
 
-        if (TryBuildSkillRecoveryContext(inboundEvent.Text, inboundEvent.Platform, defaultSkillName, out var skillRecovery))
+        if ((allowSkillInvocationPrompt || defaultSkillBindingEligible) &&
+            TryBuildSkillRecoveryContext(inboundEvent.Text, inboundEvent.Platform, defaultSkillName, out var skillRecovery))
         {
             request.ToolContext = (AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
             {
@@ -2707,7 +2710,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             _logger.LogInformation(
                 "LLM reply request has no skill recovery: activity={ActivityId}, allowSkillInvocationPrompt={AllowSkillInvocationPrompt}, defaultSkillName={DefaultSkillName}, senderBindingFound={SenderBindingFound}",
                 activity.Id,
-                allowSkillInvocationPrompt,
+                allowSkillPromptForTurn,
                 defaultSkillName ?? string.Empty,
                 senderBinding is not null);
         }
@@ -2817,6 +2820,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             CommandName = normalizedCommand,
             PrimarySkillName = normalizedCommand,
             IsolatePriorConversationHistory = !viaDefaultSkillBinding,
+            FromChannelDefaultSkillBinding = viaDefaultSkillBinding,
         };
         return true;
     }

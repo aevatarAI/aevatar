@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -9,28 +10,35 @@ namespace Aevatar.GAgents.NyxidChat;
 
 /// <summary>
 /// Resolves the transient token used by the remote-skill tools
-/// (<c>use_skill</c>, <c>ornn_search_skills</c>). Bound turns use only the
-/// verified sender token or a capability issued for the exact typed NyxID
-/// authority; they never fall through to ambient bot-owner credentials.
-/// Failures stay typed so the caller can tell the user whether to bind,
-/// re-bind, or simply retry.
+/// (<c>use_skill</c>, <c>ornn_search_skills</c>). Explicit sender-triggered
+/// turns use only the verified sender token or a capability issued for the
+/// exact typed NyxID authority. A registration default-skill turn uses only
+/// the registration's validated Channel Agent Key. Neither path falls through
+/// to an unrelated ambient credential. Failures stay typed so the caller can
+/// tell the user whether to bind, re-bind, or simply retry.
 /// </summary>
 public sealed class ChannelRemoteSkillAccessTokenResolver : IRemoteSkillAccessTokenResolver
 {
     private readonly INyxIdSkillCapabilityIssuer? _capabilityIssuer;
+    private readonly ISecretVault? _secretVault;
     private readonly ILogger _logger;
 
     public ChannelRemoteSkillAccessTokenResolver(
         INyxIdSkillCapabilityIssuer? capabilityIssuer = null,
+        ISecretVault? secretVault = null,
         ILogger<ChannelRemoteSkillAccessTokenResolver>? logger = null)
     {
         _capabilityIssuer = capabilityIssuer;
+        _secretVault = secretVault;
         _logger = logger ?? NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance;
     }
 
     public async Task<RemoteSkillAccessTokenResolution> ResolveAsync(string skillName, CancellationToken ct = default)
     {
         var context = AgentToolRequestContext.Current;
+        if (IsChannelDefaultSkillInvocation(context, skillName))
+            return await ResolveChannelRegistrationAgentKeyAsync(context!, ct).ConfigureAwait(false);
+
         var bindingId = Normalize(context?.SenderBinding.BindingId);
         if (bindingId is null)
         {
@@ -78,6 +86,63 @@ public sealed class ChannelRemoteSkillAccessTokenResolver : IRemoteSkillAccessTo
             return RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.Unavailable);
         }
     }
+
+    private async Task<RemoteSkillAccessTokenResolution> ResolveChannelRegistrationAgentKeyAsync(
+        AgentToolExecutionContext context,
+        CancellationToken ct)
+    {
+        var credential = context.Channel.WorkflowResultDeliveryCredential;
+        var registrationId = Normalize(context.Channel.BotRegistrationId);
+        var scopeId = Normalize(context.Channel.RegistrationScopeId);
+        var subjectId = Normalize(credential?.SubjectId);
+        if (_secretVault is null || credential is null || registrationId is null || scopeId is null ||
+            context.ExecutionOwner.Kind != AgentToolExecutionOwnerKind.ChannelRegistration ||
+            !string.Equals(context.ExecutionOwner.OwnerId, registrationId, StringComparison.Ordinal) ||
+            subjectId is null ||
+            credential.SecretReference is not { } reference ||
+            string.IsNullOrWhiteSpace(reference.Ref) ||
+            !string.Equals(reference.Purpose, CredentialSecretPurposes.ChannelNyxIdAgentKey, StringComparison.Ordinal) ||
+            !string.Equals(reference.OwnerScopeKey, scopeId, StringComparison.Ordinal))
+        {
+            return RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.Unavailable);
+        }
+
+        var resolved = await _secretVault.ResolveAsync(
+            new ResolveSecretRequest(
+                reference.Ref,
+                CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                scopeId,
+                subjectId,
+                "channel-default-skill"),
+            ct).ConfigureAwait(false);
+        if (!resolved.Resolved || string.IsNullOrWhiteSpace(resolved.Secret) ||
+            resolved.Reference is not { } resolvedReference ||
+            !MatchesReference(reference, resolvedReference))
+        {
+            return RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.Unavailable);
+        }
+
+        return RemoteSkillAccessTokenResolution.Resolved(resolved.Secret!.Trim());
+    }
+
+    private static bool IsChannelDefaultSkillInvocation(AgentToolExecutionContext? context, string skillName)
+    {
+        var recovery = context?.SkillRecovery;
+        var requested = Normalize(skillName);
+        return recovery?.FromChannelDefaultSkillBinding == true &&
+               requested is not null &&
+               string.Equals(requested, Normalize(recovery.PrimarySkillName), StringComparison.Ordinal) &&
+               string.Equals(requested, Normalize(recovery.CommandName), StringComparison.Ordinal);
+    }
+
+    private static bool MatchesReference(SecretReference expected, SecretReference actual) =>
+        string.Equals(actual.Ref, expected.Ref, StringComparison.Ordinal) &&
+        string.Equals(actual.Purpose, expected.Purpose, StringComparison.Ordinal) &&
+        string.Equals(actual.OwnerScopeKey, expected.OwnerScopeKey, StringComparison.Ordinal) &&
+        string.Equals(actual.Fingerprint, expected.Fingerprint, StringComparison.Ordinal) &&
+        actual.Version == expected.Version &&
+        actual.CreatedAtUnixMs == expected.CreatedAtUnixMs &&
+        actual.ExpiresAtUnixMs == expected.ExpiresAtUnixMs;
 
     private static bool IsBindingStateFailure(Exception ex) =>
         ex is BindingRevokedException

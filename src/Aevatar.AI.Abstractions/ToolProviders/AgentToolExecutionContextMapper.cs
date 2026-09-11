@@ -623,7 +623,8 @@ public static class AgentToolExecutionContextMapper
             AgentToolExecutionContext.Normalize(payload.CommandArguments),
             payload.DiscoveryRequested,
             payload.IsolatePriorConversationHistory,
-            payload.MountWorkflowsRequested);
+            payload.MountWorkflowsRequested,
+            payload.FromChannelDefaultSkillBinding);
     }
 
     private static AgentSkillRecoveryContext FromSkillRecoveryCheckpointPayload(
@@ -642,7 +643,8 @@ public static class AgentToolExecutionContextMapper
             CommandArguments: null,
             payload.DiscoveryRequested,
             payload.IsolatePriorConversationHistory,
-            payload.MountWorkflowsRequested);
+            payload.MountWorkflowsRequested,
+            payload.FromChannelDefaultSkillBinding);
     }
 
     private static AgentToolCredentialSource FromCredentialSourcePayload(AgentToolCredentialSourcePayload source) =>
@@ -725,6 +727,7 @@ public static class AgentToolExecutionContextMapper
             DiscoveryRequested = context.DiscoveryRequested,
             IsolatePriorConversationHistory = context.IsolatePriorConversationHistory,
             MountWorkflowsRequested = context.MountWorkflowsRequested,
+            FromChannelDefaultSkillBinding = context.FromChannelDefaultSkillBinding,
         };
 
     private static AgentSkillRecoveryCheckpointPayload ToSkillRecoveryCheckpointPayload(
@@ -739,6 +742,7 @@ public static class AgentToolExecutionContextMapper
             DiscoveryRequested = context.DiscoveryRequested,
             IsolatePriorConversationHistory = context.IsolatePriorConversationHistory,
             MountWorkflowsRequested = context.MountWorkflowsRequested,
+            FromChannelDefaultSkillBinding = context.FromChannelDefaultSkillBinding,
         };
 
     private static AgentToolVisibilityScope FromToolVisibilityPayload(AgentToolVisibilityScopePayload? payload)

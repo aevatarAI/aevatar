@@ -220,6 +220,8 @@ message AgentSkillRecoveryContextPayload {
   bool isolate_prior_conversation_history = 9;
   // True only when the caller explicitly requested mounting the skill's workflows.
   bool mount_workflows_requested = 10;
+  // Host-resolved registration default; only this primary skill may use channel authority.
+  bool from_channel_default_skill_binding = 11;
 }
 
 message AgentToolVisibilityScopePayload {
@@ -285,6 +287,7 @@ message AgentSkillRecoveryCheckpointPayload {
   bool discovery_requested = 6;
   bool isolate_prior_conversation_history = 7;
   bool mount_workflows_requested = 8;
+  bool from_channel_default_skill_binding = 9;
 }
 
 enum AgentToolNyxIdCredentialKindPayload {

@@ -11,6 +11,34 @@ namespace Aevatar.AI.Tests;
 
 public sealed class AgentToolExecutionContextMapperTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DefaultSkillAuthority_ShouldSurviveTransportAndRecovery(bool fromDefaultSkill)
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration("reg-default-alpha"),
+            SkillRecovery = AgentSkillRecoveryContext.Empty with
+            {
+                PrimarySkillName = "configured-skill",
+                FromChannelDefaultSkillBinding = fromDefaultSkill,
+            },
+        };
+
+        var transport = AgentToolExecutionContextMapper.FromPayload(
+            AgentToolExecutionContextPayload.Parser.ParseFrom(context.ToPayload().ToByteArray()));
+        var recovered = AgentToolExecutionContextMapper.FromRecoveryPayload(
+            AgentToolRecoveryContextPayload.Parser.ParseFrom(context.ToRecoveryPayload().ToByteArray()));
+
+        foreach (var restored in new[] { transport, recovered })
+        {
+            restored.SkillRecovery.FromChannelDefaultSkillBinding.Should().Be(fromDefaultSkill);
+            restored.SkillRecovery.PrimarySkillName.Should().Be("configured-skill");
+            restored.ExecutionOwner.Should().Be(context.ExecutionOwner);
+        }
+    }
+
     [Fact]
     public void FromRequest_WhenTypedFieldsAndLegacyMetadataOverlap_ShouldUseOnlyTypedControlAndScrubMetadata()
     {

@@ -880,7 +880,8 @@ NyxidChat 的 draft-run interaction port 不在 `ConversationGAgent` turn 内执
 - **显式触发优先**：`/init` 等本地 slash、`/workflow run` 内建、`/<skill>` / `::<skill>` 显式触发、card action 路由全部先于 default binding；binding 只认领"什么都没匹配"的普通文本 turn。
 - **注册即事实**：绑定存在 `ChannelBotRegistrationEntry`（actor 持久态）并投影到 `ChannelBotRegistrationDocument`；写入时归一化为 parser 规范形（小写、去前导 trigger token）。同 `requested_id` 重注册即更新绑定。
 - **入口对称**：HTTP facade `POST /api/channels/registrations`（`default_skill_name` 字段）与 agent tool `channel_registrations`（`register_channel_via_nyx` 的 `default_skill_name` 参数）均可设置；list 输出回显该字段。
-- **sender gate 不变**：与显式 skill 触发一致，未绑定 NyxID 的 sender 不启用（tool dispatch 对 unbound sender 关闭）。
+- **授权来源按入口区分**：显式 `/<skill>` / `::<skill>` 触发仍要求发送者存在已验证的 NyxID binding；registration 的 `default_skill_name` 是 Bot 注册所有者配置的确定性入口，使用同一 registration 的 Channel Agent Key 加载精确的默认 skill，不要求当前 Telegram/Lark sender 先 `/init`。发送者即使已经绑定到另一个 NyxID 账号，也不会改变默认入口的授权来源。
+- **未绑定默认入口收窄工具面**：未绑定 sender 的 default-skill turn 只向模型暴露 `use_skill`，并且 resolver 只接受与 recovery 中 `primary_skill_name`、`command_name` 完全一致的默认 skill 和 registration Agent Key；其他 tool 或 skill 名称不会借用 Bot 授权。Agent Key/Vault 引用无效时直接失败，不回退到 sender token。
 - **不感知具体 skill 名**：binding 值是 host/user 数据，路由逻辑只做通用 skill 触发合成，生产代码不 hardcode 任何 skill 名。
 
 ### 5.6.4 Channel reply truthfulness: mutating receipts outrank model prose

@@ -2870,6 +2870,139 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldRouteUnboundPlainTextThroughDefaultSkillBinding()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registration = BuildNewRegistrationEntry();
+        registration.DefaultSkillName = "test-default-skill";
+        registration.Platform = "telegram";
+        registration.NyxProviderSlug = "telegram";
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "default-route-proof-1",
+                "msg-default-skill-unbound-1",
+                ConversationScope.DirectMessage,
+                "telegram-dm-1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "telegram",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("bound to the `test-default-skill` skill");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.SenderBinding.BindingId.Should().BeNull();
+        toolContext.ExecutionOwner.Should().Be(AgentToolExecutionOwners.ChannelRegistration(registration.Id));
+        toolContext.Channel.BotRegistrationId.Should().Be(registration.Id);
+        toolContext.Channel.WorkflowResultDeliveryCredential.Should().NotBeNull();
+        toolContext.Channel.WorkflowResultDeliveryCredential!.SubjectId.Should().Be(registration.NyxAgentApiKeyId);
+
+        var recovery = toolContext.SkillRecovery;
+        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.CommandName.Should().Be("test-default-skill");
+        recovery.PrimarySkillName.Should().Be("test-default-skill");
+        recovery.CommandArguments.Should().Be("default-route-proof-1");
+        recovery.IsolatePriorConversationHistory.Should().BeFalse();
+        recovery.FromChannelDefaultSkillBinding.Should().BeTrue();
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldKeepUnboundExplicitSkillTriggerBehindSenderBindingGate_WhenDefaultSkillIsConfigured()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .BuildServiceProvider();
+        var registration = BuildNewRegistrationEntry();
+        registration.DefaultSkillName = "test-default-skill";
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "/other-private-skill attempt",
+                "msg-default-skill-unbound-explicit-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().BeNull();
+        result.Outbound.Text.Should().Contain("NyxID 登录");
+        adapter.Replies.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task RunInboundAsync_ShouldRouteBoundPlainTextThroughDefaultSkillBindingUsingChannelAuthority()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(
+            new ExternalSubjectRef
+            {
+                Platform = "lark",
+                Tenant = "scope-1",
+                ExternalUserId = "ou_user_1",
+            },
+            new BindingId { Value = "bnd-other-user-1" });
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton<INyxIdCurrentUserResolver>(new StubNyxIdCurrentUserResolver
+            {
+                ResolvedUserId = "nyx-user-other-1",
+            })
+            .BuildServiceProvider();
+        var registration = BuildNewRegistrationEntry();
+        registration.DefaultSkillName = "test-default-skill";
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter, services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "default-route-proof-1",
+                "msg-default-skill-bound-other-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.SenderBinding.BindingId.Should().Be("bnd-other-user-1");
+        toolContext.SkillRecovery.FromChannelDefaultSkillBinding.Should().BeTrue();
+        toolContext.SkillRecovery.PrimarySkillName.Should().Be("test-default-skill");
+        toolContext.ExecutionOwner.Should().Be(AgentToolExecutionOwners.ChannelRegistration(registration.Id));
+        toolContext.Channel.WorkflowResultDeliveryCredential.Should().NotBeNull();
+        toolContext.Channel.WorkflowResultDeliveryCredential!.SubjectId.Should().Be(registration.NyxAgentApiKeyId);
+        adapter.Replies.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldRequestLlmReply_WhenUnboundPrivateSenderSendsNormalMessage()
     {
         var broker = new InMemoryCapabilityBroker();
