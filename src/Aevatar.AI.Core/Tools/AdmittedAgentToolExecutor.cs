@@ -11,6 +11,7 @@ using Aevatar.AI.Core.Observability;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -23,18 +24,21 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     private readonly ToolAuditRecordFactory _auditRecordFactory;
     private readonly ILogger<AdmittedAgentToolExecutor> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IChannelRegistrationAuthorityAdmissionPort? _channelRegistrationAuthorityAdmissionPort;
 
     public AdmittedAgentToolExecutor(
         IAgentToolAdmissionLedger admissionLedger,
         IAuditTrailAppender auditTrailAppender,
         IAuditActorIdentityHasher identityHasher,
         TimeProvider? timeProvider = null,
-        ILogger<AdmittedAgentToolExecutor>? logger = null)
+        ILogger<AdmittedAgentToolExecutor>? logger = null,
+        IChannelRegistrationAuthorityAdmissionPort? channelRegistrationAuthorityAdmissionPort = null)
     {
         _admissionLedger = admissionLedger ?? throw new ArgumentNullException(nameof(admissionLedger));
         _auditTrailAppender = auditTrailAppender ?? throw new ArgumentNullException(nameof(auditTrailAppender));
         _logger = logger ?? NullLogger<AdmittedAgentToolExecutor>.Instance;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _channelRegistrationAuthorityAdmissionPort = channelRegistrationAuthorityAdmissionPort;
         _auditRecordFactory = new ToolAuditRecordFactory(
             identityHasher ?? throw new ArgumentNullException(nameof(identityHasher)),
             _timeProvider);
@@ -203,6 +207,41 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 callSafety,
                 ct).ConfigureAwait(false);
         }
+
+        var channelAuthorityDecision = await AdmitChannelRegistrationAuthorityAsync(
+            credentialDecision.ExecutionContext,
+            credentialDecision.SelectedSenderBearer,
+            ct).ConfigureAwait(false);
+        if (channelAuthorityDecision is { Allowed: false })
+        {
+            _logger.LogWarning(
+                "Durable channel registration credential admission denied. reason={Reason}",
+                channelAuthorityDecision.Reason);
+            var publicFailure = MapChannelRegistrationAuthorityFailure(
+                channelAuthorityDecision.Reason);
+            var denied = CreateDenied(
+                tool,
+                toolName,
+                toolCallId,
+                callSafety,
+                isMutation,
+                publicFailure.Code,
+                publicFailure.Message,
+                AgentToolExecutionFailureStage.CredentialPolicy);
+            return await CompleteBeforeTerminalAsync(
+                tool,
+                denied,
+                credentialDecision.ExecutionContext,
+                credentialDecision.CredentialSource,
+                executionOwner,
+                requestId,
+                toolName,
+                toolCallId,
+                argumentsSha256,
+                callSafety,
+                ct).ConfigureAwait(false);
+        }
+
         var approvalRequestId = CreateApprovalRequestId(
             executionOwner,
             requestId,
@@ -1655,7 +1694,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 true,
                 senderContext,
                 ResolveCredentialSource(senderContext),
-                string.Empty);
+                string.Empty,
+                SelectedSenderBearer: true);
         }
 
         if (!isMutation)
@@ -1667,6 +1707,109 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             AgentToolCredentialSource.ChannelRegistration,
             $"Tool '{toolName}' was not executed because the bound sender has no valid NyxID credential.");
     }
+
+    private async Task<ChannelRegistrationAuthorityAdmissionResult?> AdmitChannelRegistrationAuthorityAsync(
+        AgentToolExecutionContext context,
+        bool selectedSenderBearer,
+        CancellationToken ct)
+    {
+        if (selectedSenderBearer)
+            return null;
+
+        var credential = context.DurableNyxIdCredential;
+        var declaredChannelRegistration =
+            context.CredentialSource == AgentToolCredentialSource.ChannelRegistration;
+        var channelRegistrationCandidate =
+            declaredChannelRegistration ||
+            credential?.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration ||
+            string.Equals(
+                credential?.Purpose,
+                CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                StringComparison.Ordinal) ||
+            string.Equals(
+                credential?.SecretReference?.Purpose,
+                CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                StringComparison.Ordinal);
+        if (!channelRegistrationCandidate)
+            return null;
+
+        if (context.Credentials.NyxIdCredentialKind != AgentToolNyxIdCredentialKind.AgentKey)
+        {
+            return ChannelRegistrationAuthorityAdmissionResult.Deny(
+                ChannelRegistrationAuthorityAdmissionReason.CredentialDescriptorMismatch);
+        }
+
+        if (credential is null)
+        {
+            return ChannelRegistrationAuthorityAdmissionResult.Deny(
+                ChannelRegistrationAuthorityAdmissionReason.CredentialDescriptorMismatch);
+        }
+
+        if (_channelRegistrationAuthorityAdmissionPort is null)
+        {
+            return ChannelRegistrationAuthorityAdmissionResult.Deny(
+                ChannelRegistrationAuthorityAdmissionReason.AuthorityUnavailable);
+        }
+
+        if (context.OperationAdmission is null)
+        {
+            return ChannelRegistrationAuthorityAdmissionResult.Deny(
+                ChannelRegistrationAuthorityAdmissionReason.OperationAdmissionMissing);
+        }
+
+        try
+        {
+            var result = await _channelRegistrationAuthorityAdmissionPort.AdmitAsync(
+                new ChannelRegistrationAuthorityAdmissionRequest(
+                    credential.Clone(),
+                    context.OperationAdmission),
+                ct).ConfigureAwait(false);
+            var finalResult = result is
+                { Allowed: true, Reason: ChannelRegistrationAuthorityAdmissionReason.Allowed }
+                ? result
+                : ChannelRegistrationAuthorityAdmissionResult.Deny(
+                    result?.Reason is null or
+                        ChannelRegistrationAuthorityAdmissionReason.Unspecified or
+                        ChannelRegistrationAuthorityAdmissionReason.Allowed
+                        ? ChannelRegistrationAuthorityAdmissionReason.AuthorityUnavailable
+                        : result.Reason);
+            return finalResult;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "Durable channel registration credential admission failed. error={Error}",
+                SafeExceptionClass(ex));
+            return ChannelRegistrationAuthorityAdmissionResult.Deny(
+                ChannelRegistrationAuthorityAdmissionReason.AuthorityUnavailable);
+        }
+    }
+
+    private static (string Code, string Message) MapChannelRegistrationAuthorityFailure(
+        ChannelRegistrationAuthorityAdmissionReason reason) => reason switch
+        {
+            ChannelRegistrationAuthorityAdmissionReason.TargetNotGranted or
+                ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized =>
+                (
+                    "channel_service_not_allowed",
+                    "The channel registration is not authorized to call this Service."),
+            ChannelRegistrationAuthorityAdmissionReason.RegistrationMissing =>
+                (
+                    "registration_not_found",
+                    "The channel registration was not found."),
+            ChannelRegistrationAuthorityAdmissionReason.AuthorizationContractInvalid =>
+                (
+                    "channel_authorization_contract_invalid",
+                    "The channel registration authorization contract is invalid."),
+            _ =>
+                (
+                    "credential_denied",
+                    "The durable channel registration credential is not authorized for this operation."),
+        };
 
     private static bool RequiresApproval(IAgentTool tool, AgentToolCallSafety callSafety)
     {
@@ -1742,6 +1885,10 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                        EnforcementOwner: AgentToolOperationEnforcementOwner.Aevatar,
                    },
                } &&
+               string.Equals(
+                   NormalizeIdentity(authorization.CallSiteId),
+                   NormalizeIdentity(admission.CallSiteId),
+                   StringComparison.Ordinal) &&
                admission.ExecutionPolicy.AllowedExecutionModes.Contains(
                    AgentToolOperationExecutionMode.Durable) &&
                string.Equals(
@@ -2111,7 +2258,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         bool Allowed,
         AgentToolExecutionContext ExecutionContext,
         AgentToolCredentialSource CredentialSource,
-        string Message);
+        string Message,
+        bool SelectedSenderBearer = false);
 
     private sealed record ExecutionOwnerIdentity(
         AgentToolExecutionOwnerKind Kind,

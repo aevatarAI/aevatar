@@ -17,6 +17,20 @@ public enum ChannelRegistrationCommandStartError
     StoreActorUnavailable = 1,
 }
 
+internal sealed class ChannelRegistrationCommandDispatchException : InvalidOperationException
+{
+    public ChannelRegistrationCommandDispatchException(
+        string message,
+        bool acceptanceUnknown,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        AcceptanceUnknown = acceptanceUnknown;
+    }
+
+    public bool AcceptanceUnknown { get; }
+}
+
 // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
 //   Old pattern: Nyx relay registration endpoints + singleton provisioning services 在 Host 内做 platform selection / scope resolution / remote Nyx provisioning / actor creation / envelope construction / dispatch through raw runtime/dispatch helpers。
 //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
@@ -25,14 +39,14 @@ public sealed class ChannelRegistrationCommandFacade
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public rebuild surfaces, new=internal Runtime startup helper only
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=facade RebuildProjectionAsync, new=facade handles register/unregister only
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=relay-local rebuild command DI, new=runtime startup dispatch only
-    private readonly ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> _registerDispatchService;
+    private readonly ICommandDispatchPipeline<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> _registerDispatchPipeline;
     private readonly ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> _unregisterDispatchService;
 
-    public ChannelRegistrationCommandFacade(
-        ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> registerDispatchService,
+    internal ChannelRegistrationCommandFacade(
+        ICommandDispatchPipeline<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> registerDispatchPipeline,
         ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> unregisterDispatchService)
     {
-        _registerDispatchService = registerDispatchService ?? throw new ArgumentNullException(nameof(registerDispatchService));
+        _registerDispatchPipeline = registerDispatchPipeline ?? throw new ArgumentNullException(nameof(registerDispatchPipeline));
         _unregisterDispatchService = unregisterDispatchService ?? throw new ArgumentNullException(nameof(unregisterDispatchService));
     }
 
@@ -44,8 +58,38 @@ public sealed class ChannelRegistrationCommandFacade
         //   Old pattern: provisioning services 手写 local mirror envelope 并直调 runtime/dispatch。
         //   New principle: local mirror writes 只进入 typed command facade 和 standard command skeleton。
         ArgumentNullException.ThrowIfNull(command);
-        var result = await _registerDispatchService.DispatchAsync(command, ct);
-        return ResolveReceipt(result);
+        var prepared = await _registerDispatchPipeline.PrepareAsync(command, ct);
+        if (!prepared.Succeeded || prepared.Target is null)
+        {
+            throw new ChannelRegistrationCommandDispatchException(
+                "local_mirror_dispatch_failed",
+                acceptanceUnknown: false);
+        }
+
+        // Cancellation known before dispatch cannot have admitted this command.
+        // Once dispatch starts, failures still carry unknown acceptance semantics.
+        ct.ThrowIfCancellationRequested();
+        DispatchAdmission admission;
+        try
+        {
+            admission = await _registerDispatchPipeline.DispatchPreparedAsync(prepared.Target, ct);
+        }
+        catch (Exception ex)
+        {
+            throw new ChannelRegistrationCommandDispatchException(
+                "Channel registration command dispatch acceptance is unknown.",
+                acceptanceUnknown: true,
+                ex);
+        }
+
+        if (!admission.Accepted)
+        {
+            throw new ChannelRegistrationCommandDispatchException(
+                "local_mirror_dispatch_failed",
+                acceptanceUnknown: false);
+        }
+
+        return prepared.Target.Receipt;
     }
 
     public async Task<ChannelRegistrationCommandAcceptedReceipt> UnregisterAsync(
@@ -80,13 +124,17 @@ public sealed class ChannelRegistrationCommandFacade
 public sealed class ChannelRelayRegistrationFacade
 {
     private readonly IReadOnlyDictionary<string, INyxChannelBotProvisioningService> _provisioningServices;
+    private readonly ChannelAgentKeyWriteMode _writeMode;
 
-    public ChannelRelayRegistrationFacade(IEnumerable<INyxChannelBotProvisioningService> provisioningServices)
+    public ChannelRelayRegistrationFacade(
+        IEnumerable<INyxChannelBotProvisioningService> provisioningServices,
+        ChannelAgentKeyWriteMode writeMode = ChannelAgentKeyWriteMode.Disabled)
     {
         _provisioningServices = BuildProvisioningServiceMap(provisioningServices);
+        _writeMode = writeMode;
     }
 
-    public Task<NyxChannelBotProvisioningResult> RegisterAsync(
+    public async Task<NyxChannelBotProvisioningResult> RegisterAsync(
         ChannelRelayRegistrationRequest request,
         CancellationToken ct = default)
     {
@@ -98,15 +146,29 @@ public sealed class ChannelRelayRegistrationFacade
         var platform = request.Platform.Trim().ToLowerInvariant();
         if (!_provisioningServices.TryGetValue(platform, out var provisioningService))
         {
-            return Task.FromResult(new NyxChannelBotProvisioningResult(
+            return new NyxChannelBotProvisioningResult(
                 Succeeded: false,
                 Status: "error",
                 Platform: platform,
                 Error: "unsupported_platform",
-                Note: $"Platform '{platform}' is not in the supported production contract. ChannelRuntime currently provisions relay registrations for: {string.Join(", ", _provisioningServices.Keys.OrderBy(static key => key, StringComparer.OrdinalIgnoreCase))}."));
+                Note: $"Platform '{platform}' is not in the supported production contract. ChannelRuntime currently provisions relay registrations for: {string.Join(", ", _provisioningServices.Keys.OrderBy(static key => key, StringComparer.OrdinalIgnoreCase))}.");
         }
 
-        return provisioningService.ProvisionAsync(request.ToProvisioningRequest(platform), ct);
+        if (_writeMode != ChannelAgentKeyWriteMode.NyxIdDefault)
+        {
+            return new NyxChannelBotProvisioningResult(
+                Succeeded: false,
+                Status: "error",
+                Platform: platform,
+                Error: "channel_agent_key_write_gate_closed");
+        }
+
+        var result = await provisioningService.ProvisionAsync(request.ToProvisioningRequest(platform), ct);
+        if (result.Succeeded)
+            return result;
+
+        var failureReason = NyxApiResponseHelper.NormalizePublicFailureReason(result.Error);
+        return result with { Error = failureReason };
     }
 
     private static IReadOnlyDictionary<string, INyxChannelBotProvisioningService> BuildProvisioningServiceMap(
@@ -144,8 +206,12 @@ public sealed record ChannelRelayRegistrationRequest(
     string NyxProviderSlug,
     NyxChannelLarkCredentials? Lark = null,
     IReadOnlyDictionary<string, string>? Credentials = null,
-    string DefaultSkillName = "")
+    string DefaultSkillName = "",
+    ChannelRegistrationServiceSelection? RequestedServiceSelection = null)
 {
+    public ChannelRegistrationServiceSelection ServiceSelection =>
+        RequestedServiceSelection ?? ChannelRegistrationServiceSelection.NyxIdDefault;
+
     public NyxChannelBotProvisioningRequest ToProvisioningRequest(string platform)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
@@ -160,7 +226,8 @@ public sealed record ChannelRelayRegistrationRequest(
             NyxProviderSlug: NyxProviderSlug,
             Lark: Lark,
             Credentials: Credentials,
-            DefaultSkillName: DefaultSkillName);
+            DefaultSkillName: DefaultSkillName,
+            RequestedServiceSelection: ServiceSelection);
     }
 }
 

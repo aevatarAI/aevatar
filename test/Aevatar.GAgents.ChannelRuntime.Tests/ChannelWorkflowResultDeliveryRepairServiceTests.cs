@@ -120,6 +120,61 @@ public sealed class ChannelWorkflowResultDeliveryRepairServiceTests
     }
 
     [Fact]
+    public async Task RepairAsync_NewModelNeverEntersHistoricalRepair()
+    {
+        var validFixture = new Fixture(NewRegistration(valid: true));
+        var validResult = await validFixture.Service.RepairAsync(
+            "reg-alpha",
+            "scope-alpha",
+            "user-alpha",
+            "user-bearer-alpha");
+
+        validResult.Status.Should().Be(ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled);
+        validFixture.AssertNoMutationSideEffects();
+
+        var invalidFixture = new Fixture(NewRegistration(valid: false));
+        var invalidResult = await invalidFixture.Service.RepairAsync(
+            "reg-alpha",
+            "scope-alpha",
+            "user-alpha",
+            "user-bearer-alpha");
+
+        invalidResult.Status.Should().Be(ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed);
+        invalidResult.FailurePhase.Should().Be(ChannelWorkflowResultDeliveryRepairPhase.RequestAdmission);
+        invalidResult.FailureReason.Should().Be(ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest);
+        invalidFixture.AssertNoMutationSideEffects();
+    }
+
+    [Fact]
+    public async Task RepairAsync_ExplicitRegistrationWithStaleRepairState_NeverEntersHistoricalRepair()
+    {
+        var registration = NewRegistration(valid: true);
+        registration.AuthorizationMode =
+            ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist;
+        registration.RegistrationServiceAllowlist = new ChannelRegistrationServiceAllowlist
+        {
+            ServiceIds = { "svc-business" },
+        };
+        registration.ChannelAgentKey.Grant.AllowAllServices = false;
+        registration.ChannelAgentKey.Grant.AllowAllNodes = false;
+        registration.ChannelAgentKey.Grant.AllowedServiceIds.Add("svc-business");
+        registration.ChannelAgentKey.Grant.ScopePlanDigest =
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        registration.WorkflowResultDeliveryRepair = RequestedRepair();
+        var fixture = new Fixture(registration);
+
+        var result = await fixture.Service.RepairAsync(
+            "reg-alpha",
+            "scope-alpha",
+            "user-alpha",
+            "user-bearer-alpha");
+
+        result.Status.Should().Be(ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled);
+        result.NyxAgentApiKeyId.Should().Be("key-old-alpha");
+        fixture.AssertNoMutationSideEffects();
+    }
+
+    [Fact]
     public async Task RepairAsync_CancellationBeforeRotationHasNoSideEffects()
     {
         var fixture = new Fixture(Registration());
@@ -402,6 +457,35 @@ public sealed class ChannelWorkflowResultDeliveryRepairServiceTests
             Version = 1,
         };
 
+    private static ChannelBotRegistrationEntry NewRegistration(bool valid)
+    {
+        var registration = Registration();
+        var reference = new SecretReference
+        {
+            Ref = "sec-new-alpha",
+            Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            OwnerScopeKey = registration.ScopeId,
+            Version = 1,
+            Fingerprint = "sha256:new-alpha",
+            CreatedAtUnixMs = Now.ToUnixTimeMilliseconds(),
+        };
+        registration.WorkflowResultDeliveryCredential = reference.Clone();
+        registration.AuthorizationMode = ChannelRegistrationAuthorizationMode.NyxidDefault;
+        registration.ChannelAgentKey = valid
+            ? new ChannelAgentKeyCredential
+            {
+                ApiKeyId = registration.NyxAgentApiKeyId,
+                SecretReference = reference.Clone(),
+                Grant = new ChannelAgentKeyGrantSnapshot
+                {
+                    AllowAllServices = true,
+                    AllowAllNodes = true,
+                },
+            }
+            : null;
+        return registration;
+    }
+
     private static ChannelWorkflowResultDeliveryRepairState RequestedRepair() =>
         new()
         {
@@ -491,6 +575,10 @@ public sealed class ChannelWorkflowResultDeliveryRepairServiceTests
         public Task<IReadOnlyList<ChannelBotRegistrationEntry>> QueryAllAsync(
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([]);
+
+        public Task<IReadOnlyList<ChannelBotRegistrationSnapshot>> QueryAllSnapshotsAsync(
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ChannelBotRegistrationSnapshot>>([]);
     }
 
     private sealed class RecordingCommandPort(Fixture owner)

@@ -10,6 +10,35 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ChannelRegistrationCommandFacadeTests
 {
     [Fact]
+    public async Task RegisterLocalMirrorAsync_CallerCancelledDuringPreparation_ThrowsCancellationBeforeDispatch()
+    {
+        using var caller = new CancellationTokenSource();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        var dispatchPort = Substitute.For<IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId).Returns(_ =>
+        {
+            caller.Cancel();
+            return Task.FromResult<IActor?>(Substitute.For<IActor>());
+        });
+        dispatchPort.DispatchAsync(Arg.Any<string>(), Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
+            .Returns(info =>
+            {
+                info.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                return ActorDispatchPortTestSupport.AcceptAsync(info);
+            });
+        var facade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, dispatchPort);
+
+        var act = () => facade.RegisterLocalMirrorAsync(new ChannelBotRegisterCommand
+        {
+            RequestedId = "reg-alpha", Platform = "lark", ScopeId = "scope-alpha",
+        }, caller.Token);
+
+        var failure = await act.Should().ThrowAsync<OperationCanceledException>();
+        failure.Which.CancellationToken.Should().Be(caller.Token);
+        await dispatchPort.DidNotReceiveWithAnyArgs().DispatchAsync(default!, default!, default);
+    }
+
+    [Fact]
     public async Task RegisterLocalMirrorAsync_WhenStoreActorIsMissing_ShouldCreateActorBeforeDispatch()
     {
         EventEnvelope? capturedEnvelope = null;

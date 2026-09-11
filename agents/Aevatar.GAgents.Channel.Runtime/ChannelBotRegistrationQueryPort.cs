@@ -42,15 +42,48 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             .ToArray();
     }
 
+    public async Task<IReadOnlyList<ChannelBotRegistrationSnapshot>> QueryAllSnapshotsAsync(
+        CancellationToken ct = default)
+    {
+        var result = await _documentReader.QueryAsync(
+            new ProjectionDocumentQuery { Take = 1000 },
+            ct);
+
+        return result.Items
+            .Select(static document => new ChannelBotRegistrationSnapshot(
+                ToEntry(document),
+                document.StateVersion))
+            .ToArray();
+    }
+
     public Task<ChannelBotRegistrationEntry?> GetByNyxAgentApiKeyIdAsync(
         string nyxAgentApiKeyId,
         CancellationToken ct = default) =>
         QuerySingleByFieldAsync(nameof(ChannelBotRegistrationDocument.NyxAgentApiKeyId), nyxAgentApiKeyId, ct);
 
-    public Task<IReadOnlyList<ChannelBotRegistrationEntry>> ListByNyxAgentApiKeyIdAsync(
+    public async Task<IReadOnlyList<ChannelBotRegistrationEntry>> ListByNyxAgentApiKeyIdAsync(
         string nyxAgentApiKeyId,
-        CancellationToken ct = default) =>
-        QueryAllByFieldAsync(nameof(ChannelBotRegistrationDocument.NyxAgentApiKeyId), nyxAgentApiKeyId, ct);
+        CancellationToken ct = default)
+    {
+        var documents = await QueryAllDocumentsByFieldAsync(
+            nameof(ChannelBotRegistrationDocument.NyxAgentApiKeyId),
+            nyxAgentApiKeyId,
+            ct);
+        return documents.Select(static document => ToEntry(document)).ToArray();
+    }
+
+    public async Task<IReadOnlyList<ChannelBotRegistrationSnapshot>> ListSnapshotsByNyxAgentApiKeyIdAsync(
+        string nyxAgentApiKeyId,
+        CancellationToken ct = default)
+    {
+        var documents = await QueryAllDocumentsByFieldAsync(
+            nameof(ChannelBotRegistrationDocument.NyxAgentApiKeyId),
+            nyxAgentApiKeyId,
+            ct);
+        return documents.Select(static document => new ChannelBotRegistrationSnapshot(
+            ToEntry(document),
+            document.StateVersion)).ToArray();
+    }
 
     public Task<ChannelBotRegistrationEntry?> GetByNyxChannelBotIdAsync(
         string nyxChannelBotId,
@@ -85,13 +118,13 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
         return document == null ? null : ToEntry(document);
     }
 
-    private async Task<IReadOnlyList<ChannelBotRegistrationEntry>> QueryAllByFieldAsync(
+    private async Task<IReadOnlyList<ChannelBotRegistrationDocument>> QueryAllDocumentsByFieldAsync(
         string fieldPath,
         string fieldValue,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(fieldValue))
-            return Array.Empty<ChannelBotRegistrationEntry>();
+            return Array.Empty<ChannelBotRegistrationDocument>();
 
         var result = await _documentReader.QueryAsync(
             new ProjectionDocumentQuery
@@ -109,7 +142,7 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             },
             ct);
 
-        return result.Items.Select(static doc => ToEntry(doc)).ToArray();
+        return result.Items;
     }
 
     private static ChannelBotRegistrationEntry ToEntry(ChannelBotRegistrationDocument document) =>
@@ -124,6 +157,9 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             NyxAgentApiKeyId = document.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = document.NyxConversationRouteId ?? string.Empty,
             WorkflowResultDeliveryCredential = document.WorkflowResultDeliveryCredential?.Clone(),
+            RegistrationServiceAllowlist = document.RegistrationServiceAllowlist?.Clone(),
+            ChannelAgentKey = document.ChannelAgentKey?.Clone(),
+            AuthorizationMode = document.AuthorizationMode,
             LastInboundAtUtc = document.LastInboundAtUtc,
             DefaultSkillName = document.DefaultSkillName ?? string.Empty,
             WorkflowResultDeliveryRepair = document.WorkflowResultDeliveryRepair?.Clone(),

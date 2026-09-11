@@ -27,6 +27,9 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(15);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("default_skill_name")!.FieldNumber.Should().Be(16);
         ChannelBotRegistrationEntry.Descriptor.FindFieldByName("workflow_result_delivery_repair")!.FieldNumber.Should().Be(17);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("registration_service_allowlist")!.FieldNumber.Should().Be(18);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("channel_agent_key")!.FieldNumber.Should().Be(19);
+        ChannelBotRegistrationEntry.Descriptor.FindFieldByName("authorization_mode")!.FieldNumber.Should().Be(20);
     }
 
     [Fact]
@@ -44,6 +47,9 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("nyx_reply_credential_ref").Should().BeNull();
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(11);
         ChannelBotRegisterCommand.Descriptor.FindFieldByName("default_skill_name")!.FieldNumber.Should().Be(12);
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("registration_service_allowlist")!.FieldNumber.Should().Be(13);
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("channel_agent_key")!.FieldNumber.Should().Be(14);
+        ChannelBotRegisterCommand.Descriptor.FindFieldByName("authorization_mode")!.FieldNumber.Should().Be(15);
     }
 
     [Fact]
@@ -67,6 +73,60 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("workflow_result_delivery_credential")!.FieldNumber.Should().Be(16);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("default_skill_name")!.FieldNumber.Should().Be(17);
         ChannelBotRegistrationDocument.Descriptor.FindFieldByName("workflow_result_delivery_repair")!.FieldNumber.Should().Be(18);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("registration_service_allowlist")!.FieldNumber.Should().Be(19);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("channel_agent_key")!.FieldNumber.Should().Be(20);
+        ChannelBotRegistrationDocument.Descriptor.FindFieldByName("authorization_mode")!.FieldNumber.Should().Be(21);
+    }
+
+    [Fact]
+    public void ChannelAgentKeyContracts_ShouldUseStableFieldNumbersAndPreserveOptionalBooleans()
+    {
+        AssertEnum(
+            "ChannelRegistrationAuthorizationMode",
+            ("CHANNEL_REGISTRATION_AUTHORIZATION_MODE_UNSPECIFIED", 0),
+            ("CHANNEL_REGISTRATION_AUTHORIZATION_MODE_NYXID_DEFAULT", 1),
+            ("CHANNEL_REGISTRATION_AUTHORIZATION_MODE_EXPLICIT_SERVICE_ALLOWLIST", 2));
+        AssertFields<ChannelRegistrationServiceAllowlist>(
+            ("service_ids", 1));
+        AssertFields<ChannelAgentKeyCredential>(
+            ("api_key_id", 1),
+            ("secret_reference", 2),
+            ("grant", 3));
+        AssertFields<ChannelAgentKeyGrantSnapshot>(
+            ("allowed_service_ids", 1),
+            ("allowed_node_ids", 2),
+            ("scope_plan_digest", 3),
+            ("allow_all_services", 4),
+            ("allow_all_nodes", 5));
+
+        var original = new ChannelAgentKeyGrantSnapshot
+        {
+            AllowAllServices = false,
+            AllowAllNodes = false,
+        };
+
+        var roundTripped = ChannelAgentKeyGrantSnapshot.Parser.ParseFrom(original.ToByteArray());
+
+        roundTripped.HasAllowAllServices.Should().BeTrue();
+        roundTripped.AllowAllServices.Should().BeFalse();
+        roundTripped.HasAllowAllNodes.Should().BeTrue();
+        roundTripped.AllowAllNodes.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ExplicitEmptyAllowlist_ShouldPreserveMessagePresenceAcrossSerialization()
+    {
+        var original = new ChannelBotRegistrationEntry
+        {
+            Id = "reg-explicit-empty",
+            AuthorizationMode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
+            RegistrationServiceAllowlist = new ChannelRegistrationServiceAllowlist(),
+        };
+
+        var roundTripped = ChannelBotRegistrationEntry.Parser.ParseFrom(original.ToByteArray());
+
+        roundTripped.RegistrationServiceAllowlist.Should().NotBeNull();
+        roundTripped.RegistrationServiceAllowlist.ServiceIds.Should().BeEmpty();
     }
 
     [Fact]

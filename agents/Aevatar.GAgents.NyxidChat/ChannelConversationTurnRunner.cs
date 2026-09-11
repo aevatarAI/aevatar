@@ -170,6 +170,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var registration = await ResolveRegistrationAsync(activity, ct);
         if (registration is null)
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
+        if (ChannelRegistrationAuthorizationContract.Classify(registration) ==
+            ChannelRegistrationAuthorizationContractKind.Invalid)
+        {
+            return ConversationTurnResult.PermanentFailure(
+                "channel_authorization_contract_invalid",
+                "Channel registration authorization contract is invalid.");
+        }
 
         // Group/channel chats deliver every message once the bot holds the broad read scope, so a
         // turn only "addresses" the bot when it @-mentions the bot, replies to one of the bot's own
@@ -2394,15 +2401,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static ChannelWorkflowResultDeliveryCredential? BuildWorkflowResultDeliveryCredential(
         ChannelBotRegistrationEntry registration)
     {
-        var secretReference = registration.WorkflowResultDeliveryCredential;
-        if (string.IsNullOrWhiteSpace(secretReference?.Ref) ||
-            string.IsNullOrWhiteSpace(registration.NyxAgentApiKeyId))
+        if (!ChannelWorkflowResultDeliveryCapability.TryGetDeliveryCredential(
+                registration,
+                out var apiKeyId,
+                out var secretReference))
+        {
             return null;
+        }
 
         return new ChannelWorkflowResultDeliveryCredential
         {
-            SecretReference = secretReference.Clone(),
-            SubjectId = registration.NyxAgentApiKeyId.Trim(),
+            SecretReference = secretReference,
+            SubjectId = apiKeyId,
         };
     }
 

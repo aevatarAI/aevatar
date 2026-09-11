@@ -46,6 +46,22 @@ public sealed class ChannelWorkflowResultDeliveryRepairObservationTests
     }
 
     [Fact]
+    public void Capability_UsesNewContractAndNeverFallsBackFromInvalidNewRecords()
+    {
+        var newRegistration = NewRegistration(
+            Repair(ChannelWorkflowResultDeliveryRepairStatus.Failed));
+        var invalidNewRegistration = NewRegistration();
+        invalidNewRegistration.ChannelAgentKey = null;
+
+        ChannelWorkflowResultDeliveryCapability.Resolve(newRegistration)
+            .Should().Be(ChannelWorkflowResultDeliveryCapabilityStatus.Enabled);
+        ChannelWorkflowResultDeliveryCapability.IsEnabled(invalidNewRegistration)
+            .Should().BeFalse();
+        ChannelWorkflowResultDeliveryCapability.Resolve(invalidNewRegistration)
+            .Should().Be(ChannelWorkflowResultDeliveryCapabilityStatus.RepairRequired);
+    }
+
+    [Fact]
     public async Task OutcomeProjector_PublishesEveryMatchingCommittedRepairOutcomeOnly()
     {
         var eventHub = Substitute.For<
@@ -198,7 +214,28 @@ public sealed class ChannelWorkflowResultDeliveryRepairObservationTests
             Purpose = CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
             OwnerScopeKey = "scope-alpha",
             Version = 1,
+            Fingerprint = "sha256:alpha",
+            CreatedAtUnixMs = 1784563200000,
         };
+
+    private static ChannelBotRegistrationEntry NewRegistration(
+        ChannelWorkflowResultDeliveryRepairState? repair = null)
+    {
+        var reference = DeliveryReference();
+        var registration = Registration(reference.Clone(), repair);
+        registration.AuthorizationMode = ChannelRegistrationAuthorizationMode.NyxidDefault;
+        registration.ChannelAgentKey = new ChannelAgentKeyCredential
+        {
+            ApiKeyId = registration.NyxAgentApiKeyId,
+            SecretReference = reference.Clone(),
+            Grant = new ChannelAgentKeyGrantSnapshot
+            {
+                AllowAllServices = true,
+                AllowAllNodes = true,
+            },
+        };
+        return registration;
+    }
 
     private static ChannelWorkflowResultDeliveryRepairState Repair(
         ChannelWorkflowResultDeliveryRepairStatus status,

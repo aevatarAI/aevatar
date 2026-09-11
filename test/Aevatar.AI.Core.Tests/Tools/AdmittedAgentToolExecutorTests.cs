@@ -1112,6 +1112,72 @@ public sealed class AdmittedAgentToolExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenWebhookPermitCallSiteDoesNotMatchAdmission_ShouldDenyWithoutHumanFallback()
+    {
+        var appender = SuccessfulAuditAppender();
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(true, false, false),
+            name: "nyxid_proxy")
+        {
+            ApprovalMode = ToolApprovalMode.Auto,
+        };
+        var permittedAdmission = ExactUnattendedAdmission() with
+        {
+            CallSiteId = "workflow-1/create-approval",
+        };
+        var executionAdmission = permittedAdmission with
+        {
+            CallSiteId = "workflow-1/update-approval",
+        };
+        var selectorDigest = AgentToolOperationSelector.ComputeDigest(permittedAdmission);
+        AgentToolOperationSelector.ComputeDigest(executionAdmission).Should().Be(selectorDigest);
+        var owner = AgentToolExecutionOwners.WorkflowRun("run-1");
+        var context = CreateTestExecutionContext() with
+        {
+            ExecutionOwner = owner,
+            Request = new AgentToolRequestIdentity("run-1", "call-1"),
+            InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+            OperationAdmission = executionAdmission,
+            Credentials = new AgentToolCredentials(
+                "jit-token",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.ProxyDelegation),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                "tenant-alpha",
+                "owner-alpha",
+                "proxy"),
+        };
+        var executor = CreateExecutor(appender);
+        var request = new AgentToolExecutionRequest(
+            tool,
+            "{}",
+            context,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null,
+            UnattendedAuthorization: new AgentToolUnattendedExecutionAuthorization(
+                AgentToolUnattendedAuthorizationKind.WorkflowWebhookExact,
+                "sha256:authorization",
+                owner.Clone(),
+                "run-1",
+                "nyxid_proxy",
+                "call-1",
+                AgentToolArgumentsDigest.ComputeSha256("{}"),
+                permittedAdmission.CallSiteId,
+                selectorDigest));
+
+        var outcome = await executor.ExecuteAsync(request);
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Denied);
+        outcome.FailureCode.Should().Be("unattended_authorization_mismatch");
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(0);
+        appender.Records.Should().NotContain(record =>
+            record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.WaitingApproval);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenWebhookPermitDoesNotMatchArguments_ShouldDenyWithoutHumanFallback()
     {
         var appender = SuccessfulAuditAppender();
@@ -2065,7 +2131,8 @@ public sealed class AdmittedAgentToolExecutorTests
             AgentToolOperationRisk.Write,
             AgentToolOperationApproval.Required,
             AgentToolOperationEnforcementOwner.Aevatar,
-            [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]));
+            [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]),
+        CallSiteId: "workflow-1/create-approval");
 
     private sealed class RecordingTool(
         AgentToolCallSafety safety,

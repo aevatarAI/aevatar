@@ -8,7 +8,6 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 internal sealed class ChannelNyxIdAgentKeyReadinessPort(
     ISecretVault secretVault,
-    NyxIdApiClient nyxClient,
     ILogger<ChannelNyxIdAgentKeyReadinessPort> logger)
     : IChannelNyxIdAgentKeyReadinessPort
 {
@@ -37,29 +36,11 @@ internal sealed class ChannelNyxIdAgentKeyReadinessPort(
                 return ChannelNyxIdAgentKeyReadinessResult.Failed("channel_agent_key_unavailable");
             }
 
-            await ChannelNyxIdAgentKeyScopePolicy.EnsureProxyScopeAsync(
-                nyxClient,
-                resolved.Secret.Trim(),
-                credential.SubjectId,
-                logger,
-                ct);
             return ChannelNyxIdAgentKeyReadinessResult.Succeeded;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
-        }
-        catch (InvalidOperationException ex) when (string.Equals(
-            ex.Message,
-            "channel_agent_key_credential_class_invalid",
-            StringComparison.Ordinal))
-        {
-            logger.LogWarning(
-                "Channel Agent Key uses an incompatible NyxID credential class and must be reissued by its registration owner: subjectId={SubjectId} scope={Scope}",
-                credential.SubjectId,
-                credential.OwnerScopeKey);
-            return ChannelNyxIdAgentKeyReadinessResult.Failed(
-                "channel_agent_key_rebind_required");
         }
         catch (Exception ex)
         {
@@ -125,9 +106,11 @@ internal static class ChannelNyxIdAgentKeyScopePolicy
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKeyId);
 
         var normalizedApiKeyId = apiKeyId.Trim();
-        var currentResponse = await nyxClient.GetApiKeyAsync(credential, normalizedApiKeyId, ct);
-        EnsureGeneralProxyCredentialClass(currentResponse);
-        var currentScopes = ParseScopes(currentResponse, "scope_inspection_failed");
+        var currentScopes = await GetGeneralCredentialScopesAsync(
+            nyxClient,
+            credential,
+            normalizedApiKeyId,
+            ct);
         if (HasProxyScope(currentScopes))
             return;
 
@@ -144,6 +127,21 @@ internal static class ChannelNyxIdAgentKeyScopePolicy
         logger.LogInformation(
             "Upgraded channel Agent Key for NyxID workflow proxy access: apiKeyId={ApiKeyId}",
             normalizedApiKeyId);
+    }
+
+    private static async Task<string> GetGeneralCredentialScopesAsync(
+        NyxIdApiClient nyxClient,
+        string credential,
+        string apiKeyId,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(nyxClient);
+        ArgumentException.ThrowIfNullOrWhiteSpace(credential);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKeyId);
+
+        var response = await nyxClient.GetApiKeyAsync(credential, apiKeyId.Trim(), ct);
+        EnsureGeneralProxyCredentialClass(response);
+        return ParseScopes(response, "scope_inspection_failed");
     }
 
     private static string ParseScopes(string response, string failureCode)

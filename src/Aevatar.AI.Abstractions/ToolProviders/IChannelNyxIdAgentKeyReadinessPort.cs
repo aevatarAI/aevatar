@@ -3,9 +3,9 @@ using Aevatar.Foundation.Abstractions.Credentials;
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
 /// <summary>
-/// Prepares the vault-backed Agent Key owned by a channel registration before a workflow starts.
-/// Implementations keep raw key material inside the adapter boundary and must fail closed when the
-/// exact durable reference cannot be resolved or prepared for NyxID workflow access.
+/// Resolves the vault-backed Agent Key owned by a channel registration before a workflow starts.
+/// Implementations keep raw key material inside the adapter boundary and fail closed when the exact
+/// durable reference cannot be resolved. NyxID authorization is enforced by the target invocation.
 /// </summary>
 public interface IChannelNyxIdAgentKeyReadinessPort
 {

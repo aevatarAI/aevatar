@@ -24,7 +24,8 @@ public sealed record AgentToolOperationAdmission(
     AgentToolOperationExecutionPolicy ExecutionPolicy,
     string CatalogDigest = "",
     AgentToolOperationReadBack? ReadBack = null,
-    string CatalogServiceSlug = "")
+    string CatalogServiceSlug = "",
+    string CallSiteId = "")
 {
     public IEnumerable<AgentToolOperationParameter> PathParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Path);

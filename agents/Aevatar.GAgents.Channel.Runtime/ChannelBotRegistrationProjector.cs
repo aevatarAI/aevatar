@@ -27,7 +27,8 @@ public sealed class ChannelBotRegistrationProjector
     }
 
     protected override IEnumerable<ChannelBotRegistrationEntry> ExtractEntries(
-        ChannelBotRegistrationStoreState state) => state.Registrations;
+        ChannelBotRegistrationStoreState state) =>
+        state.Registrations;
 
     protected override string EntryKey(ChannelBotRegistrationEntry entry) => entry.Id ?? string.Empty;
 
@@ -50,6 +51,9 @@ public sealed class ChannelBotRegistrationProjector
             NyxAgentApiKeyId = entry.NyxAgentApiKeyId ?? string.Empty,
             NyxConversationRouteId = entry.NyxConversationRouteId ?? string.Empty,
             WorkflowResultDeliveryCredential = entry.WorkflowResultDeliveryCredential?.Clone(),
+            RegistrationServiceAllowlist = entry.RegistrationServiceAllowlist?.Clone(),
+            ChannelAgentKey = entry.ChannelAgentKey?.Clone(),
+            AuthorizationMode = entry.AuthorizationMode,
             LastInboundAtUtc = entry.LastInboundAtUtc,
             DefaultSkillName = entry.DefaultSkillName ?? string.Empty,
             WorkflowResultDeliveryRepair = entry.WorkflowResultDeliveryRepair?.Clone(),

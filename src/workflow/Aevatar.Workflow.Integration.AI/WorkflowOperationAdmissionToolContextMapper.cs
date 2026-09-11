@@ -55,7 +55,8 @@ public static class WorkflowOperationAdmissionToolContextMapper
                     ExternalCapabilityExecutionMode.Durable =>
                         AgentToolOperationExecutionMode.Durable,
                     _ => AgentToolOperationExecutionMode.Unspecified,
-                }).ToArray()));
+                }).ToArray()),
+            CallSiteId: admission.CallSiteId);
     }
 
     private static AgentToolOperationAdmission MapPublished(
@@ -73,7 +74,8 @@ public static class WorkflowOperationAdmissionToolContextMapper
             proof.Parameters.Select(MapParameter).ToArray(),
             MapRequestBody(proof.RequestBody),
             MapResponsePolicy(proof.ResponsePolicy),
-            MapExecutionPolicy(proof.ExecutionPolicy));
+            MapExecutionPolicy(proof.ExecutionPolicy),
+            CallSiteId: admission.CallSiteId);
     }
 
     private static AgentToolOperationAdmission MapAuthored(
@@ -113,7 +115,8 @@ public static class WorkflowOperationAdmissionToolContextMapper
             parameters,
             MapRequestBody(request),
             MapResponsePolicy(request.ResponseMode),
-            MapExecutionPolicy(proof.ExecutionPolicy));
+            MapExecutionPolicy(proof.ExecutionPolicy),
+            CallSiteId: admission.CallSiteId);
     }
 
     private static AgentToolOperationRequestBody? MapRequestBody(

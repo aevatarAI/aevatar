@@ -18,6 +18,7 @@ public static class AgentToolOperationAdmissionPayloadMapper
             ExecutionPolicy = ToExecutionPolicy(admission.ExecutionPolicy),
             CatalogDigest = admission.CatalogDigest ?? string.Empty,
             CatalogServiceSlug = admission.CatalogServiceSlug ?? string.Empty,
+            CallSiteId = admission.CallSiteId ?? string.Empty,
         };
         switch (admission.Identity)
         {
@@ -91,7 +92,8 @@ public static class AgentToolOperationAdmissionPayloadMapper
             FromExecutionPolicy(payload.ExecutionPolicy),
             payload.CatalogDigest ?? string.Empty,
             readBack,
-            payload.CatalogServiceSlug ?? string.Empty);
+            payload.CatalogServiceSlug ?? string.Empty,
+            payload.CallSiteId ?? string.Empty);
     }
 
     private static AgentToolOperationReadBackPayload ToReadBack(AgentToolOperationReadBack readBack)

@@ -1,5 +1,9 @@
 namespace Aevatar.GAgents.Channel.Runtime;
 
+public sealed record ChannelBotRegistrationSnapshot(
+    ChannelBotRegistrationEntry Registration,
+    long StateVersion);
+
 public interface IChannelBotRegistrationQueryPort
 {
     Task<ChannelBotRegistrationEntry?> GetAsync(string registrationId, CancellationToken ct = default);
@@ -12,4 +16,11 @@ public interface IChannelBotRegistrationQueryPort
     Task<long?> GetStateVersionAsync(string registrationId, CancellationToken ct = default);
 
     Task<IReadOnlyList<ChannelBotRegistrationEntry>> QueryAllAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns each registration together with the authoritative version from the same
+    /// projection document read.
+    /// </summary>
+    Task<IReadOnlyList<ChannelBotRegistrationSnapshot>> QueryAllSnapshotsAsync(
+        CancellationToken ct = default);
 }

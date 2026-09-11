@@ -47,10 +47,37 @@ message ChannelBotRegistrationEntry {
   // Actor-owned progress for in-place workflow result delivery repair. Raw
   // NyxID key material never enters this state; only a typed vault handle may.
   ChannelWorkflowResultDeliveryRepairState workflow_result_delivery_repair = 17;
+  ChannelRegistrationServiceAllowlist registration_service_allowlist = 18;
+  ChannelAgentKeyCredential channel_agent_key = 19;
+  ChannelRegistrationAuthorizationMode authorization_mode = 20;
 }
 
 message ChannelBotRegistrationStoreState {
   repeated ChannelBotRegistrationEntry registrations = 1;
+}
+
+enum ChannelRegistrationAuthorizationMode {
+  CHANNEL_REGISTRATION_AUTHORIZATION_MODE_UNSPECIFIED = 0;
+  CHANNEL_REGISTRATION_AUTHORIZATION_MODE_NYXID_DEFAULT = 1;
+  CHANNEL_REGISTRATION_AUTHORIZATION_MODE_EXPLICIT_SERVICE_ALLOWLIST = 2;
+}
+
+message ChannelRegistrationServiceAllowlist {
+  repeated string service_ids = 1;
+}
+
+message ChannelAgentKeyCredential {
+  string api_key_id = 1;
+  aevatar.credentials.SecretReference secret_reference = 2;
+  ChannelAgentKeyGrantSnapshot grant = 3;
+}
+
+message ChannelAgentKeyGrantSnapshot {
+  repeated string allowed_service_ids = 1;
+  repeated string allowed_node_ids = 2;
+  string scope_plan_digest = 3;
+  optional bool allow_all_services = 4;
+  optional bool allow_all_nodes = 5;
 }
 
 // Domain events for ChannelBotRegistrationGAgent
@@ -78,6 +105,9 @@ message ChannelBotRegisterCommand {
   aevatar.credentials.SecretReference workflow_result_delivery_credential = 11;
   // Optional inbound default-skill binding; see ChannelBotRegistrationEntry.default_skill_name.
   string default_skill_name = 12;
+  ChannelRegistrationServiceAllowlist registration_service_allowlist = 13;
+  ChannelAgentKeyCredential channel_agent_key = 14;
+  ChannelRegistrationAuthorizationMode authorization_mode = 15;
 }
 
 message ChannelBotUnregisterCommand {
@@ -289,6 +319,9 @@ message ChannelBotRegistrationDocument {
   string default_skill_name = 17;
   // Current actor-owned repair progress; copied without read-side inference.
   ChannelWorkflowResultDeliveryRepairState workflow_result_delivery_repair = 18;
+  ChannelRegistrationServiceAllowlist registration_service_allowlist = 19;
+  ChannelAgentKeyCredential channel_agent_key = 20;
+  ChannelRegistrationAuthorizationMode authorization_mode = 21;
 }
 
 // ─── Relay / conversation normalization ───

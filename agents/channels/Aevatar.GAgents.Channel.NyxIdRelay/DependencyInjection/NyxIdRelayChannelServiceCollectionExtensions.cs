@@ -2,12 +2,18 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Commands;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelBotServiceConnection;
+using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationExplicitAuthorization;
+using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
@@ -32,9 +38,29 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
 
         services.TryAddSingleton<NyxIdToolOptions>();
         services.TryAddSingleton<NyxIdApiClient>();
+        services.TryAddSingleton<
+            IChannelRegistrationNyxIdAuthorizationPort,
+            ChannelRegistrationNyxIdAuthorizationPort>();
+        services.TryAddSingleton<ChannelRegistrationAuthorizationPlanner>();
+        services.TryAddSingleton<IChannelRegistrationDependencyResolver, ChannelRegistrationConfiguredDependencyResolver>();
+        services.TryAddSingleton<IChannelRegistrationBotConnectionPort, ChannelRegistrationNyxIdBotConnectionPort>();
+        services.TryAddSingleton<INyxIdCurrentUserResolver, NyxIdCurrentUserResolver>();
+        services.TryAddSingleton<IChannelRegistrationOwnerResolver, ChannelRegistrationOwnerResolver>();
+        services.TryAddSingleton<ChannelRegistrationExplicitAuthorizationPreparation>();
+        services.TryAddSingleton(sp => new ChannelAgentKeyProvisioningService(
+            sp.GetRequiredService<NyxIdApiClient>(),
+            sp.GetRequiredService<ISecretVault>(),
+            sp.GetRequiredService<ILogger<ChannelAgentKeyProvisioningService>>(),
+            sp.GetService<NyxIdRelayOptions>()?.ChannelAgentKeyWriteMode ??
+            ChannelAgentKeyWriteMode.Disabled));
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
-        services.TryAddSingleton<ChannelRegistrationCommandFacade>();
-        services.TryAddSingleton<ChannelRelayRegistrationFacade>();
+        services.TryAddSingleton(sp => new ChannelRegistrationCommandFacade(
+            sp.GetRequiredService<ICommandDispatchPipeline<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>(),
+            sp.GetRequiredService<ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>()));
+        services.TryAddSingleton(sp => new ChannelRelayRegistrationFacade(
+            sp.GetServices<INyxChannelBotProvisioningService>(),
+            sp.GetService<NyxIdRelayOptions>()?.ChannelAgentKeyWriteMode ??
+            ChannelAgentKeyWriteMode.Disabled));
         services.TryAddSingleton<ChannelBotRegistrationCommandEnvelopeFactory>();
         services.TryAddSingleton<ChannelRegistrationCommandReceiptFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<ChannelBotRegistrationCommandTarget>, ActorCommandTargetDispatcher<ChannelBotRegistrationCommandTarget>>();

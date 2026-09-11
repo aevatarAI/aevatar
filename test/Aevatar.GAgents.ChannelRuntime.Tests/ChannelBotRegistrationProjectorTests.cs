@@ -78,6 +78,90 @@ public sealed class ChannelBotRegistrationProjectorTests
     }
 
     [Fact]
+    public async Task PublicProjector_PreservesUnifiedAuthorizationContractPresence()
+    {
+        var dispatcher = new RecordingRegistrationWriteDispatcher();
+        var projector = new ChannelBotRegistrationProjector(dispatcher, _clock);
+        var credential = TestChannelAgentKey("bot-reg-new");
+        var state = new ChannelBotRegistrationStoreState
+        {
+            Registrations =
+            {
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "bot-reg-new",
+                    Platform = "telegram",
+                    ScopeId = "scope-x",
+                    NyxAgentApiKeyId = credential.ApiKeyId,
+                    WorkflowResultDeliveryCredential = credential.SecretReference.Clone(),
+                    ChannelAgentKey = credential,
+                    AuthorizationMode = ChannelRegistrationAuthorizationMode.NyxidDefault,
+                },
+            },
+        };
+
+        await projector.ProjectAsync(
+            _context,
+            BuildCommittedEnvelope("evt-bot-new", 11, state),
+            CancellationToken.None);
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.NyxidDefault);
+        document.ChannelAgentKey.Should().Be(credential);
+        document.ChannelAgentKey.Should().NotBeSameAs(credential);
+        document.ChannelAgentKey.Grant.HasAllowAllServices.Should().BeTrue();
+        document.ChannelAgentKey.Grant.AllowAllServices.Should().BeFalse();
+        document.ChannelAgentKey.Grant.HasAllowAllNodes.Should().BeTrue();
+        document.ChannelAgentKey.Grant.AllowAllNodes.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PublicProjector_RebuildsExplicitAuthorizationContractAtAuthoritativeVersion(
+        bool includeBusinessService)
+    {
+        var dispatcher = new RecordingRegistrationWriteDispatcher();
+        var projector = new ChannelBotRegistrationProjector(dispatcher, _clock);
+        var credential = TestChannelAgentKey("bot-reg-explicit");
+        credential.Grant.ScopePlanDigest =
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        var allowlist = new ChannelRegistrationServiceAllowlist();
+        if (includeBusinessService)
+            allowlist.ServiceIds.Add("svc-alpha");
+        var entry = new ChannelBotRegistrationEntry
+        {
+            Id = "bot-reg-explicit",
+            Platform = "telegram",
+            ScopeId = "scope-x",
+            NyxAgentApiKeyId = credential.ApiKeyId,
+            WorkflowResultDeliveryCredential = credential.SecretReference.Clone(),
+            RegistrationServiceAllowlist = allowlist,
+            ChannelAgentKey = credential,
+            AuthorizationMode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
+        };
+        var state = new ChannelBotRegistrationStoreState { Registrations = { entry } };
+
+        await projector.ProjectAsync(
+            _context,
+            BuildCommittedEnvelope("evt-bot-explicit", 41, state),
+            CancellationToken.None);
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.StateVersion.Should().Be(41);
+        document.AuthorizationMode.Should().Be(
+            ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
+        document.RegistrationServiceAllowlist.Should().NotBeNull();
+        document.RegistrationServiceAllowlist.ServiceIds.Should().Equal(allowlist.ServiceIds);
+        document.RegistrationServiceAllowlist.Should().NotBeSameAs(allowlist);
+        document.ChannelAgentKey.Should().Be(credential);
+        document.ChannelAgentKey.Should().NotBeSameAs(credential);
+        document.ChannelAgentKey.Grant.ScopePlanDigest.Should().Be(credential.Grant.ScopePlanDigest);
+        document.ChannelAgentKey.Grant.HasAllowAllServices.Should().BeTrue();
+        document.ChannelAgentKey.Grant.HasAllowAllNodes.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task PublicProjector_DeletesDocument_WhenEntryIsTombstoned()
     {
         var dispatcher = new RecordingRegistrationWriteDispatcher();
@@ -160,6 +244,26 @@ public sealed class ChannelBotRegistrationProjectorTests
             RequestedAtUnixMs = 1784563200000,
             UpdatedAtUnixMs = 1784563201000,
         };
+
+    private static ChannelAgentKeyCredential TestChannelAgentKey(string registrationId)
+    {
+        var reference = TestDeliverySecretReference(registrationId);
+        reference.Version = 1;
+        reference.Fingerprint = $"sha256:{registrationId}";
+        reference.CreatedAtUnixMs = 1775822400000;
+        return new ChannelAgentKeyCredential
+        {
+            ApiKeyId = $"key-{registrationId}",
+            SecretReference = reference,
+            Grant = new ChannelAgentKeyGrantSnapshot
+            {
+                AllowedServiceIds = { "svc-alpha", "svc-beta" },
+                AllowedNodeIds = { "node-alpha" },
+                AllowAllServices = false,
+                AllowAllNodes = false,
+            },
+        };
+    }
 
     private sealed class RecordingRegistrationWriteDispatcher : IProjectionWriteDispatcher<ChannelBotRegistrationDocument>
     {

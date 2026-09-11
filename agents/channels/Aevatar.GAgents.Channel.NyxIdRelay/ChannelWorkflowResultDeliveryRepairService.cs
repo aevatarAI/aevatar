@@ -100,6 +100,26 @@ internal sealed class ChannelWorkflowResultDeliveryRepairService
                 registration.NyxAgentApiKeyId);
         }
 
+        var authorizationContract = ChannelRegistrationAuthorizationContract.Classify(registration);
+        if (authorizationContract is ChannelRegistrationAuthorizationContractKind.NyxIdDefault or
+            ChannelRegistrationAuthorizationContractKind.ExplicitServiceAllowlist)
+        {
+            return Result(
+                ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled,
+                string.Empty,
+                registration.Id,
+                registration.ChannelAgentKey.ApiKeyId);
+        }
+
+        if (authorizationContract == ChannelRegistrationAuthorizationContractKind.Invalid)
+        {
+            return Failed(
+                registration,
+                registration.WorkflowResultDeliveryRepair?.RequestId ?? string.Empty,
+                ChannelWorkflowResultDeliveryRepairPhase.RequestAdmission,
+                ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest);
+        }
+
         if (registration.WorkflowResultDeliveryRepair is null &&
             ChannelWorkflowResultDeliveryCapability.IsEnabled(registration))
         {

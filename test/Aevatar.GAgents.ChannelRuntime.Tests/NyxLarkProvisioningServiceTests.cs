@@ -5,6 +5,8 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -14,6 +16,62 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public class NyxLarkProvisioningServiceTests
 {
+    [Fact]
+    public async Task ProvisionAsync_UnverifiedOwner_RejectsBeforeNyxResources()
+    {
+        var handler = new RecordingHandler();
+        var ownerResolver = Substitute.For<IChannelRegistrationOwnerResolver>();
+        ownerResolver.ResolveAsync("user-token", "scope-1", Arg.Any<CancellationToken>())
+            .Returns(new ChannelRegistrationOwnerResolution(null, "service_owner_forbidden"));
+        var service = CreateService(handler, ownerResolver: ownerResolver);
+
+        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("service_owner_forbidden");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_DefaultOrganizationOwner_SendsTargetOrganizationId()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
+        handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
+        handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
+        handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
+        var service = CreateService(handler, ownerResolver: OrganizationOwnerResolver("user-alpha", "org-alpha"));
+
+        var result = await service.ProvisionAsync(
+            BuildRequest() with { ScopeId = "org-alpha" },
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue("organization default provisioning failed with {0}", result.Error);
+        using var body = System.Text.Json.JsonDocument.Parse(handler.Requests[0].Body);
+        body.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-alpha");
+    }
+
+    [Fact]
+    public async Task ExplicitSelection_NeverFallsThroughToDefaultKeyProvisioning()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
+        handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
+        handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
+        handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
+        using var input = System.Text.Json.JsonDocument.Parse("""{"service_ids":[]}""");
+        ChannelRegistrationServiceIdsJsonParser.TryParse(input.RootElement, out var selection).Should().BeTrue();
+        INyxChannelBotProvisioningService service = CreateService(handler);
+
+        var result = await service.ProvisionAsync(new NyxChannelBotProvisioningRequest(
+            "lark", "user-token", "https://aevatar.example.com", "scope-1", "Ops Bot", "api-lark-bot",
+            Lark: new NyxChannelLarkCredentials("cli_a1b2c3", "secret-xyz", "verify-123"),
+            RequestedServiceSelection: selection), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        handler.Requests.Should().NotContain(request => request.Path == "/api/v1/api-keys");
+    }
+
     [Fact]
     public async Task ProvisionAsync_Captures_FullKey_Into_Vault_And_Mirrors_Typed_Handle_Only()
     {
@@ -43,7 +101,7 @@ public class NyxLarkProvisioningServiceTests
         var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
 
         var secretVault = new InMemorySecretVault();
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             nyxClient,
             nyxOptions,
             commandFacade,
@@ -78,6 +136,17 @@ public class NyxLarkProvisioningServiceTests
         capturedEnvelope!.Payload.Is(ChannelBotRegisterCommand.Descriptor).Should().BeTrue();
         var command = capturedEnvelope.Payload.Unpack<ChannelBotRegisterCommand>();
         MatchesLocalMirror(command, result.RegistrationId!).Should().BeTrue();
+        command.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.NyxidDefault);
+        command.ChannelAgentKey.Should().NotBeNull();
+        command.ChannelAgentKey.ApiKeyId.Should().Be("key-123");
+        command.ChannelAgentKey.Grant.HasAllowAllServices.Should().BeTrue();
+        command.ChannelAgentKey.Grant.AllowAllServices.Should().BeTrue();
+        command.ChannelAgentKey.Grant.HasAllowAllNodes.Should().BeTrue();
+        command.ChannelAgentKey.Grant.AllowAllNodes.Should().BeTrue();
+        command.ChannelAgentKey.Grant.AllowedServiceIds.Should().BeEmpty();
+        command.ChannelAgentKey.Grant.AllowedNodeIds.Should().BeEmpty();
+        command.NyxAgentApiKeyId.Should().Be(command.ChannelAgentKey.ApiKeyId);
+        command.WorkflowResultDeliveryCredential.Should().Be(command.ChannelAgentKey.SecretReference);
         // The one-time full_key lives ONLY in the vault; the mirror command carries the typed handle.
         command.ToString().Should().NotContain("full-key");
         command.WorkflowResultDeliveryCredential.Should().NotBeNull();
@@ -108,13 +177,11 @@ public class NyxLarkProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_Without_FullKey_Provisions_Bot_Without_Delivery_Credential()
+    public async Task ProvisionAsync_Without_FullKey_FailsBeforeBotOrRouteCreation()
     {
         var handler = new RecordingHandler();
         handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123"));
-        handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456","status":"pending_webhook"}""");
-        handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789","default_agent":true}""");
-        handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
 
         EventEnvelope? capturedEnvelope = null;
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
@@ -126,7 +193,7 @@ public class NyxLarkProvisioningServiceTests
                 Arg.Any<CancellationToken>())
             .Returns(ActorDispatchPortTestSupport.AcceptAsync);
 
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
@@ -137,11 +204,36 @@ public class NyxLarkProvisioningServiceTests
 
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
 
-        result.Succeeded.Should().BeTrue();
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("channel_authorization_contract_invalid");
         result.WorkflowResultDeliveryEnabled.Should().BeFalse();
-        capturedEnvelope.Should().NotBeNull();
-        capturedEnvelope!.Payload.Unpack<ChannelBotRegisterCommand>()
-            .WorkflowResultDeliveryCredential.Should().BeNull();
+        capturedEnvelope.Should().BeNull();
+        handler.Requests.Select(static request => (request.Method, request.Path)).Should().Equal(
+            (HttpMethod.Post, "/api/v1/api-keys"),
+            (HttpMethod.Delete, "/api/v1/api-keys/key-123"));
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenVaultPutFails_DeletesKeyBeforeBotOrRouteCreation()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
+        var secretVault = new RecordingSecretVault
+        {
+            PutException = new InvalidOperationException("vault unavailable"),
+        };
+
+        var result = await CreateService(handler, secretVault)
+            .ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("secret_vault_unavailable");
+        handler.Requests.Select(static request => (request.Method, request.Path)).Should().Equal(
+            (HttpMethod.Post, "/api/v1/api-keys"),
+            (HttpMethod.Delete, "/api/v1/api-keys/key-123"));
+        secretVault.PutRequests.Should().ContainSingle();
+        secretVault.RevokeRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -162,7 +254,7 @@ public class NyxLarkProvisioningServiceTests
             .ProvisionAsync(BuildRequest(), CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("api_key_credential_class_invalid");
+        result.Error.Should().Be("channel_authorization_contract_invalid");
         handler.Requests.Should().HaveCount(2);
         handler.Requests[1].Method.Should().Be(HttpMethod.Delete);
         handler.Requests[1].Path.Should().Be("/api/v1/api-keys/key-invalid");
@@ -170,7 +262,7 @@ public class NyxLarkProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_WhenIncompatibleCredentialCleanupFails_ReportsManualCleanup()
+    public async Task ProvisionAsync_WhenIncompatibleCredentialCleanupFails_PreservesStableContractError()
     {
         var handler = new RecordingHandler();
         handler.Enqueue(
@@ -187,7 +279,7 @@ public class NyxLarkProvisioningServiceTests
             .ProvisionAsync(BuildRequest(), CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("api_key_credential_class_cleanup_failed");
+        result.Error.Should().Be("channel_authorization_contract_invalid");
         handler.Requests.Should().HaveCount(2);
         handler.Requests[1].Method.Should().Be(HttpMethod.Delete);
         handler.Requests[1].Path.Should().Be("/api/v1/api-keys/key-invalid");
@@ -211,7 +303,7 @@ public class NyxLarkProvisioningServiceTests
                 Arg.Any<EventEnvelope>(),
                 Arg.Any<CancellationToken>())
             .Returns(ActorDispatchPortTestSupport.AcceptAsync);
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
@@ -239,7 +331,7 @@ public class NyxLarkProvisioningServiceTests
             new HttpClient(handler));
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             commandFacade,
@@ -289,7 +381,7 @@ public class NyxLarkProvisioningServiceTests
             .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
 
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
@@ -327,7 +419,7 @@ public class NyxLarkProvisioningServiceTests
             .Returns(ActorDispatchPortTestSupport.AcceptAsync);
         var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
 
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
@@ -418,7 +510,7 @@ public class NyxLarkProvisioningServiceTests
                 Arg.Any<CancellationToken>())
             .Returns(ActorDispatchPortTestSupport.AcceptAsync);
 
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
@@ -445,7 +537,7 @@ public class NyxLarkProvisioningServiceTests
         var handler = new RecordingHandler();
         var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = null }, new HttpClient(handler));
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = null },
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
@@ -469,7 +561,7 @@ public class NyxLarkProvisioningServiceTests
             InternalApiBaseUrl = "http://nyxid.internal:3001",
         };
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             new NyxIdApiClient(options, new HttpClient(handler)),
             options,
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
@@ -486,7 +578,8 @@ public class NyxLarkProvisioningServiceTests
     [Fact]
     public async Task ProvisionAsync_ShouldRollbackRemoteResources_WhenLocalMirrorRegistrationFails()
     {
-        var handler = new RecordingHandler();
+        var effects = new List<string>();
+        var handler = new RecordingHandler(effects);
         handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
@@ -495,19 +588,17 @@ public class NyxLarkProvisioningServiceTests
         handler.Enqueue(HttpMethod.Delete, "/api/v1/channel-bots/bot-456", """{"ok":true}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
 
-        var actor = Substitute.For<IActor>();
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(actor));
-        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+            .Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
                 ChannelBotRegistrationGAgent.WellKnownId,
-                Arg.Any<EventEnvelope>(),
                 Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromException<DispatchAdmission>(new InvalidOperationException("mirror failed")));
+            .Returns(Task.FromResult<IActor>(null!));
         var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
 
-        var secretVault = new RecordingSecretVault();
-        var service = new NyxLarkProvisioningService(
+        var secretVault = new RecordingSecretVault(effects);
+        var service = CreateWithVault(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
@@ -519,7 +610,7 @@ public class NyxLarkProvisioningServiceTests
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("mirror failed");
+        result.Error.Should().Be("local_mirror_dispatch_failed");
         handler.Requests.Should().HaveCount(7);
         handler.Requests[3].Path.Should().Be("/api/v1/keys");
         handler.Requests[4].Method.Should().Be(HttpMethod.Delete);
@@ -533,6 +624,50 @@ public class NyxLarkProvisioningServiceTests
         secretVault.RevokeRequests[0].Ref.Should().Be(secretVault.StoredReferences.Single().Ref);
         secretVault.RevokeRequests[0].Purpose.Should().Be(CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey);
         secretVault.RevokeRequests[0].SubjectId.Should().Be("key-123");
+        effects.Should().Equal(
+            "nyx:route-delete",
+            "nyx:bot-delete",
+            "nyx:key-delete",
+            "vault:revoke");
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenLocalMirrorAcceptanceIsUnknown_DoesNotRollbackExternalResources()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
+        handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
+        handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
+        handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
+
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException<DispatchAdmission>(
+                new OperationCanceledException("Admission acknowledgement was lost after dispatch started.")));
+        var secretVault = new RecordingSecretVault();
+        var service = CreateWithVault(
+            new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+                new HttpClient(handler)),
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(
+                actorRuntime,
+                (IActorDispatchPort)actorRuntime),
+            secretVault,
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("local_mirror_acceptance_unknown_remote_cleanup_skipped");
+        handler.Requests.Should().HaveCount(4);
+        handler.Requests.Should().OnlyContain(static request => request.Method != HttpMethod.Delete);
+        secretVault.RevokeRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -543,23 +678,27 @@ public class NyxLarkProvisioningServiceTests
         // key stays resolvable with no registration referencing it.
         var handler = new RecordingHandler();
         handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
-        handler.Enqueue("/api/v1/channel-bots", """{"error":true,"status":500,"message":"upstream unavailable"}""");
+        handler.Enqueue("/api/v1/channel-bots", """{"error":true,"status":500,"message":"provider-echoed-secret-value"}""");
         handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
 
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var secretVault = new RecordingSecretVault();
-        var service = new NyxLarkProvisioningService(
+        var logger = new RecordingLogger<NyxLarkProvisioningService>();
+        var service = CreateWithVault(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             secretVault,
-            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+            logger);
 
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("channel_bot_id_request_failed");
+        logger.Messages.Should().NotContain(message =>
+            message.Contains("provider-echoed-secret-value", StringComparison.Ordinal));
         handler.Requests.Should().HaveCount(3);
         handler.Requests[2].Method.Should().Be(HttpMethod.Delete);
         handler.Requests[2].Path.Should().Be("/api/v1/api-keys/key-123");
@@ -585,7 +724,7 @@ public class NyxLarkProvisioningServiceTests
             RevokeException = new InvalidOperationException(
                 "Garnet secret vault rotate/revoke requires atomic versioned transitions."),
         };
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
@@ -597,8 +736,7 @@ public class NyxLarkProvisioningServiceTests
         var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        // The original NyxID failure surfaces, not the revoke failure.
-        result.Error.Should().StartWith("channel_bot_id_request_failed");
+        result.Error.Should().Be("channel_bot_id_request_failed");
         secretVault.RevokeRequests.Should().ContainSingle();
         handler.Requests.Should().HaveCount(3);
         handler.Requests[2].Method.Should().Be(HttpMethod.Delete);
@@ -623,7 +761,7 @@ public class NyxLarkProvisioningServiceTests
 
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var secretVault = new RecordingSecretVault();
-        var service = new NyxLarkProvisioningService(
+        var service = CreateWithVault(
             new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
                 new HttpClient(handler)),
@@ -639,6 +777,10 @@ public class NyxLarkProvisioningServiceTests
         handler.Requests.Should().HaveCount(3);
         handler.Requests[2].Method.Should().Be(HttpMethod.Delete);
         handler.Requests[2].Path.Should().Be("/api/v1/api-keys/key-123");
+        handler.Requests[2].CancellationToken.CanBeCanceled.Should().BeTrue();
+        secretVault.RevokeCancellationTokens.Should().ContainSingle();
+        secretVault.RevokeCancellationTokens[0].CanBeCanceled.Should().BeTrue();
+        secretVault.RevokeCancellationTokens[0].Should().NotBe(cts.Token);
     }
 
     private static bool MatchesLocalMirror(ChannelBotRegisterCommand command, string registrationId) =>
@@ -662,9 +804,29 @@ public class NyxLarkProvisioningServiceTests
             Label: "Ops Bot",
             NyxProviderSlug: "api-lark-bot");
 
+    private static NyxLarkProvisioningService CreateWithVault(
+        NyxIdApiClient nyxClient,
+        NyxIdToolOptions nyxOptions,
+        ChannelRegistrationCommandFacade commandFacade,
+        ISecretVault secretVault,
+        ILogger<NyxLarkProvisioningService> logger,
+        IChannelRegistrationOwnerResolver? ownerResolver = null) =>
+        new(
+            nyxClient,
+            nyxOptions,
+            commandFacade,
+            new ChannelAgentKeyProvisioningService(
+                nyxClient,
+                secretVault,
+                NullLogger<ChannelAgentKeyProvisioningService>.Instance,
+                ChannelAgentKeyWriteMode.NyxIdDefault),
+            ownerResolver ?? PersonalOwnerResolver("scope-1"),
+            logger);
+
     private static NyxLarkProvisioningService CreateService(
         RecordingHandler handler,
-        ISecretVault? secretVault = null)
+        ISecretVault? secretVault = null,
+        IChannelRegistrationOwnerResolver? ownerResolver = null)
     {
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
@@ -673,31 +835,74 @@ public class NyxLarkProvisioningServiceTests
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
             .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-        return new NyxLarkProvisioningService(
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        return CreateWithVault(
             nyxClient,
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             secretVault ?? new InMemorySecretVault(),
-            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>(),
+            ownerResolver);
     }
 
-    private static string GeneralAgentKeyResponse(string id, string? fullKey = null) =>
-        fullKey is null
-            ? $$"""{"id":"{{id}}","purpose":"general","scheduled_write_enabled":false}"""
-            : $$"""{"id":"{{id}}","full_key":"{{fullKey}}","purpose":"general","scheduled_write_enabled":false}""";
+    private static IChannelRegistrationOwnerResolver PersonalOwnerResolver(string scopeId)
+    {
+        var resolver = Substitute.For<IChannelRegistrationOwnerResolver>();
+        resolver.ResolveAsync(Arg.Any<string>(), scopeId, Arg.Any<CancellationToken>())
+            .Returns(new ChannelRegistrationOwnerResolution(
+                new VerifiedChannelRegistrationOwner(
+                    scopeId,
+                    new ChannelRegistrationKeyOwner(
+                        ChannelRegistrationKeyOwnerKind.Personal,
+                        scopeId),
+                    null),
+                string.Empty));
+        return resolver;
+    }
 
-    private sealed class RecordingSecretVault : ISecretVault
+    private static IChannelRegistrationOwnerResolver OrganizationOwnerResolver(
+        string actorId,
+        string organizationId)
+    {
+        var resolver = Substitute.For<IChannelRegistrationOwnerResolver>();
+        resolver.ResolveAsync(Arg.Any<string>(), organizationId, Arg.Any<CancellationToken>())
+            .Returns(new ChannelRegistrationOwnerResolution(
+                new VerifiedChannelRegistrationOwner(
+                    actorId,
+                    new ChannelRegistrationKeyOwner(
+                        ChannelRegistrationKeyOwnerKind.Organization,
+                        organizationId),
+                    organizationId),
+                string.Empty));
+        return resolver;
+    }
+
+    private static string GeneralAgentKeyResponse(string id, string? fullKey = null)
+    {
+        var fullKeyProperty = fullKey is null ? string.Empty : $"\"full_key\":\"{fullKey}\",";
+        return $$"""{"id":"{{id}}",{{fullKeyProperty}}"purpose":"general","scheduled_write_enabled":false,"scopes":"read write proxy","allow_all_services":true,"allow_all_nodes":true,"allowed_service_ids":[],"allowed_node_ids":[]}""";
+    }
+
+    private sealed class RecordingSecretVault(List<string>? effects = null) : ISecretVault
     {
         private readonly InMemorySecretVault _inner = new();
 
         public List<StoreSecretRequest> PutRequests { get; } = [];
         public List<RevokeSecretRequest> RevokeRequests { get; } = [];
         public List<SecretReference> StoredReferences { get; } = [];
+        public List<CancellationToken> RevokeCancellationTokens { get; } = [];
+        public Exception? PutException { get; init; }
         public Exception? RevokeException { get; init; }
 
         public async Task<StoreSecretResult> PutAsync(StoreSecretRequest request, CancellationToken ct = default)
         {
             PutRequests.Add(request);
+            if (PutException is not null)
+                throw PutException;
             var result = await _inner.PutAsync(request, ct);
             StoredReferences.Add(result.Reference);
             return result;
@@ -711,18 +916,37 @@ public class NyxLarkProvisioningServiceTests
 
         public Task<RevokeSecretResult> RevokeAsync(RevokeSecretRequest request, CancellationToken ct = default)
         {
+            effects?.Add("vault:revoke");
             RevokeRequests.Add(request);
+            RevokeCancellationTokens.Add(ct);
             return RevokeException is null
                 ? _inner.RevokeAsync(request, ct)
                 : Task.FromException<RevokeSecretResult>(RevokeException);
         }
     }
 
-    private sealed class RecordingHandler : HttpMessageHandler
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add($"{formatter(state, exception)} {exception}");
+    }
+
+    private sealed class RecordingHandler(List<string>? effects = null) : HttpMessageHandler
     {
         private readonly Queue<(HttpMethod? Method, string Path, string Body, Func<Exception>? ExceptionFactory)> _responses = new();
 
-        public List<(HttpMethod Method, string Path, string Body)> Requests { get; } = [];
+        public List<(HttpMethod Method, string Path, string Body, CancellationToken CancellationToken)> Requests { get; } = [];
 
         public void Enqueue(string path, string body) => _responses.Enqueue((null, path, body, null));
 
@@ -750,7 +974,17 @@ public class NyxLarkProvisioningServiceTests
             var body = request.Content is null
                 ? string.Empty
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            Requests.Add((request.Method, expectedPath, body));
+            Requests.Add((request.Method, expectedPath, body, cancellationToken));
+            if (request.Method == HttpMethod.Delete)
+            {
+                effects?.Add(expectedPath switch
+                {
+                    var path when path.StartsWith("/api/v1/channel-conversations/", StringComparison.Ordinal) => "nyx:route-delete",
+                    var path when path.StartsWith("/api/v1/channel-bots/", StringComparison.Ordinal) => "nyx:bot-delete",
+                    var path when path.StartsWith("/api/v1/api-keys/", StringComparison.Ordinal) => "nyx:key-delete",
+                    _ => "nyx:delete",
+                });
+            }
 
             if (exceptionFactory is not null)
                 throw exceptionFactory();

@@ -83,6 +83,80 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
+    public async Task BotQueryPort_GetAsync_PreservesUnifiedAuthorizationContractPresence()
+    {
+        var credential = TestChannelAgentKey("bot-new");
+        var document = new ChannelBotRegistrationDocument
+        {
+            Id = "bot-new",
+            Platform = "telegram",
+            ScopeId = "scope-x",
+            NyxAgentApiKeyId = credential.ApiKeyId,
+            WorkflowResultDeliveryCredential = credential.SecretReference.Clone(),
+            ChannelAgentKey = credential,
+            AuthorizationMode = ChannelRegistrationAuthorizationMode.NyxidDefault,
+        };
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.GetAsync("bot-new", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(document));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var result = await queryPort.GetAsync("bot-new");
+
+        result.Should().NotBeNull();
+        result!.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.NyxidDefault);
+        result.ChannelAgentKey.Should().Be(credential);
+        result.ChannelAgentKey.Should().NotBeSameAs(credential);
+        result.ChannelAgentKey.Grant.HasAllowAllServices.Should().BeTrue();
+        result.ChannelAgentKey.Grant.AllowAllServices.Should().BeFalse();
+        result.ChannelAgentKey.Grant.HasAllowAllNodes.Should().BeTrue();
+        result.ChannelAgentKey.Grant.AllowAllNodes.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BotQueryPort_GetAsync_PreservesExplicitAllowlistPresenceAndClonesFacts(
+        bool includeBusinessService)
+    {
+        var credential = TestChannelAgentKey("bot-explicit");
+        credential.Grant.ScopePlanDigest =
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        var allowlist = new ChannelRegistrationServiceAllowlist();
+        if (includeBusinessService)
+            allowlist.ServiceIds.Add("svc-alpha");
+        var document = new ChannelBotRegistrationDocument
+        {
+            Id = "bot-explicit",
+            Platform = "telegram",
+            ScopeId = "scope-x",
+            StateVersion = 43,
+            NyxAgentApiKeyId = credential.ApiKeyId,
+            WorkflowResultDeliveryCredential = credential.SecretReference.Clone(),
+            RegistrationServiceAllowlist = allowlist,
+            ChannelAgentKey = credential,
+            AuthorizationMode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
+        };
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.GetAsync("bot-explicit", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(document));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var result = await queryPort.GetAsync("bot-explicit");
+
+        result.Should().NotBeNull();
+        result!.AuthorizationMode.Should().Be(
+            ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
+        result.RegistrationServiceAllowlist.Should().NotBeNull();
+        result.RegistrationServiceAllowlist.ServiceIds.Should().Equal(allowlist.ServiceIds);
+        result.RegistrationServiceAllowlist.Should().NotBeSameAs(allowlist);
+        result.ChannelAgentKey.Should().Be(credential);
+        result.ChannelAgentKey.Should().NotBeSameAs(credential);
+        result.ChannelAgentKey.Grant.ScopePlanDigest.Should().Be(credential.Grant.ScopePlanDigest);
+        (await queryPort.GetStateVersionAsync("bot-explicit")).Should().Be(43);
+    }
+
+    [Fact]
     public async Task BotQueryPort_QueryAllAsync_ReturnsMappedEntries()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
@@ -110,6 +184,43 @@ public sealed class RegistrationQueryPortTests
         var result = await queryPort.QueryAllAsync();
 
         result.Select(static entry => entry.Id).Should().Equal("bot-1", "bot-2");
+    }
+
+    [Fact]
+    public async Task BotQueryPort_QueryAllSnapshotsAsync_MapsEntryAndVersionFromSingleDocumentQuery()
+    {
+        var credential = TestChannelAgentKey("bot-new");
+        var document = new ChannelBotRegistrationDocument
+        {
+            Id = "bot-new",
+            Platform = "telegram",
+            ScopeId = "scope-x",
+            StateVersion = 27,
+            NyxAgentApiKeyId = credential.ApiKeyId,
+            ChannelAgentKey = credential,
+            AuthorizationMode = ChannelRegistrationAuthorizationMode.NyxidDefault,
+        };
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ProjectionDocumentQueryResult<ChannelBotRegistrationDocument>
+            {
+                Items = [document],
+            }));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var result = await queryPort.QueryAllSnapshotsAsync();
+
+        result.Should().ContainSingle();
+        result[0].Registration.Id.Should().Be("bot-new");
+        result[0].Registration.ChannelAgentKey.Should().Be(credential);
+        result[0].Registration.ChannelAgentKey.Should().NotBeSameAs(credential);
+        result[0].StateVersion.Should().Be(27);
+        await reader.Received(1).QueryAsync(
+            Arg.Is<ProjectionDocumentQuery>(query => query.Take == 1000),
+            Arg.Any<CancellationToken>());
+        await reader.DidNotReceive().GetAsync(
+            Arg.Any<string>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -142,6 +253,43 @@ public sealed class RegistrationQueryPortTests
         capturedQuery!.Take.Should().Be(1);
         capturedQuery.Filters.Should().ContainSingle();
         capturedQuery.Filters[0].FieldPath.Should().Be(nameof(ChannelBotRegistrationDocument.NyxAgentApiKeyId));
+        capturedQuery.Filters[0].Operator.Should().Be(ProjectionDocumentFilterOperator.Eq);
+        capturedQuery.Filters[0].Value.RawValue.Should().Be("key-1");
+    }
+
+    [Fact]
+    public async Task BotQueryPort_ListSnapshotsByNyxAgentApiKeyIdAsync_PreservesDocumentStateVersion()
+    {
+        ProjectionDocumentQuery? capturedQuery = null;
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.QueryAsync(
+                Arg.Do<ProjectionDocumentQuery>(query => capturedQuery = query),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ProjectionDocumentQueryResult<ChannelBotRegistrationDocument>
+            {
+                Items =
+                [
+                    new ChannelBotRegistrationDocument
+                    {
+                        Id = "bot-1",
+                        Platform = "lark",
+                        NyxAgentApiKeyId = "key-1",
+                        StateVersion = 23,
+                    },
+                ],
+            }));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var result = await queryPort.ListSnapshotsByNyxAgentApiKeyIdAsync("key-1");
+
+        result.Should().ContainSingle();
+        result[0].Registration.Id.Should().Be("bot-1");
+        result[0].StateVersion.Should().Be(23);
+        capturedQuery.Should().NotBeNull();
+        capturedQuery!.Take.Should().Be(32);
+        capturedQuery.Filters.Should().ContainSingle();
+        capturedQuery.Filters[0].FieldPath.Should().Be(
+            nameof(ChannelBotRegistrationDocument.NyxAgentApiKeyId));
         capturedQuery.Filters[0].Operator.Should().Be(ProjectionDocumentFilterOperator.Eq);
         capturedQuery.Filters[0].Value.RawValue.Should().Be("key-1");
     }
@@ -197,6 +345,26 @@ public sealed class RegistrationQueryPortTests
         result.Should().NotBeNull();
         result!.Id.Should().Be("bot-1");
         await publicQueryPort.Received(1).GetAsync("bot-1", Arg.Any<CancellationToken>());
+    }
+
+    private static ChannelAgentKeyCredential TestChannelAgentKey(string registrationId)
+    {
+        var reference = TestDeliverySecretReference(registrationId);
+        reference.Version = 1;
+        reference.Fingerprint = $"sha256:{registrationId}";
+        reference.CreatedAtUnixMs = 1775822400000;
+        return new ChannelAgentKeyCredential
+        {
+            ApiKeyId = $"key-{registrationId}",
+            SecretReference = reference,
+            Grant = new ChannelAgentKeyGrantSnapshot
+            {
+                AllowedServiceIds = { "svc-alpha", "svc-beta" },
+                AllowedNodeIds = { "node-alpha" },
+                AllowAllServices = false,
+                AllowAllNodes = false,
+            },
+        };
     }
 
     [Fact]

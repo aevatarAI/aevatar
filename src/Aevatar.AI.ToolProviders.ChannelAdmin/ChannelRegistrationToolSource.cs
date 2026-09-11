@@ -18,21 +18,31 @@ public sealed class ChannelRegistrationToolSource : IAgentToolSource
     private readonly IChannelBotRegistrationQueryPort _queryPort;
     private readonly ChannelRegistrationCommandFacade _commandFacade;
     private readonly ChannelRelayRegistrationFacade _registrationFacade;
+    private readonly INyxChannelBotDeprovisioningService _deprovisioningService;
 
     public ChannelRegistrationToolSource(
         IChannelBotRegistrationQueryPort queryPort,
         ChannelRegistrationCommandFacade commandFacade,
-        ChannelRelayRegistrationFacade registrationFacade)
+        ChannelRelayRegistrationFacade registrationFacade,
+        INyxChannelBotDeprovisioningService deprovisioningService)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
         _registrationFacade = registrationFacade ?? throw new ArgumentNullException(nameof(registrationFacade));
+        _deprovisioningService = deprovisioningService ?? throw new ArgumentNullException(nameof(deprovisioningService));
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        IReadOnlyList<IAgentTool> tools = [new ChannelRegistrationTool(_queryPort, _commandFacade, _registrationFacade)];
+        IReadOnlyList<IAgentTool> tools =
+        [
+            new ChannelRegistrationTool(
+                _queryPort,
+                _commandFacade,
+                _registrationFacade,
+                _deprovisioningService),
+        ];
         return Task.FromResult(tools);
     }
 }
