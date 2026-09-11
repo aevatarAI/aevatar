@@ -95,6 +95,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             {
                 generationContext = await BuildGenerationContextAsync(replyRequest, metadataCts.Token)
                     .ConfigureAwait(false);
+                generationContext = generationContext with
+                {
+                    ToolContext = RestrictChannelDefaultSkillToolVisibility(generationContext.ToolContext),
+                };
             }
             catch (OperationCanceledException) when (metadataCts.IsCancellationRequested)
             {
@@ -1624,6 +1628,21 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             toolContext,
             ownerFallbackControl,
             ownerFallbackToolContext);
+    }
+
+    private static AgentToolExecutionContext RestrictChannelDefaultSkillToolVisibility(
+        AgentToolExecutionContext toolContext)
+    {
+        if (!toolContext.SkillRecovery.FromChannelDefaultSkillBinding ||
+            !string.IsNullOrWhiteSpace(toolContext.SenderBinding.BindingId))
+        {
+            return toolContext;
+        }
+
+        return toolContext with
+        {
+            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["use_skill"]),
+        };
     }
 
     private async Task<LLMControlContext> ApplySenderTokenAsync(

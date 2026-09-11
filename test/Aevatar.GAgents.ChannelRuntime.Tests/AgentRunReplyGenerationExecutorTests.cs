@@ -121,6 +121,48 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildInitialStepState_WhenUnboundDefaultSkill_ShouldRestrictCatalogAuthorityBeforeMaterialization()
+    {
+        var fixture = CreateProfiledChannelExecutor();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(fixture.Request.ToolContext) with
+        {
+            Channel = new AgentToolChannelContext(
+                "telegram",
+                "sender-alpha",
+                "scope-alpha",
+                "message-alpha",
+                null,
+                BotRegistrationId: "registration-alpha"),
+            SkillRecovery = AgentSkillRecoveryContext.Empty with
+            {
+                PrimarySkillName = "test-default-skill",
+                CommandName = "test-default-skill",
+                FromChannelDefaultSkillBinding = true,
+            },
+        };
+        fixture.Request.ToolContext = toolContext.ToPayload();
+
+        await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest(
+                "run-1",
+                "channel-agent-run:run-1",
+                1,
+                fixture.Request.Clone()),
+            CancellationToken.None);
+
+        await fixture.ProfilePlanner.Received().PrepareAsync(
+            Arg.Any<AgentProfileSnapshot>(),
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<IReadOnlyList<IAgentTool>>(),
+            Arg.Is<AgentToolExecutionContext>(context =>
+                context.ToolVisibility.IsRestricted &&
+                context.ToolVisibility.Allows("use_skill") &&
+                !context.ToolVisibility.Allows(fixture.Tool.Name)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenPinnedChannelProofIsTampered_ShouldFailClosed()
     {
         var fixture = CreateProfiledChannelExecutor();
