@@ -1059,7 +1059,8 @@ public sealed class MainnetHostCompositionTests
             AgentProfilePolicies.NyxIdChatRouteToolSet,
             ToolSetNames.ChannelCore,
             ToolSetNames.ChannelLark,
-            "channel.reply.default",
+            ToolSetNames.ChannelReplyBooking,
+            ToolSetNames.ChannelReplyDefault,
             ToolSetNames.ChannelTelegram,
             ToolSetNames.ChatCore,
             ToolSetNames.LarkSelfNotify,
@@ -1176,7 +1177,7 @@ public sealed class MainnetHostCompositionTests
                 source is ChannelNyxIdConnectedServiceInventoryToolSource)
             .Which.Should()
             .BeSameAs(channelInventorySource);
-        var channelReply = registry.Resolve("channel.reply.default");
+        var channelReply = registry.Resolve(ToolSetNames.ChannelReplyDefault);
         channelReply.IsSuccess.Should().BeTrue(channelReply.Error?.Message);
         channelReply.Sources.Select(static source => source.GetType()).Should().Equal(
             workspace.Sources.Select(static source => source.GetType()).Concat(
@@ -1187,6 +1188,11 @@ public sealed class MainnetHostCompositionTests
             ]));
         channelReply.Sources.Select(static source => source.GetType()).Should()
             .Equal(channelToolSources.Select(static source => source.GetType()));
+
+        var bookingReply = registry.Resolve(ToolSetNames.ChannelReplyBooking);
+        bookingReply.IsSuccess.Should().BeTrue(bookingReply.Error?.Message);
+        bookingReply.Sources.Select(static source => source.GetType()).Should()
+            .Equal(channelReply.Sources.Select(static source => source.GetType()));
         foreach (var platform in new[] { "telegram", "lark" })
         {
             await AssertChannelProfileInventoryAsync(registry, platform, hasBinding: true);

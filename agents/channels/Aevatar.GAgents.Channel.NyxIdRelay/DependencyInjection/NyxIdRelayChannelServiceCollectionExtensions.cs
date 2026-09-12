@@ -56,7 +56,8 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.TryAddSingleton(sp => new ChannelRegistrationCommandFacade(
             sp.GetRequiredService<ICommandDispatchPipeline<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>(),
-            sp.GetRequiredService<ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>()));
+            sp.GetRequiredService<ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>(),
+            sp.GetRequiredService<ICommandDispatchService<ChannelBotUpdateRuntimeConfigCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>()));
         services.TryAddSingleton(sp => new ChannelRelayRegistrationFacade(
             sp.GetServices<INyxChannelBotProvisioningService>(),
             sp.GetService<NyxIdRelayOptions>()?.ChannelAgentKeyWriteMode ??
@@ -73,6 +74,9 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<ICommandDispatchPipeline<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>, DefaultCommandDispatchPipeline<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>, DefaultCommandDispatchService<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>, DefaultCommandDispatchService<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>();
+        AddRegistrationCommand<ChannelBotUpdateRuntimeConfigCommand>(
+            services,
+            static serviceProvider => serviceProvider.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());
         AddRegistrationCommand<ChannelBotWorkflowResultDeliveryRepairRequestCommand>(
             services,
             static serviceProvider => serviceProvider.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());

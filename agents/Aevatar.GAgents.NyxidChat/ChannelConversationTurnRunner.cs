@@ -2817,6 +2817,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         context = AgentSkillRecoveryContextBuilder.FromTrigger(trigger) with
         {
+            RequireInitialOrnnSearch = !viaDefaultSkillBinding,
+            RequireOrnnSearchOnBlocker = !viaDefaultSkillBinding,
+            MaxOrnnSearchAttempts = viaDefaultSkillBinding ? 0 : 2,
             CommandName = normalizedCommand,
             PrimarySkillName = normalizedCommand,
             IsolatePriorConversationHistory = !viaDefaultSkillBinding,
@@ -2933,6 +2936,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var useSkillInstruction = trigger.MountWorkflowsRequested
             ? "The user explicitly requested mounting this skill's workflows. Use a matching `use_skill` mount preview already present in this turn; otherwise call `use_skill` with this skill name, the exact command arguments, and `mount_workflows=true`. The first call is a read-only preview. When it returns `workflow_mount_confirmation_token`, call `use_skill` again with the same skill, args, `mount_workflows=true`, and that exact token so the mutating call enters durable approval. Do not claim the workflows are mounted until the matching successful mutating receipt is present.\n"
             : "Use a matching successful `use_skill` result already present in this turn. If none is present, call `use_skill` with this skill name and the exact command arguments; omit `mount_workflows` because loading instructions is read-only and must not mutate scope workflows.\n";
+        var blockerRecoveryInstruction = viaDefaultSkillBinding
+            ? "If the bound skill's required external capability is missing or a required tool fails, report that exact capability/tool failure once; do not call `ornn_search_skills` to replace this channel's configured default skill.\n"
+            : "If a loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n";
         prompt =
             invocationLine +
             "This command is not handled by Aevatar's local relay commands. Treat it as an Ornn skill-backed command, not an open-ended chat answer.\n" +
@@ -2940,7 +2946,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             $"Follow those skill instructions exactly, with `args` = {argsJson}, until the command's final result is ready.\n" +
             "Stick to the data sources the loaded skill names. Do NOT invent repository/path guesses, do NOT call `/api/v1/skills/.../files` (skill files are already inlined in the `use_skill` response above), and do NOT fall back to generic `nyxid_proxy` discovery when the loaded skill did not point you there.\n" +
             "If no matching skill was actually loaded above, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +
-            "If a loaded skill leaves any workflow step, source layout, API contract, or required capability ambiguous, call `ornn_search_skills` with the concrete blocker and then `use_skill` the best matching skill before trying generic proxy discovery or path guessing.\n" +
+            blockerRecoveryInstruction +
             "Do not narrate intermediate work, path guesses, or partial findings as the user-visible reply.\n" +
             "The only final user-visible answer should be the completed command result or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
             $"Original command: {originalJson}";

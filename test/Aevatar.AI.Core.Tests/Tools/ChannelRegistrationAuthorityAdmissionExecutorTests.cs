@@ -32,7 +32,6 @@ public sealed class ChannelRegistrationAuthorityAdmissionExecutorTests
     [InlineData("missing_port")]
     [InlineData("credential_kind_mismatch")]
     [InlineData("credential_descriptor_missing")]
-    [InlineData("operation_admission_missing")]
     public async Task ExecuteAsync_ExecutorSideAdmissionDenial_ShouldFailClosed(string scenario)
     {
         var tool = new RecordingTool();
@@ -71,6 +70,47 @@ public sealed class ChannelRegistrationAuthorityAdmissionExecutorTests
         outcome.FailureCode.Should().Be("credential_denied");
         outcome.TerminalInvoked.Should().BeFalse();
         tool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NonOperationToolWithoutOperationAdmission_ShouldUseChannelAgentKey()
+    {
+        var tool = new RecordingTool();
+        var admissionPort = new RecordingAuthorityAdmissionPort(
+            ChannelRegistrationAuthorityAdmissionResult.Deny(
+                ChannelRegistrationAuthorityAdmissionReason.OperationAdmissionMissing));
+        var executor = CreateExecutor(admissionPort);
+        var context = CreateDurableChannelRegistrationContext() with
+        {
+            OperationAdmission = null,
+        };
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool, context));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        tool.ExecuteCount.Should().Be(1);
+        admissionPort.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_OperationToolWithoutOperationAdmission_ShouldFailClosed()
+    {
+        var tool = new OperationAdmissionOwnerTool();
+        var admissionPort = new RecordingAuthorityAdmissionPort(
+            ChannelRegistrationAuthorityAdmissionResult.Allow());
+        var executor = CreateExecutor(admissionPort);
+        var context = CreateDurableChannelRegistrationContext() with
+        {
+            OperationAdmission = null,
+        };
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool, context));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Denied);
+        outcome.FailureCode.Should().Be("credential_denied");
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ExecuteCount.Should().Be(0);
+        admissionPort.Requests.Should().BeEmpty();
     }
 
     [Theory]
@@ -492,7 +532,7 @@ public sealed class ChannelRegistrationAuthorityAdmissionExecutorTests
             ExecutionOwner = AgentToolExecutionOwners.WorkflowRun("run-alpha"),
         };
 
-    private sealed class RecordingTool : IAgentTool
+    private class RecordingTool : IAgentTool
     {
         public string Name => "channel_authority_test";
 
@@ -509,6 +549,22 @@ public sealed class ChannelRegistrationAuthorityAdmissionExecutorTests
             ExecuteCount++;
             return Task.FromResult("{\"ok\":true}");
         }
+    }
+
+    private sealed class OperationAdmissionOwnerTool : RecordingTool, IAgentToolOperationAdmissionOwner
+    {
+        public AgentToolOperationAdmission OperationAdmission { get; } = new(
+            "svc-alpha",
+            "service-alpha",
+            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/resources",
+            "contract-alpha",
+            [],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            AgentToolOperationExecutionPolicy.Unspecified);
     }
 
     private sealed class StartingAdmissionLedger : IAgentToolAdmissionLedger

@@ -118,7 +118,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IChannelRuntimeToolCatalogMaterializer>(sp =>
             new ChannelRuntimeToolCatalogMaterializer(
                 sp.GetRequiredService<IToolSetRegistry>(),
-                sp.GetRequiredService<IAgentToolDiscoveryService>()));
+                sp.GetRequiredService<IAgentToolDiscoveryService>(),
+                sp.GetService<ILogger<ChannelRuntimeToolCatalogMaterializer>>()));
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();

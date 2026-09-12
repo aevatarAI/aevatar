@@ -1,9 +1,12 @@
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgents.Channel.Runtime;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
 
@@ -20,13 +23,16 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
 {
     private readonly IToolSetRegistry _toolSetRegistry;
     private readonly IAgentToolDiscoveryService _toolDiscoveryService;
+    private readonly ILogger<ChannelRuntimeToolCatalogMaterializer> _logger;
 
     public ChannelRuntimeToolCatalogMaterializer(
         IToolSetRegistry toolSetRegistry,
-        IAgentToolDiscoveryService? toolDiscoveryService = null)
+        IAgentToolDiscoveryService? toolDiscoveryService = null,
+        ILogger<ChannelRuntimeToolCatalogMaterializer>? logger = null)
     {
         _toolSetRegistry = toolSetRegistry ?? throw new ArgumentNullException(nameof(toolSetRegistry));
         _toolDiscoveryService = toolDiscoveryService ?? AgentToolDiscoveryService.Instance;
+        _logger = logger ?? NullLogger<ChannelRuntimeToolCatalogMaterializer>.Instance;
     }
 
     public async Task<AgentTurnToolCatalog> MaterializeAsync(
@@ -50,9 +56,10 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             sources.AddRange(resolved.Sources);
         }
 
+        var discoveryToolContext = WithRuntimeConnectedServicesContext(runtimeConfig, toolContext);
         var availableTools = sources.Count == 0
             ? new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase)
-            : await DiscoverToolsAsync(sources, toolContext, diagnostics, ct).ConfigureAwait(false);
+            : await DiscoverToolsAsync(sources, discoveryToolContext, diagnostics, ct).ConfigureAwait(false);
         if (availableTools is null)
             return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
 
@@ -124,6 +131,98 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             new PromptLayerBounds(8 * 1024, 2 * 1024));
     }
 
+    private static AgentToolExecutionContext WithRuntimeConnectedServicesContext(
+        ChannelRuntimeConfigProof runtimeConfig,
+        AgentToolExecutionContext toolContext)
+    {
+        if (runtimeConfig.NyxidServiceSelectors.Count == 0)
+            return toolContext;
+
+        var contextJson = AddRuntimeSelectors(
+            toolContext.ConnectedServices.ContextJson,
+            runtimeConfig.NyxidServiceSelectors);
+        if (string.Equals(
+                contextJson,
+                toolContext.ConnectedServices.ContextJson,
+                StringComparison.Ordinal))
+        {
+            return toolContext;
+        }
+
+        return toolContext with
+        {
+            ConnectedServices = new AgentToolConnectedServicesContext(contextJson),
+        };
+    }
+
+    private static string AddRuntimeSelectors(
+        string? contextJson,
+        IReadOnlyList<ChannelBotRuntimeNyxIdServiceSelector> selectors)
+    {
+        using var document = TryParseObject(contextJson);
+        using var output = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(output))
+        {
+            writer.WriteStartObject();
+            if (document is not null)
+            {
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    if (!string.Equals(property.Name, "nyxid_service_selectors", StringComparison.Ordinal))
+                        property.WriteTo(writer);
+                }
+            }
+
+            writer.WritePropertyName("nyxid_service_selectors");
+            writer.WriteStartArray();
+            foreach (var selector in selectors)
+            {
+                var serviceSlug = Normalize(selector.ServiceSlug);
+                if (serviceSlug is null)
+                    continue;
+
+                writer.WriteStartObject();
+                writer.WriteString("service_slug", serviceSlug);
+                writer.WritePropertyName("endpoint_names");
+                writer.WriteStartArray();
+                foreach (var endpointName in selector.EndpointNames)
+                {
+                    var normalized = Normalize(endpointName);
+                    if (normalized is not null)
+                        writer.WriteStringValue(normalized);
+                }
+
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(output.ToArray());
+    }
+
+    private static JsonDocument? TryParseObject(string? contextJson)
+    {
+        if (string.IsNullOrWhiteSpace(contextJson))
+            return null;
+
+        try
+        {
+            var document = JsonDocument.Parse(contextJson);
+            if (document.RootElement.ValueKind == JsonValueKind.Object)
+                return document;
+
+            document.Dispose();
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private ToolSetResolveResult? ResolveToolSet(
         string toolSetRef,
         List<AgentProfileTurnDiagnostic> diagnostics)
@@ -133,8 +232,12 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
         {
             resolved = _toolSetRegistry.Resolve(toolSetRef);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            _logger.LogWarning(
+                ex,
+                "Channel runtime tool set resolve failed for {ToolSetRef}",
+                toolSetRef);
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.ToolSetUnavailable,
                 toolSetRef));

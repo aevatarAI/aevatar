@@ -41,13 +41,16 @@ public sealed class ChannelRegistrationCommandFacade
     // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=relay-local rebuild command DI, new=runtime startup dispatch only
     private readonly ICommandDispatchPipeline<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> _registerDispatchPipeline;
     private readonly ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> _unregisterDispatchService;
+    private readonly ICommandDispatchService<ChannelBotUpdateRuntimeConfigCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> _updateRuntimeConfigDispatchService;
 
     internal ChannelRegistrationCommandFacade(
         ICommandDispatchPipeline<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> registerDispatchPipeline,
-        ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> unregisterDispatchService)
+        ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> unregisterDispatchService,
+        ICommandDispatchService<ChannelBotUpdateRuntimeConfigCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError> updateRuntimeConfigDispatchService)
     {
         _registerDispatchPipeline = registerDispatchPipeline ?? throw new ArgumentNullException(nameof(registerDispatchPipeline));
         _unregisterDispatchService = unregisterDispatchService ?? throw new ArgumentNullException(nameof(unregisterDispatchService));
+        _updateRuntimeConfigDispatchService = updateRuntimeConfigDispatchService ?? throw new ArgumentNullException(nameof(updateRuntimeConfigDispatchService));
     }
 
     public async Task<ChannelRegistrationCommandAcceptedReceipt> RegisterLocalMirrorAsync(
@@ -103,6 +106,24 @@ public sealed class ChannelRegistrationCommandFacade
             new ChannelBotUnregisterCommand
             {
                 RegistrationId = registrationId ?? string.Empty,
+            },
+            ct);
+        return ResolveReceipt(result);
+    }
+
+    public async Task<ChannelRegistrationCommandAcceptedReceipt> UpdateRuntimeConfigAsync(
+        string registrationId,
+        ChannelBotRuntimeConfig? runtimeConfig,
+        string defaultSkillName,
+        CancellationToken ct = default)
+    {
+        var result = await _updateRuntimeConfigDispatchService.DispatchAsync(
+            new ChannelBotUpdateRuntimeConfigCommand
+            {
+                RegistrationId = registrationId ?? string.Empty,
+                RuntimeConfig = runtimeConfig?.Clone(),
+                DefaultSkillName = defaultSkillName ?? string.Empty,
+                UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             },
             ct);
         return ResolveReceipt(result);
@@ -271,6 +292,7 @@ internal sealed class ChannelBotRegistrationCommandTargetResolver<TCommand>
 internal sealed class ChannelBotRegistrationCommandEnvelopeFactory :
     ICommandEnvelopeFactory<ChannelBotRegisterCommand>,
     ICommandEnvelopeFactory<ChannelBotUnregisterCommand>,
+    ICommandEnvelopeFactory<ChannelBotUpdateRuntimeConfigCommand>,
     ICommandEnvelopeFactory<ChannelBotWorkflowResultDeliveryRepairRequestCommand>,
     ICommandEnvelopeFactory<ChannelBotWorkflowResultDeliveryRepairPrepareCommand>,
     ICommandEnvelopeFactory<ChannelBotWorkflowResultDeliveryRepairCompleteCommand>,
@@ -282,6 +304,9 @@ internal sealed class ChannelBotRegistrationCommandEnvelopeFactory :
         CreateEnvelopeCore(command, context);
 
     public EventEnvelope CreateEnvelope(ChannelBotUnregisterCommand command, CommandContext context) =>
+        CreateEnvelopeCore(command, context);
+
+    public EventEnvelope CreateEnvelope(ChannelBotUpdateRuntimeConfigCommand command, CommandContext context) =>
         CreateEnvelopeCore(command, context);
 
     public EventEnvelope CreateEnvelope(

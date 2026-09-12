@@ -233,6 +233,7 @@ public class NyxIdConnectedServiceToolSourceTests
             .And.NotContain("catalog_digest")
             .And.NotContain("candidate_ref");
         handler.DiscoveryRequests.Should().Be(1);
+        handler.DiscoveryPaths.Should().Equal("/api/v1/user-services");
         handler.McpConfigRequests.Should().Be(1);
         handler.RawOpenApiRequests.Should().BeEmpty();
         handler.ExactReads.Should().BeEmpty();
@@ -261,6 +262,51 @@ public class NyxIdConnectedServiceToolSourceTests
         tools.Should().ContainSingle();
         handler.DiscoveryTokens.Should().Equal("discovery-token");
         handler.McpConfigTokens.Should().Equal("execution-token");
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_AgentKeyCredential_ShouldMaterializeOpenApiOperationsFromRuntimeSelectors()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/google-workspace/openapi.json"] = CustomOpenApi;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext(
+            "agent-key-token",
+            credentialKind: AgentToolNyxIdCredentialKind.AgentKey,
+            connectedServicesContextJson: """
+                {
+                  "nyxid_service_selectors": [
+                    { "service_slug": "api-google-workspace", "endpoint_names": ["readDiningProfileContext"] }
+                  ]
+                }
+                """);
+        var tools = await source.DiscoverToolsAsync();
+
+        var tool = tools.Should().ContainSingle().Subject;
+        var owner = tool.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
+        owner.OperationAdmission.ServiceInstanceId.Should().Be("agent-key:api-google-workspace");
+        owner.OperationAdmission.ServiceSlug.Should().Be("api-google-workspace");
+        owner.OperationAdmission.Identity.Should().Be(
+            new AgentToolOperationIdentity.PublishedEndpoint("readDiningProfileContext"));
+        handler.DiscoveryRequests.Should().Be(0);
+        handler.McpConfigRequests.Should().Be(0);
+        handler.RawOpenApiRequests.Should().Equal(
+            "/api/v1/catalog-specs/api-google-workspace/openapi.json",
+            "/api/v1/catalog-specs/google-workspace/openapi.json");
+
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-agent-key",
+            tool.Name,
+            "{}");
+
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        handler.McpConfigRequests.Should().Be(0);
+        var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
+        proxyRequest.Path.Should().Be("/api/v1/proxy/s/api-google-workspace/profile/dining");
+        proxyRequest.Query.Should().NotContain("_nyxid_via");
+        proxyRequest.Authorization.Should().Be("agent-key-token");
+        proxyRequest.ApiKey.Should().BeEmpty();
     }
 
     [Theory]
@@ -1639,7 +1685,8 @@ public class NyxIdConnectedServiceToolSourceTests
         string userToken,
         string? organizationToken = null,
         string? sourceReadableToken = null,
-        AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified) =>
+        AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified,
+        string? connectedServicesContextJson = null) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials(
@@ -1648,6 +1695,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 null,
                 credentialKind,
                 sourceReadableToken),
+            ConnectedServices = new AgentToolConnectedServicesContext(connectedServicesContextJson),
             Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
         });
 
@@ -2240,7 +2288,12 @@ public class NyxIdConnectedServiceToolSourceTests
         return new VerificationRun(result, handler, executionPort.Outcomes);
     }
 
-    private sealed record ProxyRequestRecord(string Method, string Path, string Query);
+    private sealed record ProxyRequestRecord(
+        string Method,
+        string Path,
+        string Query,
+        string Authorization = "",
+        string ApiKey = "");
 
     private sealed record VerificationRun(
         NyxIdChatToolVerificationResult Result,
@@ -2317,7 +2370,12 @@ public class NyxIdConnectedServiceToolSourceTests
         public Dictionary<string, string> McpConfigByToken { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> OpenApiResponsesByPath { get; } = new(StringComparer.Ordinal);
         public List<string> DiscoveryTokens { get; } = [];
+        public List<string> DiscoveryPaths { get; } = [];
+        public List<string> DiscoveryAuthorizationHeaders { get; } = [];
+        public List<string> DiscoveryApiKeyHeaders { get; } = [];
         public List<string> McpConfigTokens { get; } = [];
+        public List<string> McpConfigAuthorizationHeaders { get; } = [];
+        public List<string> McpConfigApiKeyHeaders { get; } = [];
         public List<string> RawOpenApiRequests { get; } = [];
         public List<string> ExactReads { get; } = [];
         public List<ProxyRequestRecord> ProxyRequests { get; } = [];
@@ -2336,12 +2394,18 @@ public class NyxIdConnectedServiceToolSourceTests
             HttpRequestMessage request,
             CancellationToken ct)
         {
-            var token = request.Headers.Authorization?.Parameter ?? string.Empty;
+            var bearerToken = request.Headers.Authorization?.Parameter ?? string.Empty;
+            request.Headers.TryGetValues("X-API-Key", out var apiKeyValues);
+            var apiKey = apiKeyValues?.SingleOrDefault() ?? string.Empty;
+            var token = string.IsNullOrWhiteSpace(apiKey) ? bearerToken : apiKey;
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
-            if (path == "/api/v1/keys")
+            if (path is "/api/v1/user-services" or "/api/v1/keys")
             {
                 DiscoveryRequests++;
                 DiscoveryTokens.Add(token);
+                DiscoveryPaths.Add(path);
+                DiscoveryAuthorizationHeaders.Add(bearerToken);
+                DiscoveryApiKeyHeaders.Add(apiKey);
                 if (CancelDiscoveryWith is not null)
                 {
                     CancelDiscoveryWith.Cancel();
@@ -2356,6 +2420,8 @@ public class NyxIdConnectedServiceToolSourceTests
             {
                 McpConfigRequests++;
                 McpConfigTokens.Add(token);
+                McpConfigAuthorizationHeaders.Add(bearerToken);
+                McpConfigApiKeyHeaders.Add(apiKey);
                 if (CancelMcpConfigWith is not null)
                 {
                     CancelMcpConfigWith.Cancel();
@@ -2384,6 +2450,16 @@ public class NyxIdConnectedServiceToolSourceTests
             }
 
             if (request.Method == HttpMethod.Get &&
+                path.StartsWith("/api/v1/catalog-specs/", StringComparison.Ordinal) &&
+                path.EndsWith("/openapi.json", StringComparison.Ordinal))
+            {
+                RawOpenApiRequests.Add(path);
+                if (OpenApiResponsesByPath.TryGetValue(path, out var openApiResponse))
+                    return Task.FromResult(Json(openApiResponse));
+                throw new InvalidOperationException("catalog_openapi_must_be_configured");
+            }
+
+            if (request.Method == HttpMethod.Get &&
                 path.StartsWith("/api/v1/keys/", StringComparison.Ordinal))
             {
                 ExactReads.Add(Uri.UnescapeDataString(path["/api/v1/keys/".Length..]));
@@ -2393,7 +2469,9 @@ public class NyxIdConnectedServiceToolSourceTests
                 ProxyRequests.Add(new ProxyRequestRecord(
                     request.Method.Method,
                     path,
-                    request.RequestUri?.Query ?? string.Empty));
+                    request.RequestUri?.Query ?? string.Empty,
+                    request.Headers.Authorization?.Parameter ?? string.Empty,
+                    apiKey));
                 var responseBody = ProxyResponseBodies.Count == 0
                     ? ProxyResponseBody
                     : ProxyResponseBodies.Dequeue();

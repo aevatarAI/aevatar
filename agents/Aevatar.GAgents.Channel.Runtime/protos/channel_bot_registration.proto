@@ -162,6 +162,13 @@ message ChannelBotUnregisterCommand {
   string registration_id = 1;
 }
 
+message ChannelBotUpdateRuntimeConfigCommand {
+  string registration_id = 1;
+  ChannelBotRuntimeConfig runtime_config = 2;
+  string default_skill_name = 3;
+  int64 updated_at_unix_ms = 4;
+}
+
 enum ChannelWorkflowResultDeliveryCapabilityStatus {
   CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_UNSPECIFIED = 0;
   CHANNEL_WORKFLOW_RESULT_DELIVERY_CAPABILITY_STATUS_ENABLED = 1;
@@ -310,6 +317,13 @@ message ChannelBotRecordInboundCommand {
 message ChannelBotInboundObservedEvent {
   string registration_id = 1;
   google.protobuf.Timestamp observed_at_utc = 2;
+}
+
+message ChannelBotRuntimeConfigUpdatedEvent {
+  string registration_id = 1;
+  ChannelBotRuntimeConfig runtime_config = 2;
+  string default_skill_name = 3;
+  int64 updated_at_unix_ms = 4;
 }
 
 message ChannelBotCompactTombstonesCommand {

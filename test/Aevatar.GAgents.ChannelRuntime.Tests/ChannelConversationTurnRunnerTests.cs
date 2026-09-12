@@ -2569,8 +2569,11 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Should().NotBeNull();
         result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("bound to the `whatsapp-reply-draft` skill");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("do not call `ornn_search_skills`");
         var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
-        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireInitialOrnnSearch.Should().BeFalse();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeFalse();
+        recovery.MaxOrnnSearchAttempts.Should().Be(0);
         recovery.CommandName.Should().Be("whatsapp-reply-draft");
         recovery.PrimarySkillName.Should().Be("whatsapp-reply-draft");
         recovery.CommandArguments.Should().Be(message);
@@ -2901,6 +2904,7 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Should().NotBeNull();
         result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("bound to the `test-default-skill` skill");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("do not call `ornn_search_skills`");
 
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
         toolContext.SenderBinding.BindingId.Should().BeNull();
@@ -2910,7 +2914,9 @@ public sealed class ChannelConversationTurnRunnerTests
         toolContext.Channel.WorkflowResultDeliveryCredential!.SubjectId.Should().Be(registration.NyxAgentApiKeyId);
 
         var recovery = toolContext.SkillRecovery;
-        recovery.RequireInitialOrnnSearch.Should().BeTrue();
+        recovery.RequireInitialOrnnSearch.Should().BeFalse();
+        recovery.RequireOrnnSearchOnBlocker.Should().BeFalse();
+        recovery.MaxOrnnSearchAttempts.Should().Be(0);
         recovery.CommandName.Should().Be("test-default-skill");
         recovery.PrimarySkillName.Should().Be("test-default-skill");
         recovery.CommandArguments.Should().Be("default-route-proof-1");

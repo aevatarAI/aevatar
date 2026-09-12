@@ -78,8 +78,34 @@ public sealed class ChannelCallbackEndpointsTests
         routePatterns.Any(pattern => pattern?.Contains("/callback/", StringComparison.Ordinal) == true)
             .Should().BeFalse();
         routePatterns.Should().Contain("/api/channels/registrations");
+        routePatterns.Should().Contain("/api/channels/registrations/{registrationId}/runtime-config");
         routePatterns.Should().Contain("/api/channels/diagnostics/errors");
         routePatterns.Should().NotContain("/api/channels/registrations/rebuild");
+    }
+
+    [Fact]
+    public void MapChannelCallbackEndpoints_ShouldRegisterAuditedRuntimeConfigUpdateRoute()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = "Development",
+        });
+
+        var app = builder.Build();
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        app.MapChannelCallbackEndpoints();
+
+        var endpoint = routeBuilder.DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(route => string.Equals(
+                route.RoutePattern.RawText,
+                "/api/channels/registrations/{registrationId}/runtime-config",
+                StringComparison.Ordinal));
+
+        endpoint.Metadata.OfType<IAuthorizeData>().Should().NotBeEmpty();
+        endpoint.Metadata.OfType<HttpMethodMetadata>()
+            .Single().HttpMethods.Should().Contain("POST");
     }
 
     [Fact]

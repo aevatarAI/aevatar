@@ -34,6 +34,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             .On<ChannelBotScopeIdRepairedEvent>(ApplyScopeIdRepaired)
             .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
             .On<ChannelBotInboundObservedEvent>(ApplyInboundObserved)
+            .On<ChannelBotRuntimeConfigUpdatedEvent>(ApplyRuntimeConfigUpdated)
             .On<ChannelBotTombstonesCompactedEvent>(ApplyTombstonesCompacted)
             .On<ChannelBotWorkflowResultDeliveryRepairRequestedEvent>(ApplyWorkflowResultDeliveryRepairRequested)
             .On<ChannelBotWorkflowResultDeliveryRepairPreparedEvent>(ApplyWorkflowResultDeliveryRepairPrepared)
@@ -172,6 +173,30 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             TombstoneStateVersion = NextCommittedVersion(),
         });
         Logger.LogInformation("Unregistered channel bot: id={Id}", cmd.RegistrationId);
+    }
+
+    [EventHandler]
+    public async Task HandleUpdateRuntimeConfig(ChannelBotUpdateRuntimeConfigCommand cmd)
+    {
+        var registrationId = Normalize(cmd.RegistrationId);
+        var entry = FindActiveRegistration(registrationId);
+        if (entry is null)
+        {
+            Logger.LogWarning("Cannot update runtime config: channel bot registration not found: {Id}", registrationId);
+            return;
+        }
+
+        var runtimeConfig = NormalizeRuntimeConfig(cmd.RuntimeConfig, cmd.DefaultSkillName);
+        await PersistDomainEventAsync(new ChannelBotRuntimeConfigUpdatedEvent
+        {
+            RegistrationId = registrationId,
+            RuntimeConfig = runtimeConfig?.Clone(),
+            DefaultSkillName = runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
+            UpdatedAtUnixMs = cmd.UpdatedAtUnixMs > 0
+                ? cmd.UpdatedAtUnixMs
+                : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+        Logger.LogInformation("Updated channel bot runtime config: id={Id}", registrationId);
     }
 
     [EventHandler]
@@ -528,6 +553,20 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return current;
 
         entry.LastInboundAtUtc = evt.ObservedAtUtc;
+        return next;
+    }
+
+    private static ChannelBotRegistrationStoreState ApplyRuntimeConfigUpdated(
+        ChannelBotRegistrationStoreState current,
+        ChannelBotRuntimeConfigUpdatedEvent evt)
+    {
+        var next = current.Clone();
+        var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
+        if (entry is null || entry.Tombstoned)
+            return current;
+
+        entry.RuntimeConfig = evt.RuntimeConfig?.Clone();
+        entry.DefaultSkillName = evt.DefaultSkillName ?? string.Empty;
         return next;
     }
 

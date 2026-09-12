@@ -30,7 +30,7 @@ public sealed class NyxIdServiceInstanceClient
         CancellationToken ct)
     {
         var candidates = new List<NyxIdServiceInstanceBinding>();
-        var userResponse = await _client.ListServicesAsync(userToken, ct);
+        var userResponse = await _client.ListUserServicesAsync(userToken, ct);
         EnsureDiscoverySucceeded(userResponse);
         candidates.AddRange(ParseBindings(
             userResponse,
@@ -39,7 +39,7 @@ public sealed class NyxIdServiceInstanceClient
         if (!string.IsNullOrWhiteSpace(organizationToken) &&
             !string.Equals(userToken, organizationToken, StringComparison.Ordinal))
         {
-            var organizationResponse = await _client.ListServicesAsync(organizationToken, ct);
+            var organizationResponse = await _client.ListUserServicesAsync(organizationToken, ct);
             EnsureDiscoverySucceeded(organizationResponse);
             candidates.AddRange(ParseBindings(
                 organizationResponse,
@@ -70,6 +70,20 @@ public sealed class NyxIdServiceInstanceClient
         }
 
         return exact.Values.OrderBy(static binding => binding.Instance.UserServiceId, StringComparer.Ordinal).ToArray();
+    }
+
+    internal async Task<IReadOnlyList<NyxIdServiceInstanceBinding>> DiscoverAgentKeyAsync(
+        string agentKey,
+        CancellationToken ct)
+    {
+        var response = await _client.ListServicesAsync(agentKey, ct);
+        EnsureDiscoverySucceeded(response);
+        return ParseBindings(
+                response,
+                agentKey,
+                NyxIdServiceAccessTokenSource.User)
+            .OrderBy(static binding => binding.Instance.UserServiceId, StringComparer.Ordinal)
+            .ToArray();
     }
 
     private static void EnsureDiscoverySucceeded(string response)
