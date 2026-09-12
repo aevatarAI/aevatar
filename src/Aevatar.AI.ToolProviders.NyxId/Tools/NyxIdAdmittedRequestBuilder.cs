@@ -343,6 +343,15 @@ internal static class NyxIdAdmittedRequestBuilder
         return Uri.EscapeDataString(raw);
     }
 
+    private static bool ShouldMaterializeDriveMediaAlt(
+        AgentToolOperationAdmission admission,
+        AgentToolOperationParameter parameter) =>
+        string.Equals(admission.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(admission.PathTemplate, "/drive/v3/files/{fileId}", StringComparison.Ordinal) &&
+        string.Equals(parameter.Name, "alt", StringComparison.Ordinal) &&
+        parameter.Schema.Kind == AgentToolOperationValueKind.String &&
+        parameter.Schema.AllowedValues.Contains("media", StringComparer.Ordinal);
+
     private static bool IsSafePathSegment(string raw, bool rejectPreEncodedOctets)
     {
         if (raw is "." or "..")
@@ -409,6 +418,30 @@ internal static class NyxIdAdmittedRequestBuilder
                 "NYXID_OPERATION_QUERY_PARAMETER_UNKNOWN",
                 $"query parameter '{extra}' is not declared by the admitted operation.");
             return string.Empty;
+        }
+
+        if (admission.Identity is AgentToolOperationIdentity.PublishedEndpoint)
+        {
+            foreach (var parameter in declared.Values)
+            {
+                if (parameter.Required || supplied.ContainsKey(parameter.Name))
+                    continue;
+
+                if (parameter.Schema.AllowedValues.Count == 1)
+                {
+                    supplied[parameter.Name] = CreateScalarValue(
+                        parameter.Schema.Kind,
+                        parameter.Schema.AllowedValues.Single());
+                    continue;
+                }
+
+                if (ShouldMaterializeDriveMediaAlt(admission, parameter))
+                {
+                    supplied[parameter.Name] = CreateScalarValue(
+                        parameter.Schema.Kind,
+                        "media");
+                }
+            }
         }
 
         var missing = declared.Values.FirstOrDefault(parameter =>
@@ -723,6 +756,23 @@ internal static class NyxIdAdmittedRequestBuilder
         foreach (var property in value.EnumerateObject())
             values[property.Name] = property.Value.Clone();
         return values;
+    }
+
+    private static JsonElement CreateScalarValue(
+        AgentToolOperationValueKind kind,
+        string value)
+    {
+        var json = kind switch
+        {
+            AgentToolOperationValueKind.String => JsonSerializer.Serialize(value),
+            AgentToolOperationValueKind.Integer => value,
+            AgentToolOperationValueKind.Number => value,
+            AgentToolOperationValueKind.Boolean => value,
+            _ => throw new InvalidOperationException(
+                "A single allowed query value must use a scalar operation schema."),
+        };
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
     }
 
     private static string? ToScalarText(JsonElement value) => value.ValueKind switch

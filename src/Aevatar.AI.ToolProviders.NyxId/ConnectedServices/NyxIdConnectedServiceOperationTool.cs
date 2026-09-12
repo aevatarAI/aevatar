@@ -310,7 +310,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             "retry_required",
             data: null,
             ReadTooLargeErrorCode,
-            ReadTooLargeErrorMessage);
+            ReadTooLargeErrorMessage,
+            BuildReadRetryHints());
         var receipt = NyxIdProxyReceiptFactory.CreateSuccess(
             callId,
             toolName,
@@ -357,7 +358,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         string status,
         JsonNode? data,
         string? errorCode,
-        string? errorMessage) => new JsonObject
+        string? errorMessage,
+        JsonNode? retryHints = null) => new JsonObject
     {
         ["kind"] = ReadProjectionKind,
         ["status"] = status,
@@ -367,7 +369,31 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         ["data"] = data?.DeepClone(),
         ["error_code"] = errorCode,
         ["error_message"] = errorMessage,
+        ["retry_hints"] = retryHints?.DeepClone(),
     }.ToJsonString(JsonOptions);
+
+    private JsonObject BuildReadRetryHints()
+    {
+        var queryParameters = new JsonArray(OperationAdmission.QueryParameters
+            .OrderBy(static parameter => parameter.Name, StringComparer.Ordinal)
+            .Select(parameter => new JsonObject
+            {
+                ["name"] = parameter.Name,
+                ["required"] = parameter.Required,
+                ["description"] = NyxIdConnectedServiceOperationSchema.BuildModelParameterDescription(
+                    "query",
+                    parameter),
+            })
+            .ToArray());
+
+        return new JsonObject
+        {
+            ["reason"] = "bounded_projection_limit_exceeded",
+            ["operation_path_template"] = OperationAdmission.PathTemplate,
+            ["query_parameters"] = queryParameters,
+            ["retry_guidance"] = "Retry the same read with a narrower query, smaller page size, or the next page token when the operation publishes those query parameters.",
+        };
+    }
 
     private JsonObject BuildProvenance() => new()
     {
@@ -506,7 +532,11 @@ internal static class NyxIdConnectedServiceOperationSchema
         var required = new JsonArray();
         foreach (var parameter in values.OrderBy(static item => item.Name, StringComparer.Ordinal))
         {
-            properties[parameter.Name] = ToJsonSchema(parameter.Schema);
+            var schema = ToJsonSchema(parameter.Schema);
+            var description = BuildModelParameterDescription(slot, parameter);
+            if (!string.IsNullOrWhiteSpace(description))
+                schema["description"] = description;
+            properties[parameter.Name] = schema;
             if (parameter.Required)
                 required.Add(parameter.Name);
         }
@@ -523,6 +553,37 @@ internal static class NyxIdConnectedServiceOperationSchema
         }
         rootProperties[slot] = group;
     }
+
+    internal static string? BuildModelParameterDescription(
+        string slot,
+        AgentToolOperationParameter parameter)
+    {
+        var description = string.IsNullOrWhiteSpace(parameter.Description)
+            ? null
+            : parameter.Description.Trim();
+        if (!string.Equals(slot, "query", StringComparison.Ordinal))
+            return description;
+
+        var guidance = BuildQueryParameterGuidance(parameter.Name);
+        if (string.IsNullOrWhiteSpace(guidance))
+            return description;
+        if (string.IsNullOrWhiteSpace(description))
+            return guidance;
+        if (description.Contains(guidance, StringComparison.Ordinal))
+            return description;
+        return description + " " + guidance;
+    }
+
+    private static string? BuildQueryParameterGuidance(string name) => name switch
+    {
+        "timeMin" => "For list reads, provide an ISO 8601 lower-bound timestamp to keep the result bounded.",
+        "timeMax" => "For list reads, provide an ISO 8601 upper-bound timestamp paired with timeMin to keep the result bounded.",
+        "singleEvents" => "Set to true when expanding recurring events inside a bounded time window.",
+        "orderBy" => "Use startTime when the operation supports chronological event ordering for a bounded time window.",
+        "maxResults" or "pageSize" => "Use a small bounded page size and continue with the published page token if more data is needed.",
+        "pageToken" or "nextPageToken" => "Use only to continue a previous bounded page read from the same operation.",
+        _ => null,
+    };
 
     private static JsonObject ToJsonSchema(AgentToolOperationValueSchema schema)
     {
@@ -615,7 +676,8 @@ internal static class NyxIdConnectedServiceOperationAdmissionMapper
             _ => AgentToolOperationParameterLocation.Unspecified,
         },
         parameter.Required,
-        MapSchema(parameter.Schema));
+        MapSchema(parameter.Schema),
+        string.IsNullOrWhiteSpace(parameter.Description) ? null : parameter.Description);
 
     private static AgentToolOperationExecutionPolicy MapExecutionPolicy(NyxIdOperationExecutionPolicy? policy) =>
         policy is null

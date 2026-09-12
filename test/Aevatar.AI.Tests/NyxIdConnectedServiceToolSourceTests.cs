@@ -112,6 +112,15 @@ public class NyxIdConnectedServiceToolSourceTests
               "get": {
                 "operationId": "readDiningProfileContext",
                 "summary": "Read dining preference context",
+                "parameters": [
+                  {
+                    "name": "alt",
+                    "in": "query",
+                    "required": false,
+                    "description": "Set to media to download the file content instead of metadata.",
+                    "schema": { "type": "string", "enum": ["media"] }
+                  }
+                ],
                 "responses": {
                   "200": {
                     "description": "Dining context",
@@ -289,6 +298,21 @@ public class NyxIdConnectedServiceToolSourceTests
         owner.OperationAdmission.ServiceSlug.Should().Be("api-google-workspace");
         owner.OperationAdmission.Identity.Should().Be(
             new AgentToolOperationIdentity.PublishedEndpoint("readDiningProfileContext"));
+        owner.OperationAdmission.QueryParameters.Single().Description.Should()
+            .Be("Set to media to download the file content instead of metadata.");
+        using (var schema = JsonDocument.Parse(tool.ParametersSchema))
+        {
+            var alt = schema.RootElement
+                .GetProperty("properties")
+                .GetProperty("query")
+                .GetProperty("properties")
+                .GetProperty("alt");
+            alt.GetProperty("description").GetString().Should()
+                .Be("Set to media to download the file content instead of metadata.");
+            alt.GetProperty("enum").EnumerateArray()
+                .Select(static item => item.GetString())
+                .Should().Equal("media");
+        }
         handler.DiscoveryRequests.Should().Be(0);
         handler.McpConfigRequests.Should().Be(0);
         handler.RawOpenApiRequests.Should().Equal(
@@ -901,6 +925,69 @@ public class NyxIdConnectedServiceToolSourceTests
         outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
         handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DynamicRead_CalendarListSchema_ShouldDescribeBoundedQueryParameters()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-calendar", "api-google-workspace", "api-google-workspace"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-calendar", "api-google-workspace", CalendarListEndpoint("calendar-list")));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        var query = schema.RootElement
+            .GetProperty("properties")
+            .GetProperty("query")
+            .GetProperty("properties");
+        query.GetProperty("timeMin").GetProperty("description").GetString()
+            .Should().Contain("lower-bound timestamp");
+        query.GetProperty("timeMax").GetProperty("description").GetString()
+            .Should().Contain("upper-bound timestamp");
+        query.GetProperty("singleEvents").GetProperty("description").GetString()
+            .Should().Contain("bounded time window");
+        query.GetProperty("orderBy").GetProperty("description").GetString()
+            .Should().Contain("startTime");
+    }
+
+    [Fact]
+    public async Task DynamicRead_ResponseOverLimit_ShouldReturnRetryHintsFromAdmissionQueryParameters()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-calendar", "api-google-workspace", "api-google-workspace"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-calendar", "api-google-workspace", CalendarListEndpoint("calendar-list")));
+        handler.ProxyResponseContentFactory = () => new StreamingContent(
+            Encoding.UTF8.GetBytes(new string('x', 16 * 1024 + 1)));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-calendar",
+            tool.Name,
+            """{"path_params":{"calendarId":"primary"}}""");
+
+        using var result = JsonDocument.Parse(outcome.ResultJson);
+        result.RootElement.GetProperty("status").GetString().Should().Be("retry_required");
+        var hints = result.RootElement.GetProperty("retry_hints");
+        hints.GetProperty("reason").GetString().Should().Be("bounded_projection_limit_exceeded");
+        hints.GetProperty("operation_path_template").GetString()
+            .Should().Be("/calendar/v3/calendars/{calendarId}/events");
+        hints.GetProperty("query_parameters")
+            .EnumerateArray()
+            .Select(parameter => parameter.GetProperty("name").GetString())
+            .Should().Contain(["timeMin", "timeMax", "singleEvents", "orderBy"]);
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
     }
 
     [Fact]
@@ -1945,6 +2032,26 @@ public class NyxIdConnectedServiceToolSourceTests
           "method": "GET",
           "path": "{{path}}",
           "parameters": [],
+          "request_body_schema": null,
+          "request_content_type": null,
+          "request_body_required": false,
+          "response": { "content_types": ["application/json"], "binary_artifact": false }
+        }
+        """;
+
+    private static string CalendarListEndpoint(string endpointId) => $$"""
+        {
+          "endpoint_id": "{{endpointId}}",
+          "name": "calendar_list_events",
+          "method": "GET",
+          "path": "/calendar/v3/calendars/{calendarId}/events",
+          "parameters": [
+            { "name": "calendarId", "in": "path", "required": true, "schema": { "type": "string" } },
+            { "name": "timeMin", "in": "query", "required": false, "description": "Lower bound for an event start time.", "schema": { "type": "string" } },
+            { "name": "timeMax", "in": "query", "required": false, "description": "Upper bound for an event start time.", "schema": { "type": "string" } },
+            { "name": "singleEvents", "in": "query", "required": false, "schema": { "type": "boolean" } },
+            { "name": "orderBy", "in": "query", "required": false, "schema": { "type": "string", "enum": ["startTime"] } }
+          ],
           "request_body_schema": null,
           "request_content_type": null,
           "request_body_required": false,

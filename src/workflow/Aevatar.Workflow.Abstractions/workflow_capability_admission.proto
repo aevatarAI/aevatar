@@ -287,6 +287,7 @@ message NyxIdOperationParameterContract {
   NyxIdOperationParameterLocation location = 2;
   bool required = 3;
   NyxIdOperationSchema schema = 4;
+  string description = 5;
 }
 
 message NyxIdOperationRequestBodyContract {

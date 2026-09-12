@@ -224,7 +224,8 @@ public sealed record AgentToolOperationParameter(
     string Name,
     AgentToolOperationParameterLocation Location,
     bool Required,
-    AgentToolOperationValueSchema Schema);
+    AgentToolOperationValueSchema Schema,
+    string? Description = null);
 
 public sealed record AgentToolOperationRequestBody(
     bool Required,
