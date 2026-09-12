@@ -85,9 +85,9 @@ public sealed class StudioWorkflowScheduleProvisioningExecutor
 
         if (!preflight.Success)
         {
-            return IsWorkflowEvidenceProjectionPending(preflight)
+            return TryGetProjectionPendingAuthorizationFailure(preflight, out var retryableFailureCode)
                 ? StudioWorkflowScheduleProvisioningExecutionResult.Retry(
-                    "workflow_authorization_evidence_not_found",
+                    retryableFailureCode,
                     preflight.Detail)
                 : StudioWorkflowScheduleProvisioningExecutionResult.Failed(
                     preflight.FailureCode.ToString(),
@@ -198,9 +198,26 @@ public sealed class StudioWorkflowScheduleProvisioningExecutor
             $"Provisioning for service '{intent.PublishedServiceId}' exhausted {maxGenerations} deleted schedule generations.");
     }
 
-    private static bool IsWorkflowEvidenceProjectionPending(
-        StudioMemberWorkflowAuthorizationResult result) =>
-        result.Detail.Contains("workflow_authorization_evidence_not_found", StringComparison.Ordinal);
+    private static bool TryGetProjectionPendingAuthorizationFailure(
+        StudioMemberWorkflowAuthorizationResult result,
+        out string failureCode)
+    {
+        failureCode = string.Empty;
+        var detail = result.Detail;
+        if (detail.Contains("studio_member_evidence_not_found", StringComparison.Ordinal))
+        {
+            failureCode = "studio_member_evidence_not_found";
+            return true;
+        }
+
+        if (detail.Contains("workflow_authorization_evidence_not_found", StringComparison.Ordinal))
+        {
+            failureCode = "workflow_authorization_evidence_not_found";
+            return true;
+        }
+
+        return false;
+    }
 
     private static bool IsBindingProjectionPending(string message) =>
         message.Contains("has no bound workflow", StringComparison.Ordinal) ||
