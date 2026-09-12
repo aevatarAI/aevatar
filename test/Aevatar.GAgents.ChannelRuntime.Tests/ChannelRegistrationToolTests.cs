@@ -33,8 +33,9 @@ public sealed class ChannelRegistrationToolTests
         tool.ParametersSchema.Should().Contain("\"credentials\"");
         tool.ParametersSchema.Should().Contain("\"lark\"");
         tool.ParametersSchema.Should().Contain("\"telegram\"");
+        tool.ParametersSchema.Should().Contain("\"bot_token\"");
         tool.ParametersSchema.Should().Contain("\"service_ids\"");
-        tool.ParametersSchema.Should().NotContain("authorization_mode");
+        tool.ParametersSchema.Should().Contain("\"authorization_mode\"");
         tool.ParametersSchema.Should().NotContain("scope_plan_digest");
         tool.ParametersSchema.Should().NotContain("allowed_service_ids");
         JsonDocument.Parse(tool.ParametersSchema).RootElement
@@ -292,7 +293,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            $$"""{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","service_ids":{{serviceIdsJson}}}""");
+            $$"""{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist","service_ids":{{serviceIdsJson}}}""");
         using var document = JsonDocument.Parse(json);
 
         document.RootElement.TryGetProperty("error_code", out var errorCode).Should().BeTrue();
@@ -331,6 +332,35 @@ public sealed class ChannelRegistrationToolTests
         captured.ServiceSelection.ServiceIds.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_RegisterChannelViaNyx_WhenLegacyServiceIdsArePresent_SelectsNyxIdDefault()
+    {
+        NyxChannelBotProvisioningRequest? captured = null;
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+        provisioningService.ProvisionAsync(
+                Arg.Do<NyxChannelBotProvisioningRequest>(request => captured = request),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: true,
+                Status: "accepted",
+                Platform: "lark",
+                RegistrationId: "reg-legacy-default")));
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(CreateRegistrationFacade(provisioningService))
+            .BuildServiceProvider();
+        var tool = CreateTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        await tool.ExecuteAsync(
+            """{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","service_ids":["svc-legacy"]}""");
+
+        captured.Should().NotBeNull();
+        captured!.ServiceSelection.AuthorizationMode.Should()
+            .Be(ChannelRegistrationAuthorizationMode.NyxidDefault);
+        captured.ServiceSelection.ServiceIds.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("[]", new string[0])]
     [InlineData("[\" svc-b \",\"svc-a\",\"svc-a\"]", new[] { "svc-a", "svc-b" })]
@@ -356,7 +386,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            $$"""{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","service_ids":{{serviceIdsJson}}}""");
+            $$"""{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist","service_ids":{{serviceIdsJson}}}""");
         using var document = JsonDocument.Parse(json);
 
         document.RootElement.GetProperty("status").GetString().Should().Be("accepted");

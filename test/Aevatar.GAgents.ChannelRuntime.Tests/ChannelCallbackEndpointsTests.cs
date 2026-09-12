@@ -536,7 +536,7 @@ public sealed class ChannelCallbackEndpointsTests
                 Platform: "lark",
                 RegistrationId: "reg-invalid-service-ids")));
         var http = CreateJsonHttpContext(
-            $$"""{"platform":"lark","app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","webhook_base_url":"https://aevatar.example.com","service_ids":{{serviceIdsJson}}}""",
+            $$"""{"platform":"lark","app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist","service_ids":{{serviceIdsJson}}}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
@@ -589,6 +589,40 @@ public sealed class ChannelCallbackEndpointsTests
         captured.ServiceSelection.ServiceIds.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task HandleRegisterAsync_WhenLegacyServiceIdsArePresent_SelectsNyxIdDefault()
+    {
+        NyxChannelBotProvisioningRequest? captured = null;
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+        provisioningService.ProvisionAsync(
+                Arg.Do<NyxChannelBotProvisioningRequest>(request => captured = request),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: true,
+                Status: "accepted",
+                Platform: "lark",
+                RegistrationId: "reg-legacy-default")));
+        var http = CreateJsonHttpContext(
+            """{"platform":"lark","app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","webhook_base_url":"https://aevatar.example.com","service_ids":["svc-legacy"]}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRegisterAsync",
+            http,
+            CreateRegistrationFacade(provisioningService),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        captured.Should().NotBeNull();
+        captured!.ServiceSelection.AuthorizationMode.Should()
+            .Be(ChannelRegistrationAuthorizationMode.NyxidDefault);
+        captured.ServiceSelection.ServiceIds.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("[]", new string[0])]
     [InlineData("[\" svc-b \",\"svc-a\",\"svc-a\"]", new[] { "svc-a", "svc-b" })]
@@ -608,7 +642,7 @@ public sealed class ChannelCallbackEndpointsTests
                 Platform: "lark",
                 RegistrationId: "reg-explicit")));
         var http = CreateJsonHttpContext(
-            $$"""{"platform":"lark","app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","webhook_base_url":"https://aevatar.example.com","service_ids":{{serviceIdsJson}}}""",
+            $$"""{"platform":"lark","app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist","service_ids":{{serviceIdsJson}}}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 

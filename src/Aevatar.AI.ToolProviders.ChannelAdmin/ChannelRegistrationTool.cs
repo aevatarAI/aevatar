@@ -74,6 +74,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Base URL for Nyx relay callbacks, e.g. 'https://aevatar-console-backend-api.aevatar.ai' (required for register_channel_via_nyx)"
             },
+            "bot_token": {
+              "type": "string",
+              "description": "Telegram bot token shorthand for register_channel_via_nyx; equivalent to credentials.bot_token."
+            },
             "credentials": {
               "type": "object",
               "additionalProperties": { "type": "string" },
@@ -106,12 +110,16 @@ public sealed class ChannelRegistrationTool : IAgentTool
             },
             "runtime_config": {
               "type": "object",
-              "description": "Optional ChannelRegistration-owned runtime config for instructions, default_skill, tool_set_refs, extra_tool_names, nyxid_service_selectors, credential_source_mode, and agent_key_service_requirements."
+              "description": "Optional ChannelRegistration-owned runtime config for instructions, default_skill, tool_set_refs, extra_tool_names, nyxid_service_selectors, credential_source_mode, and agent_key_service_requirements. When omitted, registrations with a default_skill_name use the auto-generated registration agent key."
+            },
+            "authorization_mode": {
+              "type": "string",
+              "description": "Optional authorization mode. Use explicit_service_allowlist to apply service_ids; omit or use nyxid_default for default registration agent key authorization."
             },
             "service_ids": {
               "type": "array",
               "items": { "type": "string" },
-              "description": "Optional exact NyxID UserService IDs allowed for registration-authorized calls. Omit for NyxID default authorization; an explicit empty array selects an empty business allowlist."
+              "description": "Exact NyxID UserService IDs allowed only when authorization_mode is explicit_service_allowlist. Legacy callers may send this field without changing the default authorization mode."
             },
             "registration_id": {
               "type": "string",

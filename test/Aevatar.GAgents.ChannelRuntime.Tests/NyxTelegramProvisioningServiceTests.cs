@@ -508,14 +508,59 @@ public class NyxTelegramProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_WhenLegacyDefaultSkillNameIsPresent_BuildsRegistrationAgentKeyRuntimeConfig()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", AgentKeyResponse("key-123", "full-key"));
+        handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-tg-legacy"}""");
+        handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-tg-legacy"}""");
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(
+            actorRuntime,
+            (IActorDispatchPort)actorRuntime);
+        INyxChannelBotProvisioningService service = CreateService(handler, commandFacade: commandFacade);
+
+        var result = await service.ProvisionAsync(
+            new NyxChannelBotProvisioningRequest(
+                Platform: "telegram",
+                AccessToken: "user-token",
+                WebhookBaseUrl: "https://aevatar.example.com",
+                ScopeId: "scope-1",
+                Label: "Ops Bot",
+                NyxProviderSlug: "api-telegram-bot",
+                Credentials: new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["bot_token"] = "tok-from-map",
+                },
+                DefaultSkillName: " /Booking-Capacity "),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        capturedEnvelope.Should().NotBeNull();
+        var command = capturedEnvelope!.Payload.Unpack<ChannelBotRegisterCommand>();
+        command.RuntimeConfig.Should().NotBeNull();
+        command.RuntimeConfig!.DefaultSkill.Name.Should().Be("/Booking-Capacity");
+        command.RuntimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);
+    }
+
+    [Fact]
     public async Task ExplicitSelection_NeverFallsThroughToDefaultKeyProvisioning()
     {
         var handler = new RecordingHandler();
         handler.Enqueue("/api/v1/api-keys", AgentKeyResponse("key-123", "full-key"));
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
-        using var input = System.Text.Json.JsonDocument.Parse("""{"service_ids":[]}""");
+        using var input = System.Text.Json.JsonDocument.Parse("""{"authorization_mode":"explicit_service_allowlist","service_ids":[]}""");
         ChannelRegistrationServiceIdsJsonParser.TryParse(input.RootElement, out var selection).Should().BeTrue();
+        selection.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
         INyxChannelBotProvisioningService service = CreateService(handler);
 
         var result = await service.ProvisionAsync(new NyxChannelBotProvisioningRequest(
