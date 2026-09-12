@@ -192,6 +192,10 @@ maximum 和 recovery 都要包含 `use_skill`、`nyxid_service_inventory`；仅�
 
 Pinned NyxID Assistant route 不挂载 `nyxid_service_inventory`：该 route 的 caller inventory 读取由 read-only `nyxid_services`（list/show，读 `/api/v1/keys`）承担，不为同一事实并列第二个 model-visible 读取工具。kernel 与 floor prompt 对 inventory 读取的指引必须以 `nyxid_service_inventory` 出现在最终 tool schemas 为条件；缺席时指向当前实际存在的只读 management read，不得无条件指向单一工具名。
 
+Channel registration 采用 `registration_agent_key` 时，外层工具准入使用该 registration 的 Agent Key；内部 `nyxid_service_inventory_reader` 仍只读取绑定发送者的服务。切换到 verified sender token 或新签发的 inventory capability 时，wrapper 必须同时设置 `SenderNyxIdAccessToken`、`SourceReadableUserBearer` 类型与 `BearerToken` 来源，并移除外层 `DurableNyxIdCredential`。内部读取继续经过 `IAgentToolExecutionPort`，保留原 execution owner、sender binding、NyxID authority 与 request ID，使用独立的 `:inventory-read` call ID。不得仅替换 token 字符串后保留 registration Agent Key 的凭据描述，也不得通过放宽统一准入校验解决描述冲突。
+
+内部准入拒绝的 `credential_denied` 回执映射为 `Denied / NYXID_SERVICE_INVENTORY_CREDENTIAL_DENIED`，只返回固定的安全文案，要求修正凭据配置后再重试；普通 inventory 不可用仍返回 `NYXID_SERVICE_INVENTORY_FAILED`。wrapper 日志保留 request ID、call ID、typed failure stage 和 error code，不记录 token 或外部原始错误正文。回归验证必须让外层 inventory 与内部 reader 都经过真实 `AdmittedAgentToolExecutor`，同时检查发送者 HTTP Authorization、两个调用的独立审计记录以及外层上下文未被改变。
+
 ## 7. NyxID Chat turn credential lifecycle
 
 NyxID Chat ingress 把 caller credential 明确分为两类，后续 turn operation 不得改变其 kind：

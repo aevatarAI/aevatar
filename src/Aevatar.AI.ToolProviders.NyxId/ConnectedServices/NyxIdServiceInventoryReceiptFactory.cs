@@ -7,6 +7,9 @@ public static class NyxIdServiceInventoryReceiptFactory
 {
     private const string FailureCode = "NYXID_SERVICE_INVENTORY_FAILED";
     private const string FailureMessage = "The connected-service inventory request failed.";
+    private const string CredentialDeniedCode = "NYXID_SERVICE_INVENTORY_CREDENTIAL_DENIED";
+    private const string CredentialDeniedMessage =
+        "The connected-service inventory read was denied by credential policy. The credential configuration must be corrected before retrying.";
 
     public static AgentToolReceipt? Create(
         string callId,
@@ -23,18 +26,22 @@ public static class NyxIdServiceInventoryReceiptFactory
             if (root.TryGetProperty("error", out var error) &&
                 error.ValueKind is not (JsonValueKind.Null or JsonValueKind.False))
             {
+                var credentialDenied = error.ValueKind == JsonValueKind.String &&
+                    error.GetString() is "credential_denied" or CredentialDeniedCode;
+                var failureCode = credentialDenied ? CredentialDeniedCode : FailureCode;
+                var failureMessage = credentialDenied ? CredentialDeniedMessage : FailureMessage;
                 return new AgentToolReceipt
                 {
                     CallId = callId ?? string.Empty,
                     ToolName = toolName ?? string.Empty,
-                    Status = AgentToolReceiptStatus.Error,
+                    Status = credentialDenied ? AgentToolReceiptStatus.Denied : AgentToolReceiptStatus.Error,
                     ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
-                    ErrorCode = FailureCode,
-                    ErrorMessage = FailureMessage,
+                    ErrorCode = failureCode,
+                    ErrorMessage = failureMessage,
                     ResultJson = JsonSerializer.Serialize(new
                     {
-                        error = FailureCode,
-                        message = FailureMessage,
+                        error = failureCode,
+                        message = failureMessage,
                     }),
                 };
             }

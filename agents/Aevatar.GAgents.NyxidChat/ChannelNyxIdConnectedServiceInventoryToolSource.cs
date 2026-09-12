@@ -135,10 +135,16 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
             var senderContext = context with
             {
+                // This read is authorized by the bound sender, independently of
+                // the registration Agent Key that admitted the outer tool call.
+                CredentialSource = AgentToolCredentialSource.BearerToken,
+                DurableNyxIdCredential = null,
                 Credentials = new AgentToolCredentials(
                     token,
                     token,
-                    context.Credentials.SenderNyxIdAccessToken),
+                    SenderNyxIdAccessToken: token,
+                    NyxIdCredentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                    NyxIdCredentialAuthority: AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
                 Request = context.Request with
                 {
                     CallId = CreateInventoryReadCallId(context.Request.CallId),
@@ -152,6 +158,15 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                     AgentToolApprovalContinuationMode.None,
                     ApprovalGrant: null),
                 ct).ConfigureAwait(false);
+            if (outcome.Kind is AgentToolExecutionOutcomeKind.Denied or AgentToolExecutionOutcomeKind.Failed)
+            {
+                _logger.LogWarning(
+                    "NyxID connected-service inventory reader failed. request={RequestId} call={CallId} failureStage={FailureStage} errorCode={ErrorCode}",
+                    senderContext.Request.RequestId,
+                    senderContext.Request.CallId,
+                    outcome.FailureStage,
+                    outcome.FailureCode);
+            }
             return outcome.ResultJson;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
