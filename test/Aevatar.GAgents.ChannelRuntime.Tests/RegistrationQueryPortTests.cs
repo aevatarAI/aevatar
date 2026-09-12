@@ -365,7 +365,7 @@ public sealed class RegistrationQueryPortTests
                 Name = "booking-capacity",
                 Version = "2.3",
             },
-            ToolSetRefs = { "channel.reply.booking" },
+            ToolSetRefs = { "channel.reply.default" },
             ExtraToolNames = { "ask_user" },
             NyxidServiceSelectors =
             {

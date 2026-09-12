@@ -1059,7 +1059,6 @@ public sealed class MainnetHostCompositionTests
             AgentProfilePolicies.NyxIdChatRouteToolSet,
             ToolSetNames.ChannelCore,
             ToolSetNames.ChannelLark,
-            ToolSetNames.ChannelReplyBooking,
             ToolSetNames.ChannelReplyDefault,
             ToolSetNames.ChannelTelegram,
             ToolSetNames.ChatCore,
@@ -1189,10 +1188,6 @@ public sealed class MainnetHostCompositionTests
         channelReply.Sources.Select(static source => source.GetType()).Should()
             .Equal(channelToolSources.Select(static source => source.GetType()));
 
-        var bookingReply = registry.Resolve(ToolSetNames.ChannelReplyBooking);
-        bookingReply.IsSuccess.Should().BeTrue(bookingReply.Error?.Message);
-        bookingReply.Sources.Select(static source => source.GetType()).Should()
-            .Equal(channelReply.Sources.Select(static source => source.GetType()));
         foreach (var platform in new[] { "telegram", "lark" })
         {
             await AssertChannelProfileInventoryAsync(registry, platform, hasBinding: true);

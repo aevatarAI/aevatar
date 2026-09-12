@@ -610,11 +610,6 @@ public static class MainnetHostBuilderExtensions
                 ],
                 "Channel reply runtime with skill authoring, sender inventory, and admitted connected-service operations.");
             options.AddToolSet(
-                ToolSetNames.ChannelReplyBooking,
-                [ToolSetNames.ChannelReplyDefault],
-                [],
-                "Booking channel reply runtime alias; typed runtime config selectors choose admitted service operations.");
-            options.AddToolSet(
                 ToolSetNames.LarkSelfNotify,
                 [ToolSetNames.WorkspaceDefault, ToolSetNames.ChannelLark],
                 [],

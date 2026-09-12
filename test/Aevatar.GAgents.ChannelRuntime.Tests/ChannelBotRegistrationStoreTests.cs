@@ -281,7 +281,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
             AgentKeyServiceRequirements = new ChannelBotRuntimeAgentKeyServiceRequirements(),
         };
-        runtimeConfig.ToolSetRefs.Add("channel.reply.booking");
+        runtimeConfig.ToolSetRefs.Add("channel.reply.default");
         runtimeConfig.AgentKeyServiceRequirements.AllowedServiceSlugs.Add("API-Google-Workspace");
         runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
         {

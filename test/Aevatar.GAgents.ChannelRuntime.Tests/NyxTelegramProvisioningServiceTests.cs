@@ -471,7 +471,7 @@ public class NyxTelegramProvisioningServiceTests
             },
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
         };
-        runtimeConfig.ToolSetRefs.Add("channel.reply.booking");
+        runtimeConfig.ToolSetRefs.Add("channel.reply.default");
         runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
         {
             ServiceSlug = "api-google-workspace",
@@ -501,7 +501,7 @@ public class NyxTelegramProvisioningServiceTests
         command.RuntimeConfig.Should().NotBeSameAs(runtimeConfig);
         command.RuntimeConfig.Instructions.Should().Be("Book dinner only after explicit confirmation.");
         command.RuntimeConfig.DefaultSkill.Name.Should().Be("booking-capacity");
-        command.RuntimeConfig.ToolSetRefs.Should().BeEquivalentTo("channel.reply.booking");
+        command.RuntimeConfig.ToolSetRefs.Should().BeEquivalentTo("channel.reply.default");
         command.RuntimeConfig.NyxidServiceSelectors.Single().ServiceSlug.Should().Be("api-google-workspace");
         command.RuntimeConfig.NyxidServiceSelectors.Single().EndpointNames.Should().BeEquivalentTo("calendar_create_event");
         command.RuntimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);

@@ -247,7 +247,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             DefaultSkillVersion = "2.3",
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
         };
-        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.booking");
+        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.default");
         request.ChannelRuntimeConfig.ExtraToolNames.Add("ask_user");
         request.ChannelRuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
         {
@@ -293,7 +293,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             Instructions = "Only answer booking capacity questions.",
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
         };
-        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.booking");
+        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.default");
         request.ChannelRuntimeConfig.ExtraToolNames.Add("ask_user");
 
         var state = await fixture.Executor.BuildInitialStepStateAsync(
@@ -379,7 +379,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             DefaultSkillVersion = "2.3",
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
         };
-        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.booking");
+        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.default");
 
         var state = await fixture.Executor.BuildInitialStepStateAsync(
             new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
@@ -476,7 +476,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ConfigDigest = "sha256:config",
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
         };
-        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.booking");
+        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.default");
 
         var state = await fixture.Executor.BuildInitialStepStateAsync(
             new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
@@ -497,11 +497,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var allowedTool = new CountingTool("allowed_route_tool");
         var hiddenTool = new CountingTool("hidden_route_tool");
         var registry = new RecordingToolSetRegistry();
-        registry.Add("channel.reply.booking", new StaticToolSource([allowedTool, hiddenTool]));
+        registry.Add("channel.reply.default", new StaticToolSource([allowedTool, hiddenTool]));
         var materializer = new ChannelRuntimeToolCatalogMaterializer(registry);
 
         var catalog = await materializer.MaterializeAsync(
-            new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.booking" } },
+            new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.default" } },
             [],
             AgentToolExecutionContext.Empty with
             {
@@ -527,10 +527,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
             "api-google-workspace",
             "mail_send");
         var registry = new RecordingToolSetRegistry();
-        registry.Add("channel.reply.booking", new StaticToolSource([routeTool, selectedOperation, hiddenOperation]));
+        registry.Add("channel.reply.default", new StaticToolSource([routeTool, selectedOperation, hiddenOperation]));
         var materializer = new ChannelRuntimeToolCatalogMaterializer(registry);
 
-        var runtimeConfig = new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.booking" } };
+        var runtimeConfig = new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.default" } };
         runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
         {
             ServiceSlug = "api-google-workspace",
@@ -555,10 +555,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
     public async Task ChannelRuntimeCatalog_WhenRuntimeSelectorsPresent_ShouldPassSelectorsToDiscoveryContext()
     {
         var registry = new RecordingToolSetRegistry();
-        registry.Add("channel.reply.booking", new StaticToolSource([new CountingTool("route_tool")]));
+        registry.Add("channel.reply.default", new StaticToolSource([new CountingTool("route_tool")]));
         var discoveryService = new RecordingDiscoveryService([new CountingTool("route_tool")]);
         var materializer = new ChannelRuntimeToolCatalogMaterializer(registry, discoveryService);
-        var runtimeConfig = new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.booking" } };
+        var runtimeConfig = new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.default" } };
         runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
         {
             ServiceSlug = "api-google-workspace",
@@ -2695,7 +2695,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(AgentTurnToolCatalogMaterialization.Create(catalog, authority)));
         var toolSetRegistry = new RecordingToolSetRegistry();
-        toolSetRegistry.Add("channel.reply.booking", new StaticToolSource([tool, askUserTool]));
+        toolSetRegistry.Add("channel.reply.default", new StaticToolSource([tool, askUserTool]));
         var channelRuntimeCatalogMaterializer = new ChannelRuntimeToolCatalogMaterializer(toolSetRegistry);
         var executor = new AgentRunReplyGenerationExecutor(
             Substitute.For<IActorDispatchPort>(),

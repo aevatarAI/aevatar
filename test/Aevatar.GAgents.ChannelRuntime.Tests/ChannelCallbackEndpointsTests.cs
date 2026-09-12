@@ -852,7 +852,7 @@ public sealed class ChannelCallbackEndpointsTests
                   "name": "booking-capacity",
                   "version": "1.0.0"
                 },
-                "tool_set_refs": ["channel.reply.booking"],
+                "tool_set_refs": ["channel.reply.default"],
                 "nyxid_service_selectors": [
                   {
                     "service_slug": "api-google-workspace",
@@ -883,7 +883,7 @@ public sealed class ChannelCallbackEndpointsTests
         capturedRequest!.RuntimeConfig.Should().NotBeNull();
         capturedRequest.RuntimeConfig!.Instructions.Should().Be("Book dinner only after explicit confirmation.");
         capturedRequest.RuntimeConfig.DefaultSkill.Name.Should().Be("booking-capacity");
-        capturedRequest.RuntimeConfig.ToolSetRefs.Should().BeEquivalentTo("channel.reply.booking");
+        capturedRequest.RuntimeConfig.ToolSetRefs.Should().BeEquivalentTo("channel.reply.default");
         capturedRequest.RuntimeConfig.NyxidServiceSelectors.Single().ServiceSlug.Should().Be("api-google-workspace");
         capturedRequest.RuntimeConfig.NyxidServiceSelectors.Single().EndpointNames.Should().BeEquivalentTo("calendar_create_event");
         capturedRequest.RuntimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);

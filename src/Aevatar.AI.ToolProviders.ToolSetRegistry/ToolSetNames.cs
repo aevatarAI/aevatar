@@ -26,12 +26,6 @@ public static class ToolSetNames
     /// </summary>
     public const string ChannelReplyDefault = "channel.reply.default";
 
-    /// <summary>
-    /// Narrow channel reply runtime name used by booking-capacity registrations. It composes the
-    /// default channel reply surface; typed runtime config selectors still choose service tools.
-    /// </summary>
-    public const string ChannelReplyBooking = "channel.reply.booking";
-
     public const string WorkspaceDefault = "workspace.default";
     public const string LarkSelfNotify = "lark.self_notify";
 
