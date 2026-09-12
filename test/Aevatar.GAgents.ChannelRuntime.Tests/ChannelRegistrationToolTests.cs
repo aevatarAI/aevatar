@@ -361,6 +361,35 @@ public sealed class ChannelRegistrationToolTests
         captured.ServiceSelection.ServiceIds.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_RegisterChannelViaNyx_WhenExplicitModeOmitsServiceIds_SelectsEmptyExplicitAllowlist()
+    {
+        NyxChannelBotProvisioningRequest? captured = null;
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+        provisioningService.ProvisionAsync(
+                Arg.Do<NyxChannelBotProvisioningRequest>(request => captured = request),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: true,
+                Status: "accepted",
+                Platform: "lark",
+                RegistrationId: "reg-explicit-empty")));
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(CreateRegistrationFacade(provisioningService))
+            .BuildServiceProvider();
+        var tool = CreateTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        await tool.ExecuteAsync(
+            """{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist"}""");
+
+        captured.Should().NotBeNull();
+        captured!.ServiceSelection.AuthorizationMode.Should()
+            .Be(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
+        captured.ServiceSelection.ServiceIds.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("[]", new string[0])]
     [InlineData("[\" svc-b \",\"svc-a\",\"svc-a\"]", new[] { "svc-a", "svc-b" })]

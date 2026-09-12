@@ -44,7 +44,10 @@ public static class ChannelRegistrationServiceIdsJsonParser
             return true;
 
         if (!root.TryGetProperty("service_ids", out var serviceIdsElement))
+        {
+            selection = ChannelRegistrationServiceSelection.Explicit([]);
             return true;
+        }
 
         if (serviceIdsElement.ValueKind != JsonValueKind.Array)
             return false;

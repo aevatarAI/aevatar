@@ -966,14 +966,23 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         string? body,
         Dictionary<string, string>? extraHeaders = null)
     {
-        var request = CreateProxyRequest(
-            apiKey,
-            slug,
-            userServiceId,
-            path,
-            method,
-            body,
-            extraHeaders);
+        var url = BuildProxyUrl(slug, userServiceId, path, publicApiOnly: false);
+        var httpMethod = new HttpMethod(method.ToUpperInvariant());
+        var request = new HttpRequestMessage(httpMethod, url);
+        request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
+
+        var callerSpecifiedUserAgent = ApplyExtraHeaders(request, extraHeaders);
+        if (!callerSpecifiedUserAgent)
+            request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
+
+        if (!string.IsNullOrEmpty(body) &&
+            httpMethod != HttpMethod.Get &&
+            httpMethod != HttpMethod.Head)
+        {
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        }
+
+        ApplyIdempotencyKey(request, httpMethod);
         return request;
     }
 

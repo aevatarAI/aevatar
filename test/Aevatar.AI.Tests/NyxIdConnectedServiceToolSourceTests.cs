@@ -305,8 +305,8 @@ public class NyxIdConnectedServiceToolSourceTests
         var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
         proxyRequest.Path.Should().Be("/api/v1/proxy/s/api-google-workspace/profile/dining");
         proxyRequest.Query.Should().NotContain("_nyxid_via");
-        proxyRequest.Authorization.Should().Be("agent-key-token");
-        proxyRequest.ApiKey.Should().BeEmpty();
+        proxyRequest.Authorization.Should().BeEmpty();
+        proxyRequest.ApiKey.Should().Be("agent-key-token");
     }
 
     [Theory]
