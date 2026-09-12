@@ -17,7 +17,8 @@ internal static class ChannelRegistrationCommandFacadeTestSupport
 
         return new ChannelRegistrationCommandFacade(
             CreateDispatchPipeline<ChannelBotRegisterCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory),
-            CreateDispatchService<ChannelBotUnregisterCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory));
+            CreateDispatchService<ChannelBotUnregisterCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory),
+            CreateDispatchService<ChannelBotUpdateRuntimeConfigCommand>(actorRuntime, contextPolicy, envelopeFactory, targetDispatcher, receiptFactory));
     }
 
     public static IChannelWorkflowResultDeliveryRepairCommandPort CreateRepairPort(

@@ -91,38 +91,15 @@ public sealed class ChannelRemoteSkillAccessTokenResolver : IRemoteSkillAccessTo
         AgentToolExecutionContext context,
         CancellationToken ct)
     {
-        var credential = context.Channel.WorkflowResultDeliveryCredential;
-        var registrationId = Normalize(context.Channel.BotRegistrationId);
-        var scopeId = Normalize(context.Channel.RegistrationScopeId);
-        var subjectId = Normalize(credential?.SubjectId);
-        if (_secretVault is null || credential is null || registrationId is null || scopeId is null ||
-            context.ExecutionOwner.Kind != AgentToolExecutionOwnerKind.ChannelRegistration ||
-            !string.Equals(context.ExecutionOwner.OwnerId, registrationId, StringComparison.Ordinal) ||
-            subjectId is null ||
-            credential.SecretReference is not { } reference ||
-            string.IsNullOrWhiteSpace(reference.Ref) ||
-            !string.Equals(reference.Purpose, CredentialSecretPurposes.ChannelNyxIdAgentKey, StringComparison.Ordinal) ||
-            !string.Equals(reference.OwnerScopeKey, scopeId, StringComparison.Ordinal))
-        {
-            return RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.Unavailable);
-        }
-
-        var resolved = await _secretVault.ResolveAsync(
-            new ResolveSecretRequest(
-                reference.Ref,
-                CredentialSecretPurposes.ChannelNyxIdAgentKey,
-                scopeId,
-                subjectId,
-                "channel-default-skill"),
-            ct).ConfigureAwait(false);
-        if (!resolved.Resolved || string.IsNullOrWhiteSpace(resolved.Secret) ||
-            resolved.Reference is not { } resolvedReference ||
-            !MatchesReference(reference, resolvedReference))
-        {
-            return RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.Unavailable);
-        }
-
-        return RemoteSkillAccessTokenResolution.Resolved(resolved.Secret!.Trim());
+        var agentKey = await ChannelRegistrationAgentKeySecretResolver.ResolveAsync(
+                context,
+                _secretVault,
+                "channel-default-skill",
+                ct)
+            .ConfigureAwait(false);
+        return agentKey is null
+            ? RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.Unavailable)
+            : RemoteSkillAccessTokenResolution.Resolved(agentKey);
     }
 
     private static bool IsChannelDefaultSkillInvocation(AgentToolExecutionContext? context, string skillName)
@@ -134,15 +111,6 @@ public sealed class ChannelRemoteSkillAccessTokenResolver : IRemoteSkillAccessTo
                string.Equals(requested, Normalize(recovery.PrimarySkillName), StringComparison.Ordinal) &&
                string.Equals(requested, Normalize(recovery.CommandName), StringComparison.Ordinal);
     }
-
-    private static bool MatchesReference(SecretReference expected, SecretReference actual) =>
-        string.Equals(actual.Ref, expected.Ref, StringComparison.Ordinal) &&
-        string.Equals(actual.Purpose, expected.Purpose, StringComparison.Ordinal) &&
-        string.Equals(actual.OwnerScopeKey, expected.OwnerScopeKey, StringComparison.Ordinal) &&
-        string.Equals(actual.Fingerprint, expected.Fingerprint, StringComparison.Ordinal) &&
-        actual.Version == expected.Version &&
-        actual.CreatedAtUnixMs == expected.CreatedAtUnixMs &&
-        actual.ExpiresAtUnixMs == expected.ExpiresAtUnixMs;
 
     private static bool IsBindingStateFailure(Exception ex) =>
         ex is BindingRevokedException
@@ -169,6 +137,64 @@ public sealed class ChannelRemoteSkillAccessTokenResolver : IRemoteSkillAccessTo
         };
         return true;
     }
+
+    private static string? Normalize(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+}
+
+internal static class ChannelRegistrationAgentKeySecretResolver
+{
+    public static async Task<string?> ResolveAsync(
+        AgentToolExecutionContext context,
+        ISecretVault? secretVault,
+        string auditReason,
+        CancellationToken ct)
+    {
+        var credential = context.Channel.WorkflowResultDeliveryCredential;
+        var registrationId = Normalize(context.Channel.BotRegistrationId);
+        var scopeId = Normalize(context.Channel.RegistrationScopeId);
+        var subjectId = Normalize(credential?.SubjectId);
+        if (secretVault is null || credential is null || registrationId is null || scopeId is null ||
+            context.ExecutionOwner.Kind != AgentToolExecutionOwnerKind.ChannelRegistration ||
+            !string.Equals(context.ExecutionOwner.OwnerId, registrationId, StringComparison.Ordinal) ||
+            subjectId is null ||
+            credential.SecretReference is not { } reference ||
+            string.IsNullOrWhiteSpace(reference.Ref) ||
+            !string.Equals(reference.Purpose, CredentialSecretPurposes.ChannelNyxIdAgentKey, StringComparison.Ordinal) ||
+            !string.Equals(reference.OwnerScopeKey, scopeId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var resolved = await secretVault.ResolveAsync(
+            new ResolveSecretRequest(
+                reference.Ref,
+                CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                scopeId,
+                subjectId,
+                auditReason),
+            ct).ConfigureAwait(false);
+        if (!resolved.Resolved || string.IsNullOrWhiteSpace(resolved.Secret) ||
+            resolved.Reference is not { } resolvedReference ||
+            !MatchesReference(reference, resolvedReference))
+        {
+            return null;
+        }
+
+        return resolved.Secret.Trim();
+    }
+
+    private static bool MatchesReference(SecretReference expected, SecretReference actual) =>
+        string.Equals(actual.Ref, expected.Ref, StringComparison.Ordinal) &&
+        string.Equals(actual.Purpose, expected.Purpose, StringComparison.Ordinal) &&
+        string.Equals(actual.OwnerScopeKey, expected.OwnerScopeKey, StringComparison.Ordinal) &&
+        string.Equals(actual.Fingerprint, expected.Fingerprint, StringComparison.Ordinal) &&
+        actual.Version == expected.Version &&
+        actual.CreatedAtUnixMs == expected.CreatedAtUnixMs &&
+        actual.ExpiresAtUnixMs == expected.ExpiresAtUnixMs;
 
     private static string? Normalize(string? value)
     {

@@ -103,12 +103,6 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public bool HasPublicApiEndpoint =>
         !string.IsNullOrWhiteSpace(_options.EffectiveApiBaseUrl);
 
-    private enum ProxyCredentialTransport
-    {
-        AuthorizationBearer,
-        ApiKeyHeader,
-    }
-
     /// <summary>
     /// Default <c>User-Agent</c> injected on every call to <see cref="ProxyRequestAsync"/>
     /// when the caller does not specify one in <c>extraHeaders</c>. GitHub's REST API rejects
@@ -120,7 +114,6 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     /// happen to send <c>reqwest/x.y</c> as their default and so never hit this.
     /// </summary>
     public const string DefaultProxyUserAgent = "aevatar-agent-builder";
-    private const string ApiKeyHeaderName = "X-API-Key";
     private const string UserAgentHeaderName = "User-Agent";
 
     private readonly HttpClient _http;
@@ -270,6 +263,9 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     public Task<string> GetCatalogEntryAsync(string token, string slug, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/catalog/{Uri.EscapeDataString(slug)}", ct);
+
+    public Task<string> GetCatalogOpenApiSpecAsync(string token, string catalogSpecSlug, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/catalog-specs/{Uri.EscapeDataString(catalogSpecSlug)}/openapi.json", ct);
 
     // ─── AI Services (unified /keys) ───
 
@@ -609,6 +605,29 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         long maxBytes,
         CancellationToken ct)
     {
+        return ProxyRequestBoundedWithApiKeyAsync(
+            apiKey,
+            slug,
+            userServiceId,
+            path,
+            method,
+            body,
+            extraHeaders: null,
+            maxBytes,
+            ct);
+    }
+
+    public Task<NyxIdProxyTextResponse> ProxyRequestBoundedWithApiKeyAsync(
+        string apiKey,
+        string slug,
+        string userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
+        CancellationToken ct)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
@@ -619,6 +638,31 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             path,
             method,
             body,
+            extraHeaders,
+            maxBytes,
+            ct);
+    }
+
+    internal Task<NyxIdProxyTextResponse> ProxyRequestBoundedWithApiKeyAsync(
+        string apiKey,
+        string slug,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxBytes);
+        return ProxyRequestBoundedWithApiKeyCoreAsync(
+            apiKey,
+            slug,
+            userServiceId: null,
+            path,
+            method,
+            body,
+            extraHeaders,
             maxBytes,
             ct);
     }
@@ -705,10 +749,49 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
-        using var request = CreateProxyRequest(
+        return await ProxyRequestResponseCoreAsync(
             token,
             slug,
             userServiceId.Trim(),
+            path,
+            method,
+            body,
+            extraHeaders,
+            ct);
+    }
+
+    internal async Task<NyxIdProxyTextResponse> ProxyRequestResponseAsync(
+        string token,
+        string slug,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct) =>
+        await ProxyRequestResponseCoreAsync(
+            token,
+            slug,
+            userServiceId: null,
+            path,
+            method,
+            body,
+            extraHeaders,
+            ct);
+
+    private async Task<NyxIdProxyTextResponse> ProxyRequestResponseCoreAsync(
+        string token,
+        string slug,
+        string? userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct)
+    {
+        using var request = CreateProxyRequest(
+            token,
+            slug,
+            userServiceId,
             path,
             method,
             body,
@@ -790,10 +873,11 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     private async Task<NyxIdProxyTextResponse> ProxyRequestBoundedWithApiKeyCoreAsync(
         string apiKey,
         string slug,
-        string userServiceId,
+        string? userServiceId,
         string path,
         string method,
         string? body,
+        Dictionary<string, string>? extraHeaders,
         long maxBytes,
         CancellationToken ct)
     {
@@ -803,17 +887,84 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             userServiceId,
             path,
             method,
-            body);
+            body,
+            extraHeaders);
         return await SendTextResponseAsync(request, maxBytes, ct);
     }
 
-    private HttpRequestMessage CreateApiKeyProxyRequest(
+    internal async Task<NyxIdProxyTextResponse> ProxyRequestResponseWithApiKeyAsync(
         string apiKey,
         string slug,
         string userServiceId,
         string path,
         string method,
-        string? body)
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
+        return await ProxyRequestResponseWithApiKeyCoreAsync(
+            apiKey,
+            slug,
+            userServiceId.Trim(),
+            path,
+            method,
+            body,
+            extraHeaders,
+            ct);
+    }
+
+    internal async Task<NyxIdProxyTextResponse> ProxyRequestResponseWithApiKeyAsync(
+        string apiKey,
+        string slug,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        return await ProxyRequestResponseWithApiKeyCoreAsync(
+            apiKey,
+            slug,
+            userServiceId: null,
+            path,
+            method,
+            body,
+            extraHeaders,
+            ct);
+    }
+
+    private async Task<NyxIdProxyTextResponse> ProxyRequestResponseWithApiKeyCoreAsync(
+        string apiKey,
+        string slug,
+        string? userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct)
+    {
+        using var request = CreateApiKeyProxyRequest(
+            apiKey,
+            slug,
+            userServiceId,
+            path,
+            method,
+            body,
+            extraHeaders);
+        return await SendTextResponseAsync(request, ct);
+    }
+
+    private HttpRequestMessage CreateApiKeyProxyRequest(
+        string apiKey,
+        string slug,
+        string? userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders = null)
     {
         var request = CreateProxyRequest(
             apiKey,
@@ -822,8 +973,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             path,
             method,
             body,
-            extraHeaders: null,
-            ProxyCredentialTransport.ApiKeyHeader);
+            extraHeaders);
         return request;
     }
 
@@ -835,17 +985,13 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         string method,
         string? body,
         Dictionary<string, string>? extraHeaders,
-        ProxyCredentialTransport credentialTransport = ProxyCredentialTransport.AuthorizationBearer,
         bool publicApiOnly = false,
         bool applyAmbientIdempotencyKey = true)
     {
         var url = BuildProxyUrl(slug, userServiceId, path, publicApiOnly);
         var httpMethod = new HttpMethod(method.ToUpperInvariant());
         var request = new HttpRequestMessage(httpMethod, url);
-        if (credentialTransport == ProxyCredentialTransport.ApiKeyHeader)
-            request.Headers.Add(ApiKeyHeaderName, token);
-        else
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         var callerSpecifiedUserAgent = ApplyExtraHeaders(request, extraHeaders);
         if (!callerSpecifiedUserAgent)
@@ -1010,6 +1156,46 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             ct);
     }
 
+    public async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseWithApiKeyAsync(
+        string apiKey,
+        string slug,
+        string userServiceId,
+        string path,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
+        return await ProxyGetBinaryResponseCoreAsync(
+            apiKey,
+            slug,
+            userServiceId.Trim(),
+            path,
+            extraHeaders,
+            maxBytes,
+            ct);
+    }
+
+    internal async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseWithApiKeyAsync(
+        string apiKey,
+        string slug,
+        string path,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        return await ProxyGetBinaryResponseCoreAsync(
+            apiKey,
+            slug,
+            userServiceId: null,
+            path,
+            extraHeaders,
+            maxBytes,
+            ct);
+    }
+
     private async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseCoreAsync(
         string token,
         string slug,
@@ -1019,14 +1205,14 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         long maxBytes,
         CancellationToken ct)
     {
-        var url = BuildProxyUrl(slug, userServiceId, path);
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-        var callerSpecifiedUserAgent = ApplyExtraHeaders(request, extraHeaders);
-        if (!callerSpecifiedUserAgent)
-            request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
+        using var request = CreateProxyRequest(
+            token,
+            slug,
+            userServiceId,
+            path,
+            method: HttpMethod.Get.Method,
+            body: null,
+            extraHeaders);
 
         return await SendBinaryResponseAsync(request, NormalizeProxyFileArtifactMaxBytes(maxBytes), ct);
     }
@@ -1338,6 +1524,9 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     public Task<string> GetMcpConfigAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/mcp/config", ct);
+
+    public Task<string> GetMcpConfigWithApiKeyAsync(string apiKey, CancellationToken ct) =>
+        GetWithApiKeyAsync(apiKey, "/api/v1/mcp/config", ct);
 
     // ─── API Keys (additions) ───
 
@@ -1894,6 +2083,15 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         var url = $"{GetPublicApiBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return await SendAsync(request, ct);
+    }
+
+    internal async Task<string> GetWithApiKeyAsync(string apiKey, string path, CancellationToken ct)
+    {
+        var url = $"{GetPublicApiBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
         return await SendAsync(request, ct);
     }
 

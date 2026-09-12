@@ -12,14 +12,18 @@ using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -215,6 +219,369 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         AgentProfileSnapshotCodec.ByteEquivalent(state.AgentProfileSnapshot, fixture.Profile).Should().BeTrue();
         state.ToolCatalogProof.Should().Be(fixture.Catalog.Proof.ToPayload());
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WhenChannelRuntimeConfigIsPresent_ShouldBypassAgentProfileResolution()
+    {
+        var fixture = CreateProfiledChannelExecutor();
+        var request = fixture.Request.Clone();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+        {
+            SkillRecovery = AgentSkillRecoveryContext.Empty with
+            {
+                PrimarySkillName = "booking-capacity",
+                CommandName = "booking-capacity",
+                FromChannelDefaultSkillBinding = true,
+            },
+        };
+        request.ToolContext = toolContext.ToPayload();
+        request.ChannelRuntimeConfig = new ChannelRuntimeConfigProof
+        {
+            RegistrationId = "bot-reg-1",
+            ConfigRevision = 7,
+            ConfigDigest = "sha256:config",
+            InstructionsDigest = "sha256:instructions",
+            Instructions = "Only answer booking capacity questions.",
+            DefaultSkillName = "booking-capacity",
+            DefaultSkillVersion = "2.3",
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+        };
+        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.default");
+        request.ChannelRuntimeConfig.ExtraToolNames.Add("ask_user");
+        request.ChannelRuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "calendar_create_event" },
+        });
+
+        var state = await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
+            CancellationToken.None);
+
+        state.AgentProfileSnapshot.Should().BeNull();
+        state.AgentProfileTurnAuthority.Should().BeNull();
+        state.ChannelRuntimeConfig.Should().NotBeNull();
+        state.ChannelRuntimeConfig.RegistrationId.Should().Be("bot-reg-1");
+        state.ChannelRuntimeConfig.ConfigRevision.Should().Be(7);
+        state.ChannelRuntimeConfig.Instructions.Should().Be("Only answer booking capacity questions.");
+        state.ChannelRuntimeConfig.ExposedToolCatalog.Should().Be(state.ToolCatalogProof);
+        state.ToolCatalogProof.ToolDescriptors.Select(static descriptor => descriptor.Name)
+            .Should().BeEquivalentTo("ask_user", fixture.Tool.Name);
+        fixture.Generator.ReceivedCatalog.Should().NotBeNull();
+        fixture.Generator.ReceivedCatalog!.FinalAllowedToolNames.Should()
+            .BeEquivalentTo("ask_user", fixture.Tool.Name);
+        fixture.Generator.ReceivedCatalog.ProfilePromptLayer.Should().NotBeNull();
+        fixture.Generator.ReceivedCatalog.ProfilePromptLayer!.Content.Should()
+            .Contain("Only answer booking capacity questions.");
+        fixture.Generator.ReceivedCatalog.ProfilePromptLayer.Provenance.Source.Should()
+            .Be("channel-registration:bot-reg-1@7");
+        fixture.ProfileResolver.ReceivedCalls().Should().BeEmpty();
+        fixture.ProfilePlanner.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BuildLlmStepExecution_WhenFinalNoToolsStepCarriesChannelRuntimeConfig_ShouldSkipCatalogRematerialization()
+    {
+        var fixture = CreateProfiledChannelExecutor();
+        var request = fixture.Request.Clone();
+        request.ChannelRuntimeConfig = new ChannelRuntimeConfigProof
+        {
+            RegistrationId = "bot-reg-1",
+            ConfigRevision = 7,
+            ConfigDigest = "sha256:config",
+            Instructions = "Only answer booking capacity questions.",
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+        };
+        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.default");
+        request.ChannelRuntimeConfig.ExtraToolNames.Add("ask_user");
+
+        var state = await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
+            CancellationToken.None);
+        state.ToolCatalogProof.ToolDescriptors.Should().NotBeEmpty();
+        state.ChannelRuntimeConfig.Should().NotBeNull();
+        state.FinalNoToolsStep = true;
+
+        var execution = await fixture.Executor.BuildLlmStepExecutionAsync(
+            new AgentRunReplyStepExecutionRequest(
+                "run-1",
+                "channel-agent-run:run-1",
+                1,
+                state.NextStepIndex,
+                request.Clone(),
+                state.Clone()),
+            CancellationToken.None);
+
+        fixture.Generator.ReceivedCatalog.Should().NotBeNull();
+        fixture.Generator.ReceivedCatalog!.Proof.ToolCount.Should().Be(0);
+        var providerRequest = fixture.Provider.Requests.Should().ContainSingle().Subject;
+        providerRequest.Tools.Should().BeNull();
+        providerRequest.ToolCatalogProof.Should().NotBeNull();
+        providerRequest.ToolCatalogProof!.ToolCount.Should().Be(0);
+        execution.Continuation.LlmStepResult!.ToolCatalogCaptured.Should().BeTrue();
+        execution.Continuation.LlmStepResult.AvailableToolNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WhenChannelRuntimeConfigUsesRegistrationAgentKey_ShouldResolveLlmCredential()
+    {
+        var secretVault = new InMemorySecretVault();
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-channel-alpha",
+            "agent-key-channel-alpha",
+            "channel-agent-key-token",
+            "test"));
+        var fixture = CreateProfiledChannelExecutor(secretVault: secretVault);
+        var request = fixture.Request.Clone();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+        {
+            Channel = new AgentToolChannelContext(
+                "telegram",
+                "sender-alpha",
+                "scope-channel-alpha",
+                "message-alpha",
+                null,
+                WorkflowResultDeliveryCredential: new ChannelWorkflowResultDeliveryCredential
+                {
+                    SecretReference = stored.Reference.Clone(),
+                    SubjectId = "agent-key-channel-alpha",
+                },
+                BotRegistrationId: "reg-channel-alpha"),
+            SenderBinding = new AgentToolSenderBindingContext(
+                "bnd-sender-alpha",
+                NyxUserId: null,
+                SenderTenant: "sender-tenant-alpha"),
+            ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration("reg-channel-alpha"),
+        };
+        request.ToolContext = toolContext.ToPayload();
+        request.Activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "activity-user-token-must-not-win",
+        };
+        request.LlmControl = new LLMControlContext(
+            NyxIdAccessToken: null,
+            NyxIdOrgToken: null,
+            SenderNyxIdAccessToken: "bound-sender-token",
+            ModelOverride: null,
+            NyxIdRoutePreference: null,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null).ToPayload();
+        request.ChannelRuntimeConfig = new ChannelRuntimeConfigProof
+        {
+            RegistrationId = "reg-channel-alpha",
+            ConfigRevision = 7,
+            ConfigDigest = "sha256:config",
+            InstructionsDigest = "sha256:instructions",
+            Instructions = "Only answer booking capacity questions.",
+            DefaultSkillName = "booking-capacity",
+            DefaultSkillVersion = "2.3",
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+        };
+        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.default");
+
+        var state = await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
+            CancellationToken.None);
+
+        var control = AgentRunReplyStepMappers.LlmControlFromProto(state);
+        control.NyxIdAccessToken.Should().Be("channel-agent-key-token");
+        control.SenderNyxIdAccessToken.Should().BeNull();
+        var persistedToolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
+        persistedToolContext.Channel.WorkflowResultDeliveryCredential!.SecretReference.Should().Be(stored.Reference);
+        persistedToolContext.Credentials.NyxIdAccessToken.Should().Be("channel-agent-key-token");
+        persistedToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
+        persistedToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        persistedToolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
+        persistedToolContext.Credentials.NyxIdCredentialAuthority.Should()
+            .Be(AgentToolNyxIdCredentialAuthority.ToolExecutionContext);
+        persistedToolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        persistedToolContext.DurableNyxIdCredential.Should().NotBeNull();
+        persistedToolContext.DurableNyxIdCredential!.Ref.Should().Be(stored.Reference.Ref);
+        persistedToolContext.DurableNyxIdCredential.Purpose.Should().Be(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey);
+        persistedToolContext.DurableNyxIdCredential.OwnerScopeKey.Should().Be("scope-channel-alpha");
+        persistedToolContext.DurableNyxIdCredential.SubjectId.Should().Be("agent-key-channel-alpha");
+        persistedToolContext.DurableNyxIdCredential.SourceKind.Should()
+            .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
+        persistedToolContext.DurableNyxIdCredential.SecretReference.Should().Be(stored.Reference);
+
+        var persistedState = state.Clone();
+        persistedState.LlmControl.NyxIdAccessToken = string.Empty;
+        await fixture.Executor.BuildLlmStepExecutionAsync(
+            new AgentRunReplyStepExecutionRequest(
+                "run-1",
+                "channel-agent-run:run-1",
+                1,
+                persistedState.NextStepIndex,
+                request.Clone(),
+                persistedState),
+            CancellationToken.None);
+
+        var providerRequest = fixture.Provider.Requests.Should().ContainSingle().Subject;
+        providerRequest.LlmControl!.NyxIdAccessToken.Should().Be("channel-agent-key-token");
+        fixture.ProfileResolver.ReceivedCalls().Should().BeEmpty();
+        fixture.ProfilePlanner.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WhenRegistrationAgentKeyCannotResolve_ShouldClearAllNyxIdCredentials()
+    {
+        var fixture = CreateProfiledChannelExecutor();
+        var request = fixture.Request.Clone();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+        {
+            Channel = new AgentToolChannelContext(
+                "telegram",
+                "sender-alpha",
+                "scope-channel-alpha",
+                "message-alpha",
+                null,
+                WorkflowResultDeliveryCredential: new ChannelWorkflowResultDeliveryCredential
+                {
+                    SecretReference = new SecretReference
+                    {
+                        Ref = "missing-agent-key",
+                        Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                        OwnerScopeKey = "scope-channel-alpha",
+                    },
+                    SubjectId = "agent-key-channel-alpha",
+                },
+                BotRegistrationId: "reg-channel-alpha"),
+            Credentials = new AgentToolCredentials(
+                "ambient-token",
+                "ambient-org-token",
+                "sender-token",
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                "source-readable-token"),
+        };
+        request.ToolContext = toolContext.ToPayload();
+        request.Activity.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "activity-token",
+        };
+        request.LlmControl = new LLMControlContext(
+            NyxIdAccessToken: "request-token",
+            NyxIdOrgToken: "request-org-token",
+            SenderNyxIdAccessToken: "request-sender-token",
+            ModelOverride: null,
+            NyxIdRoutePreference: null,
+            MaxToolRoundsOverride: null,
+            UserMemoryPrompt: null).ToPayload();
+        request.ChannelRuntimeConfig = new ChannelRuntimeConfigProof
+        {
+            RegistrationId = "reg-channel-alpha",
+            ConfigRevision = 7,
+            ConfigDigest = "sha256:config",
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+        };
+        request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.default");
+
+        var state = await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
+            CancellationToken.None);
+
+        var control = AgentRunReplyStepMappers.LlmControlFromProto(state);
+        control.NyxIdAccessToken.Should().BeNull();
+        control.NyxIdOrgToken.Should().BeNull();
+        control.SenderNyxIdAccessToken.Should().BeNull();
+        var persistedToolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
+        persistedToolContext.Credentials.Should().Be(AgentToolCredentials.Empty);
+        persistedToolContext.DurableNyxIdCredential.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ChannelRuntimeCatalog_WhenToolVisibilityRestrictsNames_ShouldExposeOnlyAllowedRouteTools()
+    {
+        var allowedTool = new CountingTool("allowed_route_tool");
+        var hiddenTool = new CountingTool("hidden_route_tool");
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.default", new StaticToolSource([allowedTool, hiddenTool]));
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(registry);
+
+        var catalog = await materializer.MaterializeAsync(
+            new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.default" } },
+            [],
+            AgentToolExecutionContext.Empty with
+            {
+                ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["allowed_route_tool"]),
+            },
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("allowed_route_tool");
+        catalog.Proof.ToolDescriptors.Select(static descriptor => descriptor.Name)
+            .Should().BeEquivalentTo("allowed_route_tool");
+    }
+
+    [Fact]
+    public async Task ChannelRuntimeCatalog_WhenToolSetContainsConnectedOperations_ShouldExposeOnlySelectorMatches()
+    {
+        var routeTool = new CountingTool("route_tool");
+        var selectedOperation = new ConnectedOperationTool(
+            "calendar_create_event",
+            "api-google-workspace",
+            "calendar_create_event");
+        var hiddenOperation = new ConnectedOperationTool(
+            "mail_send",
+            "api-google-workspace",
+            "mail_send");
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.default", new StaticToolSource([routeTool, selectedOperation, hiddenOperation]));
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(registry);
+
+        var runtimeConfig = new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.default" } };
+        runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "calendar_create_event" },
+        });
+
+        var catalog = await materializer.MaterializeAsync(
+            runtimeConfig,
+            [],
+            AgentToolExecutionContext.Empty,
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool", "calendar_create_event");
+        catalog.Proof.ToolDescriptors.Select(static descriptor => descriptor.Name)
+            .Should().BeEquivalentTo("route_tool", "calendar_create_event");
+        catalog.Proof.ToolDescriptors.Single(static descriptor => descriptor.Name == "calendar_create_event")
+            .Origin.Should().Be(AgentTurnToolOrigin.ConnectedService);
+        catalog.Proof.ToolDescriptors.Should().NotContain(static descriptor => descriptor.Name == "mail_send");
+    }
+
+    [Fact]
+    public async Task ChannelRuntimeCatalog_WhenRuntimeSelectorsPresent_ShouldPassSelectorsToDiscoveryContext()
+    {
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.default", new StaticToolSource([new CountingTool("route_tool")]));
+        var discoveryService = new RecordingDiscoveryService([new CountingTool("route_tool")]);
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(registry, discoveryService);
+        var runtimeConfig = new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.default" } };
+        runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "calendar_create_event" },
+        });
+
+        await materializer.MaterializeAsync(
+            runtimeConfig,
+            [],
+            AgentToolExecutionContext.Empty with
+            {
+                ConnectedServices = new AgentToolConnectedServicesContext("""{"existing":"value"}"""),
+            },
+            CancellationToken.None);
+
+        var contextJson = discoveryService.Contexts.Should().ContainSingle().Subject.ConnectedServices.ContextJson;
+        using var document = JsonDocument.Parse(contextJson!);
+        document.RootElement.GetProperty("existing").GetString().Should().Be("value");
+        var selector = document.RootElement.GetProperty("nyxid_service_selectors").EnumerateArray()
+            .Should().ContainSingle().Subject;
+        selector.GetProperty("service_slug").GetString().Should().Be("api-google-workspace");
+        selector.GetProperty("endpoint_names").EnumerateArray().Select(static element => element.GetString())
+            .Should().BeEquivalentTo("calendar_create_event");
     }
 
     [Fact]
@@ -2268,9 +2635,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
 
     private static ProfiledChannelExecutorFixture CreateProfiledChannelExecutor(
-        string routeToolSet = AgentProfilePolicies.ChannelReplyRouteToolSet)
+        string routeToolSet = AgentProfilePolicies.ChannelReplyRouteToolSet,
+        ISecretVault? secretVault = null)
     {
         var tool = new CountingTool("workspace_profile_tool");
+        var askUserTool = new CountingTool("ask_user");
         var provider = new RecordingProvider();
         var generator = new CatalogAwareStepPlanReplyGenerator(tool, provider);
         var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
@@ -2325,6 +2694,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 Arg.Any<AgentToolExecutionContext>(),
                 Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(AgentTurnToolCatalogMaterialization.Create(catalog, authority)));
+        var toolSetRegistry = new RecordingToolSetRegistry();
+        toolSetRegistry.Add("channel.reply.default", new StaticToolSource([tool, askUserTool]));
+        var channelRuntimeCatalogMaterializer = new ChannelRuntimeToolCatalogMaterializer(toolSetRegistry);
         var executor = new AgentRunReplyGenerationExecutor(
             Substitute.For<IActorDispatchPort>(),
             generator,
@@ -2332,7 +2704,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance,
             profileSnapshotResolver: profileResolver,
-            profileCatalogPlanner: profilePlanner);
+            profileCatalogPlanner: profilePlanner,
+            channelRuntimeCatalogMaterializer: channelRuntimeCatalogMaterializer,
+            secretVault: secretVault);
         var toolContext = AgentToolExecutionContext.Empty with
         {
             Caller = new AgentToolCallerContext("scope-alpha", "scope-alpha", "run-1"),
@@ -2712,6 +3086,53 @@ public sealed class AgentRunReplyGenerationExecutorTests
         }
     }
 
+    private sealed class RecordingToolSetRegistry : IToolSetRegistry
+    {
+        private readonly Dictionary<string, IReadOnlyList<IAgentToolSource>> _sources =
+            new(StringComparer.Ordinal);
+
+        public void Add(string name, params IAgentToolSource[] sources) =>
+            _sources.Add(name, sources);
+
+        public IReadOnlyList<string> GetRegisteredNames() => _sources.Keys.ToArray();
+
+        public ToolSetResolveResult Resolve(string? name)
+        {
+            name ??= string.Empty;
+            return _sources.TryGetValue(name, out var sources)
+                ? ToolSetResolveResult.Success(name, sources)
+                : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                    ToolSetResolveError.UnknownNameCode,
+                    name,
+                    "missing",
+                    GetRegisteredNames()));
+        }
+    }
+
+    private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+            Task.FromResult(tools);
+    }
+
+    private sealed class RecordingDiscoveryService(IReadOnlyList<IAgentTool> tools) : IAgentToolDiscoveryService
+    {
+        public List<AgentToolExecutionContext> Contexts { get; } = [];
+
+        public Task<AgentToolDiscoveryResult> DiscoverAsync(
+            IEnumerable<IAgentToolSource> sources,
+            AgentToolExecutionContext context,
+            CancellationToken ct = default)
+        {
+            _ = sources;
+            _ = ct;
+            Contexts.Add(context);
+            return Task.FromResult(AgentToolDiscoveryResult.Success(
+                tools.Select(static tool => new AgentToolDiscoveryEntry(tool, nameof(RecordingDiscoveryService)))
+                    .ToArray()));
+        }
+    }
+
     private sealed class CountingTool(string name) : IAgentTool
     {
         public int ExecuteCount { get; private set; }
@@ -2724,6 +3145,39 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ExecuteCount++;
             return Task.FromResult("{}");
         }
+    }
+
+    private sealed class ConnectedOperationTool : IAgentTool, IAgentToolOperationAdmissionOwner
+    {
+        public ConnectedOperationTool(string name, string serviceSlug, string endpointId)
+        {
+            Name = name;
+            OperationAdmission = new AgentToolOperationAdmission(
+                "svc-1",
+                serviceSlug,
+                new AgentToolOperationIdentity.PublishedEndpoint(endpointId),
+                AgentToolOperationAuthorizationBasis.PublishedContract,
+                "POST",
+                "/v1/events",
+                "sha256:contract",
+                [],
+                null,
+                AgentToolOperationResponsePolicy.TextOnly,
+                new AgentToolOperationExecutionPolicy(
+                    AgentToolOperationRisk.Write,
+                    AgentToolOperationApproval.Required,
+                    AgentToolOperationEnforcementOwner.NyxId,
+                    [AgentToolOperationExecutionMode.Interactive]),
+                CatalogServiceSlug: serviceSlug);
+        }
+
+        public string Name { get; }
+        public string Description => Name;
+        public string ParametersSchema => "{}";
+        public AgentToolOperationAdmission OperationAdmission { get; }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     private sealed class CredentialCapturingTool : IAgentTool

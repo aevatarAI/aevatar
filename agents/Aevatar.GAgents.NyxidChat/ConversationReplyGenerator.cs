@@ -2119,10 +2119,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var disableTools = IsChannelTurn(effective) &&
                             string.IsNullOrWhiteSpace(senderBindingId) &&
                             !defaultSkillBinding;
-        if (defaultSkillBinding && string.IsNullOrWhiteSpace(senderBindingId) && effectiveToolContext is not null)
+        if (defaultSkillBinding &&
+            string.IsNullOrWhiteSpace(senderBindingId) &&
+            effectiveToolContext is not null &&
+            effectiveToolContext.CredentialSource != AgentToolCredentialSource.ChannelRegistration)
         {
             // An unbound sender may enter the registration's deterministic default skill, but
-            // cannot use that registration authority to discover or invoke arbitrary tools.
+            // cannot use ambient sender authority to discover or invoke arbitrary tools.
             effectiveToolContext = effectiveToolContext with
             {
                 ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["use_skill"]),

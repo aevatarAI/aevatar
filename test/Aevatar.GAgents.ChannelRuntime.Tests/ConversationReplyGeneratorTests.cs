@@ -969,6 +969,57 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task BuildStepPlanAsync_WithChannelRegistrationDefaultSkill_KeepsSealedRuntimeCatalog()
+    {
+        var useSkill = new StubTool("use_skill");
+        var bookingTool = new StubTool("google_calendar_list_events");
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            toolSources: [new StubToolSource(useSkill, bookingTool)]);
+        var catalog = new AgentTurnToolCatalog(
+            [useSkill.Name, bookingTool.Name],
+            new ProfileRoutingPromptLayer(
+                "registration-runtime-route",
+                new ProfileRoutingPromptProvenance("channel-registration"),
+                new PromptLayerBounds(1024, 256)),
+            selectedSkillPromptLayer: null,
+            selectedIntentId: "booking-capacity",
+            candidateIntentId: "booking-capacity",
+            exactTools: [useSkill, bookingTool]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext("telegram", "8823472623", "scope-1", "msg-runtime", null),
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+            SkillRecovery = AgentSkillRecoveryContext.Empty with
+            {
+                PrimarySkillName = "booking-capacity",
+                FromChannelDefaultSkillBinding = true,
+            },
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "msg-runtime",
+                ChannelId = ChannelId.From("telegram"),
+                Conversation = new ConversationReference { CanonicalKey = "telegram:dm:8823472623" },
+                Content = new MessageContent { Text = "check booking capacity" },
+            },
+            new Dictionary<string, string>(),
+            Control(token: "registration-agent-key"),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            ct: CancellationToken.None,
+            turnCatalog: catalog);
+
+        OfferedToolNames(plan).Should().BeEquivalentTo(useSkill.Name, bookingTool.Name);
+        plan.ToolContext.ToolVisibility.IsRestricted.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task BuildStepPlanAsync_InNyxIdChatTurn_UsesPinnedSourceAndAllowsHumanSessionReads()
     {
         var registeredSource = new StubToolSource(
@@ -2816,7 +2867,7 @@ public sealed class ConversationReplyGeneratorTests
         executionEvents.Should().Equal(
             "use_skill",
             "nyxid_service_inventory",
-            "/api/v1/keys");
+            "/api/v1/user-services");
 
         remoteSkillFetcher.Requests.Should().ContainSingle().Which.Should().Be((
             "sender-skill-token",
@@ -2836,7 +2887,7 @@ public sealed class ConversationReplyGeneratorTests
             "tenant-authority-alpha",
             "ou-authority-alpha"));
         inventoryHandler.Authorization.Should().Be("Bearer sender-inventory-token");
-        inventoryHandler.RequestPath.Should().Be("/api/v1/keys");
+        inventoryHandler.RequestPath.Should().Be("/api/v1/user-services");
 
         var useSkillResult = providerFactory.Requests[1].Messages
             .Should().ContainSingle(message =>

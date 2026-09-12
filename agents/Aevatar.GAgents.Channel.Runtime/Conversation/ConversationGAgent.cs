@@ -15,6 +15,8 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Aevatar.GAgents.Channel.Runtime;
 
@@ -102,7 +104,6 @@ public sealed partial class ConversationGAgent :
         StateTransitionMatcher
             .Match(current, evt)
             .On<ConversationTurnCompletedEvent>(ApplyTurnCompleted)
-            .On<ConversationAgentProfilePinnedEvent>(ApplyAgentProfilePinned)
             .On<NeedsLlmReplyEvent>(ApplyLlmReplyRequested)
             .On<NeedsWorkflowDraftRunEvent>(ApplyWorkflowDraftRunRequested)
             .On<ConversationContinueRejectedEvent>(ApplyContinueRejected)
@@ -340,17 +341,19 @@ public sealed partial class ConversationGAgent :
             // so the run actor can echo them back inside LlmReplyReadyEvent and forward them to
             // the LLM call. The persisted copy keeps only encrypted runtime-secret references.
             var runCopy = result.LlmReplyRequest.Clone();
+            var channelRuntimeConfig = await ResolveChannelRuntimeConfigProofAsync(runCopy, CancellationToken.None);
             runCopy.TargetActorId = Id;
             runCopy.TargetRef = targetRef.Clone();
-            runCopy.AgentProfile = State.AgentProfile?.Clone();
-            // Fix (review round 1, F6):
-            //   The transient Channel run copied its profile pin but omitted sealed attachments.
-            //   Copy the sibling authority field without adding Channel bind or admission behavior.
+            runCopy.ChannelRuntimeConfig = channelRuntimeConfig?.Clone();
+            runCopy.AgentProfile = null;
             runCopy.ContextAttachments = State.ContextAttachments?.Clone();
             // Refactor (iter98/cluster-002): Old=ConversationGAgent filled run_id from correlation_id; New=producer must supply run_id before this handoff.
             runCopy.RunId = NormalizeOptional(runCopy.RunId)!;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);
-            RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
+            if (ShouldUseSenderBindingCredentials(channelRuntimeConfig))
+                RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
+            else
+                ClearSenderBindingCredentials(runCopy);
             await AttachRelayRuntimeSecretReferencesAsync(runCopy, runtimeContext, CancellationToken.None);
             runCopy.PriorHistory.Clear();
             if (!ShouldIsolatePriorConversationHistory(runCopy))
@@ -500,6 +503,117 @@ public sealed partial class ConversationGAgent :
             .FromPayload(request.ToolContext)
             .SkillRecovery
             .IsolatePriorConversationHistory;
+
+    private static bool ShouldUseSenderBindingCredentials(ChannelRuntimeConfigProof? runtimeConfig) =>
+        runtimeConfig?.CredentialSourceMode is not
+            ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
+
+    private static void ClearSenderBindingCredentials(NeedsLlmReplyEvent request)
+    {
+        if (request.Activity?.TransportExtras is not null)
+            request.Activity.TransportExtras.NyxUserAccessToken = string.Empty;
+        request.RelayUserAccessTokenRef = null;
+        ClearSenderBindingToolContextCredentials(request);
+    }
+
+    private static void ClearSenderBindingToolContextCredentials(NeedsLlmReplyEvent request)
+    {
+        if (request.ToolContext is null)
+            return;
+
+        var context = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
+        var credentials = context.Credentials;
+        if (credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.AgentKey)
+            return;
+
+        context = context with
+        {
+            Credentials = credentials with
+            {
+                NyxIdAccessToken = null,
+                SenderNyxIdAccessToken = null,
+                SourceReadableNyxIdAccessToken = null,
+                NyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
+                NyxIdCredentialAuthority = AgentToolNyxIdCredentialAuthority.Unspecified,
+            },
+            DurableNyxIdCredential = null,
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+        };
+        request.ToolContext = context.ToPayload();
+    }
+
+    private async Task<ChannelRuntimeConfigProof?> ResolveChannelRuntimeConfigProofAsync(
+        NeedsLlmReplyEvent request,
+        CancellationToken ct)
+    {
+        var registrationId = NormalizeOptional(request.RegistrationId);
+        if (registrationId is null)
+            return null;
+
+        var queryPort = Services.GetService<IChannelBotRegistrationQueryPort>();
+        ChannelBotRegistrationEntry? registration;
+        long configRevision;
+        if (queryPort is null)
+        {
+            var runtimeQueryPort = Services.GetService<IChannelBotRegistrationRuntimeQueryPort>();
+            if (runtimeQueryPort is null)
+                return null;
+
+            registration = await runtimeQueryPort.GetAsync(registrationId, ct);
+            configRevision = 0;
+        }
+        else
+        {
+            var snapshot = await queryPort.GetSnapshotAsync(registrationId, ct);
+            if (snapshot is null)
+                return null;
+
+            registration = snapshot.Registration;
+            configRevision = snapshot.StateVersion;
+        }
+
+        if (registration is null)
+            return null;
+
+        var config = BuildEffectiveRuntimeConfig(registration);
+        var proof = new ChannelRuntimeConfigProof
+        {
+            RegistrationId = registration.Id ?? registrationId,
+            ConfigRevision = configRevision,
+            ConfigDigest = ComputeDigest(config.ToByteArray()),
+            InstructionsDigest = ComputeStringDigest(config.Instructions),
+            Instructions = config.Instructions,
+            DefaultSkillName = config.DefaultSkill?.Name ?? string.Empty,
+            DefaultSkillVersion = config.DefaultSkill?.Version ?? string.Empty,
+            CredentialSourceMode = config.CredentialSourceMode,
+        };
+        proof.ToolSetRefs.AddRange(config.ToolSetRefs);
+        proof.ExtraToolNames.AddRange(config.ExtraToolNames);
+        proof.NyxidServiceSelectors.AddRange(config.NyxidServiceSelectors.Select(static selector => selector.Clone()));
+        return proof;
+    }
+
+    private static ChannelBotRuntimeConfig BuildEffectiveRuntimeConfig(ChannelBotRegistrationEntry registration)
+    {
+        var config = registration.RuntimeConfig?.Clone() ?? new ChannelBotRuntimeConfig();
+        var defaultSkillName = NormalizeOptional(config.DefaultSkill?.Name) ??
+                               NormalizeOptional(registration.DefaultSkillName);
+        if (defaultSkillName is not null)
+        {
+            config.DefaultSkill ??= new ChannelBotRuntimeDefaultSkillConfig();
+            config.DefaultSkill.Name = defaultSkillName.TrimStart('/').ToLowerInvariant();
+            config.DefaultSkill.Version = NormalizeOptional(config.DefaultSkill.Version) ?? string.Empty;
+        }
+
+        config.Instructions = NormalizeOptional(config.Instructions) ?? string.Empty;
+        return config;
+    }
+
+    private static string ComputeStringDigest(string value) =>
+        ComputeDigest(Encoding.UTF8.GetBytes(value ?? string.Empty));
+
+    private static string ComputeDigest(byte[] bytes) =>
+        $"sha256:{Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()}";
 
     private async Task<ChatRouteAction> ResolveInboundTargetRefAsync(
         ChatActivity activity,
@@ -981,24 +1095,6 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
-        if (!await EnsureAgentProfilePinnedAsync(evt.AgentProfile, evt.RunId))
-        {
-            Logger.LogError(
-                "Rejected LLM reply produced with a different Agent Profile snapshot. correlation={CorrelationId} runId={RunId}",
-                evt.CorrelationId,
-                evt.RunId);
-            evt = evt.Clone();
-            evt.TerminalState = LlmReplyTerminalState.Failed;
-            evt.ErrorCode = "agent_profile_pin_mismatch";
-            evt.ErrorSummary = "The LLM run profile does not match the conversation profile pin.";
-            evt.Outbound = new MessageContent
-            {
-                Text = "Sorry, the conversation profile changed unexpectedly. Please start a new conversation and try again.",
-            };
-            evt.AppendedHistory.Clear();
-            evt.AgentProfile = null;
-        }
-
         if (IsWorkflowRunDeliveryDelegation(evt.WorkflowRunDelivery))
         {
             await CompleteWorkflowRunDeliveryDelegationAsync(
@@ -1201,25 +1297,6 @@ public sealed partial class ConversationGAgent :
                 evt.CorrelationId,
                 State.Conversation?.CanonicalKey);
             return;
-        }
-
-        if (!await EnsureAgentProfilePinnedAsync(evt.AgentProfile, evt.RunId))
-        {
-            Logger.LogError(
-                "Rejected Lark card completion produced with a different Agent Profile snapshot. correlation={CorrelationId} runId={RunId}",
-                evt.CorrelationId,
-                evt.RunId);
-            evt = evt.Clone();
-            evt.AppendedHistory.Clear();
-            evt.AgentProfile = null;
-            evt.DeliveryFailure = new LlmReplyDeliveryFailedEvent
-            {
-                CorrelationId = evt.CorrelationId ?? string.Empty,
-                RunId = evt.RunId ?? string.Empty,
-                ErrorCode = "agent_profile_pin_mismatch",
-                ErrorMessage = "The LLM run profile does not match the conversation profile pin.",
-                FailedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            };
         }
 
         var nowMs = evt.CompletedAtUnixMs > 0
@@ -2849,7 +2926,8 @@ public sealed partial class ConversationGAgent :
                     ct)).Reference;
             }
 
-            if (string.IsNullOrWhiteSpace(request.RelayUserAccessTokenRef?.Ref) &&
+            if (ShouldUseSenderBindingCredentials(request.ChannelRuntimeConfig) &&
+                string.IsNullOrWhiteSpace(request.RelayUserAccessTokenRef?.Ref) &&
                 NormalizeOptional(runtimeContext.NyxUserAccessToken) is { } userAccessToken)
             {
                 request.RelayUserAccessTokenRef = (await secretStore.PutAsync(
@@ -3166,38 +3244,6 @@ public sealed partial class ConversationGAgent :
         NormalizeRecentAttachmentActivities(next.RecentAttachmentActivities, evt.CompletedAtUnixMs);
         next.LastUpdatedUnixMs = evt.CompletedAtUnixMs;
         return next;
-    }
-
-    private static ConversationGAgentState ApplyAgentProfilePinned(
-        ConversationGAgentState current,
-        ConversationAgentProfilePinnedEvent evt)
-    {
-        var next = current.Clone();
-        if (next.AgentProfile is null && evt.Profile is not null)
-            next.AgentProfile = evt.Profile.Clone();
-        if (evt.PinnedAtUnixMs > next.LastUpdatedUnixMs)
-            next.LastUpdatedUnixMs = evt.PinnedAtUnixMs;
-        return next;
-    }
-
-    private async Task<bool> EnsureAgentProfilePinnedAsync(
-        AgentProfileSnapshot? profile,
-        string? sourceRunId)
-    {
-        if (profile is null)
-            return true;
-        if (State.AgentProfile is not null)
-            return State.AgentProfile.Equals(profile);
-        if (profile.DeterministicPolicySha256.Length != 32)
-            return false;
-
-        await PersistDomainEventAsync(new ConversationAgentProfilePinnedEvent
-        {
-            Profile = profile.Clone(),
-            SourceRunId = sourceRunId?.Trim() ?? string.Empty,
-            PinnedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        });
-        return true;
     }
 
     // /clear semantics: the retained transcript window and the recent attachment

@@ -7,6 +7,7 @@ using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity;
@@ -16,6 +17,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Microsoft.Extensions.Logging;
@@ -48,6 +50,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private readonly IFileArtifactReadPort? _fileArtifactReadPort;
     private readonly IAgentProfileTurnSnapshotResolver? _profileSnapshotResolver;
     private readonly IAgentProfileTurnToolCatalogPlanner? _profileCatalogPlanner;
+    private readonly IChannelRuntimeToolCatalogMaterializer? _channelRuntimeCatalogMaterializer;
+    private readonly ISecretVault? _secretVault;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunReplyGenerationExecutor> _logger;
 
@@ -64,7 +68,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IBindingRevocationReconciler? bindingRevocationReconciler = null,
         IFileArtifactReadPort? fileArtifactReadPort = null,
         IAgentProfileTurnSnapshotResolver? profileSnapshotResolver = null,
-        IAgentProfileTurnToolCatalogPlanner? profileCatalogPlanner = null)
+        IAgentProfileTurnToolCatalogPlanner? profileCatalogPlanner = null,
+        IChannelRuntimeToolCatalogMaterializer? channelRuntimeCatalogMaterializer = null,
+        ISecretVault? secretVault = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -77,6 +83,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _fileArtifactReadPort = fileArtifactReadPort;
         _profileSnapshotResolver = profileSnapshotResolver;
         _profileCatalogPlanner = profileCatalogPlanner;
+        _channelRuntimeCatalogMaterializer = channelRuntimeCatalogMaterializer;
+        _secretVault = secretVault;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -97,7 +105,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     .ConfigureAwait(false);
                 generationContext = generationContext with
                 {
-                    ToolContext = RestrictChannelDefaultSkillToolVisibility(generationContext.ToolContext),
+                    ToolContext = RestrictChannelDefaultSkillToolVisibility(
+                        generationContext.ToolContext,
+                        replyRequest.ChannelRuntimeConfig),
                 };
             }
             catch (OperationCanceledException) when (metadataCts.IsCancellationRequested)
@@ -159,6 +169,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 state.AgentProfileSnapshot = catalogPlan.ProfileSnapshot.Clone();
             if (catalogPlan.Authority is not null)
                 state.AgentProfileTurnAuthority = catalogPlan.Authority.Clone();
+            if (catalogPlan.ChannelRuntimeConfig is not null)
+                state.ChannelRuntimeConfig = catalogPlan.ChannelRuntimeConfig.Clone();
             foreach (var pair in plan.Metadata)
                 state.ExternalMetadata[pair.Key] = pair.Value;
             state.Messages.AddRange(plan.InitialMessages.Select(AgentRunReplyStepMappers.ToProto));
@@ -1316,7 +1328,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private sealed record AgentRunTurnCatalogPlan(
         AgentTurnToolCatalog Catalog,
         AgentProfileSnapshot? ProfileSnapshot = null,
-        AgentProfileTurnAuthorityState? Authority = null);
+        AgentProfileTurnAuthorityState? Authority = null,
+        ChannelRuntimeConfigProof? ChannelRuntimeConfig = null);
 
     private async Task<AgentRunTurnCatalogPlan> ResolveInitialTurnCatalogAsync(
         AgentRunReplyGenerationExecutionRequest request,
@@ -1324,6 +1337,18 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         ReplyGenerationContext generationContext,
         CancellationToken ct)
     {
+        if (replyRequest.ChannelRuntimeConfig is not null)
+        {
+            var catalog = request.TurnCatalog ?? await MaterializeChannelRuntimeCatalogAsync(
+                    replyRequest.ChannelRuntimeConfig,
+                    generationContext.ToolContext,
+                    ct)
+                .ConfigureAwait(false);
+            return new AgentRunTurnCatalogPlan(
+                catalog,
+                ChannelRuntimeConfig: WithExposedToolCatalog(replyRequest.ChannelRuntimeConfig, catalog));
+        }
+
         if (request.TurnCatalog is not null)
             return new AgentRunTurnCatalogPlan(request.TurnCatalog);
 
@@ -1466,14 +1491,44 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             materialization.ReconcileProposal);
     }
 
+    private Task<AgentTurnToolCatalog> MaterializeChannelRuntimeCatalogAsync(
+        ChannelRuntimeConfigProof runtimeConfig,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct) =>
+        _channelRuntimeCatalogMaterializer is null
+            ? Task.FromResult(AgentTurnToolCatalogFactory.RestrictedEmpty())
+            : _channelRuntimeCatalogMaterializer.MaterializeAsync(runtimeConfig, [], toolContext, ct);
+
+    private static ChannelRuntimeConfigProof WithExposedToolCatalog(
+        ChannelRuntimeConfigProof proof,
+        AgentTurnToolCatalog catalog)
+    {
+        var clone = proof.Clone();
+        clone.ExposedToolCatalog = catalog.Proof.ToPayload();
+        return clone;
+    }
+
     private async Task<AgentTurnToolCatalog> ResolvePersistedTurnCatalogAsync(
         AgentRunReplyStepExecutionRequest workItem,
         AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
         var state = workItem.StepState;
+        if (state.FinalNoToolsStep)
+            return RestrictedEmptyForPersistedProof(state.ToolCatalogProof);
+
         if (workItem.TurnCatalog is not null)
             return VerifyPersistedTurnCatalog(state, workItem.TurnCatalog);
+
+        if (state.ChannelRuntimeConfig is not null)
+        {
+            var catalog = await MaterializeChannelRuntimeCatalogAsync(
+                    state.ChannelRuntimeConfig,
+                    toolContext,
+                    ct)
+                .ConfigureAwait(false);
+            return VerifyPersistedTurnCatalog(state, catalog);
+        }
 
         var profile = state.AgentProfileSnapshot;
         var authority = state.AgentProfileTurnAuthority;
@@ -1616,11 +1671,28 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         // derived below with the sender token cleared, so a failed/empty re-mint still
         // leaves the bot-owner LLM path intact.
         control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
+        var agentKeyOverlay = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
+                request,
+                toolContext,
+                control,
+                ct)
+            .ConfigureAwait(false);
+        control = agentKeyOverlay.Control;
+        if (agentKeyOverlay.AgentKey is not null)
+        {
+            toolContext = ApplyChannelRegistrationAgentKeyToolCredential(toolContext, agentKeyOverlay.AgentKey);
+        }
+        else if (request.ChannelRuntimeConfig?.CredentialSourceMode ==
+                 ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey)
+        {
+            toolContext = ClearNyxIdCredentials(toolContext);
+        }
 
         var ownerFallbackControl = control with { SenderNyxIdAccessToken = null };
         var ownerFallbackToolContext = ClearSenderBinding(toolContext);
 
         control = OverlayActivityUserToken(request, control);
+        toolContext = control.ToToolContext(toolContext);
 
         return new ReplyGenerationContext(
             metadata,
@@ -1631,9 +1703,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     }
 
     private static AgentToolExecutionContext RestrictChannelDefaultSkillToolVisibility(
-        AgentToolExecutionContext toolContext)
+        AgentToolExecutionContext toolContext,
+        ChannelRuntimeConfigProof? channelRuntimeConfig)
     {
-        if (!toolContext.SkillRecovery.FromChannelDefaultSkillBinding ||
+        if (channelRuntimeConfig is not null ||
+            !toolContext.SkillRecovery.FromChannelDefaultSkillBinding ||
             !string.IsNullOrWhiteSpace(toolContext.SenderBinding.BindingId))
         {
             return toolContext;
@@ -1772,22 +1846,44 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
         var requestControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
+        var agentKeyOverlay = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
+                request,
+                planToolContext,
+                requestControl,
+                ct)
+            .ConfigureAwait(false);
+        requestControl = agentKeyOverlay.Control;
+        var registrationAgentKeyMode = request.ChannelRuntimeConfig?.CredentialSourceMode ==
+                                       ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
+        if (agentKeyOverlay.AgentKey is not null)
+        {
+            planToolContext = ApplyChannelRegistrationAgentKeyToolCredential(
+                planToolContext,
+                agentKeyOverlay.AgentKey);
+        }
+        else if (registrationAgentKeyMode)
+        {
+            planToolContext = ClearNyxIdCredentials(planToolContext);
+        }
+
         requestControl = OverlayActivityUserToken(request, requestControl);
 
         var control = stepControl with
         {
             NyxIdAccessToken = NormalizeOptional(requestControl.NyxIdAccessToken) ??
                                planToolContext.Credentials.NyxIdAccessToken ??
-                               stepControl.NyxIdAccessToken,
+                               (registrationAgentKeyMode ? null : stepControl.NyxIdAccessToken),
             NyxIdOrgToken = NormalizeOptional(requestControl.NyxIdOrgToken) ??
                             planToolContext.Credentials.NyxIdOrgToken ??
-                            stepControl.NyxIdOrgToken,
+                            (registrationAgentKeyMode ? null : stepControl.NyxIdOrgToken),
             SenderNyxIdAccessToken = NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
                                      planToolContext.Credentials.SenderNyxIdAccessToken ??
-                                     stepControl.SenderNyxIdAccessToken,
+                                     (registrationAgentKeyMode ? null : stepControl.SenderNyxIdAccessToken),
         };
         var toolContext = control.ToToolContext(planToolContext);
-        var activityUserToken = NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        var activityUserToken = registrationAgentKeyMode
+            ? null
+            : NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
         var requestToolContextOwnsCredential = requestCredentials.NyxIdCredentialAuthority ==
                                                AgentToolNyxIdCredentialAuthority.ToolExecutionContext;
         var executionAccessToken = activityUserToken ??
@@ -1816,6 +1912,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
     private static LLMControlContext OverlayActivityUserToken(NeedsLlmReplyEvent request, LLMControlContext control)
     {
+        if (request.ChannelRuntimeConfig?.CredentialSourceMode ==
+            ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey)
+        {
+            return control;
+        }
+
         var userAccessToken = NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
         if (userAccessToken is null)
             return control;
@@ -1850,6 +1952,124 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             ExternalUserId = senderId,
         };
         return true;
+    }
+
+    private async Task<ChannelRegistrationAgentKeyCredentialOverlay> ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
+        NeedsLlmReplyEvent request,
+        AgentToolExecutionContext toolContext,
+        LLMControlContext control,
+        CancellationToken ct)
+    {
+        if (request.ChannelRuntimeConfig?.CredentialSourceMode !=
+            ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey)
+        {
+            return new ChannelRegistrationAgentKeyCredentialOverlay(control, null);
+        }
+
+        var agentKey = await ResolveChannelRegistrationAgentKeyAsync(request, toolContext, ct)
+            .ConfigureAwait(false);
+        if (agentKey is null)
+        {
+            return new ChannelRegistrationAgentKeyCredentialOverlay(
+                control with
+                {
+                    NyxIdAccessToken = null,
+                    NyxIdOrgToken = null,
+                    SenderNyxIdAccessToken = null,
+                },
+                null);
+        }
+
+        _logger.LogInformation(
+            "Applied channel registration Agent Key as NyxID LLM credential: correlation={CorrelationId} registration={RegistrationId}",
+            request.CorrelationId,
+            toolContext.Channel.BotRegistrationId ?? string.Empty);
+        return new ChannelRegistrationAgentKeyCredentialOverlay(
+            control with
+            {
+                NyxIdAccessToken = agentKey,
+                NyxIdOrgToken = null,
+                SenderNyxIdAccessToken = null,
+            },
+            agentKey);
+    }
+
+    private static AgentToolExecutionContext ApplyChannelRegistrationAgentKeyToolCredential(
+        AgentToolExecutionContext toolContext,
+        string agentKey)
+    {
+        var durableCredential = BuildChannelRegistrationDurableCredential(toolContext);
+        return toolContext with
+        {
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+            DurableNyxIdCredential = durableCredential?.Clone(),
+            Credentials = toolContext.Credentials with
+            {
+                NyxIdAccessToken = agentKey,
+                NyxIdOrgToken = null,
+                SenderNyxIdAccessToken = null,
+                SourceReadableNyxIdAccessToken = null,
+                NyxIdCredentialKind = AgentToolNyxIdCredentialKind.AgentKey,
+                NyxIdCredentialAuthority = AgentToolNyxIdCredentialAuthority.ToolExecutionContext,
+            },
+        };
+    }
+
+    private static DurableCallerCredentialRef? BuildChannelRegistrationDurableCredential(
+        AgentToolExecutionContext toolContext)
+    {
+        var credential = toolContext.Channel.WorkflowResultDeliveryCredential;
+        var reference = credential?.SecretReference;
+        var subjectId = NormalizeOptional(credential?.SubjectId);
+        if (reference is null ||
+            subjectId is null ||
+            string.IsNullOrWhiteSpace(reference.Ref) ||
+            string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
+            !string.Equals(
+                reference.Purpose,
+                CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return new DurableCallerCredentialRef
+        {
+            Ref = reference.Ref,
+            Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            OwnerScopeKey = reference.OwnerScopeKey,
+            SubjectId = subjectId,
+            SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+            SecretReference = reference.Clone(),
+        };
+    }
+
+    private sealed record ChannelRegistrationAgentKeyCredentialOverlay(
+        LLMControlContext Control,
+        string? AgentKey);
+
+    private async Task<string?> ResolveChannelRegistrationAgentKeyAsync(
+        NeedsLlmReplyEvent request,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        var registrationId = NormalizeOptional(toolContext.Channel.BotRegistrationId);
+        var agentKey = await ChannelRegistrationAgentKeySecretResolver.ResolveAsync(
+                toolContext,
+                _secretVault,
+                "channel-llm",
+                ct)
+            .ConfigureAwait(false);
+        if (agentKey is null)
+        {
+            _logger.LogWarning(
+                "Channel registration Agent Key LLM credential unavailable: correlation={CorrelationId} registration={RegistrationId} hasVault={HasVault}",
+                request.CorrelationId,
+                registrationId ?? string.Empty,
+                _secretVault is not null);
+        }
+
+        return agentKey;
     }
 
     private void TriggerBindingReconcile(
@@ -1985,6 +2205,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             SenderBinding = AgentToolSenderBindingContext.Empty,
             Credentials = context.Credentials with { SenderNyxIdAccessToken = null },
+        };
+
+    private static AgentToolExecutionContext ClearNyxIdCredentials(AgentToolExecutionContext context) =>
+        context with
+        {
+            CredentialSource = AgentToolCredentialSource.Unspecified,
+            DurableNyxIdCredential = null,
+            Credentials = AgentToolCredentials.Empty,
         };
 
     private static LLMControlContext UseServerDefaultRouting(LLMControlContext control) =>

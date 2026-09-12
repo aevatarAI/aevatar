@@ -462,6 +462,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         }
 
         var request = build.Request!;
+        var useApiKeyCredential =
+            AgentToolRequestContext.Current?.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.AgentKey;
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
         {
@@ -477,7 +479,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         // against that same view while retaining the delegation token for the exact proxy request.
         var authorityToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
                                  AgentToolRequestContext.Current?.Credentials) ?? token;
-        var authorityLease = await _delegationTokenLease.ResolveAsync(authorityToken, ct);
+        var authorityLease = useApiKeyCredential
+            ? NyxIdDelegationTokenLeaseResult.Success(authorityToken)
+            : await _delegationTokenLease.ResolveAsync(authorityToken, ct);
         if (!authorityLease.Succeeded)
         {
             return CreateAdmittedFailureOutcome(
@@ -491,6 +495,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         var revalidationFailure = await RevalidateAdmittedOperationAsync(
             admission,
             authorityLease.AccessToken!,
+            useApiKeyCredential,
             ct);
         if (revalidationFailure is not null)
         {
@@ -508,7 +513,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             request.Slug,
             FormatAdmissionIdentity(admission.Identity));
 
-        var proxyLease = await _delegationTokenLease.ResolveAsync(token, ct);
+        var proxyLease = useApiKeyCredential
+            ? NyxIdDelegationTokenLeaseResult.Success(token)
+            : await _delegationTokenLease.ResolveAsync(token, ct);
         if (!proxyLease.Succeeded)
         {
             return CreateAdmittedFailureOutcome(
@@ -523,6 +530,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         {
             return await ExecuteAdmittedFileArtifactAsync(
                 proxyLease.AccessToken!,
+                useApiKeyCredential,
                 request,
                 callId,
                 toolName,
@@ -532,26 +540,12 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 ct);
         }
 
-        var response = maxTextResponseBytes.HasValue
-            ? await _client.ProxyRequestBoundedAsync(
-                proxyLease.AccessToken!,
-                request.Slug,
-                request.ServiceId,
-                request.Path,
-                request.Method,
-                request.Body,
-                request.Headers,
-                maxTextResponseBytes.Value,
-                ct)
-            : await _client.ProxyRequestResponseAsync(
-                proxyLease.AccessToken!,
-                request.Slug,
-                request.ServiceId,
-                request.Path,
-                request.Method,
-                request.Body,
-                request.Headers,
-                ct);
+        var response = await ExecuteAdmittedTextProxyAsync(
+            proxyLease.AccessToken!,
+            useApiKeyCredential,
+            request,
+            maxTextResponseBytes,
+            ct);
         if (!response.Succeeded &&
             response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes")
         {
@@ -563,7 +557,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 ResponseTooLargeErrorMessage);
         }
 
-        var authorityFailure = !response.Succeeded
+        var authorityFailure = !response.Succeeded &&
+                               !NyxIdConnectedServiceToolSource.IsAgentKeySyntheticServiceId(
+                                   admission.ServiceInstanceId)
             ? MapExactRouteFailure(response.Content, admission.ServiceInstanceId, request.Slug)
             : null;
         var result = authorityFailure is { } authorityError
@@ -604,6 +600,87 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 ct);
         }
         return new AgentToolTerminalOutcome(result, receipt);
+    }
+
+    private Task<NyxIdProxyTextResponse> ExecuteAdmittedTextProxyAsync(
+        string token,
+        bool useApiKeyCredential,
+        NyxIdOperationRequest request,
+        long? maxTextResponseBytes,
+        CancellationToken ct)
+    {
+        var useSlugOnlyAgentKeyProxy = useApiKeyCredential &&
+                                       NyxIdConnectedServiceToolSource.IsAgentKeySyntheticServiceId(
+                                           request.ServiceId);
+        if (maxTextResponseBytes.HasValue)
+        {
+            if (useSlugOnlyAgentKeyProxy)
+            {
+                return _client.ProxyRequestBoundedWithApiKeyAsync(
+                    token,
+                    request.Slug,
+                    request.Path,
+                    request.Method,
+                    request.Body,
+                    request.Headers,
+                    maxTextResponseBytes.Value,
+                    ct);
+            }
+
+            return useApiKeyCredential
+                ? _client.ProxyRequestBoundedWithApiKeyAsync(
+                    token,
+                    request.Slug,
+                    request.ServiceId,
+                    request.Path,
+                    request.Method,
+                    request.Body,
+                    request.Headers,
+                    maxTextResponseBytes.Value,
+                    ct)
+                : _client.ProxyRequestBoundedAsync(
+                    token,
+                    request.Slug,
+                    request.ServiceId,
+                    request.Path,
+                    request.Method,
+                    request.Body,
+                    request.Headers,
+                    maxTextResponseBytes.Value,
+                    ct);
+        }
+
+        if (useSlugOnlyAgentKeyProxy)
+        {
+            return _client.ProxyRequestResponseWithApiKeyAsync(
+                token,
+                request.Slug,
+                request.Path,
+                request.Method,
+                request.Body,
+                request.Headers,
+                ct);
+        }
+
+        return useApiKeyCredential
+            ? _client.ProxyRequestResponseWithApiKeyAsync(
+                token,
+                request.Slug,
+                request.ServiceId,
+                request.Path,
+                request.Method,
+                request.Body,
+                request.Headers,
+                ct)
+            : _client.ProxyRequestResponseAsync(
+                token,
+                request.Slug,
+                request.ServiceId,
+                request.Path,
+                request.Method,
+                request.Body,
+                request.Headers,
+                ct);
     }
 
     private static bool IsExactApprovalFailedReceipt(AgentToolReceipt? receipt) =>
@@ -661,12 +738,21 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
     private async Task<NyxIdOperationRequestFailure?> RevalidateAdmittedOperationAsync(
         AgentToolOperationAdmission admission,
         string token,
+        bool useApiKeyCredential,
         CancellationToken ct)
     {
         if (admission.Identity is AgentToolOperationIdentity.AuthoredRequest)
         {
             // The committed explicit-request proof was validated before tool dispatch. Runtime
             // authority is deliberately enforced by NyxID's exact route, not a catalog read.
+            return null;
+        }
+
+        if (useApiKeyCredential)
+        {
+            // Agent Keys are proxy-capable integration identities, but the NyxID MCP catalog is
+            // not part of their supported runtime authority surface. The turn admission freezes
+            // the OpenAPI-derived contract; the exact proxy route enforces live service authority.
             return null;
         }
 
@@ -940,6 +1026,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
 
     private async Task<AgentToolTerminalOutcome> ExecuteAdmittedFileArtifactAsync(
         string effectiveToken,
+        bool useApiKeyCredential,
         NyxIdOperationRequest request,
         string callId,
         string toolName,
@@ -956,14 +1043,34 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         if (!workflowRuntime.HasManagedParent || callerScopeId == null || ownerRunId == null)
             return new AgentToolTerminalOutcome(FileArtifactError("managed_workflow_context_required", "response_mode=file_artifact requires a managed workflow runtime context and caller scope."));
 
-        var response = await _client.ProxyGetBinaryResponseAsync(
-            effectiveToken,
-            request.Slug,
-            request.ServiceId,
-            request.Path,
-            request.Headers,
-            _fileArtifactMaxBytes,
-            ct);
+        var useSlugOnlyAgentKeyProxy = useApiKeyCredential &&
+                                       NyxIdConnectedServiceToolSource.IsAgentKeySyntheticServiceId(
+                                           request.ServiceId);
+        var response = useSlugOnlyAgentKeyProxy
+            ? await _client.ProxyGetBinaryResponseWithApiKeyAsync(
+                effectiveToken,
+                request.Slug,
+                request.Path,
+                request.Headers,
+                _fileArtifactMaxBytes,
+                ct)
+            : useApiKeyCredential
+                ? await _client.ProxyGetBinaryResponseWithApiKeyAsync(
+                    effectiveToken,
+                    request.Slug,
+                    request.ServiceId,
+                    request.Path,
+                    request.Headers,
+                    _fileArtifactMaxBytes,
+                    ct)
+                : await _client.ProxyGetBinaryResponseAsync(
+                    effectiveToken,
+                    request.Slug,
+                    request.ServiceId,
+                    request.Path,
+                    request.Headers,
+                    _fileArtifactMaxBytes,
+                    ct);
 
         if (authoredServiceInstanceId is not null)
         {

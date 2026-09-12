@@ -134,7 +134,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         result.Should().Contain("GitHub");
         handler.Authorization.Should().Be("Bearer inventory-access-token");
-        handler.RequestPath.Should().Be("/api/v1/keys");
+        handler.RequestPath.Should().Be("/api/v1/user-services");
         executionPort.Requests.Should().ContainSingle();
         executionPort.Requests[0].ArgumentsJson.Should().Be("{}");
         executionPort.Requests[0].ExecutionContext.Request.RequestId.Should().Be("request-inventory-1");
@@ -198,7 +198,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         result.Should().Contain("GitHub");
         handler.Authorization.Should().Be("Bearer strict-sender-token");
-        handler.RequestPath.Should().Be("/api/v1/keys");
+        handler.RequestPath.Should().Be("/api/v1/user-services");
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
     }

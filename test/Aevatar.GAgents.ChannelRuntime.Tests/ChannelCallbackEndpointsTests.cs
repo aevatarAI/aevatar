@@ -78,8 +78,34 @@ public sealed class ChannelCallbackEndpointsTests
         routePatterns.Any(pattern => pattern?.Contains("/callback/", StringComparison.Ordinal) == true)
             .Should().BeFalse();
         routePatterns.Should().Contain("/api/channels/registrations");
+        routePatterns.Should().Contain("/api/channels/registrations/{registrationId}/runtime-config");
         routePatterns.Should().Contain("/api/channels/diagnostics/errors");
         routePatterns.Should().NotContain("/api/channels/registrations/rebuild");
+    }
+
+    [Fact]
+    public void MapChannelCallbackEndpoints_ShouldRegisterAuditedRuntimeConfigUpdateRoute()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = "Development",
+        });
+
+        var app = builder.Build();
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        app.MapChannelCallbackEndpoints();
+
+        var endpoint = routeBuilder.DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(route => string.Equals(
+                route.RoutePattern.RawText,
+                "/api/channels/registrations/{registrationId}/runtime-config",
+                StringComparison.Ordinal));
+
+        endpoint.Metadata.OfType<IAuthorizeData>().Should().NotBeEmpty();
+        endpoint.Metadata.OfType<HttpMethodMetadata>()
+            .Single().HttpMethods.Should().Contain("POST");
     }
 
     [Fact]
@@ -798,6 +824,70 @@ public sealed class ChannelCallbackEndpointsTests
 
         response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         response.Body.Should().Contain("missing_bot_token");
+    }
+
+    [Fact]
+    public async Task HandleRegisterAsync_ParsesRuntimeConfigBeforeTelegramCredentialValidation()
+    {
+        NyxChannelBotProvisioningRequest? capturedRequest = null;
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("telegram");
+        provisioningService.ProvisionAsync(
+                Arg.Do<NyxChannelBotProvisioningRequest>(request => capturedRequest = request),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: false,
+                Status: "error",
+                Platform: "telegram",
+                Error: "missing_bot_token")));
+
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "platform": "telegram",
+              "webhook_base_url": "https://aevatar.example.com",
+              "runtime_config": {
+                "instructions": "Book dinner only after explicit confirmation.",
+                "default_skill": {
+                  "name": "booking-capacity",
+                  "version": "1.0.0"
+                },
+                "tool_set_refs": ["channel.reply.default"],
+                "nyxid_service_selectors": [
+                  {
+                    "service_slug": "api-google-workspace",
+                    "endpoint_names": ["calendar_create_event"]
+                  }
+                ],
+                "credential_source_mode": "registration_agent_key",
+                "agent_key_service_requirements": {
+                  "allowed_service_slugs": ["api-google-workspace"]
+                }
+              }
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRegisterAsync",
+            http,
+            CreateRegistrationFacade(provisioningService),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("missing_bot_token");
+        capturedRequest.Should().NotBeNull();
+        capturedRequest!.RuntimeConfig.Should().NotBeNull();
+        capturedRequest.RuntimeConfig!.Instructions.Should().Be("Book dinner only after explicit confirmation.");
+        capturedRequest.RuntimeConfig.DefaultSkill.Name.Should().Be("booking-capacity");
+        capturedRequest.RuntimeConfig.ToolSetRefs.Should().BeEquivalentTo("channel.reply.default");
+        capturedRequest.RuntimeConfig.NyxidServiceSelectors.Single().ServiceSlug.Should().Be("api-google-workspace");
+        capturedRequest.RuntimeConfig.NyxidServiceSelectors.Single().EndpointNames.Should().BeEquivalentTo("calendar_create_event");
+        capturedRequest.RuntimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);
+        capturedRequest.RuntimeConfig.AgentKeyServiceRequirements.AllowedServiceSlugs.Should().BeEquivalentTo("api-google-workspace");
     }
 
     [Fact]

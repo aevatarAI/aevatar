@@ -10,6 +10,7 @@ import "channel_contracts.proto";
 import "chat_route_policy.proto";
 import "ai_messages.proto";
 import "Credentials/credential_secret_references.proto";
+import "channel_bot_registration.proto";
 
 message OutboundDeliveryReceipt {
   string reply_message_id = 1;
@@ -99,6 +100,9 @@ message NeedsLlmReplyEvent {
   // Conversation-owned immutable profile pin. Unlike target_ref this is durable business
   // authority and may be persisted; it contains no request credential or runtime tool object.
   aevatar.ai.AgentProfileSnapshot agent_profile = 17;
+  // ChannelRegistration-owned runtime config provenance used by normal Channel bot runs.
+  // It contains no runtime credentials and does not depend on Agent Profile resolution.
+  ChannelRuntimeConfigProof channel_runtime_config = 19;
 }
 
 enum ChannelWorkflowDraftRunSourceKind {
@@ -393,14 +397,6 @@ message LarkCardDeliveryCompletedEvent {
   LlmReplyDeliveryFailedEvent delivery_failure = 8;
   int64 completed_at_unix_ms = 9;
   aevatar.ai.AgentProfileSnapshot agent_profile = 10;
-}
-
-// Committed exactly once for a profiled conversation. A changed scope/system binding affects new
-// conversations only; an active conversation never hot-replaces this immutable snapshot.
-message ConversationAgentProfilePinnedEvent {
-  aevatar.ai.AgentProfileSnapshot profile = 1;
-  string source_run_id = 2;
-  int64 pinned_at_unix_ms = 3;
 }
 
 // Refactor (iter57/cluster-065-lark-card-signal-only):

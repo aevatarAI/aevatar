@@ -42,6 +42,14 @@ public static class ChannelCallbackEndpoints
             .RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
+        group.MapPost("/registrations/{registrationId}/runtime-config", HandleUpdateRuntimeConfigAsync)
+            .WithEndpointAudit(
+                "channel.registration.runtime-config.update",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
         group.MapPost(
                 "/registrations/{registrationId}/workflow-result-delivery/repair",
                 HandleRepairWorkflowResultDeliveryAsync)
@@ -112,7 +120,17 @@ public static class ChannelCallbackEndpoints
                 return Results.BadRequest(new { error = "invalid_service_ids" });
             }
 
-            request = document.RootElement.Deserialize<RegistrationRequest>(RegistrationJsonOptions);
+            if (!ChannelBotRuntimeConfigJsonParser.TryParse(
+                    document.RootElement,
+                    out var runtimeConfig))
+            {
+                return Results.BadRequest(new { error = "invalid_runtime_config" });
+            }
+
+            var parsedRequest = document.RootElement.Deserialize<RegistrationRequest>(RegistrationJsonOptions);
+            request = parsedRequest is null
+                ? null
+                : parsedRequest with { RuntimeConfig = runtimeConfig };
         }
         catch (JsonException ex)
         {
@@ -159,6 +177,7 @@ public static class ChannelCallbackEndpoints
                     EncryptKey: request.EncryptKey?.Trim() ?? string.Empty),
                 Credentials: BuildCredentialsMap(platformNormalized, request),
                 DefaultSkillName: request.DefaultSkillName?.Trim() ?? string.Empty,
+                RuntimeConfig: request.RuntimeConfig?.Clone(),
                 RequestedServiceSelection: serviceSelection),
             ct);
 
@@ -269,6 +288,57 @@ public static class ChannelCallbackEndpoints
         }).ToArray();
 
         return Results.Json(result, RegistrationJsonOptions);
+    }
+
+    private static async Task<IResult> HandleUpdateRuntimeConfigAsync(
+        string registrationId,
+        HttpContext http,
+        [FromServices] ChannelRegistrationCommandFacade commandFacade,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
+        ChannelBotRuntimeConfig? runtimeConfig;
+        try
+        {
+            using var document = await JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+            if (!ChannelBotRuntimeConfigJsonParser.TryParse(
+                    document.RootElement,
+                    out runtimeConfig))
+            {
+                return Results.BadRequest(new { error = "invalid_runtime_config" });
+            }
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Invalid runtime config update payload");
+            return Results.BadRequest(new { error = "Invalid JSON" });
+        }
+
+        var registration = await queryPort.GetAsync(registrationId, ct);
+        if (registration is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
+        var callerScopeId = ResolveScopeId(http, null, required: false).ScopeId;
+        if (string.IsNullOrWhiteSpace(callerScopeId) ||
+            !string.Equals(registration.ScopeId, callerScopeId, StringComparison.Ordinal))
+        {
+            return Results.NotFound(new { error = "Registration not found" });
+        }
+
+        await commandFacade.UpdateRuntimeConfigAsync(
+            registrationId,
+            runtimeConfig,
+            runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
+            ct);
+
+        return Results.Accepted(value: new
+        {
+            status = "accepted",
+            registration_id = registrationId,
+            default_skill_name = runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
+        });
     }
 
     private static async Task<IResult> HandleRepairWorkflowResultDeliveryAsync(
@@ -839,7 +909,8 @@ public static class ChannelCallbackEndpoints
         string? Label,
         // Optional Ornn skill this bot's plain inbound messages are routed to
         // (deterministic channel→skill binding; message text becomes the skill args).
-        string? DefaultSkillName);
+        string? DefaultSkillName,
+        [property: JsonIgnore] ChannelBotRuntimeConfig? RuntimeConfig = null);
 
     private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(
         string platform,

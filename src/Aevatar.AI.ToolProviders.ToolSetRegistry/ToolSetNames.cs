@@ -25,6 +25,7 @@ public static class ToolSetNames
     /// Channel reply runtime composed from workspace tools and sender-authorized NyxID inventory.
     /// </summary>
     public const string ChannelReplyDefault = "channel.reply.default";
+
     public const string WorkspaceDefault = "workspace.default";
     public const string LarkSelfNotify = "lark.self_notify";
 

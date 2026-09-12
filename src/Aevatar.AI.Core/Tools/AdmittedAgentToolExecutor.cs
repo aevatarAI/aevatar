@@ -209,6 +209,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         }
 
         var channelAuthorityDecision = await AdmitChannelRegistrationAuthorityAsync(
+            tool,
             credentialDecision.ExecutionContext,
             credentialDecision.SelectedSenderBearer,
             ct).ConfigureAwait(false);
@@ -1709,6 +1710,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     }
 
     private async Task<ChannelRegistrationAuthorityAdmissionResult?> AdmitChannelRegistrationAuthorityAsync(
+        IAgentTool tool,
         AgentToolExecutionContext context,
         bool selectedSenderBearer,
         CancellationToken ct)
@@ -1739,7 +1741,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 ChannelRegistrationAuthorityAdmissionReason.CredentialDescriptorMismatch);
         }
 
-        if (credential is null)
+        if (credential is null || !HasCompleteChannelRegistrationCredentialDescriptor(credential))
         {
             return ChannelRegistrationAuthorityAdmissionResult.Deny(
                 ChannelRegistrationAuthorityAdmissionReason.CredentialDescriptorMismatch);
@@ -1753,8 +1755,10 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
 
         if (context.OperationAdmission is null)
         {
-            return ChannelRegistrationAuthorityAdmissionResult.Deny(
-                ChannelRegistrationAuthorityAdmissionReason.OperationAdmissionMissing);
+            return tool is IAgentToolOperationAdmissionOwner
+                ? ChannelRegistrationAuthorityAdmissionResult.Deny(
+                    ChannelRegistrationAuthorityAdmissionReason.OperationAdmissionMissing)
+                : ChannelRegistrationAuthorityAdmissionResult.Allow();
         }
 
         try
@@ -1787,6 +1791,34 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             return ChannelRegistrationAuthorityAdmissionResult.Deny(
                 ChannelRegistrationAuthorityAdmissionReason.AuthorityUnavailable);
         }
+    }
+
+    private static bool HasCompleteChannelRegistrationCredentialDescriptor(
+        DurableCallerCredentialRef credential)
+    {
+        var reference = credential.SecretReference;
+        return credential.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration &&
+               string.Equals(
+                   credential.Purpose,
+                   CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                   StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(credential.SubjectId) &&
+               reference is not null &&
+               string.Equals(credential.Ref, reference.Ref, StringComparison.Ordinal) &&
+               string.Equals(credential.Purpose, reference.Purpose, StringComparison.Ordinal) &&
+               string.Equals(
+                   credential.OwnerScopeKey,
+                   reference.OwnerScopeKey,
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   reference.Purpose,
+                   CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                   StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(reference.OwnerScopeKey) &&
+               reference.Version > 0 &&
+               !string.IsNullOrWhiteSpace(reference.Fingerprint) &&
+               reference.CreatedAtUnixMs > 0 &&
+               reference.ExpiresAtUnixMs >= 0;
     }
 
     private static (string Code, string Message) MapChannelRegistrationAuthorityFailure(

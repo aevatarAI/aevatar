@@ -49,6 +49,7 @@ public sealed class ChannelBotRegistrationProjectorTests
                     WorkflowResultDeliveryCredential = TestDeliverySecretReference("bot-reg-1"),
                     LastInboundAtUtc = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 10, 11, 0, 0, TimeSpan.Zero)),
                     DefaultSkillName = "whatsapp-reply-draft",
+                    RuntimeConfig = TestRuntimeConfig(),
                     WorkflowResultDeliveryRepair = FailedRepair(),
                 },
             },
@@ -72,6 +73,8 @@ public sealed class ChannelBotRegistrationProjectorTests
         doc.ActorId.Should().Be("bot-reg-actor-1");
         doc.LastInboundAtUtc.Should().Be(Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 10, 11, 0, 0, TimeSpan.Zero)));
         doc.DefaultSkillName.Should().Be("whatsapp-reply-draft");
+        doc.RuntimeConfig.Should().Be(TestRuntimeConfig());
+        doc.RuntimeConfig.Should().NotBeSameAs(state.Registrations[0].RuntimeConfig);
         doc.WorkflowResultDeliveryRepair.Should().Be(FailedRepair());
         doc.WorkflowResultDeliveryRepair.Should().NotBeSameAs(
             state.Registrations[0].WorkflowResultDeliveryRepair);
@@ -228,6 +231,32 @@ public sealed class ChannelBotRegistrationProjectorTests
             }),
         };
     }
+
+    private static ChannelBotRuntimeConfig TestRuntimeConfig() =>
+        new()
+        {
+            Instructions = "Use the booking rules before proposing times.",
+            DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+            {
+                Name = "whatsapp-reply-draft",
+                Version = "2.3",
+            },
+            ToolSetRefs = { "channel.reply.default" },
+            ExtraToolNames = { "ask_user" },
+            NyxidServiceSelectors =
+            {
+                new ChannelBotRuntimeNyxIdServiceSelector
+                {
+                    ServiceSlug = "api-google-workspace",
+                    EndpointNames = { "calendar_create_event" },
+                },
+            },
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+            AgentKeyServiceRequirements = new ChannelBotRuntimeAgentKeyServiceRequirements
+            {
+                AllowedServiceSlugs = { "api-google-workspace" },
+            },
+        };
 
     private static ChannelWorkflowResultDeliveryRepairState FailedRepair() =>
         new()

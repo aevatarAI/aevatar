@@ -319,6 +319,47 @@ public sealed class NyxIdApiClientProxyBinaryTests
     }
 
     [Fact]
+    public async Task ProxyGetBinaryResponseWithApiKeyAsync_ShouldUseAgentKeyBearerWithoutApiKeyHeader()
+    {
+        var handler = new CapturingHandler([1, 2, 3], "application/octet-stream");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        var response = await client.ProxyGetBinaryResponseWithApiKeyAsync(
+            apiKey: "agent-key",
+            slug: "api-google-workspace",
+            userServiceId: "usvc-google",
+            path: "calendar/events/export",
+            extraHeaders: null,
+            maxBytes: 1024,
+            ct: CancellationToken.None);
+
+        response.Succeeded.Should().BeTrue();
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Authorization.Should().Be(new AuthenticationHeaderValue("Bearer", "agent-key"));
+        request.Headers.Should().NotContainKey("X-API-Key");
+    }
+
+    [Fact]
+    public async Task GetMcpConfigWithApiKeyAsync_ShouldUseAgentKeyBearerWithoutApiKeyHeaderAndDefaultUserAgent()
+    {
+        var handler = new CapturingHandler("""{ "services": [] }""");
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+
+        await client.GetMcpConfigWithApiKeyAsync("agent-key", CancellationToken.None);
+
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Get);
+        request.Uri!.AbsoluteUri.Should().Be("https://nyx.example/api/v1/mcp/config");
+        request.Authorization.Should().Be(new AuthenticationHeaderValue("Bearer", "agent-key"));
+        request.Headers.Should().NotContainKey("X-API-Key");
+        request.Headers["User-Agent"].Should().Equal(NyxIdApiClient.DefaultProxyUserAgent);
+    }
+
+    [Fact]
     public async Task ProxyGetBinaryResponseAsync_ShouldFailBeforeBufferingWhenContentLengthExceedsMaxBytes()
     {
         var handler = new CapturingHandler(

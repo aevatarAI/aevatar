@@ -8,6 +8,8 @@ public interface IChannelBotRegistrationQueryPort
 {
     Task<ChannelBotRegistrationEntry?> GetAsync(string registrationId, CancellationToken ct = default);
 
+    Task<ChannelBotRegistrationSnapshot?> GetSnapshotAsync(string registrationId, CancellationToken ct = default);
+
     /// <summary>
     /// Returns the projection state version for a registration document, or null
     /// if the document does not exist. Used to confirm that a command was actually

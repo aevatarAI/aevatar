@@ -267,6 +267,48 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleUpdateRuntimeConfig_UpdatesOnlyRuntimeFacts()
+    {
+        var command = NewRegistration("reg-runtime", apiKeyId: "key-runtime");
+        await _agent.HandleRegister(command);
+        var before = _agent.State.Registrations.Single().Clone();
+        var runtimeConfig = new ChannelBotRuntimeConfig
+        {
+            DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+            {
+                Name = " /Booking-Capacity ",
+            },
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+            AgentKeyServiceRequirements = new ChannelBotRuntimeAgentKeyServiceRequirements(),
+        };
+        runtimeConfig.ToolSetRefs.Add("channel.reply.default");
+        runtimeConfig.AgentKeyServiceRequirements.AllowedServiceSlugs.Add("API-Google-Workspace");
+        runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = " API-Google-Workspace ",
+        });
+
+        await _agent.HandleUpdateRuntimeConfig(new ChannelBotUpdateRuntimeConfigCommand
+        {
+            RegistrationId = "reg-runtime",
+            RuntimeConfig = runtimeConfig,
+            UpdatedAtUnixMs = 1,
+        });
+
+        var entry = _agent.State.Registrations.Single();
+        entry.NyxAgentApiKeyId.Should().Be(before.NyxAgentApiKeyId);
+        entry.NyxChannelBotId.Should().Be(before.NyxChannelBotId);
+        entry.NyxConversationRouteId.Should().Be(before.NyxConversationRouteId);
+        entry.ChannelAgentKey.Should().Be(before.ChannelAgentKey);
+        entry.DefaultSkillName.Should().Be("booking-capacity");
+        entry.RuntimeConfig.Should().NotBeNull();
+        entry.RuntimeConfig!.NyxidServiceSelectors.Should().ContainSingle();
+        entry.RuntimeConfig.NyxidServiceSelectors[0].ServiceSlug.Should().Be("api-google-workspace");
+        entry.RuntimeConfig.NyxidServiceSelectors[0].EndpointNames.Should().BeEmpty();
+        entry.RuntimeConfig.AgentKeyServiceRequirements.AllowedServiceSlugs.Should().Equal("api-google-workspace");
+    }
+
+    [Fact]
     public async Task HandleRegister_RejectsLegacyShapedNewCommand()
     {
         var beforeVersion = _agent.EventSourcing!.CurrentVersion;

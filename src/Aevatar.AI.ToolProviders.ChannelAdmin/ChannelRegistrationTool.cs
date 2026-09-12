@@ -104,6 +104,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Optional Ornn skill to bind this bot's plain inbound messages to. When set, every non-command message deterministically runs this skill with the message text as its arguments. Explicit /<skill> triggers and local slash commands still take priority."
             },
+            "runtime_config": {
+              "type": "object",
+              "description": "Optional ChannelRegistration-owned runtime config for instructions, default_skill, tool_set_refs, extra_tool_names, nyxid_service_selectors, credential_source_mode, and agent_key_service_requirements."
+            },
             "service_ids": {
               "type": "array",
               "items": { "type": "string" },
@@ -306,6 +310,15 @@ public sealed class ChannelRegistrationTool : IAgentTool
             });
         }
 
+        if (!ChannelBotRuntimeConfigJsonParser.TryParse(args, out var runtimeConfig))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error_code = "invalid_runtime_config",
+                error = "runtime_config must be an object when present",
+            });
+        }
+
         var scopeResolution = ResolveRegistrationOwnerScopeId(args);
         if (scopeResolution.Error is not null)
             return SerializeError(scopeResolution.Error);
@@ -331,6 +344,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
                     EncryptKey: ResolveCredential(args, credentials, platform, "encrypt_key")),
                 Credentials: credentials,
                 DefaultSkillName: GetStr(args, "default_skill_name")?.Trim() ?? string.Empty,
+                RuntimeConfig: runtimeConfig?.Clone(),
                 RequestedServiceSelection: serviceSelection),
             ct);
 

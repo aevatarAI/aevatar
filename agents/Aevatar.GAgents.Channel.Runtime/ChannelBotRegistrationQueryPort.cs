@@ -15,11 +15,19 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
 
     public async Task<ChannelBotRegistrationEntry?> GetAsync(string registrationId, CancellationToken ct = default)
     {
+        var snapshot = await GetSnapshotAsync(registrationId, ct);
+        return snapshot?.Registration;
+    }
+
+    public async Task<ChannelBotRegistrationSnapshot?> GetSnapshotAsync(string registrationId, CancellationToken ct = default)
+    {
         if (string.IsNullOrWhiteSpace(registrationId))
             return null;
 
         var document = await _documentReader.GetAsync(registrationId, ct);
-        return document == null ? null : ToEntry(document);
+        return document == null
+            ? null
+            : new ChannelBotRegistrationSnapshot(ToEntry(document), document.StateVersion);
     }
 
     public async Task<long?> GetStateVersionAsync(string registrationId, CancellationToken ct = default)
@@ -160,6 +168,7 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             RegistrationServiceAllowlist = document.RegistrationServiceAllowlist?.Clone(),
             ChannelAgentKey = document.ChannelAgentKey?.Clone(),
             AuthorizationMode = document.AuthorizationMode,
+            RuntimeConfig = document.RuntimeConfig?.Clone(),
             LastInboundAtUtc = document.LastInboundAtUtc,
             DefaultSkillName = document.DefaultSkillName ?? string.Empty,
             WorkflowResultDeliveryRepair = document.WorkflowResultDeliveryRepair?.Clone(),

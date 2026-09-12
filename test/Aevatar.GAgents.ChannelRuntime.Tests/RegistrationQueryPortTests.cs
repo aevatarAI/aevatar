@@ -61,6 +61,7 @@ public sealed class RegistrationQueryPortTests
                 NyxAgentApiKeyId = "key-1",
                 NyxConversationRouteId = "route-1",
                 WorkflowResultDeliveryCredential = TestDeliverySecretReference("bot-1"),
+                RuntimeConfig = TestRuntimeConfig(),
                 WorkflowResultDeliveryRepair = FailedRepair(),
             }));
 
@@ -77,6 +78,9 @@ public sealed class RegistrationQueryPortTests
         result.NyxAgentApiKeyId.Should().Be("key-1");
         result.NyxConversationRouteId.Should().Be("route-1");
         result.WorkflowResultDeliveryCredential.Should().Be(TestDeliverySecretReference("bot-1"));
+        result.RuntimeConfig.Should().Be(TestRuntimeConfig());
+        result.RuntimeConfig.Should().NotBeSameAs(
+            (await reader.GetAsync("bot-1", CancellationToken.None))!.RuntimeConfig);
         result.WorkflowResultDeliveryRepair.Should().Be(FailedRepair());
         result.WorkflowResultDeliveryRepair.Should().NotBeSameAs(
             (await reader.GetAsync("bot-1", CancellationToken.None))!.WorkflowResultDeliveryRepair);
@@ -154,6 +158,11 @@ public sealed class RegistrationQueryPortTests
         result.ChannelAgentKey.Should().NotBeSameAs(credential);
         result.ChannelAgentKey.Grant.ScopePlanDigest.Should().Be(credential.Grant.ScopePlanDigest);
         (await queryPort.GetStateVersionAsync("bot-explicit")).Should().Be(43);
+        var snapshot = await queryPort.GetSnapshotAsync("bot-explicit");
+        snapshot.Should().NotBeNull();
+        snapshot!.StateVersion.Should().Be(43);
+        snapshot.Registration.ChannelAgentKey.Should().Be(credential);
+        snapshot.Registration.ChannelAgentKey.Should().NotBeSameAs(credential);
     }
 
     [Fact]
@@ -346,6 +355,32 @@ public sealed class RegistrationQueryPortTests
         result!.Id.Should().Be("bot-1");
         await publicQueryPort.Received(1).GetAsync("bot-1", Arg.Any<CancellationToken>());
     }
+
+    private static ChannelBotRuntimeConfig TestRuntimeConfig() =>
+        new()
+        {
+            Instructions = "Use the booking rules before proposing times.",
+            DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+            {
+                Name = "booking-capacity",
+                Version = "2.3",
+            },
+            ToolSetRefs = { "channel.reply.default" },
+            ExtraToolNames = { "ask_user" },
+            NyxidServiceSelectors =
+            {
+                new ChannelBotRuntimeNyxIdServiceSelector
+                {
+                    ServiceSlug = "api-google-workspace",
+                    EndpointNames = { "calendar_create_event" },
+                },
+            },
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+            AgentKeyServiceRequirements = new ChannelBotRuntimeAgentKeyServiceRequirements
+            {
+                AllowedServiceSlugs = { "api-google-workspace" },
+            },
+        };
 
     private static ChannelAgentKeyCredential TestChannelAgentKey(string registrationId)
     {

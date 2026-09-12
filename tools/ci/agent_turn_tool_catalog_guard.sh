@@ -18,6 +18,15 @@ require_pattern() {
   rg -q -- "${pattern}" "${file}" || fail "${message}"
 }
 
+reject_pattern() {
+  local pattern="$1"
+  local file="$2"
+  local message="$3"
+  if rg -q -- "${pattern}" "${file}"; then
+    fail "${message}"
+  fi
+}
+
 host_composition="src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs"
 catalog_contract="src/Aevatar.AI.Abstractions/ToolProviders/AgentTurnToolCatalog.cs"
 discovery_contract="src/Aevatar.AI.Abstractions/ToolProviders/AgentToolDiscoveryService.cs"
@@ -287,17 +296,19 @@ require_pattern 'ready\.AgentProfile = State\.GenerationStep\.AgentProfileSnapsh
   "ordinary Channel ready events must carry the run profile snapshot back to Conversation."
 require_pattern 'completed\.AgentProfile = State\.GenerationStep\.AgentProfileSnapshot\.Clone\(\)' "${agent_run_card_actor}" \
   "CardKit completion must carry the run profile snapshot back to Conversation."
-require_pattern 'AgentProfileSnapshot agent_profile = 18' "${conversation_state_proto}" \
-  "Conversation actor state must own its immutable profile pin."
-require_pattern 'ConversationAgentProfilePinnedEvent' "${conversation_events_proto}" \
-  "Conversation profile pin must be a committed typed event."
-require_pattern 'runCopy\.AgentProfile = State\.AgentProfile\?\.Clone\(\)' "${conversation_actor}" \
-  "later Channel runs must receive the Conversation-owned profile snapshot."
-require_pattern 'EnsureAgentProfilePinnedAsync\(evt\.AgentProfile, evt\.RunId\)' "${conversation_actor}" \
-  "Conversation must reconcile every terminal run profile against its pin."
-require_pattern 'BuildInitialStepState_WhenConversationCarriesPinnedProfile_ShouldNotResolveCurrentBinding' "${channel_executor_tests}" \
-  "the Channel binding-drift replay proof test is missing."
-require_pattern 'HandleLlmReplyReadyAsync_WhenProfileDiffersFromConversationPin_ShouldFailClosed' "${conversation_tests}" \
-  "the Conversation profile mismatch fail-closed proof test is missing."
+require_pattern 'reserved 18;' "${conversation_state_proto}" \
+  "Conversation state must reserve the removed AgentProfile field number."
+require_pattern 'ChannelRuntimeConfigProof channel_runtime_config = 19' "${conversation_events_proto}" \
+  "Conversation terminal events must carry the registration-owned runtime config proof."
+require_pattern 'runCopy\.ChannelRuntimeConfig = channelRuntimeConfig\?\.Clone\(\)' "${conversation_actor}" \
+  "Channel runs must receive the registration-owned runtime config proof."
+require_pattern 'runCopy\.AgentProfile = null' "${conversation_actor}" \
+  "Channel runtime-config runs must not carry the legacy Conversation AgentProfile fallback."
+reject_pattern 'State\.AgentProfile' "${conversation_actor}" \
+  "Conversation must not read or persist State.AgentProfile as a compatibility fallback."
+require_pattern 'BuildInitialStepState_WhenChannelRuntimeConfigIsPresent_ShouldBypassAgentProfileResolution' "${channel_executor_tests}" \
+  "the Channel runtime-config bypass proof test is missing."
+require_pattern 'BuildInitialStepState_WhenRegistrationAgentKeyCannotResolve_ShouldClearAllNyxIdCredentials' "${channel_executor_tests}" \
+  "the registration Agent Key fail-closed proof test is missing."
 
 echo "Agent turn tool catalog guard passed."
