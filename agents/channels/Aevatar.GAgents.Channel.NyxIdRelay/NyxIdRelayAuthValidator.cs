@@ -1,4 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -28,6 +29,7 @@ public sealed class NyxIdRelayAuthValidator
     //   Old pattern: Nyx relay replay/idempotency 和 reply 累积在 process-local ConcurrentDictionary/lock(NyxRelayBridgeIdempotencyGuard / NyxIdRelayReplayGuard / NyxIdRelayReplyAccumulator)。
     //   New principle: ConversationGAgent persist callback_jti admission 为 typed event 优先于 business work;删除 process-local replay guards + dead accumulator。
     private const string RelayCallbackTokenType = "relay_callback";
+    private const int OidcHttpAttempts = 4;
 
     private sealed record CachedOidcConfiguration(
         string Issuer,
@@ -170,7 +172,20 @@ public sealed class NyxIdRelayAuthValidator
 
     private async Task<CallbackJwtValidationResult> ValidateCallbackJwtAsync(string token, CancellationToken ct)
     {
-        var configuration = await GetConfigurationAsync(forceRefresh: false, ct);
+        CachedOidcConfiguration configuration;
+        try
+        {
+            configuration = await GetConfigurationAsync(forceRefresh: false, ct);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "Nyx relay callback JWT validation could not load OIDC/JWKS configuration");
+            return new CallbackJwtValidationResult(
+                false,
+                ErrorCode: "callback_jwt_oidc_unavailable",
+                ErrorSummary: "Nyx relay OIDC/JWKS configuration is temporarily unavailable.");
+        }
+
         var initial = ValidateCallbackJwtCore(token, configuration);
         if (initial.Succeeded)
             return initial;
@@ -412,7 +427,7 @@ public sealed class NyxIdRelayAuthValidator
     private async Task<CachedOidcConfiguration> LoadConfigurationAsync(CancellationToken ct)
     {
         var http = _httpClientFactory.CreateClient();
-        using var discoveryResponse = await http.GetAsync(ResolveDiscoveryUrl(), ct);
+        using var discoveryResponse = await SendOidcGetAsync(http, ResolveDiscoveryUrl(), ct);
         discoveryResponse.EnsureSuccessStatusCode();
         var discoveryJson = await discoveryResponse.Content.ReadAsStringAsync(ct);
         using var discoveryDocument = JsonDocument.Parse(discoveryJson);
@@ -420,7 +435,7 @@ public sealed class NyxIdRelayAuthValidator
         var issuer = RequireString(discoveryDocument.RootElement, "issuer");
         var jwksUri = RequireString(discoveryDocument.RootElement, "jwks_uri");
 
-        using var jwksResponse = await http.GetAsync(jwksUri, ct);
+        using var jwksResponse = await SendOidcGetAsync(http, jwksUri, ct);
         jwksResponse.EnsureSuccessStatusCode();
         var jwksJson = await jwksResponse.Content.ReadAsStringAsync(ct);
 
@@ -434,6 +449,45 @@ public sealed class NyxIdRelayAuthValidator
         _cachedConfiguration = configuration;
         return configuration;
     }
+
+    private async Task<HttpResponseMessage> SendOidcGetAsync(
+        HttpClient http,
+        string url,
+        CancellationToken ct)
+    {
+        for (var attempt = 1; attempt <= OidcHttpAttempts; attempt++)
+        {
+            try
+            {
+                var response = await http.GetAsync(url, ct);
+                if (!IsTransientOidcStatus(response.StatusCode) || attempt == OidcHttpAttempts)
+                    return response;
+
+                _logger.LogWarning(
+                    "Retrying Nyx relay OIDC/JWKS request after transient HTTP status. attempt={Attempt} status={StatusCode} url={Url}",
+                    attempt,
+                    (int)response.StatusCode,
+                    url);
+                response.Dispose();
+            }
+            catch (HttpRequestException exception) when (attempt < OidcHttpAttempts)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Retrying Nyx relay OIDC/JWKS request after transient HTTP failure. attempt={Attempt} url={Url}",
+                    attempt,
+                    url);
+            }
+        }
+
+        throw new InvalidOperationException("Nyx relay OIDC/JWKS retry loop exhausted unexpectedly.");
+    }
+
+    private static bool IsTransientOidcStatus(HttpStatusCode statusCode) => statusCode is
+        HttpStatusCode.TooManyRequests or
+        HttpStatusCode.BadGateway or
+        HttpStatusCode.ServiceUnavailable or
+        HttpStatusCode.GatewayTimeout;
 
     private string ResolveDiscoveryUrl()
     {

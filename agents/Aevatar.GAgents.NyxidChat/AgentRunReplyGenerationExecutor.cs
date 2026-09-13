@@ -177,7 +177,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             var currentUserMessage = plan.InitialMessages.LastOrDefault(static message =>
                 string.Equals(message.Role, "user", StringComparison.Ordinal));
             if (currentUserMessage is not null)
-                state.PendingHistoryMessages.Add(AgentRunReplyStepMappers.ToProto(currentUserMessage));
+            {
+                var currentUserProto = AgentRunReplyStepMappers.ToProto(currentUserMessage);
+                state.PendingHistoryMessages.Add(currentUserProto.Clone());
+                state.AppendedHistory.Add(AgentRunReplyStepMappers.ToConversationHistoryEntry(currentUserProto));
+            }
             return state;
         }
     }

@@ -61,6 +61,85 @@ public sealed class NyxIdRelayAuthValidatorTests
     }
 
     [Fact]
+    public async Task ValidateAsync_ShouldRetryTransientOidcDiscoveryFailure()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"),
+            () => CreateJwksJson(key))
+        {
+            DiscoveryFailuresRemaining = 1,
+        };
+        var validator = CreateValidator(handler, Issuer);
+        var request = CreateRelayRequest(key, userToken: "user-token-1");
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        handler.RequestUris.Should().Equal(
+            $"{Issuer}/.well-known/openid-configuration",
+            $"{Issuer}/.well-known/openid-configuration",
+            $"{Issuer}/jwks");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldRetryTransientOidcDiscoveryStatus()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"),
+            () => CreateJwksJson(key));
+        handler.DiscoveryStatusCodes.Enqueue(HttpStatusCode.ServiceUnavailable);
+        handler.DiscoveryStatusCodes.Enqueue(HttpStatusCode.OK);
+        var validator = CreateValidator(handler, Issuer);
+        var request = CreateRelayRequest(key, userToken: "user-token-1");
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        handler.RequestUris.Should().Equal(
+            $"{Issuer}/.well-known/openid-configuration",
+            $"{Issuer}/.well-known/openid-configuration",
+            $"{Issuer}/jwks");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ShouldFailClosed_WhenOidcDiscoveryRemainsUnavailable()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var handler = new NyxRelayOidcDocumentHandler(
+            CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"),
+            () => CreateJwksJson(key))
+        {
+            DiscoveryFailuresRemaining = 4,
+        };
+        var validator = CreateValidator(handler, Issuer);
+        var request = CreateRelayRequest(key, userToken: "user-token-1");
+
+        var result = await validator.ValidateAsync(
+            request.HttpContext,
+            request.BodyBytes,
+            request.Payload,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("callback_jwt_oidc_unavailable");
+        handler.RequestUris.Should().Equal(
+            Enumerable.Repeat($"{Issuer}/.well-known/openid-configuration", 4));
+    }
+
+    [Fact]
     public async Task ValidateAsync_ShouldAcceptCallback_WhenUserTokenIsMissing()
     {
         using var rsa = RSA.Create(2048);

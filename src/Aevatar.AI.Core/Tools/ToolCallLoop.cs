@@ -463,7 +463,7 @@ public sealed class ToolCallLoop
                 string.IsNullOrWhiteSpace(audioBase64) &&
                 string.IsNullOrWhiteSpace(videoBase64))
             {
-                imageBase64 = TryGetStringByKeys(root, "base64", "data");
+                imageBase64 = TryGetStringByKeys(root, "base64");
             }
 
             var kind = ResolveMediaKind(imageBase64, audioBase64, videoBase64);

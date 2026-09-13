@@ -8,6 +8,61 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class AgentToolReceiptDeliveryPolicyTests
 {
+    [Fact]
+    public void Build_WhenNoReceipts_ShouldPersistFinalAssistantReplyInHistory()
+    {
+        var delivery = AgentToolReceiptDeliveryPolicy.Build(
+            "Tomorrow at 7 PM for 2 people is available. Please reply confirm.",
+            outboundIntent: null,
+            appendedHistory: [],
+            receipts: [],
+            toolCalls: [],
+            new AgentToolReceiptRenderer());
+
+        delivery.ReplyText.Should().Be("Tomorrow at 7 PM for 2 people is available. Please reply confirm.");
+        delivery.AppendedHistory.Should().ContainSingle();
+        delivery.AppendedHistory[0].Role.Should().Be("assistant");
+        delivery.AppendedHistory[0].Content.Should().Be(delivery.ReplyText);
+    }
+
+    [Fact]
+    public void Build_ShouldKeepOnlyUserAndFinalAssistantInAppendedHistory()
+    {
+        var history = new[]
+        {
+            new ConversationHistoryEntry { Role = "user", Content = "Can I book tomorrow at 7?" },
+            new ConversationHistoryEntry
+            {
+                Role = "assistant",
+                ToolCalls =
+                {
+                    new ConversationToolCallEntry
+                    {
+                        Id = "call-1",
+                        Name = "calendar_list_events",
+                        ArgumentsJson = "{}",
+                    },
+                },
+            },
+            new ConversationHistoryEntry { Role = "tool", ToolCallId = "call-1", Content = "[]" },
+        };
+
+        var delivery = AgentToolReceiptDeliveryPolicy.Build(
+            "Tomorrow at 7 PM is available. Please reply confirm.",
+            outboundIntent: null,
+            appendedHistory: history,
+            receipts: [],
+            toolCalls: [],
+            new AgentToolReceiptRenderer());
+
+        delivery.AppendedHistory.Should().HaveCount(2);
+        delivery.AppendedHistory[0].Role.Should().Be("user");
+        delivery.AppendedHistory[0].Content.Should().Be("Can I book tomorrow at 7?");
+        delivery.AppendedHistory[1].Role.Should().Be("assistant");
+        delivery.AppendedHistory[1].Content.Should().Be(delivery.ReplyText);
+        delivery.AppendedHistory.Should().NotContain(entry => entry.Role == "tool" || entry.ToolCalls.Count > 0);
+    }
+
     [Theory]
     [InlineData(AgentToolReceiptStatus.Error, "Failed")]
     [InlineData(AgentToolReceiptStatus.ApprovalRequired, "Approval pending")]
@@ -166,10 +221,10 @@ public sealed class AgentToolReceiptDeliveryPolicyTests
             toolCalls: [],
             new AgentToolReceiptRenderer());
 
-        delivery.AppendedHistory[0].Content.Should().BeEmpty();
-        delivery.AppendedHistory[0].ToolCalls.Should().ContainSingle(call => call.Id == "call-1");
-        delivery.AppendedHistory[1].Content.Should().Be("failed");
-        delivery.AppendedHistory[2].Content.Should().Be(delivery.ReplyText);
+        delivery.AppendedHistory.Should().ContainSingle();
+        delivery.AppendedHistory[0].Role.Should().Be("assistant");
+        delivery.AppendedHistory[0].Content.Should().Be(delivery.ReplyText);
+        delivery.AppendedHistory[0].ToolCalls.Should().BeEmpty();
         delivery.AppendedHistory.Should().NotContain(entry =>
             entry.Content.Contains("Submission confirmed", StringComparison.Ordinal));
     }
