@@ -306,12 +306,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         string callId,
         string toolName)
     {
-        var result = BuildReadProjection(
-            "retry_required",
-            data: null,
-            ReadTooLargeErrorCode,
-            ReadTooLargeErrorMessage,
-            BuildReadRetryHints());
+        var result = BuildBoundedReadTooLargeProjection();
         var receipt = NyxIdProxyReceiptFactory.CreateSuccess(
             callId,
             toolName,
@@ -322,6 +317,32 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         return new AgentToolTerminalOutcome(
             result,
             receipt);
+    }
+
+    private string BuildBoundedReadTooLargeProjection()
+    {
+        var result = BuildReadProjection(
+            "retry_required",
+            data: null,
+            ReadTooLargeErrorCode,
+            ReadTooLargeErrorMessage,
+            BuildReadRetryHints(includeQueryParameters: true));
+        if (Encoding.UTF8.GetByteCount(result) <= MaxReadSourceBytes)
+            return result;
+
+        result = BuildReadProjection(
+            "retry_required",
+            data: null,
+            ReadTooLargeErrorCode,
+            ReadTooLargeErrorMessage,
+            BuildReadRetryHints(includeQueryParameters: false));
+        return Encoding.UTF8.GetByteCount(result) <= MaxReadSourceBytes
+            ? result
+            : BuildReadProjection(
+                "retry_required",
+                data: null,
+                ReadTooLargeErrorCode,
+                ReadTooLargeErrorMessage);
     }
 
     private AgentToolTerminalOutcome BuildEffectOutcome(
@@ -372,9 +393,18 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         ["retry_hints"] = retryHints?.DeepClone(),
     }.ToJsonString(JsonOptions);
 
-    private JsonObject BuildReadRetryHints()
+    private JsonObject BuildReadRetryHints(bool includeQueryParameters)
     {
-        var queryParameters = new JsonArray(OperationAdmission.QueryParameters
+        var result = new JsonObject
+        {
+            ["reason"] = "bounded_projection_limit_exceeded",
+            ["operation_path_template"] = OperationAdmission.PathTemplate,
+            ["retry_guidance"] = "Retry the same read with a narrower query, smaller page size, or the next page token when the operation publishes those query parameters.",
+        };
+        if (!includeQueryParameters)
+            return result;
+
+        result["query_parameters"] = new JsonArray(OperationAdmission.QueryParameters
             .OrderBy(static parameter => parameter.Name, StringComparer.Ordinal)
             .Select(parameter => new JsonObject
             {
@@ -385,14 +415,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
                     parameter),
             })
             .ToArray());
-
-        return new JsonObject
-        {
-            ["reason"] = "bounded_projection_limit_exceeded",
-            ["operation_path_template"] = OperationAdmission.PathTemplate,
-            ["query_parameters"] = queryParameters,
-            ["retry_guidance"] = "Retry the same read with a narrower query, smaller page size, or the next page token when the operation publishes those query parameters.",
-        };
+        return result;
     }
 
     private JsonObject BuildProvenance() => new()

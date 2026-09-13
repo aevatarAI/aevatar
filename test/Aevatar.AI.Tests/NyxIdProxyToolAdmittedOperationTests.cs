@@ -85,14 +85,14 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public void AdmittedRequestBuilder_ShouldMaterializeSingleAllowedOptionalPublishedQueryValue()
+    public void AdmittedRequestBuilder_ShouldNotMaterializeSingleAllowedOptionalPublishedQueryValue()
     {
         var result = NyxIdAdmittedRequestBuilder.Build(
             TypedParametersAdmission(),
             """{"path_params":{"item_id":7},"query":{"ratio":1.5},"headers":{"If-Match":true}}""");
 
         result.Succeeded.Should().BeTrue();
-        result.Request!.Path.Should().Be("/items/7?mode=full&ratio=1.5");
+        result.Request!.Path.Should().Be("/items/7?ratio=1.5");
     }
 
     [Fact]

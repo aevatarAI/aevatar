@@ -991,6 +991,37 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task DynamicRead_ResponseOverLimitWithLargeParameterHints_ReturnsBoundedTypedRejection()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-calendar", "api-google-workspace", "api-google-workspace"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-calendar", "api-google-workspace", LongDescriptionCalendarListEndpoint("calendar-list")));
+        handler.ProxyResponseContentFactory = () => new StreamingContent(
+            Encoding.UTF8.GetBytes(new string('x', 16 * 1024 + 1)));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-calendar",
+            tool.Name,
+            """{"path_params":{"calendarId":"primary"}}""");
+
+        using var result = JsonDocument.Parse(outcome.ResultJson);
+        result.RootElement.GetProperty("status").GetString().Should().Be("retry_required");
+        result.RootElement.GetProperty("error_code").GetString()
+            .Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        result.RootElement.GetProperty("retry_hints")
+            .TryGetProperty("query_parameters", out _)
+            .Should().BeFalse();
+        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+    }
+
+    [Fact]
     public async Task DynamicRead_UnknownLengthResponseOverLimit_ReturnsBoundedTypedRejection()
     {
         const string marker = "provider-secret-must-not-propagate";
@@ -2074,6 +2105,27 @@ public class NyxIdConnectedServiceToolSourceTests
           "response": { "content_types": ["application/json"], "binary_artifact": false }
         }
         """;
+
+    private static string LongDescriptionCalendarListEndpoint(string endpointId)
+    {
+        var description = new string('d', 20 * 1024);
+        return $$"""
+        {
+          "endpoint_id": "{{endpointId}}",
+          "name": "calendar_list_events",
+          "method": "GET",
+          "path": "/calendar/v3/calendars/{calendarId}/events",
+          "parameters": [
+            { "name": "calendarId", "in": "path", "required": true, "schema": { "type": "string" } },
+            { "name": "timeMin", "in": "query", "required": false, "description": "{{description}}", "schema": { "type": "string" } }
+          ],
+          "request_body_schema": null,
+          "request_content_type": null,
+          "request_body_required": false,
+          "response": { "content_types": ["application/json"], "binary_artifact": false }
+        }
+        """;
+    }
 
     private static string EffectEndpoint(string endpointId) => $$"""
         {

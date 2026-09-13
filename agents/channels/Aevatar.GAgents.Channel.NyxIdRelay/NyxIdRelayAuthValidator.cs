@@ -1,4 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -458,7 +459,16 @@ public sealed class NyxIdRelayAuthValidator
         {
             try
             {
-                return await http.GetAsync(url, ct);
+                var response = await http.GetAsync(url, ct);
+                if (!IsTransientOidcStatus(response.StatusCode) || attempt == OidcHttpAttempts)
+                    return response;
+
+                _logger.LogWarning(
+                    "Retrying Nyx relay OIDC/JWKS request after transient HTTP status. attempt={Attempt} status={StatusCode} url={Url}",
+                    attempt,
+                    (int)response.StatusCode,
+                    url);
+                response.Dispose();
             }
             catch (HttpRequestException exception) when (attempt < OidcHttpAttempts)
             {
@@ -472,6 +482,12 @@ public sealed class NyxIdRelayAuthValidator
 
         throw new InvalidOperationException("Nyx relay OIDC/JWKS retry loop exhausted unexpectedly.");
     }
+
+    private static bool IsTransientOidcStatus(HttpStatusCode statusCode) => statusCode is
+        HttpStatusCode.TooManyRequests or
+        HttpStatusCode.BadGateway or
+        HttpStatusCode.ServiceUnavailable or
+        HttpStatusCode.GatewayTimeout;
 
     private string ResolveDiscoveryUrl()
     {

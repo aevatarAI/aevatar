@@ -26,6 +26,7 @@ internal sealed class NyxRelayOidcDocumentHandler : HttpMessageHandler
 
     public int JwksRequests { get; private set; }
     public int DiscoveryFailuresRemaining { get; set; }
+    public Queue<HttpStatusCode> DiscoveryStatusCodes { get; } = [];
     public List<string> RequestUris { get; } = [];
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -39,6 +40,17 @@ internal sealed class NyxRelayOidcDocumentHandler : HttpMessageHandler
             {
                 DiscoveryFailuresRemaining--;
                 throw new HttpRequestException("transient_discovery_failure");
+            }
+            if (DiscoveryStatusCodes.Count > 0)
+            {
+                var statusCode = DiscoveryStatusCodes.Dequeue();
+                if (statusCode != HttpStatusCode.OK)
+                {
+                    return Task.FromResult(new HttpResponseMessage(statusCode)
+                    {
+                        Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                    });
+                }
             }
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)

@@ -427,14 +427,6 @@ internal static class NyxIdAdmittedRequestBuilder
                 if (parameter.Required || supplied.ContainsKey(parameter.Name))
                     continue;
 
-                if (parameter.Schema.AllowedValues.Count == 1)
-                {
-                    supplied[parameter.Name] = CreateScalarValue(
-                        parameter.Schema.Kind,
-                        parameter.Schema.AllowedValues.Single());
-                    continue;
-                }
-
                 if (ShouldMaterializeDriveMediaAlt(admission, parameter))
                 {
                     supplied[parameter.Name] = CreateScalarValue(
