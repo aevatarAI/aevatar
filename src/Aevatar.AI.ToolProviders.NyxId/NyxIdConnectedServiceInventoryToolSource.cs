@@ -70,6 +70,11 @@ public sealed class NyxIdConnectedServiceInventoryToolSource : IAgentToolSource
         {
             throw;
         }
+        catch (NyxIdServiceInventoryContractException)
+        {
+            _logger.LogWarning("NyxID connected-service execution inventory contract is invalid");
+            return JsonSerializer.Serialize(new { error = NyxIdServiceInventoryContractException.ErrorCode });
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "NyxID connected-service inventory read failed");

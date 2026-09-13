@@ -30,7 +30,7 @@ public sealed class NyxIdServiceInstanceClient
         CancellationToken ct)
     {
         var candidates = new List<NyxIdServiceInstanceBinding>();
-        var userResponse = await _client.ListUserServicesAsync(userToken, ct);
+        var userResponse = await _client.ListServicesAsync(userToken, ct);
         EnsureDiscoverySucceeded(userResponse);
         candidates.AddRange(ParseBindings(
             userResponse,
@@ -39,7 +39,7 @@ public sealed class NyxIdServiceInstanceClient
         if (!string.IsNullOrWhiteSpace(organizationToken) &&
             !string.Equals(userToken, organizationToken, StringComparison.Ordinal))
         {
-            var organizationResponse = await _client.ListUserServicesAsync(organizationToken, ct);
+            var organizationResponse = await _client.ListServicesAsync(organizationToken, ct);
             EnsureDiscoverySucceeded(organizationResponse);
             candidates.AddRange(ParseBindings(
                 organizationResponse,
@@ -215,19 +215,29 @@ public sealed class NyxIdServiceInstanceClient
         NyxIdServiceAccessTokenSource tokenSource)
     {
         if (string.IsNullOrWhiteSpace(json))
-            return [];
+            throw new NyxIdServiceInventoryContractException();
         try
         {
             using var document = JsonDocument.Parse(json);
-            return EnumerateItems(document.RootElement)
-                .Select(item => ParseBinding(item, token, tokenSource))
-                .Where(static binding => binding is not null)
-                .Select(static binding => binding!)
-                .ToArray();
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("keys", out var items) ||
+                items.ValueKind != JsonValueKind.Array)
+            {
+                throw new NyxIdServiceInventoryContractException();
+            }
+
+            var bindings = new List<NyxIdServiceInstanceBinding>();
+            foreach (var item in items.EnumerateArray())
+            {
+                bindings.Add(ParseBinding(item, token, tokenSource) ??
+                    throw new NyxIdServiceInventoryContractException());
+            }
+            return bindings;
         }
         catch (JsonException)
         {
-            return [];
+            throw new NyxIdServiceInventoryContractException();
         }
     }
 
@@ -420,20 +430,6 @@ public sealed class NyxIdServiceInstanceClient
             default:
                 return false;
         }
-    }
-
-    private static IEnumerable<JsonElement> EnumerateItems(JsonElement root)
-    {
-        if (root.ValueKind == JsonValueKind.Array)
-            return root.EnumerateArray().ToArray();
-        if (root.ValueKind != JsonValueKind.Object)
-            return [];
-        foreach (var property in new[] { "keys", "services", "data" })
-        {
-            if (root.TryGetProperty(property, out var items) && items.ValueKind == JsonValueKind.Array)
-                return items.EnumerateArray().ToArray();
-        }
-        return [];
     }
 
     private static bool SameAuthority(NyxIdServiceInstance left, NyxIdServiceInstance right) =>

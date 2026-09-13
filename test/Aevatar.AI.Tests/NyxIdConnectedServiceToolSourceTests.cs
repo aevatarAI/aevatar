@@ -242,7 +242,7 @@ public class NyxIdConnectedServiceToolSourceTests
             .And.NotContain("catalog_digest")
             .And.NotContain("candidate_ref");
         handler.DiscoveryRequests.Should().Be(1);
-        handler.DiscoveryPaths.Should().Equal("/api/v1/user-services");
+        handler.DiscoveryPaths.Should().Equal("/api/v1/keys");
         handler.McpConfigRequests.Should().Be(1);
         handler.RawOpenApiRequests.Should().BeEmpty();
         handler.ExactReads.Should().BeEmpty();
@@ -335,9 +335,15 @@ public class NyxIdConnectedServiceToolSourceTests
 
     [Theory]
     [InlineData("expired", true, null, null)]
+    [InlineData("revoked", true, null, null)]
+    [InlineData("failed", true, null, null)]
+    [InlineData("refresh_failed", true, null, null)]
     [InlineData("pending_auth", true, null, null)]
     [InlineData("active", false, null, null)]
     [InlineData("active", true, "node-alpha", "offline")]
+    [InlineData("active", true, "node-alpha", "draining")]
+    [InlineData("active", true, "node-alpha", "unknown")]
+    [InlineData("active", true, "node-alpha", "inaccessible")]
     public async Task DiscoverToolsAsync_NonExecutableKeyReadiness_DoesNotExposeOperations(
         string status,
         bool connected,
@@ -555,6 +561,25 @@ public class NyxIdConnectedServiceToolSourceTests
         owner.OperationAdmission.CatalogDigest.Should().MatchRegex("^sha256:[0-9a-f]{64}$");
         handler.McpConfigRequests.Should().Be(1);
         handler.RawOpenApiRequests.Should().Equal("/api/v1/proxy/s/user-context-mock/openapi.json");
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_CustomOpenApiOverOneMiB_DoesNotExposeOperations()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            CustomInstanceWithOpenApiUrl(
+                "custom-service-alpha", "user-context-mock", "http://127.0.0.1:5119/openapi.json"));
+        handler.OpenApiResponsesByPath["/api/v1/proxy/s/user-context-mock/openapi.json"] =
+            CustomOpenApi + new string(' ', 1024 * 1024);
+        var source = CreateSource(handler);
+        using var scope = PushContext("user-token");
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+        handler.RawOpenApiRequests.Should().Equal("/api/v1/proxy/s/user-context-mock/openapi.json");
+        handler.ProxyRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -1699,6 +1724,30 @@ public class NyxIdConnectedServiceToolSourceTests
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
     }
 
+    [Theory]
+    [InlineData("{unsafe-provider-secret")]
+    [InlineData("{\"services\":[]}")]
+    [InlineData("{\"keys\":[{\"id\":\"us-incomplete\",\"is_active\":true}]}")]
+    public async Task InventorySource_MalformedInventory_ReturnsContractFailureInsteadOfEmptySuccess(string response)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = response;
+        var logger = new RecordingLogger<NyxIdConnectedServiceInventoryToolSource>();
+        var source = CreateInventorySource(handler, logger);
+        using var scope = PushContext("user-token");
+        var inventory = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        var result = await inventory.ExecuteAsync("{}");
+
+        var receipt = inventory.CreateResultReceipt("call-malformed", inventory.Name, "{}", result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_SERVICE_INVENTORY_CONTRACT_INVALID");
+        result.Should().NotContain("instances").And.NotContain("unsafe-provider-secret");
+        receipt.ResultJson.Should().NotContain("unsafe-provider-secret");
+        logger.Entries.Should().OnlyContain(entry => !entry.Message.Contains("unsafe-provider-secret", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task InventorySource_WithArguments_ShouldRejectWithoutBackendRead()
     {
@@ -2558,7 +2607,10 @@ public class NyxIdConnectedServiceToolSourceTests
             var apiKey = apiKeyValues?.SingleOrDefault() ?? string.Empty;
             var token = string.IsNullOrWhiteSpace(apiKey) ? bearerToken : apiKey;
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
-            if (path is "/api/v1/user-services" or "/api/v1/keys")
+            if (path == "/api/v1/user-services")
+                return Task.FromResult(Json("{\"services\":[]}"));
+
+            if (path == "/api/v1/keys")
             {
                 DiscoveryRequests++;
                 DiscoveryTokens.Add(token);
@@ -2572,7 +2624,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 }
                 if (DiscoveryException is not null)
                     throw DiscoveryException;
-                return Task.FromResult(Json(KeysByToken.GetValueOrDefault(token, "[]")));
+                return Task.FromResult(Json(KeysByToken.GetValueOrDefault(token, "{\"keys\":[]}")));
             }
 
             if (path == "/api/v1/mcp/config")
