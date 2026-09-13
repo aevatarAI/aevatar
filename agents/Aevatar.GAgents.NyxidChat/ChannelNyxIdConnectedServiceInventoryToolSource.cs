@@ -24,14 +24,14 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
     private readonly IAgentToolExecutionPort _toolExecutionPort;
     private readonly NyxIdToolOptions? _options;
     private readonly INyxIdApiClientFactory? _apiClientFactory;
-    private readonly INyxIdConnectedServiceInventoryCapabilityIssuer? _capabilityIssuer;
+    private readonly INyxIdConnectedServiceCapabilityIssuer? _capabilityIssuer;
     private readonly ILogger _logger;
 
     public ChannelNyxIdConnectedServiceInventoryToolSource(
         IAgentToolExecutionPort toolExecutionPort,
         NyxIdToolOptions? options = null,
         INyxIdApiClientFactory? apiClientFactory = null,
-        INyxIdConnectedServiceInventoryCapabilityIssuer? capabilityIssuer = null,
+        INyxIdConnectedServiceCapabilityIssuer? capabilityIssuer = null,
         ILogger<ChannelNyxIdConnectedServiceInventoryToolSource>? logger = null)
     {
         _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
@@ -62,18 +62,17 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         if (context is null || bindingId is null)
             return InventoryFailure("inventory_capability_unavailable");
 
-        var strictSenderToken = Normalize(context.Credentials.SenderNyxIdAccessToken);
-        if (strictSenderToken is not null)
-        {
-            return await ExecuteWithSenderTokenAsync(context, strictSenderToken, argumentsJson, ct)
-                .ConfigureAwait(false);
-        }
-
         if (_capabilityIssuer is null || !TryBuildSubject(context, out var subject))
             return InventoryFailure("inventory_capability_unavailable");
 
         try
         {
+            // A sender token is request-local and carries no durable binding proof.
+            // Revalidate the retained binding before every inventory read so a
+            // tool discovered for binding A cannot read with its token after the
+            // sender has moved to binding B. The issuer returns a fresh token for
+            // the exact current binding, and rejects a changed binding before
+            // token exchange.
             var capability = await _capabilityIssuer
                 .IssueByBindingIdAsync(subject, bindingId, ct)
                 .ConfigureAwait(false);

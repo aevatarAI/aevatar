@@ -46,6 +46,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     private readonly INyxIdRelayScopeResolver? _scopeResolver;
     private readonly IUserConfigQueryPort? _userConfigQueryPort;
     private readonly INyxIdCapabilityBroker? _capabilityBroker;
+    private readonly INyxIdConnectedServiceCapabilityIssuer? _connectedServiceCapabilityIssuer;
     private readonly IBindingRevocationReconciler? _bindingRevocationReconciler;
     private readonly IFileArtifactReadPort? _fileArtifactReadPort;
     private readonly IAgentProfileTurnSnapshotResolver? _profileSnapshotResolver;
@@ -70,7 +71,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         IAgentProfileTurnSnapshotResolver? profileSnapshotResolver = null,
         IAgentProfileTurnToolCatalogPlanner? profileCatalogPlanner = null,
         IChannelRuntimeToolCatalogMaterializer? channelRuntimeCatalogMaterializer = null,
-        ISecretVault? secretVault = null)
+        ISecretVault? secretVault = null,
+        INyxIdConnectedServiceCapabilityIssuer? connectedServiceCapabilityIssuer = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _replyGenerator = replyGenerator ?? throw new ArgumentNullException(nameof(replyGenerator));
@@ -79,6 +81,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         _scopeResolver = scopeResolver;
         _userConfigQueryPort = userConfigQueryPort;
         _capabilityBroker = capabilityBroker;
+        _connectedServiceCapabilityIssuer = connectedServiceCapabilityIssuer;
         _bindingRevocationReconciler = bindingRevocationReconciler;
         _fileArtifactReadPort = fileArtifactReadPort;
         _profileSnapshotResolver = profileSnapshotResolver;
@@ -810,14 +813,34 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             if (transientAuthorizationMatched)
             {
-                _logger.LogWarning(
-                    "Agent run tool step executing with transient authorization. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames}",
-                    workItem.RunId,
-                    request.CorrelationId,
-                    workItem.StepIndex,
-                    FormatToolNames(toolCalls.Select(static call => call.Name)));
-                toolStepResult = await authorizedToolStep.ExecuteAsync(ct).ConfigureAwait(false);
-                authorizationOutcome = AgentRunToolAuthorizationOutcome.TransientMatched;
+                var refreshedAuthorizedToolStep =
+                    await RevalidateTransientAuthorizedToolStepAsync(
+                            authorizedToolStep,
+                            request,
+                            ct)
+                        .ConfigureAwait(false);
+                if (refreshedAuthorizedToolStep is null)
+                {
+                    _logger.LogWarning(
+                        "Agent run tool step rejected because transient sender authorization could not be revalidated. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames}",
+                        workItem.RunId,
+                        request.CorrelationId,
+                        workItem.StepIndex,
+                        FormatToolNames(toolCalls.Select(static call => call.Name)));
+                    toolStepResult = BuildUnauthorizedToolStepResult(toolCalls);
+                    authorizationOutcome = AgentRunToolAuthorizationOutcome.Rejected;
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Agent run tool step executing with transient authorization. runId={RunId} correlation={CorrelationId} step={StepIndex} toolNames={ToolNames}",
+                        workItem.RunId,
+                        request.CorrelationId,
+                        workItem.StepIndex,
+                        FormatToolNames(toolCalls.Select(static call => call.Name)));
+                    toolStepResult = await refreshedAuthorizedToolStep.ExecuteAsync(ct).ConfigureAwait(false);
+                    authorizationOutcome = AgentRunToolAuthorizationOutcome.TransientMatched;
+                }
             }
             else
             {
@@ -861,6 +884,69 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Request = request.Clone(),
             ToolStepResult = toolStepResult,
         };
+    }
+
+    private async Task<AgentRunAuthorizedToolStep?> RevalidateTransientAuthorizedToolStepAsync(
+        AgentRunAuthorizedToolStep authorizedToolStep,
+        NeedsLlmReplyEvent request,
+        CancellationToken ct)
+    {
+        var toolContext = authorizedToolStep.ExecutionContext;
+        var bindingId = NormalizeOptional(toolContext.SenderBinding.BindingId);
+        if (bindingId is null)
+            return authorizedToolStep;
+
+        if (_connectedServiceCapabilityIssuer is null)
+        {
+            _logger.LogWarning(
+                "Sender-bound transient tool authorization cannot be revalidated because no capability issuer is configured. correlation={CorrelationId}",
+                request.CorrelationId);
+            return null;
+        }
+
+        if (!TryRebuildSenderSubject(toolContext, out var subject))
+        {
+            _logger.LogWarning(
+                "Sender-bound transient tool authorization cannot be revalidated because typed NyxID authority is incomplete. correlation={CorrelationId}",
+                request.CorrelationId);
+            return null;
+        }
+
+        try
+        {
+            var handle = await _connectedServiceCapabilityIssuer
+                .IssueByBindingIdAsync(subject, bindingId, ct)
+                .ConfigureAwait(false);
+            var senderToken = NormalizeOptional(handle.AccessToken);
+            if (senderToken is null)
+            {
+                _logger.LogWarning(
+                    "Sender-bound transient tool authorization received an empty capability token. correlation={CorrelationId}",
+                    request.CorrelationId);
+                return null;
+            }
+
+            return authorizedToolStep.WithRefreshedCredentials(
+                ChannelConnectedServiceCredentialPolicy.Apply(
+                    toolContext,
+                    senderToken,
+                    registrationAgentKey: null).ToPayload().Credentials);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Sender-bound transient tool authorization failed revalidation. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                request.CorrelationId,
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
+        }
     }
 
     public async Task<AgentRunNextToolStepRequestedEvent> BuildApprovedToolStepContinuationAsync(
@@ -1675,6 +1761,18 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         // derived below with the sender token cleared, so a failed/empty re-mint still
         // leaves the bot-owner LLM path intact.
         control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
+        var senderConnectedServiceToken = NormalizeOptional(control.SenderNyxIdAccessToken);
+        var hasSenderBinding = !string.IsNullOrWhiteSpace(toolContext.SenderBinding.BindingId);
+        if (hasSenderBinding)
+        {
+            // Connected-service authority is selected independently from the LLM
+            // route. A bound sender remains authoritative even when minting its
+            // short-lived token failed; the policy then makes discovery fail closed.
+            toolContext = ChannelConnectedServiceCredentialPolicy.Apply(
+                toolContext,
+                senderConnectedServiceToken,
+                registrationAgentKey: null);
+        }
         var agentKeyOverlay = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
                 request,
                 toolContext,
@@ -1682,11 +1780,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ct)
             .ConfigureAwait(false);
         control = agentKeyOverlay.Control;
-        if (agentKeyOverlay.AgentKey is not null)
+        if (agentKeyOverlay.AgentKey is not null && !hasSenderBinding)
         {
             toolContext = ApplyChannelRegistrationAgentKeyToolCredential(toolContext, agentKeyOverlay.AgentKey);
         }
-        else if (request.ChannelRuntimeConfig?.CredentialSourceMode ==
+        else if (!hasSenderBinding && request.ChannelRuntimeConfig?.CredentialSourceMode ==
                  ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey)
         {
             toolContext = ClearNyxIdCredentials(toolContext);
@@ -1730,12 +1828,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         CancellationToken ct)
     {
         var broker = _capabilityBroker;
-        if (broker is null)
+        if (broker is null && _connectedServiceCapabilityIssuer is null)
             return control;
 
         var bindingId = NormalizeOptional(toolContext.SenderBinding.BindingId);
         if (bindingId is null)
             return control;
+
+        // Once a refresh is attempted, a stale token must not survive a failed
+        // exchange or a changed binding. The LLM fallback remains independent.
+        control = control with { SenderNyxIdAccessToken = null };
 
         if (!TryRebuildSenderSubject(toolContext, out var subject))
         {
@@ -1747,8 +1849,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         try
         {
-            var handle = await broker
-                .IssueShortLivedByBindingIdAsync(
+            var handle = _connectedServiceCapabilityIssuer is not null
+                ? await _connectedServiceCapabilityIssuer.IssueByBindingIdAsync(subject, bindingId, ct)
+                    .ConfigureAwait(false)
+                : await broker!.IssueShortLivedByBindingIdAsync(
                     subject,
                     bindingId,
                     new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
@@ -1850,6 +1954,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
         var requestControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
+        var senderConnectedServiceToken = NormalizeOptional(requestControl.SenderNyxIdAccessToken);
+        var hasSenderBinding = !string.IsNullOrWhiteSpace(planToolContext.SenderBinding.BindingId);
+        if (hasSenderBinding)
+        {
+            planToolContext = ChannelConnectedServiceCredentialPolicy.Apply(
+                planToolContext,
+                senderConnectedServiceToken,
+                registrationAgentKey: null);
+        }
         var agentKeyOverlay = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
                 request,
                 planToolContext,
@@ -1859,13 +1972,13 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         requestControl = agentKeyOverlay.Control;
         var registrationAgentKeyMode = request.ChannelRuntimeConfig?.CredentialSourceMode ==
                                        ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
-        if (agentKeyOverlay.AgentKey is not null)
+        if (agentKeyOverlay.AgentKey is not null && !hasSenderBinding)
         {
             planToolContext = ApplyChannelRegistrationAgentKeyToolCredential(
                 planToolContext,
                 agentKeyOverlay.AgentKey);
         }
-        else if (registrationAgentKeyMode)
+        else if (!hasSenderBinding && registrationAgentKeyMode)
         {
             planToolContext = ClearNyxIdCredentials(planToolContext);
         }
@@ -1874,21 +1987,23 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         var control = stepControl with
         {
-            NyxIdAccessToken = NormalizeOptional(requestControl.NyxIdAccessToken) ??
+            NyxIdAccessToken = registrationAgentKeyMode
+                ? NormalizeOptional(requestControl.NyxIdAccessToken)
+                : NormalizeOptional(requestControl.NyxIdAccessToken) ??
                                planToolContext.Credentials.NyxIdAccessToken ??
                                (registrationAgentKeyMode ? null : stepControl.NyxIdAccessToken),
-            NyxIdOrgToken = NormalizeOptional(requestControl.NyxIdOrgToken) ??
+            NyxIdOrgToken = registrationAgentKeyMode ? null : NormalizeOptional(requestControl.NyxIdOrgToken) ??
                             planToolContext.Credentials.NyxIdOrgToken ??
                             (registrationAgentKeyMode ? null : stepControl.NyxIdOrgToken),
-            SenderNyxIdAccessToken = NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
+            SenderNyxIdAccessToken = registrationAgentKeyMode ? null : NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
                                      planToolContext.Credentials.SenderNyxIdAccessToken ??
                                      (registrationAgentKeyMode ? null : stepControl.SenderNyxIdAccessToken),
         };
         var toolContext = control.ToToolContext(planToolContext);
-        var activityUserToken = registrationAgentKeyMode
+        var activityUserToken = registrationAgentKeyMode || hasSenderBinding
             ? null
             : NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
-        var requestToolContextOwnsCredential = requestCredentials.NyxIdCredentialAuthority ==
+        var requestToolContextOwnsCredential = !hasSenderBinding && requestCredentials.NyxIdCredentialAuthority ==
                                                AgentToolNyxIdCredentialAuthority.ToolExecutionContext;
         var executionAccessToken = activityUserToken ??
                                    (requestToolContextOwnsCredential
@@ -1900,8 +2015,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                                     : null);
         if (executionAccessToken is not null || executionOrgToken is not null)
         {
-            // LlmControl owns model routing. Explicit request credentials own tool execution,
-            // while a current Activity user token remains the highest-priority user authority.
+            // LlmControl owns model routing. A verified sender already owns tool execution;
+            // only an unbound channel may use the current Activity user token here.
             toolContext = toolContext with
             {
                 Credentials = toolContext.Credentials with

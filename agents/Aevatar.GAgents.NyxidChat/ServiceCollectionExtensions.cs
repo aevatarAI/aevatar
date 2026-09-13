@@ -232,7 +232,6 @@ public static class ServiceCollectionExtensions
                 nyxIdChatToolSources: ResolveNyxIdChatToolSources(sp),
                 contentArtifactQueryPort: sp.GetService<IContentArtifactQueryPort>()));
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
-        services.TryAddSingleton<ChannelSenderRegistrationReadToolSource>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>
             new NyxIdActionPostconditionPort(

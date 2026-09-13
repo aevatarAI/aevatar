@@ -607,7 +607,6 @@ public static class MainnetHostBuilderExtensions
                 [
                     static sp => sp.GetRequiredService<
                         ChannelNyxIdConnectedServiceInventoryToolSource>(),
-                    static sp => sp.GetRequiredService<ChannelSenderRegistrationReadToolSource>(),
                 ],
                 "Channel reply runtime with skill authoring, sender inventory, and admitted connected-service operations.");
             options.AddToolSet(

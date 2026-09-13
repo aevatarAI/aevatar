@@ -1184,7 +1184,6 @@ public sealed class MainnetHostCompositionTests
                 typeof(OrnnAuthoringAgentToolSource),
                 typeof(NyxIdConnectedServiceToolSource),
                 typeof(ChannelNyxIdConnectedServiceInventoryToolSource),
-                typeof(ChannelSenderRegistrationReadToolSource),
             ]));
         channelReply.Sources.Select(static source => source.GetType()).Should()
             .Equal(channelToolSources.Select(static source => source.GetType()));

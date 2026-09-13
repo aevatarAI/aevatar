@@ -21,6 +21,7 @@ using Google.Protobuf.WellKnownTypes;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -337,8 +338,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
         execution.Continuation.LlmStepResult.AvailableToolNames.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task BuildInitialStepState_WhenChannelRuntimeConfigUsesRegistrationAgentKey_ShouldResolveLlmCredential()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BuildInitialStepState_WhenChannelRuntimeConfigUsesRegistrationAgentKey_ShouldSeparateLlmAndToolAuthority(
+        bool senderBound)
     {
         var secretVault = new InMemorySecretVault();
         var stored = await secretVault.PutAsync(new StoreSecretRequest(
@@ -363,10 +367,12 @@ public sealed class AgentRunReplyGenerationExecutorTests
                     SubjectId = "agent-key-channel-alpha",
                 },
                 BotRegistrationId: "reg-channel-alpha"),
-            SenderBinding = new AgentToolSenderBindingContext(
-                "bnd-sender-alpha",
-                NyxUserId: null,
-                SenderTenant: "sender-tenant-alpha"),
+            SenderBinding = senderBound
+                ? new AgentToolSenderBindingContext(
+                    "bnd-sender-alpha",
+                    NyxUserId: null,
+                    SenderTenant: "sender-tenant-alpha")
+                : AgentToolSenderBindingContext.Empty,
             ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration("reg-channel-alpha"),
         };
         request.ToolContext = toolContext.ToPayload();
@@ -377,7 +383,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         request.LlmControl = new LLMControlContext(
             NyxIdAccessToken: null,
             NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: "bound-sender-token",
+            SenderNyxIdAccessToken: senderBound ? "bound-sender-token" : null,
             ModelOverride: null,
             NyxIdRoutePreference: null,
             MaxToolRoundsOverride: null,
@@ -404,25 +410,37 @@ public sealed class AgentRunReplyGenerationExecutorTests
         control.SenderNyxIdAccessToken.Should().BeNull();
         var persistedToolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
         persistedToolContext.Channel.WorkflowResultDeliveryCredential!.SecretReference.Should().Be(stored.Reference);
-        persistedToolContext.Credentials.NyxIdAccessToken.Should().Be("channel-agent-key-token");
+        var expectedToolToken = senderBound ? "bound-sender-token" : "channel-agent-key-token";
+        persistedToolContext.Credentials.NyxIdAccessToken.Should().Be(expectedToolToken);
         persistedToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
-        persistedToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
-        persistedToolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
+        persistedToolContext.Credentials.SenderNyxIdAccessToken.Should()
+            .Be(senderBound ? "bound-sender-token" : null);
+        persistedToolContext.Credentials.NyxIdCredentialKind.Should().Be(senderBound
+            ? AgentToolNyxIdCredentialKind.SourceReadableUserBearer
+            : AgentToolNyxIdCredentialKind.AgentKey);
         persistedToolContext.Credentials.NyxIdCredentialAuthority.Should()
             .Be(AgentToolNyxIdCredentialAuthority.ToolExecutionContext);
-        persistedToolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
-        persistedToolContext.DurableNyxIdCredential.Should().NotBeNull();
-        persistedToolContext.DurableNyxIdCredential!.Ref.Should().Be(stored.Reference.Ref);
-        persistedToolContext.DurableNyxIdCredential.Purpose.Should().Be(
-            CredentialSecretPurposes.ChannelNyxIdAgentKey);
-        persistedToolContext.DurableNyxIdCredential.OwnerScopeKey.Should().Be("scope-channel-alpha");
-        persistedToolContext.DurableNyxIdCredential.SubjectId.Should().Be("agent-key-channel-alpha");
-        persistedToolContext.DurableNyxIdCredential.SourceKind.Should()
-            .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
-        persistedToolContext.DurableNyxIdCredential.SecretReference.Should().Be(stored.Reference);
+        persistedToolContext.CredentialSource.Should().Be(senderBound
+            ? AgentToolCredentialSource.BearerToken
+            : AgentToolCredentialSource.ChannelRegistration);
+        if (senderBound)
+        {
+            persistedToolContext.DurableNyxIdCredential.Should().BeNull();
+        }
+        else
+        {
+            persistedToolContext.DurableNyxIdCredential.Should().NotBeNull();
+            persistedToolContext.DurableNyxIdCredential!.Ref.Should().Be(stored.Reference.Ref);
+            persistedToolContext.DurableNyxIdCredential.Purpose.Should().Be(
+                CredentialSecretPurposes.ChannelNyxIdAgentKey);
+            persistedToolContext.DurableNyxIdCredential.OwnerScopeKey.Should().Be("scope-channel-alpha");
+            persistedToolContext.DurableNyxIdCredential.SubjectId.Should().Be("agent-key-channel-alpha");
+            persistedToolContext.DurableNyxIdCredential.SourceKind.Should()
+                .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
+            persistedToolContext.DurableNyxIdCredential.SecretReference.Should().Be(stored.Reference);
+        }
 
-        var persistedState = state.Clone();
-        persistedState.LlmControl.NyxIdAccessToken = string.Empty;
+        var persistedState = AgentRunReplyStepCredentials.StripRuntimeCredentials(state);
         await fixture.Executor.BuildLlmStepExecutionAsync(
             new AgentRunReplyStepExecutionRequest(
                 "run-1",
@@ -435,6 +453,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         var providerRequest = fixture.Provider.Requests.Should().ContainSingle().Subject;
         providerRequest.LlmControl!.NyxIdAccessToken.Should().Be("channel-agent-key-token");
+        providerRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be(expectedToolToken);
+        providerRequest.ToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
         fixture.ProfileResolver.ReceivedCalls().Should().BeEmpty();
         fixture.ProfilePlanner.ReceivedCalls().Should().BeEmpty();
     }
@@ -2239,6 +2259,141 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildToolStepContinuation_WhenSenderBindingChangesAfterPlanning_ShouldRejectTransientAuthorization()
+    {
+        var registeredTool = new CredentialCapturingTool("connected_effect");
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        var issueCount = 0;
+        issuer.IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                "binding-sender-1",
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                issueCount++;
+                return issueCount == 1
+                    ? Task.FromResult(new CapabilityHandle
+                    {
+                        AccessToken = "planned-sender-token",
+                        Scope = "proxy",
+                    })
+                    : Task.FromException<CapabilityHandle>(new BindingChangedException(
+                        new ExternalSubjectRef
+                        {
+                            Platform = "telegram",
+                            Tenant = "tenant-1",
+                            ExternalUserId = "sender-1",
+                        }));
+            });
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "planned-sender-token",
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: "planned-sender-token",
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                SourceReadableNyxIdAccessToken: "planned-sender-token",
+                AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
+            SenderBinding = new AgentToolSenderBindingContext(
+                "binding-sender-1",
+                NyxUserId: null,
+                SenderTenant: "tenant-1"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "telegram",
+                "tenant-1",
+                "sender-1"),
+        };
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name),
+            toolContext: toolContext,
+            connectedServiceCapabilityIssuer: issuer);
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        llmWorkItem.Request.ToolContext = toolContext.ToPayload();
+        llmWorkItem.StepState.ToolContext = toolContext.ToPayload();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildToolStepWorkItem(llmWorkItem, execution.Continuation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            execution.AuthorizedToolStep,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not authorized", StringComparison.Ordinal));
+        registeredTool.ExecutionTokens.Should().BeEmpty();
+        await issuer.Received(2).IssueByBindingIdAsync(
+            Arg.Is<ExternalSubjectRef>(subject =>
+                subject.Platform == "telegram" &&
+                subject.Tenant == "tenant-1" &&
+                subject.ExternalUserId == "sender-1"),
+            "binding-sender-1",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WhenSenderBindingRemainsCurrent_ShouldUseFreshTransientSenderToken()
+    {
+        var registeredTool = new CredentialCapturingTool("connected_effect");
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        issuer.IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                "binding-sender-1",
+                Arg.Any<CancellationToken>())
+            .Returns(new CapabilityHandle { AccessToken = "fresh-sender-token", Scope = "proxy" });
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "stale-sender-token",
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: "stale-sender-token",
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                SourceReadableNyxIdAccessToken: "stale-sender-token",
+                AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
+            SenderBinding = new AgentToolSenderBindingContext(
+                "binding-sender-1",
+                NyxUserId: null,
+                SenderTenant: "tenant-1"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "telegram",
+                "tenant-1",
+                "sender-1"),
+        };
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name),
+            toolContext: toolContext,
+            connectedServiceCapabilityIssuer: issuer);
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        llmWorkItem.Request.ToolContext = toolContext.ToPayload();
+        llmWorkItem.StepState.ToolContext = toolContext.ToPayload();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildToolStepWorkItem(llmWorkItem, execution.Continuation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            execution.AuthorizedToolStep,
+            CancellationToken.None);
+
+        continuation.ToolStepResult.AuthorizationOutcome.Should().Be(
+            AgentRunToolAuthorizationOutcome.TransientMatched);
+        registeredTool.ExecutionTokens.Should().Equal("fresh-sender-token");
+        await issuer.Received(2).IssueByBindingIdAsync(
+            Arg.Is<ExternalSubjectRef>(subject =>
+                subject.Platform == "telegram" &&
+                subject.Tenant == "tenant-1" &&
+                subject.ExternalUserId == "sender-1"),
+            "binding-sender-1",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task BuildToolStepContinuation_WithPreservedPlanCredentialAndDefinitionDrift_ShouldFailClosed()
     {
         const string planToken = "fresh-plan-token";
@@ -2589,14 +2744,16 @@ public sealed class AgentRunReplyGenerationExecutorTests
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
         AgentToolExecutionContext? toolContext = null,
         IActorDispatchPort? actorDispatchPort = null,
-        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null)
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null,
+        INyxIdConnectedServiceCapabilityIssuer? connectedServiceCapabilityIssuer = null)
         => CreateToolEnabledExecutor(
             [tool],
             provider,
             llmMiddlewares,
             toolContext,
             actorDispatchPort,
-            relayOptions);
+            relayOptions,
+            connectedServiceCapabilityIssuer);
 
     private static AgentRunReplyGenerationExecutor CreateToolEnabledExecutor(
         IReadOnlyList<IAgentTool> registeredTools,
@@ -2604,7 +2761,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
         AgentToolExecutionContext? toolContext = null,
         IActorDispatchPort? actorDispatchPort = null,
-        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null)
+        Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? relayOptions = null,
+        INyxIdConnectedServiceCapabilityIssuer? connectedServiceCapabilityIssuer = null)
     {
         var tools = new ToolManager();
         tools.Register(registeredTools);
@@ -2629,7 +2787,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
             new StaticStepPlanReplyGenerator(plan),
             interactiveReplyCollector: null,
             relayOptions,
-            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance,
+            connectedServiceCapabilityIssuer: connectedServiceCapabilityIssuer);
     }
 
     private static AgentRunReplyGenerationExecutor CreateCredentialGatedExecutor(

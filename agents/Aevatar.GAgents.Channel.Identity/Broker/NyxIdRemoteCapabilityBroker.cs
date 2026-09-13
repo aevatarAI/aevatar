@@ -29,8 +29,7 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// </remarks>
 public sealed class NyxIdRemoteCapabilityBroker :
     INyxIdCapabilityBroker,
-    INyxIdConnectedServiceInventoryCapabilityIssuer,
-    INyxIdChannelRegistrationReadCapabilityIssuer,
+    INyxIdConnectedServiceCapabilityIssuer,
     INyxIdSkillCapabilityIssuer,
     INyxIdBrokerCallbackClient,
     INyxIdBindingRetirementPort
@@ -246,19 +245,26 @@ public sealed class NyxIdRemoteCapabilityBroker :
         return ToCapabilityHandle(payload, scope);
     }
 
-    async Task<CapabilityHandle> INyxIdConnectedServiceInventoryCapabilityIssuer.IssueByBindingIdAsync(
+    async Task<CapabilityHandle> INyxIdConnectedServiceCapabilityIssuer.IssueByBindingIdAsync(
         ExternalSubjectRef externalSubject,
         string bindingId,
-        CancellationToken ct) =>
-        await IssueProxyCapabilityByBindingIdAsync(externalSubject, bindingId, ct).ConfigureAwait(false);
+        CancellationToken ct)
+    {
+        ExternalSubjectRefExtensions.EnsureValid(externalSubject);
+        ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
+
+        var currentBinding = await _queryPort.ResolveAsync(externalSubject, ct).ConfigureAwait(false);
+        if (currentBinding is null ||
+            !string.Equals(currentBinding.Value, bindingId.Trim(), StringComparison.Ordinal))
+        {
+            throw new BindingChangedException(externalSubject);
+        }
+
+        return await IssueProxyCapabilityByBindingIdAsync(externalSubject, bindingId, ct)
+            .ConfigureAwait(false);
+    }
 
     async Task<CapabilityHandle> INyxIdSkillCapabilityIssuer.IssueByBindingIdAsync(
-        ExternalSubjectRef externalSubject,
-        string bindingId,
-        CancellationToken ct) =>
-        await IssueProxyCapabilityByBindingIdAsync(externalSubject, bindingId, ct).ConfigureAwait(false);
-
-    async Task<CapabilityHandle> INyxIdChannelRegistrationReadCapabilityIssuer.IssueByBindingIdAsync(
         ExternalSubjectRef externalSubject,
         string bindingId,
         CancellationToken ct) =>
