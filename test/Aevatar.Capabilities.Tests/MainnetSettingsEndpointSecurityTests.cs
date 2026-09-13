@@ -7,9 +7,14 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Configuration;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.NyxidChat;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
@@ -24,6 +29,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
+using NSubstitute;
 
 namespace Aevatar.Capabilities.Tests;
 
@@ -38,6 +44,74 @@ public sealed class MainnetSettingsEndpointSecurityTests
     private const string OwnerBScope = "scope-owner-beta";
     private const string OwnerAModel = "owner-alpha-model";
     private const string OwnerARuntimeUrl = "https://owner-alpha-runtime.example.test";
+
+    [Fact]
+    public async Task MainnetHost_PublishedOpenApi_ExposesTheSendersOwnRegistrationRead()
+    {
+        await using var host = await MainnetTestHost.StartAsync();
+        var response = await host.Client.GetAsync("/api/openapi.json");
+        response.EnsureSuccessStatusCode();
+        var document = await response.Content.ReadAsStringAsync();
+        using var contract = JsonDocument.Parse(document);
+        var registrationRead = contract.RootElement.GetProperty("paths")
+            .GetProperty("/api/channels/registrations").GetProperty("get");
+        registrationRead.GetProperty("responses").GetProperty("200")
+            .TryGetProperty("content", out var content).Should().BeTrue(
+                "the published registration read must declare its actual JSON response");
+        content.TryGetProperty("application/json", out _).Should().BeTrue();
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example.test" };
+        using var handler = new PublishedOpenApiInventoryHandler(document);
+        using var http = new HttpClient(handler);
+        using var apiClient = new NyxIdApiClient(options, http);
+        var factory = Substitute.For<INyxIdApiClientFactory>();
+        factory.CreateClient().Returns(apiClient);
+        var issuer = Substitute.For<INyxIdChannelRegistrationReadCapabilityIssuer>();
+        issuer.IssueByBindingIdAsync(Arg.Any<ExternalSubjectRef>(), "sender-binding", Arg.Any<CancellationToken>())
+            .Returns(new CapabilityHandle { AccessToken = "sender-token", Scope = "proxy" });
+        var source = new ChannelSenderRegistrationReadToolSource(
+            Substitute.For<IAgentToolExecutionPort>(), options, factory, issuer);
+        using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            SenderBinding = new AgentToolSenderBindingContext("sender-binding", "sender-user", "tenant"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext("telegram", "tenant", "external-sender"),
+        });
+
+        var tools = await source.DiscoverToolsAsync();
+
+        var tool = tools.Should().ContainSingle(
+            $"the published Mainnet OpenAPI ({Encoding.UTF8.GetByteCount(document)} bytes) must expose its own Channel read").Subject;
+        tool.IsReadOnly.Should().BeTrue();
+        tool.Description.Should().Contain("GET /api/channels/registrations");
+        tool.Presentation.NyxIdOperation.ConnectedServiceId.Should().Be("sender-aevatar-service");
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        schema.RootElement.GetProperty("properties").EnumerateObject().Should().BeEmpty();
+        schema.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
+    }
+
+    private sealed class PublishedOpenApiInventoryHandler(string document) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            request.Headers.Authorization?.ToString().Should().Be("Bearer sender-token");
+            var body = request.RequestUri!.AbsolutePath switch
+            {
+                "/api/v1/keys" => """
+                    {"keys":[{"id":"sender-aevatar-service","slug":"aevatar","catalog_service_id":"catalog-aevatar",
+                    "catalog_service_slug":"aevatar","is_active":true,"connected":true,"status":"active",
+                    "credential_source":{"type":"personal"},"endpoint_url":"https://aevatar.example.test",
+                    "openapi_spec_url":"https://aevatar.example.test/api/openapi.json"}]}
+                    """,
+                "/api/v1/mcp/config" =>
+                    """{"contract_version":"1.0","catalog_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","user_id":"sender-user","services":[]}""",
+                "/api/v1/proxy/s/aevatar/api/openapi.json" => document,
+                _ => throw new InvalidOperationException("unexpected_discovery_route"),
+            };
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        }
+    }
 
     [Fact]
     public async Task MainnetHost_ShouldExposeOnlyOwnerUserConfig_AndKeepHostProviderSecretReadOnly()

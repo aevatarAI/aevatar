@@ -40,7 +40,9 @@ public static class ChannelCallbackEndpoints
                 EndpointAuditTargetResolvers.Static("channel-registration", "new"),
                 ChannelRegistrationRequestSummary)
             .RequireAuthorization();
-        group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
+        group.MapGet("/registrations", HandleListRegistrationsAsync)
+            .Produces<object[]>(StatusCodes.Status200OK, "application/json")
+            .RequireAuthorization();
         group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
         group.MapPost("/registrations/{registrationId}/runtime-config", HandleUpdateRuntimeConfigAsync)
             .WithEndpointAudit(

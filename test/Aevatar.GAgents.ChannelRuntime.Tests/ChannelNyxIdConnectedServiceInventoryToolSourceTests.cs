@@ -140,7 +140,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         result.Should().Contain("GitHub");
         handler.Authorization.Should().Be("Bearer inventory-access-token");
-        handler.RequestPath.Should().Be("/api/v1/user-services");
+        handler.RequestPath.Should().Be("/api/v1/keys");
         executionPort.Requests.Should().ContainSingle();
         executionPort.Requests[0].ArgumentsJson.Should().Be("{}");
         executionPort.Requests[0].ExecutionContext.Request.RequestId.Should().Be("request-inventory-1");
@@ -204,7 +204,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         result.Should().Contain("GitHub");
         handler.Authorization.Should().Be("Bearer strict-sender-token");
-        handler.RequestPath.Should().Be("/api/v1/user-services");
+        handler.RequestPath.Should().Be("/api/v1/keys");
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
     }
@@ -404,7 +404,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success, outcome.ResultJson);
         outcome.ResultJson.Should().Contain("GitHub");
         outcome.AuditCompleted.Should().BeTrue();
-        handler.RequestPath.Should().Be("/api/v1/user-services");
+        handler.RequestPath.Should().Be("/api/v1/keys");
         handler.Authorization.Should().Be(registrationAgentKeyMode
             ? "Bearer inventory-access-token"
             : "Bearer strict-sender-token");
@@ -434,6 +434,66 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 "bnd-sender-1", Arg.Any<CancellationToken>());
         else
             await issuer.DidNotReceiveWithAnyArgs().IssueByBindingIdAsync(default!, default!, default);
+    }
+
+    [Theory]
+    [InlineData("{unsafe-provider-secret")]
+    [InlineData("{}")]
+    [InlineData("{\"services\":[]}")]
+    [InlineData("{\"keys\":[{\"id\":\"us-incomplete\",\"is_active\":true}]}")]
+    public async Task ExecuteAsync_MalformedInventory_RecordsContractFailureInsteadOfEmptySuccess(string response)
+    {
+        var handler = new InventoryHandler { KeysResponse = response };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var auditRecords = new List<AuditRecord>();
+        var executionPort = CreateAdmittedExecutionPort(auditRecords);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))));
+        var context = CreateRegistrationContext() with
+        {
+            Credentials = new AgentToolCredentials(
+                "bot-owner-token", "bot-owner-org-token", "strict-sender-token"),
+        };
+        using var scope = AgentToolContextScope.Push(context);
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool, "{}", context, AgentToolApprovalContinuationMode.None, ApprovalGrant: null));
+
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_SERVICE_INVENTORY_CONTRACT_INVALID");
+        outcome.ResultJson.Should().NotContain("instances").And.NotContain("unsafe-provider-secret");
+        outcome.Receipt.ResultJson.Should().NotContain("unsafe-provider-secret");
+        handler.RequestPath.Should().Be("/api/v1/keys");
+        var terminalRecords = auditRecords.Where(record => record.LifecyclePhase == AuditLifecyclePhase.Terminal).ToArray();
+        terminalRecords.Should().HaveCount(2);
+        terminalRecords.Should().OnlyContain(record => record.Outcome != AuditOutcome.Success);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_GenuineEmptyKeys_ReturnsSuccessfulEmptyInventory()
+    {
+        var handler = new InventoryHandler { KeysResponse = "{\"keys\":[]}" };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))));
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext() with
+        {
+            Credentials = new AgentToolCredentials(null, null, "strict-sender-token"),
+        });
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        var result = await tool.ExecuteAsync("{}");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("instances").EnumerateArray().Should().BeEmpty();
+        tool.CreateResultReceipt("call-empty", tool.Name, "{}", result)!.Status
+            .Should().Be(AgentToolReceiptStatus.Success);
+        handler.RequestPath.Should().Be("/api/v1/keys");
     }
 
     private static AgentToolExecutionContext CreateRegistrationContext()
@@ -494,6 +554,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         public string? Authorization { get; private set; }
         public string? RequestPath { get; private set; }
         public AgentToolExecutionContext? ExecutionContext { get; private set; }
+        public string? KeysResponse { get; init; }
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -502,15 +563,19 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             Authorization = request.Headers.Authorization?.ToString();
             RequestPath = request.RequestUri?.AbsolutePath;
             ExecutionContext = AgentToolRequestContext.Current;
-            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            var response = RequestPath switch
             {
-                Content = new StringContent("""
+                "/api/v1/user-services" => """
+                    {"services":[{"id":"user-service-1","slug":"github","label":"GitHub",
+                     "is_active":true,"credential_source":{"type":"personal"}}]}
+                    """,
+                "/api/v1/keys" => KeysResponse ?? """
                     {
                       "keys": [
                         {
                           "id": "user-service-1",
                           "slug": "github",
-                          "service_id": "catalog-github",
+                          "catalog_service_id": "catalog-github",
                           "label": "GitHub",
                           "is_active": true,
                           "connected": true,
@@ -519,7 +584,12 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                         }
                       ]
                     }
-                    """),
+                    """,
+                _ => throw new InvalidOperationException("unexpected_inventory_route"),
+            };
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(response),
             });
         }
     }

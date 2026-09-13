@@ -12,7 +12,7 @@ NyxID Assistant 的 operation-class 权威边界见 [ADR-0048](../adr/0048-nyxid
 
 模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发，凭证注入、proxy/broker 审计、node routing 和 delegation 由 NyxID 负责；Aevatar 在进入 proxy 前统一执行 credential policy、actor-owned durable approval 和平台 tool audit。两边各自记录本边界事实，NyxID 的审批能力不能替代 Aevatar 本地准入。
 
-NyxID `GET /api/v1/mcp/config` is the only descriptor source for published operations. `GET /api/v1/keys` supplies the caller-executable exact UserService inventory plus credential/node execution readiness; `/api/v1/user-services` is the route-configuration and write-authority surface, not the execution-readiness authority. Aevatar never fetches or parses raw OpenAPI from `/keys`. Current-turn published-operation exposure requires the exact ordinal intersection of `/keys` and MCP on both `user_service_id` and route slug; matching an ID with a different slug is route drift and fails closed. Published-operation runtime retains exact MCP endpoint-digest revalidation; authored-request runtime reads neither MCP, OpenAPI, nor inventory.
+NyxID `GET /api/v1/mcp/config` supplies the normalized descriptor catalog for published operations. `GET /api/v1/keys` supplies the caller-executable exact UserService inventory plus credential/node execution readiness; `/api/v1/user-services` is the route-configuration and write-authority surface, not the execution-readiness authority. Current-turn MCP operation exposure requires the exact ordinal intersection of `/keys` and MCP on both `user_service_id` and route slug; matching an ID with a different slug is route drift and fails closed. For an exact executable instance omitted from MCP, the existing adapter may read its published, same-origin OpenAPI URL through an instance-bound NyxID proxy and normalize that contract. The response is bounded to 1 MiB; larger responses expose no operations. This accommodates the full Mainnet document, verified by a real host contract test. It is relevant to public catalog services whose master credential is usable by the proxy but absent from MCP's user-credential catalog. The model never receives a generic proxy or raw contract-fetch tool. Published-operation runtime revalidates the MCP endpoint when available; eligible read-only proofs omitted from MCP rely on NyxID's exact proxy route for live authority. The sender registration wrapper additionally rediscovers its published contract and checks the frozen selector digest before each invocation. Authored-request runtime reads neither MCP, OpenAPI, nor inventory.
 
 ### Caller-visible inventory 与 route 自动收敛
 
@@ -195,6 +195,30 @@ Pinned NyxID Assistant route 不挂载 `nyxid_service_inventory`：该 route 的
 Channel registration 采用 `registration_agent_key` 时，外层工具准入使用该 registration 的 Agent Key；内部 `nyxid_service_inventory_reader` 仍只读取绑定发送者的服务。切换到 verified sender token 或新签发的 inventory capability 时，wrapper 必须同时设置 `SenderNyxIdAccessToken`、`SourceReadableUserBearer` 类型与 `BearerToken` 来源，并移除外层 `DurableNyxIdCredential`。内部读取继续经过 `IAgentToolExecutionPort`，保留原 execution owner、sender binding、NyxID authority 与 request ID，使用独立的 `:inventory-read` call ID。不得仅替换 token 字符串后保留 registration Agent Key 的凭据描述，也不得通过放宽统一准入校验解决描述冲突。
 
 内部准入拒绝的 `credential_denied` 回执映射为 `Denied / NYXID_SERVICE_INVENTORY_CREDENTIAL_DENIED`，只返回固定的安全文案，要求修正凭据配置后再重试；普通 inventory 不可用仍返回 `NYXID_SERVICE_INVENTORY_FAILED`。wrapper 日志保留 request ID、call ID、typed failure stage 和 error code，不记录 token 或外部原始错误正文。回归验证必须让外层 inventory 与内部 reader 都经过真实 `AdmittedAgentToolExecutor`，同时检查发送者 HTTP Authorization、两个调用的独立审计记录以及外层上下文未被改变。
+
+### Sender-owned Channel registration read
+
+`channel.reply.default` additionally mounts `ChannelSenderRegistrationReadToolSource`. It exposes an opaque, instance-specific read only for a verified sender binding and an executable `/keys` instance with authoritative `catalog_service_slug=aevatar`. The inner operation must be an admitted, non-destructive `GET /api/channels/registrations`, with no required parameters or request body. Catalog identity is never inferred from a display name, route slug, or URL.
+
+The shared source filters inventory by the authoritative catalog slug before fetching remote contracts. The sender registration capability never fetches unrelated services' OpenAPI documents. The registration endpoint explicitly publishes its existing JSON-array success response in OpenAPI so the shared adapter can validate the response contract. This declaration is checked against the generated Mainnet document; it does not change the HTTP payload or account scoping.
+
+The outer tool accepts exactly `{}`. It does not accept `scope=all`, account IDs, headers, route selectors, or credential arguments, even if the underlying endpoint describes optional parameters. Its presentation retains the exact connected-service and operation identity so Skills can resolve the actual callable. It reads account facts; it does not choose a merchant target, change registration state, or alter the Skill's platform-entry exclusion rule.
+
+Discovery and invocation each obtain a fresh request-local capability through `INyxIdChannelRegistrationReadCapabilityIssuer`. The broker reuses the existing binding exchange without requiring unrelated runtime services. The callable retains only the verified sender identity and operation selector digest, never the issued bearer. Invocation rejects a changed sender, revoked binding, unavailable exact instance, or changed operation contract. The sender bearer is scoped to the inner read context with `BearerToken`, `SourceReadableUserBearer`, and no durable registration credential. LLM and ordinary platform tools keep their registration authority.
+
+The native outer capability is admitted under the registration's existing policy. Its inner connected-service operation must still pass through `IAgentToolExecutionPort`, with the exact operation proof and a distinct `:sender-registration-read` call ID. Both calls retain separate audit records. An incomplete inner audit becomes `CHANNEL_SENDER_REGISTRATIONS_AUDIT_INCOMPLETE`; an outer successful append cannot turn the inner incomplete execution into ordinary success.
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    A["Bound Channel sender"] --> B["Native sender read: {}"]
+    B --> C["Fresh binding capability"]
+    C --> D["Exact /keys instance + published read contract"]
+    D --> E["Shared admitted executor and audit"]
+    E --> F["NyxID proxy: sender's own registrations"]
+```
+
+Inventory and registration reads are separate capabilities. A malformed inventory contract must produce `NYXID_SERVICE_INVENTORY_CONTRACT_INVALID`, not a successful empty list; a genuine empty `keys` array remains a valid result. Fixing inventory does not itself grant operation execution. If no valid sender-owned registration read can be admitted, the Skill must report that capability gap rather than falling back to the platform account.
 
 ## 7. NyxID Chat turn credential lifecycle
 

@@ -10,6 +10,8 @@ public static class NyxIdServiceInventoryReceiptFactory
     private const string CredentialDeniedCode = "NYXID_SERVICE_INVENTORY_CREDENTIAL_DENIED";
     private const string CredentialDeniedMessage =
         "The connected-service inventory read was denied by credential policy. The credential configuration must be corrected before retrying.";
+    private const string ContractInvalidMessage =
+        "The connected-service inventory response did not match the execution inventory contract. Service availability could not be determined.";
 
     public static AgentToolReceipt? Create(
         string callId,
@@ -28,8 +30,12 @@ public static class NyxIdServiceInventoryReceiptFactory
             {
                 var credentialDenied = error.ValueKind == JsonValueKind.String &&
                     error.GetString() is "credential_denied" or CredentialDeniedCode;
-                var failureCode = credentialDenied ? CredentialDeniedCode : FailureCode;
-                var failureMessage = credentialDenied ? CredentialDeniedMessage : FailureMessage;
+                var contractInvalid = error.ValueKind == JsonValueKind.String &&
+                    error.GetString() is "inventory_contract_invalid" or NyxIdServiceInventoryContractException.ErrorCode;
+                var failureCode = credentialDenied ? CredentialDeniedCode :
+                    contractInvalid ? NyxIdServiceInventoryContractException.ErrorCode : FailureCode;
+                var failureMessage = credentialDenied ? CredentialDeniedMessage :
+                    contractInvalid ? ContractInvalidMessage : FailureMessage;
                 return new AgentToolReceipt
                 {
                     CallId = callId ?? string.Empty,
