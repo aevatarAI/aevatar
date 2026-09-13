@@ -336,7 +336,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 ? ChannelRegistrationAuthorizationMode.NyxidDefault
                 : ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
             DefaultSkillName = defaultSkillName ?? string.Empty,
-            RuntimeConfig = runtimeConfig?.Clone(),
+            RuntimeConfig = BuildLocalMirrorRuntimeConfig(runtimeConfig, defaultSkillName),
         };
 
         if (authorization is not null)
@@ -347,6 +347,27 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
         if (!ChannelRegistrationAuthorizationContract.IsValidNewCommand(cmd))
             throw new InvalidOperationException("channel_authorization_contract_invalid");
         await _commandFacade.RegisterLocalMirrorAsync(cmd, ct);
+    }
+
+    private static ChannelBotRuntimeConfig? BuildLocalMirrorRuntimeConfig(
+        ChannelBotRuntimeConfig? runtimeConfig,
+        string? defaultSkillName)
+    {
+        if (runtimeConfig is not null)
+            return runtimeConfig.Clone();
+
+        var normalizedDefaultSkillName = defaultSkillName?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedDefaultSkillName))
+            return null;
+
+        return new ChannelBotRuntimeConfig
+        {
+            DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+            {
+                Name = normalizedDefaultSkillName,
+            },
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+        };
     }
 
     private static NyxTelegramProvisioningResult Failure(string error) =>

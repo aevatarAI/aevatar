@@ -28,6 +28,8 @@ public sealed class ChannelRegistrationServiceSelection
 
 public static class ChannelRegistrationServiceIdsJsonParser
 {
+    private const string ExplicitServiceAllowlistMode = "explicit_service_allowlist";
+
     public static bool TryParse(
         JsonElement root,
         out ChannelRegistrationServiceSelection selection)
@@ -36,8 +38,16 @@ public static class ChannelRegistrationServiceIdsJsonParser
         if (root.ValueKind != JsonValueKind.Object)
             return false;
 
-        if (!root.TryGetProperty("service_ids", out var serviceIdsElement))
+        if (!TryReadAuthorizationMode(root, out var explicitSelection))
+            return false;
+        if (!explicitSelection)
             return true;
+
+        if (!root.TryGetProperty("service_ids", out var serviceIdsElement))
+        {
+            selection = ChannelRegistrationServiceSelection.Explicit([]);
+            return true;
+        }
 
         if (serviceIdsElement.ValueKind != JsonValueKind.Array)
             return false;
@@ -57,6 +67,34 @@ public static class ChannelRegistrationServiceIdsJsonParser
 
         selection = ChannelRegistrationServiceSelection.Explicit(normalized.ToArray());
         return true;
+    }
+
+    private static bool TryReadAuthorizationMode(JsonElement root, out bool explicitSelection)
+    {
+        explicitSelection = false;
+        if (!root.TryGetProperty("authorization_mode", out var modeElement) ||
+            modeElement.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (modeElement.ValueKind != JsonValueKind.String)
+            return false;
+
+        var mode = modeElement.GetString()?.Trim();
+        if (string.IsNullOrWhiteSpace(mode) ||
+            string.Equals(mode, "nyxid_default", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(mode, ExplicitServiceAllowlistMode, StringComparison.OrdinalIgnoreCase))
+        {
+            explicitSelection = true;
+            return true;
+        }
+
+        return false;
     }
 }
 

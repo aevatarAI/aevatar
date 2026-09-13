@@ -1284,7 +1284,7 @@ public sealed class NyxIdChatDurableRetryCapabilityTests
             ct.ThrowIfCancellationRequested();
             var token = request.Headers.Authorization?.Parameter ?? string.Empty;
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
-            if (path == "/api/v1/keys")
+            if (path == "/api/v1/user-services")
             {
                 CatalogRequestTokens.Add(token);
                 return Task.FromResult(KeysByToken.TryGetValue(token, out var keys)

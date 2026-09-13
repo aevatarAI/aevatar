@@ -710,7 +710,11 @@ public sealed class ChannelRegistrationExplicitAuthorizationPreparationTests
 
         private NyxChannelBotProvisioningRequest BuildRequest(string[] serviceIds, string platform, string providerSlug)
         {
-            using var input = JsonDocument.Parse(JsonSerializer.Serialize(new { service_ids = serviceIds }));
+            using var input = JsonDocument.Parse(JsonSerializer.Serialize(new
+            {
+                authorization_mode = "explicit_service_allowlist",
+                service_ids = serviceIds,
+            }));
             ChannelRegistrationServiceIdsJsonParser.TryParse(input.RootElement, out var selection).Should().BeTrue();
             return new NyxChannelBotProvisioningRequest(
                 platform, "owner-token", "https://aevatar.example.com",

@@ -59,8 +59,9 @@ public class NyxLarkProvisioningServiceTests
         handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
         handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
-        using var input = System.Text.Json.JsonDocument.Parse("""{"service_ids":[]}""");
+        using var input = System.Text.Json.JsonDocument.Parse("""{"authorization_mode":"explicit_service_allowlist","service_ids":[]}""");
         ChannelRegistrationServiceIdsJsonParser.TryParse(input.RootElement, out var selection).Should().BeTrue();
+        selection.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
         INyxChannelBotProvisioningService service = CreateService(handler);
 
         var result = await service.ProvisionAsync(new NyxChannelBotProvisioningRequest(
@@ -70,6 +71,28 @@ public class NyxLarkProvisioningServiceTests
 
         result.Succeeded.Should().BeFalse();
         handler.Requests.Should().NotContain(request => request.Path == "/api/v1/api-keys");
+    }
+
+    [Fact]
+    public async Task LegacyServiceIdsWithoutAuthorizationMode_UsesDefaultKeyProvisioning()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
+        handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-456"}""");
+        handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789"}""");
+        handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
+        using var input = System.Text.Json.JsonDocument.Parse("""{"service_ids":["svc-1"]}""");
+        ChannelRegistrationServiceIdsJsonParser.TryParse(input.RootElement, out var selection).Should().BeTrue();
+        selection.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.NyxidDefault);
+        INyxChannelBotProvisioningService service = CreateService(handler);
+
+        var result = await service.ProvisionAsync(new NyxChannelBotProvisioningRequest(
+            "lark", "user-token", "https://aevatar.example.com", "scope-1", "Ops Bot", "api-lark-bot",
+            Lark: new NyxChannelLarkCredentials("cli_a1b2c3", "secret-xyz", "verify-123"),
+            RequestedServiceSelection: selection), CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue(result.Error);
+        handler.Requests.Should().Contain(request => request.Path == "/api/v1/api-keys");
     }
 
     [Fact]

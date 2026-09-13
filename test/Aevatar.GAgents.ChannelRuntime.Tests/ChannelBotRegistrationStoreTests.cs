@@ -262,8 +262,12 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             registrationId: "reg-bound",
             defaultSkillName: " /WhatsApp-Reply-Draft "));
 
-        _agent.State.Registrations.Single(r => r.Id == "reg-bound")
-            .DefaultSkillName.Should().Be("whatsapp-reply-draft");
+        var entry = _agent.State.Registrations.Single(r => r.Id == "reg-bound");
+        entry.DefaultSkillName.Should().Be("whatsapp-reply-draft");
+        entry.RuntimeConfig.Should().NotBeNull();
+        entry.RuntimeConfig!.DefaultSkill.Name.Should().Be("whatsapp-reply-draft");
+        entry.RuntimeConfig.CredentialSourceMode.Should().Be(
+            ChannelBotRuntimeCredentialSourceMode.Unspecified);
     }
 
     [Fact]
