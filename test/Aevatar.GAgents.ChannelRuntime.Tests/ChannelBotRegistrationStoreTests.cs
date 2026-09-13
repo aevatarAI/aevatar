@@ -283,10 +283,8 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
                 Name = " /Booking-Capacity ",
             },
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
-            AgentKeyServiceRequirements = new ChannelBotRuntimeAgentKeyServiceRequirements(),
         };
         runtimeConfig.ToolSetRefs.Add("channel.reply.default");
-        runtimeConfig.AgentKeyServiceRequirements.AllowedServiceSlugs.Add("API-Google-Workspace");
         runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
         {
             ServiceSlug = " API-Google-Workspace ",
@@ -309,7 +307,6 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.RuntimeConfig!.NyxidServiceSelectors.Should().ContainSingle();
         entry.RuntimeConfig.NyxidServiceSelectors[0].ServiceSlug.Should().Be("api-google-workspace");
         entry.RuntimeConfig.NyxidServiceSelectors[0].EndpointNames.Should().BeEmpty();
-        entry.RuntimeConfig.AgentKeyServiceRequirements.AllowedServiceSlugs.Should().Equal("api-google-workspace");
     }
 
     [Fact]

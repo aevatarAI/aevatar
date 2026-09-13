@@ -955,7 +955,6 @@ public sealed class ChannelCallbackEndpointsTests
         capturedRequest.RuntimeConfig.NyxidServiceSelectors.Single().ServiceSlug.Should().Be("api-google-workspace");
         capturedRequest.RuntimeConfig.NyxidServiceSelectors.Single().EndpointNames.Should().BeEquivalentTo("calendar_create_event");
         capturedRequest.RuntimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);
-        capturedRequest.RuntimeConfig.AgentKeyServiceRequirements.AllowedServiceSlugs.Should().BeEquivalentTo("api-google-workspace");
     }
 
     [Fact]

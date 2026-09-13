@@ -38,6 +38,8 @@ public sealed class ChannelRegistrationToolTests
         tool.ParametersSchema.Should().Contain("\"authorization_mode\"");
         tool.ParametersSchema.Should().NotContain("scope_plan_digest");
         tool.ParametersSchema.Should().NotContain("allowed_service_ids");
+        tool.ParametersSchema.Should().NotContain("agent_key_service_requirements");
+        tool.ParametersSchema.Should().NotContain("allowed_service_slugs");
         JsonDocument.Parse(tool.ParametersSchema).RootElement
             .GetProperty("properties")
             .GetProperty("action")

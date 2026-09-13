@@ -128,8 +128,6 @@ public static class ChannelBotRuntimeConfigJsonParser
             return false;
         if (!ReadCredentialSourceMode(runtimeConfigElement, config))
             return false;
-        if (!ReadAgentKeyRequirements(runtimeConfigElement, config))
-            return false;
 
         runtimeConfig = config;
         return true;
@@ -225,17 +223,4 @@ public static class ChannelBotRuntimeConfigJsonParser
         return true;
     }
 
-    private static bool ReadAgentKeyRequirements(JsonElement root, ChannelBotRuntimeConfig config)
-    {
-        if (!root.TryGetProperty("agent_key_service_requirements", out var element) || element.ValueKind == JsonValueKind.Null)
-            return true;
-        if (element.ValueKind != JsonValueKind.Object)
-            return false;
-
-        var requirements = new ChannelBotRuntimeAgentKeyServiceRequirements();
-        if (!ReadStringArray(element, "allowed_service_slugs", requirements.AllowedServiceSlugs))
-            return false;
-        config.AgentKeyServiceRequirements = requirements;
-        return true;
-    }
 }

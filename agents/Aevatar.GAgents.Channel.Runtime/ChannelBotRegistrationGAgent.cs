@@ -812,7 +812,6 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         normalized.Instructions = Normalize(normalized.Instructions);
         NormalizeRepeated(normalized.ToolSetRefs);
         NormalizeRepeated(normalized.ExtraToolNames, lowerInvariant: true);
-        NormalizeRepeated(normalized.AgentKeyServiceRequirements?.AllowedServiceSlugs, lowerInvariant: true);
         foreach (var selector in normalized.NyxidServiceSelectors)
         {
             selector.ServiceSlug = Normalize(selector.ServiceSlug).ToLowerInvariant();

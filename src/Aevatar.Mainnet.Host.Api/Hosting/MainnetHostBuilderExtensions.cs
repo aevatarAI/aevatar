@@ -332,6 +332,24 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddSkillBackedHumanInteractionDelivery();
         builder.Services.AddChannelBackedHumanInteractionTools();
         builder.Services.AddNyxIdRelayChannel();
+        builder.Services.Replace(ServiceDescriptor.Singleton(_ =>
+        {
+            var options = builder.Configuration.GetSection("NyxIdRelay")
+                .Get<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>() ??
+                new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions();
+            builder.Configuration.GetSection("Aevatar:NyxIdRelay").Bind(options);
+            var writeMode = builder.Configuration["Aevatar:NyxIdRelay:ChannelAgentKeyWriteMode"] ??
+                builder.Configuration["NyxIdRelay:ChannelAgentKeyWriteMode"];
+            if (System.Enum.TryParse<Aevatar.GAgents.Channel.NyxIdRelay.ChannelAgentKeyWriteMode>(
+                    writeMode,
+                    ignoreCase: true,
+                    out var parsedWriteMode))
+            {
+                options.ChannelAgentKeyWriteMode = parsedWriteMode;
+            }
+
+            return options;
+        }));
         builder.Services.AddLarkPlatform();
         builder.Services.AddTelegramPlatform();
         builder.Services.AddChannelInteractiveReplyTools();

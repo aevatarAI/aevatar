@@ -110,7 +110,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             },
             "runtime_config": {
               "type": "object",
-              "description": "Optional ChannelRegistration-owned runtime config for instructions, default_skill, tool_set_refs, extra_tool_names, nyxid_service_selectors, credential_source_mode, and agent_key_service_requirements. When omitted, registrations with a default_skill_name use the auto-generated registration agent key."
+              "description": "Optional ChannelRegistration-owned runtime config for instructions, default_skill, tool_set_refs, extra_tool_names, nyxid_service_selectors, and credential_source_mode. When omitted, registrations with a default_skill_name use the auto-generated registration agent key."
             },
             "authorization_mode": {
               "type": "string",

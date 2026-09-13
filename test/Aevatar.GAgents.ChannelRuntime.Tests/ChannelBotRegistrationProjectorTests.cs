@@ -252,10 +252,6 @@ public sealed class ChannelBotRegistrationProjectorTests
                 },
             },
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
-            AgentKeyServiceRequirements = new ChannelBotRuntimeAgentKeyServiceRequirements
-            {
-                AllowedServiceSlugs = { "api-google-workspace" },
-            },
         };
 
     private static ChannelWorkflowResultDeliveryRepairState FailedRepair() =>

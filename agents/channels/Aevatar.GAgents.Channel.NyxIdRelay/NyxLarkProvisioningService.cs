@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationExplicitAuthorization;
@@ -558,6 +559,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 Name = normalizedDefaultSkillName,
             },
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+            ToolSetRefs = { ToolSetNames.ChannelReplyDefault },
         };
     }
 

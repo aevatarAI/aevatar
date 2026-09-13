@@ -549,6 +549,7 @@ public class NyxTelegramProvisioningServiceTests
         command.RuntimeConfig.Should().NotBeNull();
         command.RuntimeConfig!.DefaultSkill.Name.Should().Be("/Booking-Capacity");
         command.RuntimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);
+        command.RuntimeConfig.ToolSetRefs.Should().BeEquivalentTo("channel.reply.default");
     }
 
     [Fact]

@@ -376,10 +376,6 @@ public sealed class RegistrationQueryPortTests
                 },
             },
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
-            AgentKeyServiceRequirements = new ChannelBotRuntimeAgentKeyServiceRequirements
-            {
-                AllowedServiceSlugs = { "api-google-workspace" },
-            },
         };
 
     private static ChannelAgentKeyCredential TestChannelAgentKey(string registrationId)
