@@ -2,8 +2,8 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "6ba02c2f843d197525099912c0b1ab07fdca252e",
-    "contract_files_sha256": "2a41e0f00f3221020cf04befc5a6e67581aac9da89d66dc1f681eb946519be17",
+    "revision": "a07a93c4e253ab265791be5d5d5f34a015c45595",
+    "contract_files_sha256": "c4c71a109db9465ab1e10fa4c0577b5eba2c463ec45abb02700b76903f042ec7",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "7791de469b567dcde70a0f8e2a88cc818972ca557617a2538294e8ccabd5bda0",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "60e6f67c94ae11b1bf0dac036ad8ac0c35901e31787b1f0c8173964f6a12d263",
@@ -17,7 +17,7 @@
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "e99f2de69d0eb9e0b9dc235e2d568fc66d9dfb79cb0bb1364e01cc210a8c626f",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyCreateTool.cs": "2c4f2cda99154f2e667c6cfd291497e697ef11df17f081f96ec70070a8af8b8c",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyRotateTool.cs": "18212bb64644cfbca401065bccce439ea5fa00316deff57d730a0d9ac2650e53",
-      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "dda6d60c510b30f26321b89bf2dc4f01f4c6b8f5869e0b0d460463e897068aea"
+      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "de6bd28ece1b06cce5f9e10aca46cbe1d854ac6753dd09f94d3001a2dd26bcef"
     }
   },
   "nyxid": {
