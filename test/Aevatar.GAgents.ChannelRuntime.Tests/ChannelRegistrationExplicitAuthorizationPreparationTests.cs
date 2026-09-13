@@ -560,13 +560,25 @@ public sealed class ChannelRegistrationExplicitAuthorizationPreparationTests
     }
 
     [Fact]
-    public async Task DefaultDependencyResolver_DoesNotGuessIdsFromSkillOrProviderNames()
+    public async Task DefaultDependencyResolver_ResolvesConfiguredSlugsFromVerifiedInventoryWithoutGuessingNames()
     {
-        var resolver = new ChannelRegistrationConfiguredDependencyResolver();
+        var fixture = new Fixture();
+        fixture.Services.Add(fixture.Service("svc-llm") with { Slug = "chrono-llm-public" });
+        fixture.Services.Add(fixture.Service("svc-ornn") with { Slug = "ornn-api" });
+        var selection = await fixture.VerifySelectionAsync([]);
+        var resolver = new ChannelRegistrationConfiguredDependencyResolver(new NyxIdRelayOptions
+        {
+            ChannelAgentKeyRequiredServiceSlugs = ["ornn-api", " chrono-llm-public ", "ornn-api", ""],
+        });
 
-        var result = await resolver.ResolveAsync("scope-alpha", "telegram", "skill-is-not-a-service-id", CancellationToken.None);
+        var result = await resolver.ResolveAsync(
+            selection,
+            "scope-alpha",
+            "telegram",
+            "skill-is-not-a-service-id",
+            CancellationToken.None);
 
-        result.RequiredServiceIds.Should().BeEmpty();
+        result.RequiredServiceIds.Should().Equal("svc-llm", "svc-ornn");
         result.RequiresBotProxyConnection.Should().BeFalse();
     }
 
@@ -727,6 +739,18 @@ public sealed class ChannelRegistrationExplicitAuthorizationPreparationTests
                 string.Empty);
         }
 
+        public async Task<VerifiedChannelRegistrationServiceSelection> VerifySelectionAsync(string[] serviceIds)
+        {
+            var result = await new ChannelRegistrationAuthorizationPlanner(this).VerifySelectionAsync(new(
+                "owner-token",
+                ResolveOwner().Owner!,
+                serviceIds,
+                []),
+                CancellationToken.None);
+            result.Selection.Should().NotBeNull(result.ErrorCode);
+            return result.Selection!;
+        }
+
         private NyxChannelBotProvisioningRequest BuildRequest(string[] serviceIds, string platform, string providerSlug)
         {
             using var input = JsonDocument.Parse(JsonSerializer.Serialize(new
@@ -743,8 +767,12 @@ public sealed class ChannelRegistrationExplicitAuthorizationPreparationTests
                 RequestedServiceSelection: selection);
         }
 
-        public Task<ChannelRegistrationDependencies> ResolveAsync(string scopeId, string platform,
-            string defaultSkillName, CancellationToken ct)
+        public Task<ChannelRegistrationDependencies> ResolveAsync(
+            VerifiedChannelRegistrationServiceSelection selection,
+            string scopeId,
+            string platform,
+            string defaultSkillName,
+            CancellationToken ct)
         {
             Trace.Add("dependencies");
             OnDependencies?.Invoke();

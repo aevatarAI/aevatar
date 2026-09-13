@@ -1,3 +1,4 @@
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
@@ -17,18 +18,49 @@ public sealed record ChannelRegistrationDependencies(
 public interface IChannelRegistrationDependencyResolver
 {
     Task<ChannelRegistrationDependencies> ResolveAsync(
+        VerifiedChannelRegistrationServiceSelection selection,
         string scopeId, string platform, string defaultSkillName, CancellationToken ct);
 }
 
-public sealed class ChannelRegistrationConfiguredDependencyResolver : IChannelRegistrationDependencyResolver
+public sealed class ChannelRegistrationConfiguredDependencyResolver(
+    NyxIdRelayOptions options) : IChannelRegistrationDependencyResolver
 {
+    private readonly NyxIdRelayOptions _options = options ?? throw new ArgumentNullException(nameof(options));
+
     public Task<ChannelRegistrationDependencies> ResolveAsync(
+        VerifiedChannelRegistrationServiceSelection selection,
         string scopeId, string platform, string defaultSkillName, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(selection);
         ct.ThrowIfCancellationRequested();
-        // Current registration configuration declares no exact Skill/Workflow/LLM service IDs.
-        // Lark's connection is separately resolved from this registration's creation provenance.
-        return Task.FromResult(new ChannelRegistrationDependencies([], platform == NyxLarkProvisioningService.PlatformId));
+        var requiredServiceIds = ResolveRequiredServiceIds(
+            _options.ChannelAgentKeyRequiredServiceSlugs,
+            selection.Inventory);
+        return Task.FromResult(new ChannelRegistrationDependencies(
+            requiredServiceIds,
+            platform == NyxLarkProvisioningService.PlatformId));
+    }
+
+    private static string[] ResolveRequiredServiceIds(
+        IEnumerable<string> requiredServiceSlugs,
+        IReadOnlyList<NyxIdUserService> inventory)
+    {
+        var serviceIds = new List<string>();
+        foreach (var serviceSlug in requiredServiceSlugs
+                     .Select(static slug => slug.Trim())
+                     .Where(static slug => slug.Length > 0)
+                     .Distinct(StringComparer.Ordinal)
+                     .Order(StringComparer.Ordinal))
+        {
+            var services = inventory
+                .Where(service => service.IsActive && string.Equals(service.Slug, serviceSlug, StringComparison.Ordinal))
+                .ToArray();
+            if (services.Length != 1)
+                throw new InvalidOperationException($"Required channel Agent Key service slug '{serviceSlug}' did not resolve to exactly one active UserService.");
+            serviceIds.Add(services[0].Id);
+        }
+
+        return serviceIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
     }
 }
 
@@ -104,7 +136,7 @@ public sealed class VerifiedChannelRegistrationExplicitAuthorization
 
                 failureCode = "nyxid_scope_plan_unavailable";
                 var required = await dependencies.ResolveAsync(
-                    request.ScopeId, request.Platform, request.DefaultSkillName, ct);
+                    verified.Selection, request.ScopeId, request.Platform, request.DefaultSkillName, ct);
                 if (required.RequiresBotProxyConnection && connection is null)
                 {
                     // Relay-only Telegram has no proxy dependency. A configuration requiring one

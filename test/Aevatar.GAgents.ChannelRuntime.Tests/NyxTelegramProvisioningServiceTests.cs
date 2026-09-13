@@ -723,7 +723,12 @@ public class NyxTelegramProvisioningServiceTests
                         true)), null);
             });
         var dependencies = Substitute.For<IChannelRegistrationDependencyResolver>();
-        dependencies.ResolveAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        dependencies.ResolveAsync(
+                Arg.Any<VerifiedChannelRegistrationServiceSelection>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
             .Returns(new ChannelRegistrationDependencies([], false));
         return new ChannelRegistrationExplicitAuthorizationPreparation(
             new ChannelRegistrationAuthorizationPlanner(authorizationPort),
