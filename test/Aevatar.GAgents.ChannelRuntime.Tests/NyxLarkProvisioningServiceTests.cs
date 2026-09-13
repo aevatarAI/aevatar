@@ -74,7 +74,7 @@ public class NyxLarkProvisioningServiceTests
     }
 
     [Fact]
-    public async Task LegacyServiceIdsWithoutAuthorizationMode_UsesDefaultKeyProvisioning()
+    public async Task ServiceIdsWithoutAuthorizationMode_RequiresExplicitAuthorizationPreparation()
     {
         var handler = new RecordingHandler();
         handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
@@ -83,7 +83,7 @@ public class NyxLarkProvisioningServiceTests
         handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
         using var input = System.Text.Json.JsonDocument.Parse("""{"service_ids":["svc-1"]}""");
         ChannelRegistrationServiceIdsJsonParser.TryParse(input.RootElement, out var selection).Should().BeTrue();
-        selection.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.NyxidDefault);
+        selection.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
         INyxChannelBotProvisioningService service = CreateService(handler);
 
         var result = await service.ProvisionAsync(new NyxChannelBotProvisioningRequest(
@@ -91,8 +91,9 @@ public class NyxLarkProvisioningServiceTests
             Lark: new NyxChannelLarkCredentials("cli_a1b2c3", "secret-xyz", "verify-123"),
             RequestedServiceSelection: selection), CancellationToken.None);
 
-        result.Succeeded.Should().BeTrue(result.Error);
-        handler.Requests.Should().Contain(request => request.Path == "/api/v1/api-keys");
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("nyxid_scope_plan_unavailable");
+        handler.Requests.Should().NotContain(request => request.Path == "/api/v1/api-keys");
     }
 
     [Fact]

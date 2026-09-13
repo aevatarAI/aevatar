@@ -1,3 +1,4 @@
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection;
@@ -43,14 +44,17 @@ public sealed class VerifiedChannelRegistrationExplicitAuthorization
     // Only the nested preparation flow can mint this final Key-provisioning handoff.
     private VerifiedChannelRegistrationExplicitAuthorization(
         VerifiedChannelRegistrationAuthorizationPlan plan,
-        VerifiedChannelBotServiceConnection? connection)
+        VerifiedChannelBotServiceConnection? connection,
+        IReadOnlyList<ChannelBotRuntimeNyxIdServiceSelector> runtimeSelectors)
     {
         Plan = plan;
         Connection = connection;
+        RuntimeSelectors = runtimeSelectors.Select(static selector => selector.Clone()).ToArray();
     }
 
     public VerifiedChannelRegistrationAuthorizationPlan Plan { get; }
     public VerifiedChannelBotServiceConnection? Connection { get; }
+    public IReadOnlyList<ChannelBotRuntimeNyxIdServiceSelector> RuntimeSelectors { get; }
 
     /// <summary>
     /// Prepares the immutable handoff to restricted Key provisioning. It never creates a Key.
@@ -116,7 +120,8 @@ public sealed class VerifiedChannelRegistrationExplicitAuthorization
                     return new(null, planned.ErrorCode);
 
                 completed = true;
-                return new(new VerifiedChannelRegistrationExplicitAuthorization(planned.Plan!, connection), string.Empty);
+                return new(new VerifiedChannelRegistrationExplicitAuthorization(
+                    planned.Plan!, connection, BuildRuntimeSelectors(verified.Selection)), string.Empty);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
@@ -129,6 +134,26 @@ public sealed class VerifiedChannelRegistrationExplicitAuthorization
                 if (!completed && connection is not null)
                     await CleanupConnectionAsync(request.AccessToken, connection);
             }
+        }
+
+        private static IReadOnlyList<ChannelBotRuntimeNyxIdServiceSelector> BuildRuntimeSelectors(
+            VerifiedChannelRegistrationServiceSelection selection)
+        {
+            var selectedSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var selectors = new List<ChannelBotRuntimeNyxIdServiceSelector>();
+            foreach (var service in selection.RegistrationServices)
+            {
+                var serviceSlug = service.Slug.Trim();
+                if (string.IsNullOrWhiteSpace(serviceSlug) || !selectedSlugs.Add(serviceSlug))
+                    continue;
+
+                selectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+                {
+                    ServiceSlug = serviceSlug,
+                });
+            }
+
+            return selectors;
         }
 
         /// <summary>
@@ -149,5 +174,42 @@ public sealed class VerifiedChannelRegistrationExplicitAuthorization
                     "channel_service_connection_cleanup_failed", connection.UserServiceId, connection.RegistrationId, ex.GetType().Name);
             }
         }
+    }
+}
+
+internal static class ChannelRegistrationLocalMirrorRuntimeConfig
+{
+    public static ChannelBotRuntimeConfig? Build(
+        ChannelBotRuntimeConfig? runtimeConfig,
+        string? defaultSkillName,
+        VerifiedChannelRegistrationExplicitAuthorization? authorization)
+    {
+        var config = runtimeConfig?.Clone();
+        var normalizedDefaultSkillName = defaultSkillName?.Trim();
+        if (config is null && !string.IsNullOrWhiteSpace(normalizedDefaultSkillName))
+        {
+            config = new ChannelBotRuntimeConfig
+            {
+                DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+                {
+                    Name = normalizedDefaultSkillName,
+                },
+                CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+                ToolSetRefs = { ToolSetNames.ChannelReplyDefault },
+            };
+        }
+
+        if (authorization is null)
+            return config;
+
+        if (config is null && authorization.RuntimeSelectors.Count == 0)
+            return null;
+
+        config ??= new ChannelBotRuntimeConfig();
+        config.NyxidServiceSelectors.Clear();
+        config.NyxidServiceSelectors.AddRange(authorization.RuntimeSelectors.Select(static selector => selector.Clone()));
+        if (config.CredentialSourceMode == ChannelBotRuntimeCredentialSourceMode.Unspecified)
+            config.CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
+        return config;
     }
 }

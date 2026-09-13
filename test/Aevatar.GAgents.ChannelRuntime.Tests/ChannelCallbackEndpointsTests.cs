@@ -590,7 +590,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleRegisterAsync_WhenLegacyServiceIdsArePresent_SelectsNyxIdDefault()
+    public async Task HandleRegisterAsync_WhenServiceIdsArePresentWithoutMode_SelectsExplicitAllowlist()
     {
         NyxChannelBotProvisioningRequest? captured = null;
         var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
@@ -619,8 +619,8 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
         captured.Should().NotBeNull();
         captured!.ServiceSelection.AuthorizationMode.Should()
-            .Be(ChannelRegistrationAuthorizationMode.NyxidDefault);
-        captured.ServiceSelection.ServiceIds.Should().BeEmpty();
+            .Be(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
+        captured.ServiceSelection.ServiceIds.Should().Equal("svc-legacy");
     }
 
     [Fact]

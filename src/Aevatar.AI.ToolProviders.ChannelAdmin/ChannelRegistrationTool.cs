@@ -110,16 +110,16 @@ public sealed class ChannelRegistrationTool : IAgentTool
             },
             "runtime_config": {
               "type": "object",
-              "description": "Optional ChannelRegistration-owned runtime config for instructions, default_skill, tool_set_refs, extra_tool_names, nyxid_service_selectors, and credential_source_mode. When omitted, registrations with a default_skill_name use the auto-generated registration agent key."
+              "description": "Optional ChannelRegistration-owned runtime config for instructions, default_skill, tool_set_refs, extra_tool_names, and credential_source_mode. Use service_ids, not nyxid_service_selectors, to request connected NyxID service exposure through the registration Agent Key."
             },
             "authorization_mode": {
               "type": "string",
-              "description": "Optional authorization mode. Use explicit_service_allowlist to apply service_ids; omit or use nyxid_default for default registration agent key authorization."
+              "description": "Optional authorization mode. Non-empty service_ids imply explicit_service_allowlist when omitted; nyxid_default cannot be combined with service_ids."
             },
             "service_ids": {
               "type": "array",
               "items": { "type": "string" },
-              "description": "Exact NyxID UserService IDs allowed only when authorization_mode is explicit_service_allowlist. Legacy callers may send this field without changing the default authorization mode."
+              "description": "Exact NyxID UserService IDs to authorize for the registration Agent Key and seal into internal connected-service selectors. Non-empty lists select explicit service allowlist mode."
             },
             "registration_id": {
               "type": "string",

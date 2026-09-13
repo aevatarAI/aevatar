@@ -10,6 +10,8 @@ using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationExplicitAuthorization;
+using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -553,6 +555,61 @@ public class NyxTelegramProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ExplicitSelection_ReplacesCallerSelectorsWithVerifiedRuntimeSelectors()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", RestrictedAgentKeyResponse("key-explicit", "full-key-explicit", "svc-google"));
+        handler.Enqueue("/api/v1/channel-bots", """{"id":"bot-explicit"}""");
+        handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-explicit"}""");
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(
+            actorRuntime,
+            (IActorDispatchPort)actorRuntime);
+        var authorizationPreparation = CreateAuthorizationPreparation("scope-1", "svc-google", "api-google-workspace");
+        var runtimeConfig = new ChannelBotRuntimeConfig
+        {
+            Instructions = "Use sealed selectors.",
+        };
+        runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "caller-supplied-slug",
+            EndpointNames = { "caller_endpoint" },
+        });
+        using var input = System.Text.Json.JsonDocument.Parse("""{"service_ids":["svc-google"]}""");
+        ChannelRegistrationServiceIdsJsonParser.TryParse(input.RootElement, out var selection).Should().BeTrue();
+        INyxChannelBotProvisioningService service = CreateService(
+            handler,
+            commandFacade: commandFacade,
+            authorizationPreparation: authorizationPreparation);
+
+        var result = await service.ProvisionAsync(new NyxChannelBotProvisioningRequest(
+            "telegram", "user-token", "https://aevatar.example.com", "scope-1", "Ops Bot", "api-telegram-bot",
+            Credentials: new Dictionary<string, string> { ["bot_token"] = "bot-token" },
+            RuntimeConfig: runtimeConfig,
+            RequestedServiceSelection: selection), CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue(result.Error);
+        capturedEnvelope.Should().NotBeNull();
+        var command = capturedEnvelope!.Payload.Unpack<ChannelBotRegisterCommand>();
+        command.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
+        command.RegistrationServiceAllowlist.ServiceIds.Should().Equal("svc-google");
+        command.RuntimeConfig.Should().NotBeNull();
+        command.RuntimeConfig!.Instructions.Should().Be("Use sealed selectors.");
+        command.RuntimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);
+        command.RuntimeConfig.NyxidServiceSelectors.Should().ContainSingle();
+        command.RuntimeConfig.NyxidServiceSelectors[0].ServiceSlug.Should().Be("api-google-workspace");
+        command.RuntimeConfig.NyxidServiceSelectors[0].EndpointNames.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ExplicitSelection_NeverFallsThroughToDefaultKeyProvisioning()
     {
         var handler = new RecordingHandler();
@@ -578,7 +635,8 @@ public class NyxTelegramProvisioningServiceTests
         NyxIdToolOptions? options = null,
         ISecretVault? secretVault = null,
         ChannelRegistrationCommandFacade? commandFacade = null,
-        IChannelRegistrationOwnerResolver? ownerResolver = null)
+        IChannelRegistrationOwnerResolver? ownerResolver = null,
+        ChannelRegistrationExplicitAuthorizationPreparation? authorizationPreparation = null)
     {
         options ??= new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" };
         var nyxClient = new NyxIdApiClient(
@@ -611,7 +669,67 @@ public class NyxTelegramProvisioningServiceTests
                 NullLogger<ChannelAgentKeyProvisioningService>.Instance,
                 ChannelAgentKeyWriteMode.NyxIdDefault),
             ownerResolver ?? PersonalOwnerResolver("scope-1"),
-            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxTelegramProvisioningService>>());
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxTelegramProvisioningService>>(),
+            authorizationPreparation);
+    }
+
+    private static ChannelRegistrationExplicitAuthorizationPreparation CreateAuthorizationPreparation(
+        string ownerId,
+        string serviceId,
+        string serviceSlug)
+    {
+        var authorizationPort = Substitute.For<IChannelRegistrationNyxIdAuthorizationPort>();
+        authorizationPort.ReadUserServicesAsync("user-token", Arg.Any<CancellationToken>())
+            .Returns(new NyxIdApiAccessResult<NyxIdUserServices>(new NyxIdUserServices([
+                new NyxIdUserService(
+                    serviceId,
+                    serviceSlug,
+                    null,
+                    null,
+                    true,
+                    new NyxIdUserServiceCredentialSource(NyxIdUserServiceCredentialSourceKind.Personal)),
+            ]), null));
+        authorizationPort.PlanApiKeyScopeAsync(
+                "user-token",
+                Arg.Any<IReadOnlyList<string>>(),
+                null,
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var serviceIds = call.ArgAt<IReadOnlyList<string>>(1).ToArray();
+                var owner = new NyxIdScopePlanPrincipal(ownerId, NyxIdScopePlanPrincipalKind.Personal);
+                return new NyxIdApiAccessResult<NyxIdApiKeyScopePlan>(new NyxIdApiKeyScopePlan(
+                    NyxIdApiAccessResponseParser.ScopePlanAuthority,
+                    NyxIdApiAccessResponseParser.ScopePlanContractVersion,
+                    NyxIdApiAccessResponseParser.ScopePlanPolicyVersion,
+                    owner,
+                    owner,
+                    serviceIds.Select(id => new NyxIdScopePlanServiceGrant(
+                        id,
+                        owner,
+                        new NyxIdScopePlanNodeGrant(NyxIdScopePlanNodeGrantKind.NotRequired, []))).ToArray(),
+                    serviceIds,
+                    [],
+                    DateTimeOffset.Parse("2026-09-10T00:00:00Z"),
+                    "sha256:" + new string('b', 64),
+                    new NyxIdScopePlanFreshness(
+                        NyxIdScopePlanFreshnessMode.MutationRevalidatedSnapshot,
+                        "scope_plan_digest",
+                        NyxIdScopePlanPostCreationDrift.FailClosed),
+                    new NyxIdScopePlanCompleteness(
+                        true,
+                        true,
+                        NyxIdScopePlanRouteCandidateBasis.ActiveConfiguredRoutes,
+                        true)), null);
+            });
+        var dependencies = Substitute.For<IChannelRegistrationDependencyResolver>();
+        dependencies.ResolveAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new ChannelRegistrationDependencies([], false));
+        return new ChannelRegistrationExplicitAuthorizationPreparation(
+            new ChannelRegistrationAuthorizationPlanner(authorizationPort),
+            dependencies,
+            Substitute.For<IChannelRegistrationBotConnectionPort>(),
+            NullLogger<ChannelRegistrationExplicitAuthorizationPreparation>.Instance);
     }
 
     private static IChannelRegistrationOwnerResolver PersonalOwnerResolver(string scopeId)
@@ -657,6 +775,9 @@ public class NyxTelegramProvisioningServiceTests
 
     private static string AgentKeyResponse(string id, string fullKey) =>
         $$"""{"id":"{{id}}","full_key":"{{fullKey}}","purpose":"general","scheduled_write_enabled":false,"scopes":"read write proxy","allow_all_services":true,"allow_all_nodes":true,"allowed_service_ids":[],"allowed_node_ids":[]}""";
+
+    private static string RestrictedAgentKeyResponse(string id, string fullKey, string serviceId) =>
+        $$"""{"id":"{{id}}","full_key":"{{fullKey}}","purpose":"general","scheduled_write_enabled":false,"scopes":"read write proxy","allow_all_services":false,"allow_all_nodes":false,"allowed_service_ids":["{{serviceId}}"],"allowed_node_ids":[],"scope_plan_digest":"sha256:{{new string('b', 64)}}"}""";
 
     private sealed class RecordingSecretVault(List<string>? effects = null) : ISecretVault
     {

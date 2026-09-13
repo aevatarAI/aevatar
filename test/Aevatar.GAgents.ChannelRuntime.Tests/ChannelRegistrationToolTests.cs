@@ -306,6 +306,27 @@ public sealed class ChannelRegistrationToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_RegisterChannelViaNyx_WhenNyxIdDefaultHasServiceIds_RejectsBeforeProvisioning()
+    {
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("lark");
+        using var serviceProvider = new ServiceCollection()
+            .AddSingleton(CreateRegistrationFacade(provisioningService))
+            .BuildServiceProvider();
+        var tool = CreateTool(serviceProvider);
+
+        using var scope = PushNyxToken();
+        var json = await tool.ExecuteAsync(
+            """{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"nyxid_default","service_ids":["svc-conflict"]}""");
+        using var document = JsonDocument.Parse(json);
+
+        document.RootElement.GetProperty("error_code").GetString().Should().Be("invalid_service_ids");
+        await provisioningService.DidNotReceive().ProvisionAsync(
+            Arg.Any<NyxChannelBotProvisioningRequest>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_WhenServiceIdsAreMissing_SelectsNyxIdDefault()
     {
         NyxChannelBotProvisioningRequest? captured = null;
@@ -335,7 +356,7 @@ public sealed class ChannelRegistrationToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_RegisterChannelViaNyx_WhenLegacyServiceIdsArePresent_SelectsNyxIdDefault()
+    public async Task ExecuteAsync_RegisterChannelViaNyx_WhenServiceIdsArePresentWithoutMode_SelectsExplicitAllowlist()
     {
         NyxChannelBotProvisioningRequest? captured = null;
         var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
@@ -359,8 +380,8 @@ public sealed class ChannelRegistrationToolTests
 
         captured.Should().NotBeNull();
         captured!.ServiceSelection.AuthorizationMode.Should()
-            .Be(ChannelRegistrationAuthorizationMode.NyxidDefault);
-        captured.ServiceSelection.ServiceIds.Should().BeEmpty();
+            .Be(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
+        captured.ServiceSelection.ServiceIds.Should().Equal("svc-legacy");
     }
 
     [Fact]

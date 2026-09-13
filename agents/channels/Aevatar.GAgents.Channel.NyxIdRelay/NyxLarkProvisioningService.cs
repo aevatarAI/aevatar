@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
-using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationExplicitAuthorization;
@@ -528,7 +527,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
                 ? ChannelRegistrationAuthorizationMode.NyxidDefault
                 : ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
             DefaultSkillName = defaultSkillName ?? string.Empty,
-            RuntimeConfig = BuildLocalMirrorRuntimeConfig(runtimeConfig, defaultSkillName),
+            RuntimeConfig = ChannelRegistrationLocalMirrorRuntimeConfig.Build(runtimeConfig, defaultSkillName, authorization),
         };
 
         if (authorization is not null)
@@ -539,28 +538,6 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         if (!ChannelRegistrationAuthorizationContract.IsValidNewCommand(cmd))
             throw new InvalidOperationException("channel_authorization_contract_invalid");
         await _commandFacade.RegisterLocalMirrorAsync(cmd, ct);
-    }
-
-    private static ChannelBotRuntimeConfig? BuildLocalMirrorRuntimeConfig(
-        ChannelBotRuntimeConfig? runtimeConfig,
-        string? defaultSkillName)
-    {
-        if (runtimeConfig is not null)
-            return runtimeConfig.Clone();
-
-        var normalizedDefaultSkillName = defaultSkillName?.Trim();
-        if (string.IsNullOrWhiteSpace(normalizedDefaultSkillName))
-            return null;
-
-        return new ChannelBotRuntimeConfig
-        {
-            DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
-            {
-                Name = normalizedDefaultSkillName,
-            },
-            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
-            ToolSetRefs = { ToolSetNames.ChannelReplyDefault },
-        };
     }
 
     private static NyxLarkProvisioningResult Failure(string error) =>

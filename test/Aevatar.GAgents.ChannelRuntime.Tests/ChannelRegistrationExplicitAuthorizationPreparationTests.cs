@@ -420,6 +420,25 @@ public sealed class ChannelRegistrationExplicitAuthorizationPreparationTests
         fixture.ScopeTargetOrganizationIds.Should().Equal("org-alpha");
     }
 
+    [Fact]
+    public async Task ExplicitAuthorization_DerivesRuntimeSelectorsOnlyFromRegistrationServices()
+    {
+        var fixture = new Fixture
+        {
+            Dependencies = ["svc-dependency"],
+        };
+        fixture.Services.Add(fixture.Service("svc-business") with { Slug = "api-google-workspace" });
+        fixture.Services.Add(fixture.Service("svc-dependency") with { Slug = "api-lark-bot-private" });
+
+        var result = await fixture.PrepareAsync(["svc-business"], platform: "telegram");
+
+        result.Succeeded.Should().BeTrue(result.ErrorCode);
+        result.Preparation!.RuntimeSelectors.Should().ContainSingle();
+        result.Preparation.RuntimeSelectors[0].ServiceSlug.Should().Be("api-google-workspace");
+        result.Preparation.RuntimeSelectors[0].EndpointNames.Should().BeEmpty();
+        result.Preparation.Plan.AllowedServiceIds.Should().Equal("svc-business", "svc-dependency");
+    }
+
     [Theory]
     [InlineData("missing", "user_service_not_found")]
     [InlineData("inactive", "service_owner_forbidden")]

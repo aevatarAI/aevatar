@@ -29,6 +29,7 @@ public sealed class ChannelRegistrationServiceSelection
 public static class ChannelRegistrationServiceIdsJsonParser
 {
     private const string ExplicitServiceAllowlistMode = "explicit_service_allowlist";
+    private const string NyxIdDefaultMode = "nyxid_default";
 
     public static bool TryParse(
         JsonElement root,
@@ -38,17 +39,68 @@ public static class ChannelRegistrationServiceIdsJsonParser
         if (root.ValueKind != JsonValueKind.Object)
             return false;
 
-        if (!TryReadAuthorizationMode(root, out var explicitSelection))
+        if (!TryReadAuthorizationMode(root, out var mode))
             return false;
-        if (!explicitSelection)
-            return true;
+        if (!TryReadServiceIds(root, out var serviceIds, out var serviceIdsPresent))
+            return false;
 
-        if (!root.TryGetProperty("service_ids", out var serviceIdsElement))
+        if (mode == ChannelRegistrationAuthorizationMode.NyxidDefault && serviceIds.Count > 0)
+            return false;
+
+        if (mode == ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist || serviceIds.Count > 0)
         {
-            selection = ChannelRegistrationServiceSelection.Explicit([]);
+            selection = ChannelRegistrationServiceSelection.Explicit(serviceIds);
             return true;
         }
 
+        if (serviceIdsPresent)
+            selection = ChannelRegistrationServiceSelection.NyxIdDefault;
+        return true;
+    }
+
+    private static bool TryReadAuthorizationMode(
+        JsonElement root,
+        out ChannelRegistrationAuthorizationMode? mode)
+    {
+        mode = null;
+        if (!root.TryGetProperty("authorization_mode", out var modeElement) ||
+            modeElement.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (modeElement.ValueKind != JsonValueKind.String)
+            return false;
+
+        var value = modeElement.GetString()?.Trim();
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+        if (string.Equals(value, NyxIdDefaultMode, StringComparison.OrdinalIgnoreCase))
+        {
+            mode = ChannelRegistrationAuthorizationMode.NyxidDefault;
+            return true;
+        }
+
+        if (string.Equals(value, ExplicitServiceAllowlistMode, StringComparison.OrdinalIgnoreCase))
+        {
+            mode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadServiceIds(
+        JsonElement root,
+        out IReadOnlyList<string> serviceIds,
+        out bool present)
+    {
+        serviceIds = [];
+        present = false;
+        if (!root.TryGetProperty("service_ids", out var serviceIdsElement))
+            return true;
+
+        present = true;
         if (serviceIdsElement.ValueKind != JsonValueKind.Array)
             return false;
 
@@ -65,36 +117,8 @@ public static class ChannelRegistrationServiceIdsJsonParser
             normalized.Add(serviceId);
         }
 
-        selection = ChannelRegistrationServiceSelection.Explicit(normalized.ToArray());
+        serviceIds = normalized.ToArray();
         return true;
-    }
-
-    private static bool TryReadAuthorizationMode(JsonElement root, out bool explicitSelection)
-    {
-        explicitSelection = false;
-        if (!root.TryGetProperty("authorization_mode", out var modeElement) ||
-            modeElement.ValueKind == JsonValueKind.Null)
-        {
-            return true;
-        }
-
-        if (modeElement.ValueKind != JsonValueKind.String)
-            return false;
-
-        var mode = modeElement.GetString()?.Trim();
-        if (string.IsNullOrWhiteSpace(mode) ||
-            string.Equals(mode, "nyxid_default", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (string.Equals(mode, ExplicitServiceAllowlistMode, StringComparison.OrdinalIgnoreCase))
-        {
-            explicitSelection = true;
-            return true;
-        }
-
-        return false;
     }
 }
 
