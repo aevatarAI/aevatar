@@ -8,7 +8,7 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdApiClientBoundedProxyTests
 {
     [Fact]
-    public async Task ProxyRequestBoundedWithApiKeyAsync_UsesOnlyApiKeyForNyxIdAuthentication()
+    public async Task ProxyRequestBoundedWithApiKeyAsync_UsesBearerAgentKeyWithoutDownstreamApiKeyHeader()
     {
         const string apiKey = "nyx_k_managed-agent-key";
         var handler = new RecordingHandler();
@@ -25,8 +25,8 @@ public sealed class NyxIdApiClientBoundedProxyTests
             ct: CancellationToken.None);
 
         response.Succeeded.Should().BeTrue();
-        handler.Authorization.Should().BeNull();
-        handler.ApiKeys.Should().Equal(apiKey);
+        handler.Authorization.Should().Be($"Bearer {apiKey}");
+        handler.ApiKeys.Should().BeEmpty();
         handler.Body.Should().NotContain(apiKey);
     }
 

@@ -29,7 +29,10 @@ internal static class AgentToolReceiptDeliveryPolicy
         var baseReplyText = replyText ?? string.Empty;
         var history = appendedHistory ?? [];
         if (receipts is not { Count: > 0 })
-            return new AgentToolReceiptDelivery(baseReplyText, outboundIntent, history);
+            return new AgentToolReceiptDelivery(
+                baseReplyText,
+                outboundIntent,
+                EnsureFinalAssistantText(history, baseReplyText));
 
         var reconciled = Reconcile(receipts);
         var renderedReceipts = renderer.Render(reconciled, toolCalls ?? []).Trim();
@@ -41,11 +44,16 @@ internal static class AgentToolReceiptDeliveryPolicy
             return new AgentToolReceiptDelivery(
                 deterministicText,
                 new MessageContent { Text = deterministicText },
-                ReplaceBlockingAssistantNarratives(history, reconciled, deterministicText));
+                EnsureFinalAssistantText(
+                    ReplaceBlockingAssistantNarratives(history, reconciled, deterministicText),
+                    deterministicText));
         }
 
         if (string.IsNullOrWhiteSpace(renderedReceipts))
-            return new AgentToolReceiptDelivery(baseReplyText, outboundIntent, history);
+            return new AgentToolReceiptDelivery(
+                baseReplyText,
+                outboundIntent,
+                EnsureFinalAssistantText(history, baseReplyText));
 
         var renderedReplyText = AppendReceiptText(baseReplyText, renderedReceipts);
         var renderedOutboundIntent = outboundIntent?.Clone();
@@ -59,7 +67,7 @@ internal static class AgentToolReceiptDeliveryPolicy
         return new AgentToolReceiptDelivery(
             renderedReplyText,
             renderedOutboundIntent,
-            UpdateFinalAssistantText(history, renderedReplyText));
+            EnsureFinalAssistantText(history, renderedReplyText));
     }
 
     internal static IReadOnlyList<AgentToolReceipt> Reconcile(IReadOnlyList<AgentToolReceipt> receipts)
@@ -152,6 +160,34 @@ internal static class AgentToolReceiptDeliveryPolicy
         entry.Content = string.Empty;
         entry.ReasoningContent = string.Empty;
         entry.ContentParts.Clear();
+    }
+
+    private static IReadOnlyList<ConversationHistoryEntry> EnsureFinalAssistantText(
+        IReadOnlyList<ConversationHistoryEntry> source,
+        string replyText)
+    {
+        var history = KeepInteractionHistory(source);
+        if (string.IsNullOrWhiteSpace(replyText))
+            return history;
+
+        return UpdateFinalAssistantText(history, replyText);
+    }
+
+    private static IReadOnlyList<ConversationHistoryEntry> KeepInteractionHistory(
+        IReadOnlyList<ConversationHistoryEntry> source) =>
+        source
+            .Where(IsInteractionHistoryEntry)
+            .Select(static entry => entry.Clone())
+            .ToArray();
+
+    private static bool IsInteractionHistoryEntry(ConversationHistoryEntry entry)
+    {
+        if (string.Equals(entry.Role, "user", StringComparison.Ordinal))
+            return true;
+
+        return string.Equals(entry.Role, "assistant", StringComparison.Ordinal) &&
+            entry.ToolCalls.Count == 0 &&
+            string.IsNullOrWhiteSpace(entry.ToolCallId);
     }
 
     private static IReadOnlyList<ConversationHistoryEntry> UpdateFinalAssistantText(

@@ -416,6 +416,24 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
+    public async Task IssueChannelRegistrationReadByBindingIdAsync_DoesNotRequireUnrelatedRuntimeResources()
+    {
+        var accessToken = CreateAccessToken([RequiredAevatarResource]);
+        var handler = new SequenceHandler(TokenExchangeResponse(accessToken));
+        var broker = NewBroker(NewSnapshot(NyxIdRedirectUriResolver.Resolve()), httpHandler: handler);
+
+        var result = await ((INyxIdChannelRegistrationReadCapabilityIssuer)broker)
+            .IssueByBindingIdAsync(SampleSubject(), "bnd-registration-read");
+
+        result.AccessToken.Should().Be(accessToken);
+        handler.Requests.Should().ContainSingle();
+        var form = QueryHelpers.ParseQuery($"?{handler.Requests[0].Body}");
+        form["subject_token"].Should().ContainSingle().Which.Should().Be("bnd-registration-read");
+        form["scope"].Should().ContainSingle().Which.Should().Be(AevatarOAuthClientScopes.Proxy);
+        form.ContainsKey("resource").Should().BeFalse();
+    }
+
+    [Fact]
     public async Task IssueRemoteSkillReadByBindingIdAsync_DoesNotRequireAevatarRuntimeResources()
     {
         var accessToken = CreateAccessToken([RequiredAevatarResource]);

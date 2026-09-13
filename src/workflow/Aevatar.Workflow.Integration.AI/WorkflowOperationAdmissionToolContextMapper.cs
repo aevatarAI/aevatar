@@ -160,7 +160,8 @@ public static class WorkflowOperationAdmissionToolContextMapper
                 _ => AgentToolOperationParameterLocation.Unspecified,
             },
             parameter.Required,
-            MapSchema(parameter.Schema));
+            MapSchema(parameter.Schema),
+            string.IsNullOrWhiteSpace(parameter.Description) ? null : parameter.Description);
 
     private static AgentToolOperationRequestBody? MapRequestBody(
         NyxIdOperationRequestBodyContract? requestBody) =>

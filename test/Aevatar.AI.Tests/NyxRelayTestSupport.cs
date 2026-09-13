@@ -25,6 +25,8 @@ internal sealed class NyxRelayOidcDocumentHandler : HttpMessageHandler
     }
 
     public int JwksRequests { get; private set; }
+    public int DiscoveryFailuresRemaining { get; set; }
+    public Queue<HttpStatusCode> DiscoveryStatusCodes { get; } = [];
     public List<string> RequestUris { get; } = [];
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -34,6 +36,23 @@ internal sealed class NyxRelayOidcDocumentHandler : HttpMessageHandler
         RequestUris.Add(uri);
         if (uri.EndsWith("/.well-known/openid-configuration", StringComparison.Ordinal))
         {
+            if (DiscoveryFailuresRemaining > 0)
+            {
+                DiscoveryFailuresRemaining--;
+                throw new HttpRequestException("transient_discovery_failure");
+            }
+            if (DiscoveryStatusCodes.Count > 0)
+            {
+                var statusCode = DiscoveryStatusCodes.Dequeue();
+                if (statusCode != HttpStatusCode.OK)
+                {
+                    return Task.FromResult(new HttpResponseMessage(statusCode)
+                    {
+                        Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                    });
+                }
+            }
+
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_discoveryJson, Encoding.UTF8, "application/json"),

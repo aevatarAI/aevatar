@@ -11,7 +11,8 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
 {
     private static readonly TimeSpan CatalogFreshnessWindow = TimeSpan.FromMinutes(5);
-    private const int CustomOpenApiMaxBytes = 128 * 1024;
+    // Published platform documents include multiple capabilities; keep their transport bounded.
+    private const int CustomOpenApiMaxBytes = 1024 * 1024;
 
     private readonly NyxIdToolOptions _options;
     private readonly NyxIdApiClient _apiClient;
@@ -36,7 +37,19 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         _fileArtifactIngress = fileArtifactIngress;
     }
 
-    public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+        DiscoverToolsAsync(catalogServiceSlug: null, ct);
+
+    /// <summary>Limits remote contract discovery to caller-visible instances of an authoritative catalog service.</summary>
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsForCatalogServiceAsync(
+        string catalogServiceSlug, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(catalogServiceSlug);
+        return DiscoverToolsAsync(catalogServiceSlug, ct);
+    }
+
+    private async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(
+        string? catalogServiceSlug, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_options.EffectiveTransportBaseUrl))
             return [];
@@ -57,7 +70,9 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
             IReadOnlyList<NyxIdServiceInstanceBinding> bindings;
             if (credentialKind == AgentToolNyxIdCredentialKind.AgentKey)
             {
-                bindings = ReadAgentKeySelectorBindings(context, executionToken);
+                bindings = ReadAgentKeySelectorBindings(context, executionToken)
+                    .Where(binding => MatchesCatalogService(binding.Instance, catalogServiceSlug))
+                    .ToArray();
                 if (bindings.Count == 0)
                     return [];
                 catalog = null;
@@ -69,8 +84,9 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                             AgentToolRequestContext.NyxIdOrgToken,
                             ct)
                         .ConfigureAwait(false))
-                    .Where(static binding =>
-                        NyxIdServiceInstanceClient.IsCallerExecutable(binding.Instance))
+                    .Where(binding =>
+                        NyxIdServiceInstanceClient.IsCallerExecutable(binding.Instance) &&
+                        MatchesCatalogService(binding.Instance, catalogServiceSlug))
                     .ToArray();
                 if (bindings.Count == 0)
                     return [];
@@ -151,6 +167,10 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
             return [];
         }
     }
+
+    private static bool MatchesCatalogService(NyxIdServiceInstance instance, string? catalogServiceSlug) =>
+        catalogServiceSlug is null ||
+        string.Equals(instance.CatalogServiceSlug, catalogServiceSlug, StringComparison.Ordinal);
 
     private static IReadOnlyList<NyxIdServiceInstanceBinding> ReadAgentKeySelectorBindings(
         AgentToolExecutionContext context,

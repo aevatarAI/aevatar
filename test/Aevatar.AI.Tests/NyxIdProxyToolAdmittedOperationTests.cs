@@ -84,6 +84,62 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         result.Request!.FileArtifact.Should().BeTrue();
     }
 
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldNotMaterializeSingleAllowedOptionalPublishedQueryValue()
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            TypedParametersAdmission(),
+            """{"path_params":{"item_id":7},"query":{"ratio":1.5},"headers":{"If-Match":true}}""");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Path.Should().Be("/items/7?ratio=1.5");
+    }
+
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldNotMaterializeSingleAllowedOptionalAuthoredQueryValue()
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            AuthoredRequestWithSingleAllowedOptionalQueryValue(),
+            """{"path_params":{"event_id":"evt-alpha"}}""");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Path.Should().Be("/events/evt-alpha");
+    }
+
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldMaterializeDriveGetFileMediaAltByDefault()
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            DriveGetFileAdmission(),
+            """{"path_params":{"fileId":"rules-json"}}""");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Path.Should().Be("/drive/v3/files/rules-json?alt=media");
+    }
+
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldPreserveExplicitDriveGetFileAlt()
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            DriveGetFileAdmission(),
+            """{"path_params":{"fileId":"rules-json"},"query":{"alt":"json"}}""");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Path.Should().Be("/drive/v3/files/rules-json?alt=json");
+    }
+
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldNotMaterializeDriveMediaAltForOtherEndpoints()
+    {
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            DriveListFilesAdmission(),
+            "{}"
+        );
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Path.Should().Be("/drive/v3/files");
+    }
+
     [Theory]
     [InlineData("text")]
     [InlineData("file_artifact")]
@@ -1648,6 +1704,17 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             AgentToolOperationResponsePolicy.TextOnly,
             WritePolicy());
 
+    private static AgentToolOperationAdmission AuthoredRequestWithSingleAllowedOptionalQueryValue()
+    {
+        var admission = AuthoredRequestAdmission();
+        var parameters = admission.Parameters.ToArray();
+        parameters[1] = parameters[1] with
+        {
+            Schema = TextSchema("owner"),
+        };
+        return admission with { Parameters = parameters };
+    }
+
     private static AgentToolOperationAdmission ListMessagesAdmission()
     {
         var admission = new AgentToolOperationAdmission(
@@ -1843,6 +1910,40 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                     AgentToolOperationParameterLocation.Header,
                     true,
                     ValueSchema(AgentToolOperationValueKind.Boolean)),
+            ],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            ReadOnlyPolicy());
+
+    private static AgentToolOperationAdmission DriveGetFileAdmission() =>
+        new(
+            "agent-key:api-google-workspace",
+            "api-google-workspace",
+            new AgentToolOperationIdentity.PublishedEndpoint("drive_get_file"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/drive/v3/files/{fileId}",
+            "sha256:drive-get-file",
+            [
+                PathParameter("fileId"),
+                QueryParameter("supportsAllDrives", required: false, ValueSchema(AgentToolOperationValueKind.Boolean)),
+                QueryParameter("alt", required: false, ValueSchema(AgentToolOperationValueKind.String, "json", "media")),
+            ],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            ReadOnlyPolicy());
+
+    private static AgentToolOperationAdmission DriveListFilesAdmission() =>
+        new(
+            "agent-key:api-google-workspace",
+            "api-google-workspace",
+            new AgentToolOperationIdentity.PublishedEndpoint("drive_list_files"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/drive/v3/files",
+            "sha256:drive-list-files",
+            [
+                QueryParameter("alt", required: false, ValueSchema(AgentToolOperationValueKind.String, "json", "media")),
             ],
             null,
             AgentToolOperationResponsePolicy.TextOnly,

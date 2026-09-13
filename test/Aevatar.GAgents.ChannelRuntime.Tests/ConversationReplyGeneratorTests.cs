@@ -2867,7 +2867,7 @@ public sealed class ConversationReplyGeneratorTests
         executionEvents.Should().Equal(
             "use_skill",
             "nyxid_service_inventory",
-            "/api/v1/user-services");
+            "/api/v1/keys");
 
         remoteSkillFetcher.Requests.Should().ContainSingle().Which.Should().Be((
             "sender-skill-token",
@@ -2887,7 +2887,7 @@ public sealed class ConversationReplyGeneratorTests
             "tenant-authority-alpha",
             "ou-authority-alpha"));
         inventoryHandler.Authorization.Should().Be("Bearer sender-inventory-token");
-        inventoryHandler.RequestPath.Should().Be("/api/v1/user-services");
+        inventoryHandler.RequestPath.Should().Be("/api/v1/keys");
 
         var useSkillResult = providerFactory.Requests[1].Messages
             .Should().ContainSingle(message =>
@@ -4433,6 +4433,7 @@ public sealed class ConversationReplyGeneratorTests
             Authorization = request.Headers.Authorization?.ToString();
             RequestPath = request.RequestUri?.AbsolutePath;
             executionEvents.Add(RequestPath ?? "unknown-http-path");
+            RequestPath.Should().Be("/api/v1/keys");
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
                 Content = new StringContent("""
@@ -4441,7 +4442,7 @@ public sealed class ConversationReplyGeneratorTests
                         {
                           "id": "user-service-github-alpha",
                           "slug": "github",
-                          "service_id": "catalog-github-alpha",
+                          "catalog_service_id": "catalog-github-alpha",
                           "label": "GitHub",
                           "is_active": true,
                           "connected": true,

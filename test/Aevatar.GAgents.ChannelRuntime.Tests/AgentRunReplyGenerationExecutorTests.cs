@@ -63,6 +63,20 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildInitialStepState_ShouldAppendCurrentUserMessageToConversationHistory()
+    {
+        var fixture = CreateProfiledChannelExecutor();
+
+        var state = await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, fixture.Request.Clone()),
+            CancellationToken.None);
+
+        state.AppendedHistory.Should().ContainSingle(entry =>
+            entry.Role == "user" &&
+            entry.Content == "run");
+    }
+
+    [Fact]
     public async Task BuildInitialStepState_WhenExplicitRouteToolSetDiffersFromProfile_ShouldFailClosed()
     {
         var fixture = CreateProfiledChannelExecutor("channel.reply.default");
@@ -3503,7 +3517,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 new Dictionary<string, string>(),
                 llmControl ?? LLMControlContext.Empty,
                 toolContext ?? AgentToolExecutionContext.Empty,
-                InitialMessages: [],
+                InitialMessages: [ChatMessage.User(activity.Content?.Text ?? string.Empty)],
                 MaxToolRounds: 1));
         }
 

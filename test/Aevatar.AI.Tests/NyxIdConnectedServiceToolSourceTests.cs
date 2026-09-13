@@ -112,6 +112,15 @@ public class NyxIdConnectedServiceToolSourceTests
               "get": {
                 "operationId": "readDiningProfileContext",
                 "summary": "Read dining preference context",
+                "parameters": [
+                  {
+                    "name": "alt",
+                    "in": "query",
+                    "required": false,
+                    "description": "Set to media to download the file content instead of metadata.",
+                    "schema": { "type": "string", "enum": ["media"] }
+                  }
+                ],
                 "responses": {
                   "200": {
                     "description": "Dining context",
@@ -233,7 +242,7 @@ public class NyxIdConnectedServiceToolSourceTests
             .And.NotContain("catalog_digest")
             .And.NotContain("candidate_ref");
         handler.DiscoveryRequests.Should().Be(1);
-        handler.DiscoveryPaths.Should().Equal("/api/v1/user-services");
+        handler.DiscoveryPaths.Should().Equal("/api/v1/keys");
         handler.McpConfigRequests.Should().Be(1);
         handler.RawOpenApiRequests.Should().BeEmpty();
         handler.ExactReads.Should().BeEmpty();
@@ -289,6 +298,21 @@ public class NyxIdConnectedServiceToolSourceTests
         owner.OperationAdmission.ServiceSlug.Should().Be("api-google-workspace");
         owner.OperationAdmission.Identity.Should().Be(
             new AgentToolOperationIdentity.PublishedEndpoint("readDiningProfileContext"));
+        owner.OperationAdmission.QueryParameters.Single().Description.Should()
+            .Be("Set to media to download the file content instead of metadata.");
+        using (var schema = JsonDocument.Parse(tool.ParametersSchema))
+        {
+            var alt = schema.RootElement
+                .GetProperty("properties")
+                .GetProperty("query")
+                .GetProperty("properties")
+                .GetProperty("alt");
+            alt.GetProperty("description").GetString().Should()
+                .Be("Set to media to download the file content instead of metadata.");
+            alt.GetProperty("enum").EnumerateArray()
+                .Select(static item => item.GetString())
+                .Should().Equal("media");
+        }
         handler.DiscoveryRequests.Should().Be(0);
         handler.McpConfigRequests.Should().Be(0);
         handler.RawOpenApiRequests.Should().Equal(
@@ -311,9 +335,15 @@ public class NyxIdConnectedServiceToolSourceTests
 
     [Theory]
     [InlineData("expired", true, null, null)]
+    [InlineData("revoked", true, null, null)]
+    [InlineData("failed", true, null, null)]
+    [InlineData("refresh_failed", true, null, null)]
     [InlineData("pending_auth", true, null, null)]
     [InlineData("active", false, null, null)]
     [InlineData("active", true, "node-alpha", "offline")]
+    [InlineData("active", true, "node-alpha", "draining")]
+    [InlineData("active", true, "node-alpha", "unknown")]
+    [InlineData("active", true, "node-alpha", "inaccessible")]
     public async Task DiscoverToolsAsync_NonExecutableKeyReadiness_DoesNotExposeOperations(
         string status,
         bool connected,
@@ -531,6 +561,25 @@ public class NyxIdConnectedServiceToolSourceTests
         owner.OperationAdmission.CatalogDigest.Should().MatchRegex("^sha256:[0-9a-f]{64}$");
         handler.McpConfigRequests.Should().Be(1);
         handler.RawOpenApiRequests.Should().Equal("/api/v1/proxy/s/user-context-mock/openapi.json");
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_CustomOpenApiOverOneMiB_DoesNotExposeOperations()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            CustomInstanceWithOpenApiUrl(
+                "custom-service-alpha", "user-context-mock", "http://127.0.0.1:5119/openapi.json"));
+        handler.OpenApiResponsesByPath["/api/v1/proxy/s/user-context-mock/openapi.json"] =
+            CustomOpenApi + new string(' ', 1024 * 1024);
+        var source = CreateSource(handler);
+        using var scope = PushContext("user-token");
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+        handler.RawOpenApiRequests.Should().Equal("/api/v1/proxy/s/user-context-mock/openapi.json");
+        handler.ProxyRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -901,6 +950,100 @@ public class NyxIdConnectedServiceToolSourceTests
         outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
         handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DynamicRead_CalendarListSchema_ShouldDescribeBoundedQueryParameters()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-calendar", "api-google-workspace", "api-google-workspace"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-calendar", "api-google-workspace", CalendarListEndpoint("calendar-list")));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        var query = schema.RootElement
+            .GetProperty("properties")
+            .GetProperty("query")
+            .GetProperty("properties");
+        query.GetProperty("timeMin").GetProperty("description").GetString()
+            .Should().Contain("lower-bound timestamp");
+        query.GetProperty("timeMax").GetProperty("description").GetString()
+            .Should().Contain("upper-bound timestamp");
+        query.GetProperty("singleEvents").GetProperty("description").GetString()
+            .Should().Contain("bounded time window");
+        query.GetProperty("orderBy").GetProperty("description").GetString()
+            .Should().Contain("startTime");
+    }
+
+    [Fact]
+    public async Task DynamicRead_ResponseOverLimit_ShouldReturnRetryHintsFromAdmissionQueryParameters()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-calendar", "api-google-workspace", "api-google-workspace"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-calendar", "api-google-workspace", CalendarListEndpoint("calendar-list")));
+        handler.ProxyResponseContentFactory = () => new StreamingContent(
+            Encoding.UTF8.GetBytes(new string('x', 16 * 1024 + 1)));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-calendar",
+            tool.Name,
+            """{"path_params":{"calendarId":"primary"}}""");
+
+        using var result = JsonDocument.Parse(outcome.ResultJson);
+        result.RootElement.GetProperty("status").GetString().Should().Be("retry_required");
+        var hints = result.RootElement.GetProperty("retry_hints");
+        hints.GetProperty("reason").GetString().Should().Be("bounded_projection_limit_exceeded");
+        hints.GetProperty("operation_path_template").GetString()
+            .Should().Be("/calendar/v3/calendars/{calendarId}/events");
+        hints.GetProperty("query_parameters")
+            .EnumerateArray()
+            .Select(parameter => parameter.GetProperty("name").GetString())
+            .Should().Contain(["timeMin", "timeMax", "singleEvents", "orderBy"]);
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
+    }
+
+    [Fact]
+    public async Task DynamicRead_ResponseOverLimitWithLargeParameterHints_ReturnsBoundedTypedRejection()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-calendar", "api-google-workspace", "api-google-workspace"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-calendar", "api-google-workspace", LongDescriptionCalendarListEndpoint("calendar-list")));
+        handler.ProxyResponseContentFactory = () => new StreamingContent(
+            Encoding.UTF8.GetBytes(new string('x', 16 * 1024 + 1)));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-calendar",
+            tool.Name,
+            """{"path_params":{"calendarId":"primary"}}""");
+
+        using var result = JsonDocument.Parse(outcome.ResultJson);
+        result.RootElement.GetProperty("status").GetString().Should().Be("retry_required");
+        result.RootElement.GetProperty("error_code").GetString()
+            .Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
+        result.RootElement.GetProperty("retry_hints")
+            .TryGetProperty("query_parameters", out _)
+            .Should().BeFalse();
+        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
     }
 
     [Fact]
@@ -1581,6 +1724,30 @@ public class NyxIdConnectedServiceToolSourceTests
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
     }
 
+    [Theory]
+    [InlineData("{unsafe-provider-secret")]
+    [InlineData("{\"services\":[]}")]
+    [InlineData("{\"keys\":[{\"id\":\"us-incomplete\",\"is_active\":true}]}")]
+    public async Task InventorySource_MalformedInventory_ReturnsContractFailureInsteadOfEmptySuccess(string response)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = response;
+        var logger = new RecordingLogger<NyxIdConnectedServiceInventoryToolSource>();
+        var source = CreateInventorySource(handler, logger);
+        using var scope = PushContext("user-token");
+        var inventory = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        var result = await inventory.ExecuteAsync("{}");
+
+        var receipt = inventory.CreateResultReceipt("call-malformed", inventory.Name, "{}", result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_SERVICE_INVENTORY_CONTRACT_INVALID");
+        result.Should().NotContain("instances").And.NotContain("unsafe-provider-secret");
+        receipt.ResultJson.Should().NotContain("unsafe-provider-secret");
+        logger.Entries.Should().OnlyContain(entry => !entry.Message.Contains("unsafe-provider-secret", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task InventorySource_WithArguments_ShouldRejectWithoutBackendRead()
     {
@@ -1952,6 +2119,26 @@ public class NyxIdConnectedServiceToolSourceTests
         }
         """;
 
+    private static string CalendarListEndpoint(string endpointId) => $$"""
+        {
+          "endpoint_id": "{{endpointId}}",
+          "name": "calendar_list_events",
+          "method": "GET",
+          "path": "/calendar/v3/calendars/{calendarId}/events",
+          "parameters": [
+            { "name": "calendarId", "in": "path", "required": true, "schema": { "type": "string" } },
+            { "name": "timeMin", "in": "query", "required": false, "description": "Lower bound for an event start time.", "schema": { "type": "string" } },
+            { "name": "timeMax", "in": "query", "required": false, "description": "Upper bound for an event start time.", "schema": { "type": "string" } },
+            { "name": "singleEvents", "in": "query", "required": false, "schema": { "type": "boolean" } },
+            { "name": "orderBy", "in": "query", "required": false, "schema": { "type": "string", "enum": ["startTime"] } }
+          ],
+          "request_body_schema": null,
+          "request_content_type": null,
+          "request_body_required": false,
+          "response": { "content_types": ["application/json"], "binary_artifact": false }
+        }
+        """;
+
     private static string LabeledReadEndpoint(string endpointId, string name) => $$"""
         {
           "endpoint_id": "{{endpointId}}",
@@ -1967,6 +2154,27 @@ public class NyxIdConnectedServiceToolSourceTests
           "response": { "content_types": ["application/json"], "binary_artifact": false }
         }
         """;
+
+    private static string LongDescriptionCalendarListEndpoint(string endpointId)
+    {
+        var description = new string('d', 20 * 1024);
+        return $$"""
+        {
+          "endpoint_id": "{{endpointId}}",
+          "name": "calendar_list_events",
+          "method": "GET",
+          "path": "/calendar/v3/calendars/{calendarId}/events",
+          "parameters": [
+            { "name": "calendarId", "in": "path", "required": true, "schema": { "type": "string" } },
+            { "name": "timeMin", "in": "query", "required": false, "description": "{{description}}", "schema": { "type": "string" } }
+          ],
+          "request_body_schema": null,
+          "request_content_type": null,
+          "request_body_required": false,
+          "response": { "content_types": ["application/json"], "binary_artifact": false }
+        }
+        """;
+    }
 
     private static string EffectEndpoint(string endpointId) => $$"""
         {
@@ -2399,7 +2607,10 @@ public class NyxIdConnectedServiceToolSourceTests
             var apiKey = apiKeyValues?.SingleOrDefault() ?? string.Empty;
             var token = string.IsNullOrWhiteSpace(apiKey) ? bearerToken : apiKey;
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
-            if (path is "/api/v1/user-services" or "/api/v1/keys")
+            if (path == "/api/v1/user-services")
+                return Task.FromResult(Json("{\"services\":[]}"));
+
+            if (path == "/api/v1/keys")
             {
                 DiscoveryRequests++;
                 DiscoveryTokens.Add(token);
@@ -2413,7 +2624,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 }
                 if (DiscoveryException is not null)
                     throw DiscoveryException;
-                return Task.FromResult(Json(KeysByToken.GetValueOrDefault(token, "[]")));
+                return Task.FromResult(Json(KeysByToken.GetValueOrDefault(token, "{\"keys\":[]}")));
             }
 
             if (path == "/api/v1/mcp/config")

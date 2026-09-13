@@ -46,6 +46,7 @@ internal static class NyxIdOperationAdmissionProofBuilder
                 Location = MapLocation(parameter.In),
                 Required = parameter.Required || parameter.In == ParameterLocation.Path,
                 Schema = ConvertSchema(parameter.Schema, depth: 0),
+                Description = parameter.Description ?? string.Empty,
             };
             if (!IsRequiredHeaderSatisfiable(contract))
             {

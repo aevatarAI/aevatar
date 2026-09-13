@@ -30,6 +30,7 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 public sealed class NyxIdRemoteCapabilityBroker :
     INyxIdCapabilityBroker,
     INyxIdConnectedServiceInventoryCapabilityIssuer,
+    INyxIdChannelRegistrationReadCapabilityIssuer,
     INyxIdSkillCapabilityIssuer,
     INyxIdBrokerCallbackClient,
     INyxIdBindingRetirementPort
@@ -252,6 +253,12 @@ public sealed class NyxIdRemoteCapabilityBroker :
         await IssueProxyCapabilityByBindingIdAsync(externalSubject, bindingId, ct).ConfigureAwait(false);
 
     async Task<CapabilityHandle> INyxIdSkillCapabilityIssuer.IssueByBindingIdAsync(
+        ExternalSubjectRef externalSubject,
+        string bindingId,
+        CancellationToken ct) =>
+        await IssueProxyCapabilityByBindingIdAsync(externalSubject, bindingId, ct).ConfigureAwait(false);
+
+    async Task<CapabilityHandle> INyxIdChannelRegistrationReadCapabilityIssuer.IssueByBindingIdAsync(
         ExternalSubjectRef externalSubject,
         string bindingId,
         CancellationToken ct) =>
