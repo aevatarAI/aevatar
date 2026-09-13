@@ -4395,7 +4395,7 @@ public sealed class ConversationReplyGeneratorTests
     private sealed class RecordingNyxIdInventoryCapabilityIssuer(
         string accessToken,
         List<string> executionEvents)
-        : INyxIdConnectedServiceInventoryCapabilityIssuer
+        : INyxIdConnectedServiceCapabilityIssuer
     {
         public List<string> BindingIds { get; } = [];
 

@@ -152,6 +152,8 @@ public sealed class AgentRunAuthorizedToolStep
 
     internal int StepIndex { get; }
 
+    internal AgentToolExecutionContext ExecutionContext => _toolContext;
+
     internal bool Matches(AgentRunReplyStepExecutionRequest request)
     {
         if (!string.Equals(RunId, request.RunId, StringComparison.Ordinal) ||

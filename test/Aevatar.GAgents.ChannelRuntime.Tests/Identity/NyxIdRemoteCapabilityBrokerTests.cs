@@ -400,9 +400,10 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var handler = new SequenceHandler(TokenExchangeResponse(accessToken));
         var broker = NewBroker(
             NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
-            httpHandler: handler);
+            httpHandler: handler,
+            queryPort: new FixedBindingQueryPort(new BindingId { Value = "bnd-inventory-only" }));
 
-        var result = await ((INyxIdConnectedServiceInventoryCapabilityIssuer)broker)
+        var result = await ((INyxIdConnectedServiceCapabilityIssuer)broker)
             .IssueByBindingIdAsync(
                 SampleSubject(),
                 "bnd-inventory-only");
@@ -416,21 +417,19 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
-    public async Task IssueChannelRegistrationReadByBindingIdAsync_DoesNotRequireUnrelatedRuntimeResources()
+    public async Task IssueConnectedServiceCapability_WhenBindingChanged_RejectsBeforeTokenExchange()
     {
-        var accessToken = CreateAccessToken([RequiredAevatarResource]);
-        var handler = new SequenceHandler(TokenExchangeResponse(accessToken));
-        var broker = NewBroker(NewSnapshot(NyxIdRedirectUriResolver.Resolve()), httpHandler: handler);
+        var handler = new SequenceHandler(TokenExchangeResponse(CreateAccessToken([RequiredAevatarResource])));
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: handler,
+            queryPort: new FixedBindingQueryPort(new BindingId { Value = "binding-b" }));
 
-        var result = await ((INyxIdChannelRegistrationReadCapabilityIssuer)broker)
-            .IssueByBindingIdAsync(SampleSubject(), "bnd-registration-read");
+        var action = () => ((INyxIdConnectedServiceCapabilityIssuer)broker)
+            .IssueByBindingIdAsync(SampleSubject(), "binding-a");
 
-        result.AccessToken.Should().Be(accessToken);
-        handler.Requests.Should().ContainSingle();
-        var form = QueryHelpers.ParseQuery($"?{handler.Requests[0].Body}");
-        form["subject_token"].Should().ContainSingle().Which.Should().Be("bnd-registration-read");
-        form["scope"].Should().ContainSingle().Which.Should().Be(AevatarOAuthClientScopes.Proxy);
-        form.ContainsKey("resource").Should().BeFalse();
+        await action.Should().ThrowAsync<BindingChangedException>();
+        handler.Requests.Should().BeEmpty();
     }
 
     [Fact]

@@ -46,7 +46,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     {
         var handler = new InventoryHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
-        var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
         var executionPort = new RecordingExecutionPort();
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             executionPort,
@@ -87,7 +87,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         var clientFactory = new TestNyxIdApiClientFactory(new NyxIdApiClient(
             options,
             new HttpClient(handler)));
-        var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
         var executionPort = new RecordingExecutionPort();
         issuer
             .IssueByBindingIdAsync(
@@ -159,14 +159,20 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenSenderRouteTokenExists_ReusesItWithoutIssuingAnotherCapability()
+    public async Task ExecuteAsync_WhenSenderRouteTokenExists_RevalidatesBindingBeforeUsingSenderAuthority()
     {
         var handler = new InventoryHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var clientFactory = new TestNyxIdApiClientFactory(new NyxIdApiClient(
             options,
             new HttpClient(handler)));
-        var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        issuer
+            .IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                "bnd-sender-1",
+                Arg.Any<CancellationToken>())
+            .Returns(new CapabilityHandle { AccessToken = "strict-sender-token", Scope = "proxy" });
         var executionPort = new RecordingExecutionPort();
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             executionPort,
@@ -190,6 +196,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 "bnd-sender-1",
                 NyxUserId: null,
                 SenderTenant: "tenant-1"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-1",
+                "ou_sender_1"),
         });
 
         var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
@@ -205,8 +215,68 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         result.Should().Contain("GitHub");
         handler.Authorization.Should().Be("Bearer strict-sender-token");
         handler.RequestPath.Should().Be("/api/v1/keys");
-        await issuer.DidNotReceiveWithAnyArgs()
-            .IssueByBindingIdAsync(default!, default!, default);
+        await issuer.Received(1).IssueByBindingIdAsync(
+            Arg.Any<ExternalSubjectRef>(),
+            "bnd-sender-1",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenBindingChanged_DoesNotReuseStaleSenderToken()
+    {
+        var handler = new InventoryHandler();
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var clientFactory = new TestNyxIdApiClientFactory(new NyxIdApiClient(
+            options,
+            new HttpClient(handler)));
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        issuer
+            .IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                "bnd-sender-1",
+                Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException<CapabilityHandle>(new BindingChangedException(
+                new ExternalSubjectRef
+                {
+                    Platform = "lark",
+                    Tenant = "tenant-1",
+                    ExternalUserId = "ou_sender_1",
+                })));
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            clientFactory,
+            issuer,
+            NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance);
+        using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "bot-owner-access-token",
+                "bot-owner-org-token",
+                "stale-sender-token"),
+            SenderBinding = new AgentToolSenderBindingContext(
+                "bnd-sender-1",
+                NyxUserId: null,
+                SenderTenant: "tenant-1"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-1",
+                "ou_sender_1"),
+        });
+
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        var result = await tool.ExecuteAsync("{}");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString()
+            .Should().Be("inventory_capability_unavailable");
+        handler.Authorization.Should().BeNull();
+        handler.RequestPath.Should().BeNull();
+        await issuer.Received(1).IssueByBindingIdAsync(
+            Arg.Any<ExternalSubjectRef>(),
+            "bnd-sender-1",
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -217,7 +287,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         var clientFactory = new TestNyxIdApiClientFactory(new NyxIdApiClient(
             options,
             new HttpClient(handler)));
-        var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
         var executionPort = new RecordingExecutionPort();
         issuer
             .IssueByBindingIdAsync(
@@ -281,7 +351,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         var clientFactory = new TestNyxIdApiClientFactory(new NyxIdApiClient(
             options,
             new HttpClient(handler)));
-        var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
         var executionPort = new RecordingExecutionPort();
         issuer
             .IssueByBindingIdAsync(
@@ -373,12 +443,16 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     {
         var handler = new InventoryHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
-        var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
         issuer.IssueByBindingIdAsync(
                 Arg.Any<ExternalSubjectRef>(),
                 "bnd-sender-1",
                 Arg.Any<CancellationToken>())
-            .Returns(new CapabilityHandle { AccessToken = "inventory-access-token", Scope = "proxy" });
+            .Returns(new CapabilityHandle
+            {
+                AccessToken = registrationAgentKeyMode ? "inventory-access-token" : "strict-sender-token",
+                Scope = "proxy",
+            });
         var auditRecords = new List<AuditRecord>();
         var executionPort = CreateAdmittedExecutionPort(auditRecords);
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
@@ -433,7 +507,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 Arg.Is<ExternalSubjectRef>(subject => subject.ExternalUserId == "sender-1"),
                 "bnd-sender-1", Arg.Any<CancellationToken>());
         else
-            await issuer.DidNotReceiveWithAnyArgs().IssueByBindingIdAsync(default!, default!, default);
+            await issuer.Received(1).IssueByBindingIdAsync(
+                Arg.Is<ExternalSubjectRef>(subject => subject.ExternalUserId == "sender-1"),
+                "bnd-sender-1", Arg.Any<CancellationToken>());
     }
 
     [Theory]
@@ -445,12 +521,19 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     {
         var handler = new InventoryHandler { KeysResponse = response };
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        issuer.IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                "bnd-sender-1",
+                Arg.Any<CancellationToken>())
+            .Returns(new CapabilityHandle { AccessToken = "strict-sender-token", Scope = "proxy" });
         var auditRecords = new List<AuditRecord>();
         var executionPort = CreateAdmittedExecutionPort(auditRecords);
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             executionPort,
             options,
-            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))));
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            issuer);
         var context = CreateRegistrationContext() with
         {
             Credentials = new AgentToolCredentials(
@@ -477,10 +560,17 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     {
         var handler = new InventoryHandler { KeysResponse = "{\"keys\":[]}" };
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        issuer.IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                "bnd-sender-1",
+                Arg.Any<CancellationToken>())
+            .Returns(new CapabilityHandle { AccessToken = "strict-sender-token", Scope = "proxy" });
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             new RecordingExecutionPort(),
             options,
-            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))));
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            issuer);
         using var scope = AgentToolContextScope.Push(CreateRegistrationContext() with
         {
             Credentials = new AgentToolCredentials(null, null, "strict-sender-token"),
@@ -638,7 +728,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     private sealed class CancelingInventoryCapabilityIssuer(CancellationTokenSource callerCancellation)
-        : INyxIdConnectedServiceInventoryCapabilityIssuer
+        : INyxIdConnectedServiceCapabilityIssuer
     {
         public Task<CapabilityHandle> IssueByBindingIdAsync(
             ExternalSubjectRef externalSubject,

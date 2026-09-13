@@ -290,9 +290,7 @@ public static class IdentityServiceCollectionExtensions
             });
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
-        services.TryAddSingleton<INyxIdConnectedServiceInventoryCapabilityIssuer>(sp =>
-            sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
-        services.TryAddSingleton<INyxIdChannelRegistrationReadCapabilityIssuer>(sp =>
+        services.TryAddSingleton<INyxIdConnectedServiceCapabilityIssuer>(sp =>
             sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdSkillCapabilityIssuer>(sp =>
             sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());

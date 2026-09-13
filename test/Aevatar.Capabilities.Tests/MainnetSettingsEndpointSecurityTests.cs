@@ -9,6 +9,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Configuration;
@@ -29,7 +30,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
-using NSubstitute;
 
 namespace Aevatar.Capabilities.Tests;
 
@@ -63,28 +63,43 @@ public sealed class MainnetSettingsEndpointSecurityTests
         using var handler = new PublishedOpenApiInventoryHandler(document);
         using var http = new HttpClient(handler);
         using var apiClient = new NyxIdApiClient(options, http);
-        var factory = Substitute.For<INyxIdApiClientFactory>();
-        factory.CreateClient().Returns(apiClient);
-        var issuer = Substitute.For<INyxIdChannelRegistrationReadCapabilityIssuer>();
-        issuer.IssueByBindingIdAsync(Arg.Any<ExternalSubjectRef>(), "sender-binding", Arg.Any<CancellationToken>())
-            .Returns(new CapabilityHandle { AccessToken = "sender-token", Scope = "proxy" });
-        var source = new ChannelSenderRegistrationReadToolSource(
-            Substitute.For<IAgentToolExecutionPort>(), options, factory, issuer);
+        var source = new NyxIdConnectedServiceToolSource(
+            options,
+            apiClient,
+            new NyxIdServiceInstanceClient(apiClient));
         using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
             SenderBinding = new AgentToolSenderBindingContext("sender-binding", "sender-user", "tenant"),
             NyxIdAuthority = new AgentToolNyxIdAuthorityContext("telegram", "tenant", "external-sender"),
+            Credentials = new AgentToolCredentials(
+                "sender-token",
+                null,
+                "sender-token",
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                "sender-token",
+                AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
         });
 
         var tools = await source.DiscoverToolsAsync();
 
-        var tool = tools.Should().ContainSingle(
-            $"the published Mainnet OpenAPI ({Encoding.UTF8.GetByteCount(document)} bytes) must expose its own Channel read").Subject;
+        var tool = tools
+            .Where(candidate => candidate is IAgentToolOperationAdmissionOwner owner &&
+                                owner.OperationAdmission.PathTemplate == "/api/channels/registrations")
+            .Should().ContainSingle(
+                $"the published Mainnet OpenAPI ({Encoding.UTF8.GetByteCount(document)} bytes) must expose its own Channel read")
+            .Subject;
         tool.IsReadOnly.Should().BeTrue();
-        tool.Description.Should().Contain("GET /api/channels/registrations");
+        tool.Description.Should().Contain("connected service");
         tool.Presentation.NyxIdOperation.ConnectedServiceId.Should().Be("sender-aevatar-service");
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
-        schema.RootElement.GetProperty("properties").EnumerateObject().Should().BeEmpty();
+        var properties = schema.RootElement.GetProperty("properties");
+        properties.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("query");
+        properties.GetProperty("query").GetProperty("properties")
+            .EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("scope");
+        properties.GetProperty("query").GetProperty("additionalProperties")
+            .GetBoolean().Should().BeFalse();
         schema.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
     }
 
