@@ -29,6 +29,14 @@ export default function ChannelServicePicker({
   const visible = services.filter((service) =>
     `${service.label} ${service.slug}`.toLocaleLowerCase().includes(term),
   );
+  const selectableIds = visible
+    .filter((service) => service.active && service.allowed)
+    .map((service) => service.id);
+  const selectedCount = selectableIds.filter((id) =>
+    selectedIds.includes(id),
+  ).length;
+  const allSelected =
+    selectableIds.length > 0 && selectedCount === selectableIds.length;
   return (
     <section
       className="channels__services"
@@ -91,6 +99,24 @@ export default function ChannelServicePicker({
             onChange={(event) => setSearch(event.target.value)}
             disabled={disabled}
           />
+          <div className="channels__service-bulk">
+            <Checkbox
+              checked={allSelected}
+              indeterminate={selectedCount > 0 && !allSelected}
+              disabled={disabled || !selectableIds.length}
+              onChange={(event) =>
+                onChange(
+                  event.target.checked
+                    ? [...new Set([...selectedIds, ...selectableIds])]
+                    : selectedIds.filter((id) => !selectableIds.includes(id)),
+                )
+              }
+            >
+              {term
+                ? t('channels.connect.selectAllResults', 'Select all results')
+                : t('channels.connect.selectAll', 'Select all')}
+            </Checkbox>
+          </div>
           <div className="channels__service-options">
             {visible.length ? (
               visible.map((service) => {

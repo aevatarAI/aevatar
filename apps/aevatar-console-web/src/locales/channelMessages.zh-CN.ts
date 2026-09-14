@@ -77,13 +77,13 @@ export default {
   'channels.connect.botFather': '从 BotFather 获取令牌',
   'channels.connect.label': '名称',
   'channels.connect.skillName': '技能名称',
-  'channels.connect.nameLookupUnavailable':
-    '自动识别机器人名称暂不可用。请填写下方的名称和技能名称后连接。',
-  'channels.connect.nameHelp': '使用 Telegram 机器人名称，或填写自定义名称。',
+  'channels.connect.optional': '（可选）',
+  'channels.connect.botNameDefault': '默认使用 Telegram 机器人名称',
   'channels.connect.tokenRequired': '请输入从 BotFather 获取的机器人令牌。',
-  'channels.connect.nameRequired': '自动识别暂不可用，请填写名称。',
   'channels.connect.services': '服务',
   'channels.connect.selected': '已选 {count} 项',
+  'channels.connect.selectAll': '全选',
+  'channels.connect.selectAllResults': '全选搜索结果',
   'channels.connect.servicesHelp':
     '从你的 NyxID 账户中选择此机器人可以使用的服务。',
   'channels.connect.servicesLoading': '正在加载服务',
@@ -101,6 +101,8 @@ export default {
   'channels.connect.pending': '已提交 Telegram 接入请求，正在等待渠道显示。',
   'channels.connect.success': 'Telegram 已添加，给机器人发送消息即可开始。',
   'channels.connect.error.token': '请检查 BotFather 提供的令牌后重试。',
+  'channels.connect.error.botName':
+    '暂时无法获取 Telegram 机器人名称，请重试。',
   'channels.connect.error.services': '所选服务已不可用，请重新检查选择后重试。',
   'channels.connect.error.skill':
     '无法使用此技能名称，请在 Ornn 中检查名称和访问权限。',
@@ -112,8 +114,7 @@ export default {
     '渠道接入暂不可用，请联系管理员检查部署配置。',
   'channels.connect.error.rejected':
     '无法连接 Telegram，请检查机器人令牌、技能名称和所选服务后重试。',
-  'channels.connect.error.uncertain':
-    '暂时无法确认连接结果，请先查看渠道列表，再尝试新的连接。',
+  'channels.connect.error.uncertain': '暂时无法确认连接结果，请重试。',
   'channels.connect.discardTitle': '放弃此次连接设置？',
   'channels.connect.discard': '放弃',
   'channels.connect.stay': '继续填写',

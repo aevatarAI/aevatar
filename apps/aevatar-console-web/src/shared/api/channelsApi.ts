@@ -39,6 +39,7 @@ export class ChannelApiError extends Error {
 
 export type ChannelRegistrationFailure =
   | 'token'
+  | 'botName'
   | 'services'
   | 'skill'
   | 'authorization'
@@ -56,10 +57,52 @@ export class ChannelRegistrationError extends Error {
 
 export interface TelegramRegistrationInput {
   readonly botToken: string;
-  readonly label: string;
-  readonly skillName: string;
+  readonly label?: string;
+  readonly skillName?: string;
   readonly serviceIds: readonly string[];
   readonly webhookBaseUrl: string;
+}
+
+async function readTelegramBotName(botToken: string): Promise<string> {
+  if (!/^[0-9]+:[A-Za-z0-9_-]+$/.test(botToken))
+    throw new ChannelRegistrationError('token');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    // Telegram requires the token in its API path. Use a plain, uncached
+    // request without Aevatar auth; never retain or log upstream errors/URLs.
+    const response = await fetch(
+      `https://api.telegram.org/bot${botToken}/getMe`,
+      {
+        method: 'POST',
+        credentials: 'omit',
+        cache: 'no-store',
+        referrerPolicy: 'no-referrer',
+        redirect: 'error',
+        signal: controller.signal,
+      },
+    );
+    if ([401, 404].includes(response.status))
+      throw new ChannelRegistrationError('token');
+    if (!response.ok) throw new ChannelRegistrationError('botName');
+    const payload = expectRecord(await response.json(), 'Telegram response');
+    if (payload.ok !== true) {
+      throw new ChannelRegistrationError(
+        [401, 404].includes(Number(payload.error_code)) ? 'token' : 'botName',
+      );
+    }
+    const bot = expectRecord(payload.result, 'Telegram bot');
+    const botName = readString(bot, 'first_name', 'Telegram bot name').trim();
+    if (bot.is_bot !== true || !botName)
+      throw new ChannelRegistrationError('botName');
+    return botName;
+  } catch (error) {
+    throw error instanceof ChannelRegistrationError
+      ? error
+      : new ChannelRegistrationError('botName');
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function registrationFailure(status: number, value: unknown) {
@@ -154,6 +197,11 @@ export const channelsApi = {
   async registerTelegram(
     input: TelegramRegistrationInput,
   ): Promise<{ readonly registrationId: string }> {
+    const botToken = input.botToken.trim();
+    const label = input.label?.trim() ?? '';
+    const skillName = input.skillName?.trim() ?? '';
+    const botName =
+      !label || !skillName ? await readTelegramBotName(botToken) : '';
     // This request carries the token only in the authenticated POST body.
     // Do not use a mutation cache, navigation state, or persistent draft.
     let response: Response;
@@ -166,9 +214,9 @@ export const channelsApi = {
         },
         body: JSON.stringify({
           platform: 'telegram',
-          bot_token: input.botToken.trim(),
-          label: input.label.trim(),
-          default_skill_name: input.skillName.trim(),
+          bot_token: botToken,
+          label: label || botName,
+          default_skill_name: skillName || botName,
           webhook_base_url: input.webhookBaseUrl,
           authorization_mode: 'explicit_service_allowlist',
           service_ids: [...input.serviceIds],

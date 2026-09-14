@@ -21,17 +21,10 @@ jest.mock('@/shared/studio/api', () => ({
     getAuthSession: jest.fn().mockResolvedValue({ authenticated: false }),
   },
 }));
-const mockToast = {
-  success: jest.fn(),
-  warning: jest.fn(),
-  error: jest.fn(),
-  info: jest.fn(),
-};
-jest.mock('@/shared/ui/ConsoleToast', () => ({
-  ...jest.requireActual('@/shared/ui/ConsoleToast'),
-  useConsoleToast: () => mockToast,
-}));
 const fetchMock = jest.mocked(authFetch);
+const originalFetch = global.fetch;
+const telegramFetch = jest.fn();
+const telegramToken = '123456:TEST_ONLY_TOKEN';
 const response = (value: unknown, status = 200) =>
   ({
     ok: status >= 200 && status < 300,
@@ -60,14 +53,16 @@ function enterNames() {
 }
 beforeEach(() => {
   fetchMock.mockReset();
-  Object.values(mockToast).forEach((mock) => {
-    mock.mockReset();
-  });
+  telegramFetch.mockReset();
+  global.fetch = telegramFetch;
   jest.spyOn(history, 'push').mockImplementation(() => {});
   jest.spyOn(history, 'replace').mockImplementation(() => {});
   fetchMock.mockImplementation(async (input) =>
     input === servicePath ? response({ services: [service] }) : response([]),
   );
+});
+afterEach(() => {
+  global.fetch = originalFetch;
 });
 
 it('searches services, enforces permissions, submits selected IDs once and waits for the new registration', async () => {
@@ -122,7 +117,7 @@ it('searches services, enforces permissions, submits selected IDs once and waits
   ).not.toBeChecked();
   expect(screen.getByRole('checkbox', { name: /Team Slack/ })).toBeDisabled();
   expect(screen.getByRole('checkbox', { name: /Drive/ })).toBeDisabled();
-  fireEvent.click(screen.getByRole('checkbox', { name: /GitHub work/ }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Select all' }));
   fireEvent.change(
     screen.getByRole('textbox', { name: 'Search services by name or slug' }),
     { target: { value: 'slack' } },
@@ -134,6 +129,9 @@ it('searches services, enforces permissions, submits selected IDs once and waits
   enterNames();
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
   fireEvent.submit(screen.getByRole('form', { name: 'Connect Telegram' }));
+  expect(
+    screen.getByRole('checkbox', { name: 'Select all results' }),
+  ).toBeDisabled();
   const posts = fetchMock.mock.calls.filter(
     ([, init]) => init?.method === 'POST',
   );
@@ -164,7 +162,11 @@ it('searches services, enforces permissions, submits selected IDs once and waits
     await screen.findByText(/Telegram setup was submitted/),
   ).toBeInTheDocument();
   expect(screen.getByLabelText(/^Bot token/)).toHaveValue('');
-  expect(mockToast.success).not.toHaveBeenCalled();
+  expect(
+    screen.queryByText(
+      'Telegram added. Send your bot a message to get started.',
+    ),
+  ).not.toBeInTheDocument();
   expect(history.replace).not.toHaveBeenCalled();
   expect(
     JSON.stringify(
@@ -182,11 +184,78 @@ it('searches services, enforces permissions, submits selected IDs once and waits
       '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-created',
     ),
   );
-  expect(mockToast.success).toHaveBeenCalledTimes(1);
+  expect(
+    await screen.findByText(
+      'Telegram added. Send your bot a message to get started.',
+    ),
+  ).toBeInTheDocument();
 });
 
-it('recovers service loading failure, validates missing fields and allows an explicit empty selection', async () => {
+it('selects and clears available results while preserving selections outside the search', async () => {
+  fetchMock.mockResolvedValue(
+    response({
+      services: [
+        service,
+        { ...service, id: 'user-service-personal', label: 'GitHub personal' },
+        { ...service, id: 'user-service-slack', label: 'Slack', slug: 'slack' },
+        { ...service, id: 'inactive', label: 'Inactive', is_active: false },
+        {
+          ...service,
+          id: 'denied',
+          label: 'Denied',
+          credential_source: { type: 'org', allowed: false },
+        },
+      ],
+    }),
+  );
+  renderWithQueryClient(<TelegramConnectionPage scopeId="scope-alpha" />);
+  const all = await screen.findByRole('checkbox', { name: 'Select all' });
+  expect(all).not.toBeChecked();
+  fireEvent.click(screen.getByRole('checkbox', { name: /^Slack/ }));
+  expect(all).toBePartiallyChecked();
+  fireEvent.click(all);
+  expect(all).toBeChecked();
+  expect(screen.getByText('3 selected')).toBeInTheDocument();
+  for (const name of [/Inactive/, /Denied/]) {
+    expect(screen.getByRole('checkbox', { name })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name })).not.toBeChecked();
+  }
+  fireEvent.click(all);
+  expect(screen.getByText('0 selected')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('checkbox', { name: /^Slack/ }));
+
+  const search = screen.getByRole('textbox', {
+    name: 'Search services by name or slug',
+  });
+  fireEvent.change(search, { target: { value: 'GitHub' } });
+  const results = screen.getByRole('checkbox', { name: 'Select all results' });
+  expect(results).not.toBeChecked();
+  fireEvent.click(results);
+  expect(screen.getByText('3 selected')).toBeInTheDocument();
+  expect(results).toBeChecked();
+  fireEvent.click(results);
+  expect(screen.getByText('1 selected')).toBeInTheDocument();
+  fireEvent.change(search, { target: { value: 'no-matching-service' } });
+  expect(results).toBeDisabled();
+  fireEvent.change(search, { target: { value: '' } });
+  expect(screen.getByRole('checkbox', { name: /^Slack/ })).toBeChecked();
+  expect(
+    screen.getByRole('checkbox', { name: 'Select all' }),
+  ).toBePartiallyChecked();
+});
+
+it('recovers service loading failure, requires only a token and defaults optional names with no service access', async () => {
   let serviceReads = 0;
+  telegramFetch.mockResolvedValue(
+    response({
+      ok: true,
+      result: {
+        is_bot: true,
+        first_name: ' My Telegram Bot ',
+        username: 'different_username',
+      },
+    }),
+  );
   fetchMock.mockImplementation(async (input, init) => {
     if (input === servicePath)
       return ++serviceReads === 1
@@ -217,7 +286,14 @@ it('recovers service loading failure, validates missing fields and allows an exp
   expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(
     false,
   );
-  enterNames();
+  expect(screen.getByLabelText('Label (optional)')).not.toBeRequired();
+  expect(screen.getByLabelText('Skill name (optional)')).not.toBeRequired();
+  fireEvent.change(screen.getByLabelText(/^Bot token/), {
+    target: { value: telegramToken },
+  });
+  fireEvent.change(screen.getByLabelText('Label (optional)'), {
+    target: { value: '   ' },
+  });
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
   expect(
     await screen.findByText(
@@ -230,37 +306,135 @@ it('recovers service loading failure, validates missing fields and allows an exp
         fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')?.[1]
           ?.body,
       ),
-    ).service_ids,
-  ).toEqual([]);
-  expect(screen.getByLabelText(/^Bot token/)).toHaveValue('TEST_ONLY_TOKEN');
+    ),
+  ).toMatchObject({
+    label: 'My Telegram Bot',
+    default_skill_name: 'My Telegram Bot',
+    service_ids: [],
+  });
+  expect(screen.getByLabelText(/^Bot token/)).toHaveValue(telegramToken);
   expect(document.body).not.toHaveTextContent('TEST_ONLY_SECRET');
   expect(
     await screen.findByRole('button', { name: 'Connect Telegram' }),
   ).toBeEnabled();
 });
 
-it('keeps an uncertain submission from creating a duplicate and directs the owner back to their channels', async () => {
+it('shows a name-lookup toast and retries with the current token and custom field value', async () => {
+  telegramFetch.mockRejectedValueOnce(
+    new Error(`Failed https://api.telegram.org/bot${telegramToken}/getMe`),
+  );
   fetchMock.mockImplementation(async (input, init) => {
-    if (init?.method === 'POST') throw new Error('TEST_ONLY_SECRET');
+    if (init?.method === 'POST')
+      return response(
+        { status: 'accepted', registration_id: 'registration-lookup' },
+        202,
+      );
     return input === servicePath ? response({ services: [] }) : response([]);
   });
   renderWithQueryClient(<TelegramConnectionPage scopeId="scope-alpha" />);
   await screen.findByText(/No services are available/);
+  fireEvent.change(screen.getByLabelText(/^Bot token/), {
+    target: { value: telegramToken },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Could not read the Telegram bot name. Please try again.',
+  );
+  expect(document.body).not.toHaveTextContent(telegramToken);
+  expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(
+    false,
+  );
+  expect(
+    screen.getByRole('button', { name: 'Connect Telegram' }),
+  ).toBeEnabled();
+  const updatedToken = '789012:TEST_ONLY_NEW_TOKEN';
+  fireEvent.change(screen.getByLabelText(/^Bot token/), {
+    target: { value: updatedToken },
+  });
+  fireEvent.change(screen.getByLabelText(/^Label/), {
+    target: { value: 'Custom label' },
+  });
+  telegramFetch.mockResolvedValueOnce(
+    response({ ok: true, result: { is_bot: true, first_name: 'Current Bot' } }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+  await screen.findByText(/Telegram setup was submitted/);
+  expect(telegramFetch.mock.calls.map(([url]) => url)).toEqual([
+    `https://api.telegram.org/bot${telegramToken}/getMe`,
+    `https://api.telegram.org/bot${updatedToken}/getMe`,
+  ]);
+  const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST');
+  expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({
+    bot_token: updatedToken,
+    label: 'Custom label',
+    default_skill_name: 'Current Bot',
+  });
+});
+
+it.each([
+  'gateway timeout',
+  'network failure',
+])('shows a toast for %s, preserves inputs and allows a successful manual retry', async (failure) => {
+  let attempts = 0;
+  fetchMock.mockImplementation(async (input, init) => {
+    if (init?.method === 'POST') {
+      attempts += 1;
+      if (attempts === 1) {
+        if (failure === 'network failure') throw new Error('TEST_ONLY_SECRET');
+        return response({ note: 'TEST_ONLY_SECRET' }, 504);
+      }
+      return response(
+        { status: 'accepted', registration_id: 'registration-retried' },
+        202,
+      );
+    }
+    if (input === servicePath) return response({ services: [service] });
+    return response(
+      attempts === 2
+        ? [
+            {
+              id: 'registration-retried',
+              platform: 'telegram',
+              scope_id: 'scope-alpha',
+              owned: true,
+            },
+          ]
+        : [],
+    );
+  });
+  renderWithQueryClient(<TelegramConnectionPage scopeId="scope-alpha" />);
+  fireEvent.click(await screen.findByRole('checkbox', { name: 'Select all' }));
   enterNames();
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    'The connection result could not be confirmed',
+    'Could not confirm the connection. Please try again.',
   );
+  const form = screen.getByRole('form', { name: 'Connect Telegram' });
+  expect(within(form).queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByLabelText(/^Bot token/)).toHaveValue('TEST_ONLY_TOKEN');
+  expect(screen.getByLabelText(/^Label/)).toHaveValue('My team bot');
+  expect(screen.getByLabelText(/^Skill name/)).toHaveValue('review.skill');
+  expect(screen.getByRole('checkbox', { name: 'Select all' })).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: 'Select all' })).toBeEnabled();
+  expect(
+    screen.getByRole('button', { name: 'Connect Telegram' }),
+  ).toBeEnabled();
+  expect(attempts).toBe(1);
+  expect(document.body).not.toHaveTextContent('TEST_ONLY_SECRET');
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+  await waitFor(() =>
+    expect(history.replace).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-retried',
+    ),
+  );
+  expect(attempts).toBe(2);
   expect(screen.getByLabelText(/^Bot token/)).toHaveValue('');
   expect(
-    await screen.findByRole('button', { name: 'Connect Telegram' }),
-  ).toBeDisabled();
-  expect(document.body).not.toHaveTextContent('TEST_ONLY_SECRET');
-  expect(mockToast.success).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Back to channels' }));
-  expect(history.push).toHaveBeenCalledWith(
-    '/scopes/scope-alpha/workflow-activity-vnext/channels',
-  );
+    await screen.findByText(
+      'Telegram added. Send your bot a message to get started.',
+    ),
+  ).toBeInTheDocument();
 });
 
 it('confirms discarding an edited setup without issuing a registration request', async () => {

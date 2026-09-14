@@ -33,6 +33,10 @@ function registrationErrorMessage(reason: ChannelRegistrationFailure) {
       'channels.connect.error.token',
       'Check the bot token from BotFather and try again.',
     ],
+    botName: [
+      'channels.connect.error.botName',
+      'Could not read the Telegram bot name. Please try again.',
+    ],
     services: [
       'channels.connect.error.services',
       'The selected services are no longer available. Review your selection and try again.',
@@ -59,7 +63,7 @@ function registrationErrorMessage(reason: ChannelRegistrationFailure) {
     ],
     uncertain: [
       'channels.connect.error.uncertain',
-      'The connection result could not be confirmed. Check your channels before starting another connection.',
+      'Could not confirm the connection. Please try again.',
     ],
   } as const;
   const [key, fallback] = messages[reason];
@@ -72,7 +76,7 @@ export default function TelegramConnectionPage({
   readonly scopeId: string;
 }) {
   // Secret input stays in this component only, never in Query mutation state,
-  // a persisted draft, URL, or navigation state.
+  // a persisted draft, navigation URL, or navigation state.
   const [botToken, setBotToken] = React.useState('');
   const [label, setLabel] = React.useState('');
   const [skillName, setSkillName] = React.useState('');
@@ -80,9 +84,6 @@ export default function TelegramConnectionPage({
   const [submitting, setSubmitting] = React.useState(false);
   const [submittedId, setSubmittedId] = React.useState<string | null>(null);
   const [observeUntil, setObserveUntil] = React.useState(0);
-  const [error, setError] = React.useState<ChannelRegistrationFailure | null>(
-    null,
-  );
   const [validationAttempted, setValidationAttempted] = React.useState(false);
   const [leaveTarget, setLeaveTarget] = React.useState<string | null>(null);
   const inFlight = React.useRef(false);
@@ -105,7 +106,7 @@ export default function TelegramConnectionPage({
         (service) => service.id === id && service.active && service.allowed,
       ),
   );
-  const locked = submitting || submittedId !== null || error === 'uncertain';
+  const locked = submitting || submittedId !== null;
   const dirty = Boolean(botToken || label || skillName || selectedIds.length);
 
   React.useEffect(() => {
@@ -154,7 +155,7 @@ export default function TelegramConnectionPage({
 
   function navigate(target: string) {
     if (submitting) return;
-    if (dirty && !submittedId && error !== 'uncertain') setLeaveTarget(target);
+    if (dirty && !submittedId) setLeaveTarget(target);
     else history.push(target);
   }
 
@@ -164,8 +165,6 @@ export default function TelegramConnectionPage({
     setValidationAttempted(true);
     if (
       !botToken.trim() ||
-      !label.trim() ||
-      !skillName.trim() ||
       !webhookBaseUrl ||
       !services.isSuccess ||
       invalidSelection
@@ -173,7 +172,6 @@ export default function TelegramConnectionPage({
       return;
     inFlight.current = true;
     setSubmitting(true);
-    setError(null);
     try {
       const receipt = await channelsApi.registerTelegram({
         botToken,
@@ -193,8 +191,6 @@ export default function TelegramConnectionPage({
         failure instanceof ChannelRegistrationError
           ? failure.reason
           : 'uncertain';
-      setError(reason);
-      if (reason === 'uncertain') setBotToken('');
       if (reason === 'services') void services.refetch();
       toast.error(registrationErrorMessage(reason));
     } finally {
@@ -291,18 +287,11 @@ export default function TelegramConnectionPage({
                 )}
               </button>
             )}
-            aria-describedby="telegram-token-help"
             aria-invalid={
               validationAttempted && !botToken.trim() && !submittedId
             }
             onChange={(event) => setBotToken(event.target.value)}
           />
-          <p className="channels__form-help" id="telegram-token-help">
-            {t(
-              'channels.connect.nameLookupUnavailable',
-              'Automatic bot-name lookup is not available yet. Enter a Label and Skill name below to connect.',
-            )}
-          </p>
           {validationAttempted && !botToken.trim() && !locked ? (
             <p className="channels__form-error" role="alert">
               {t(
@@ -332,35 +321,20 @@ export default function TelegramConnectionPage({
             <div className="channels__field" key={field.id}>
               <div className="channels__field-heading">
                 <label htmlFor={field.id}>
-                  {t(`channels.connect.${field.key}`, field.title)}
-                  <span className="channels__required" aria-hidden="true">
-                    *
-                  </span>
+                  {t(`channels.connect.${field.key}`, field.title)}{' '}
+                  <span>{t('channels.connect.optional', '(optional)')}</span>
                 </label>
               </div>
               <Input
                 id={field.id}
                 value={field.value}
-                required
+                placeholder={t(
+                  'channels.connect.botNameDefault',
+                  'Defaults to the Telegram bot name',
+                )}
                 disabled={locked}
-                aria-describedby={`${field.id}-help`}
-                aria-invalid={validationAttempted && !field.value.trim()}
                 onChange={(event) => field.change(event.target.value)}
               />
-              <p className="channels__form-help" id={`${field.id}-help`}>
-                {t(
-                  'channels.connect.nameHelp',
-                  'Use the Telegram bot name or enter your own.',
-                )}
-              </p>
-              {validationAttempted && !field.value.trim() ? (
-                <p className="channels__form-error" role="alert">
-                  {t(
-                    'channels.connect.nameRequired',
-                    'Enter a name while automatic lookup is unavailable.',
-                  )}
-                </p>
-              ) : null}
             </div>
           ))}
         </div>
@@ -387,11 +361,6 @@ export default function TelegramConnectionPage({
             {registrationErrorMessage('configuration')}
           </p>
         ) : null}
-        {error ? (
-          <p className="channels__form-error" role="alert">
-            {registrationErrorMessage(error)}
-          </p>
-        ) : null}
         {submittedId ? (
           <div className="channels__connection-pending" role="status">
             <p>
@@ -413,7 +382,7 @@ export default function TelegramConnectionPage({
         ) : null}
         <div className="channels__form-actions">
           <Button disabled={submitting} onClick={() => navigate(listHref)}>
-            {submittedId || error === 'uncertain'
+            {submittedId
               ? t('channels.back', 'Back to channels')
               : t('channels.cancel', 'Cancel')}
           </Button>

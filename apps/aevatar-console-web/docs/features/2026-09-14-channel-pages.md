@@ -39,11 +39,13 @@ separate Console frontend origin or shown as an editable form field.
 
 ## Telegram connection form
 
-The form accepts a masked bot token, Label, Skill name, and an explicit service
-selection. The token reveal control is keyboard accessible. Unsaved form
-navigation asks whether to discard; form data is never persisted. Only the
-authenticated registration POST carries the token, and successful admission
-or an uncertain result clears it. No registration mutation cache stores it.
+The form requires a masked bot token. Label and Skill name are independently
+optional, and the service selection may be empty. The token reveal control is
+keyboard accessible. Unsaved form navigation asks whether to discard; form data
+is never persisted. The token is used only for Telegram's official name lookup
+and the authenticated registration POST. It stays in component memory for a
+manual retry after failure and clears after successful admission. No registration
+mutation cache stores it.
 
 Services come from the current NyxID session's
 `GET /api/v1/user-services`, resolved against the existing NyxID authority.
@@ -54,9 +56,13 @@ inactive services, and disallowed organization services cannot be selected.
 Only safe display fields enter the query cache.
 
 Options use label, then catalog service name, then slug. Search matches label
-or slug and preserves selections outside the current search. Each selection
-uses the exact `services[].id`; no default selection is made. The registration
-POST always supplies `authorization_mode: explicit_service_allowlist` and
+or slug and preserves selections outside the current search. A Select all
+checkbox selects or clears every available service in the current results,
+with a partial-selection state. While searching, it is labeled Select all
+results and preserves selections outside the search. Inactive or disallowed
+services are excluded; no selectable results or a locked form disables it.
+Each selection uses the exact `services[].id`; no default selection is made.
+The registration POST always supplies `authorization_mode: explicit_service_allowlist` and
 `service_ids`, including `[]` for no service access. It never substitutes a
 slug, endpoint ID, API key ID, or omitted field. If a selected service becomes
 unavailable, submission is blocked until it is deselected. Load failure has
@@ -68,26 +74,31 @@ the explicit selection above. A `202`/`status: accepted` response must contain
 the registration ID. The page waits for that exact Telegram registration in
 the owner list before showing success and opening details; inbound activity
 continues to use its real status. Observation is bounded to 20 seconds and
-Check again performs GET only. Network/server failures with uncertain effects
-require checking Channels before another setup, preventing automatic duplicates.
+Check again performs GET only. Registration failures, including 504 and network
+errors, show a shared error toast and restore editable fields and Connect
+Telegram. Inputs and service selections are preserved for an explicit manual
+retry; no automatic registration retry runs. An in-flight request still blocks
+duplicate clicks, and an accepted registration stays locked during observation.
 
-### Outstanding bot-name contract
+### Optional names and Telegram bot-name defaults
 
-The design asks for pre-registration token recognition and independent bot-name
-fallbacks for empty Label and Skill name. The reviewed `feature/integrate`
-backend and #3617/#3620 do not expose a non-mutating token/name lookup route.
-The deployed registration behavior also does not supply these fallbacks: it
-generates a generic label and forwards the skill name unchanged. NyxID's
-existing create/verify operations mutate registrations and cannot serve as a
-read-only preview.
+Label and Skill name show an optional marker and a bot-name placeholder. When
+either trimmed value is blank, the registration adapter first calls Telegram's
+official `getMe` endpoint and reads the bot's `first_name`, not its `username`.
+Each field resolves independently as its trimmed custom value or that bot name;
+a custom label never supplies an empty skill name. Both custom names bypass
+lookup. The UI locks while resolving/submitting so the result cannot overwrite
+an edit to another token; retries resolve the current token again.
 
-Until that server contract exists, the form explicitly reports that automatic
-lookup is unavailable and requires both names. It does not claim a bot has
-been recognized or submit a sample name. This is the remaining difference from
-the requested design; the frontend does not add a backend route or call Telegram
-directly with a token in its request URL. A future lookup must return the bot's
-`first_name`, preserve user edits, reject stale token results, and fall back
-independently for each name (a custom label must never supply the skill name).
+This uses the same official API flow as NyxID's existing Telegram onboarding,
+because the reviewed Aevatar/NyxID backend has no separate pre-registration
+name endpoint. The plain fetch targets only `https://api.telegram.org`, with
+credentials omitted, no cache, no referrer, redirects rejected and a 15-second
+timeout. Telegram's protocol requires the token in the API request path; it
+never enters browser navigation, logs, toast text, persistent state, or the
+authenticated fetch helper. Raw fetch errors and response bodies are discarded.
+A rejected token, unavailable lookup or absent bot name prevents registration,
+shows a safe toast and leaves the form available for retry.
 
 ## API and ownership
 

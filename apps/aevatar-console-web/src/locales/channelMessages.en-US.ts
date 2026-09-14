@@ -83,14 +83,13 @@ export default {
   'channels.connect.botFather': 'Get token from BotFather',
   'channels.connect.label': 'Label',
   'channels.connect.skillName': 'Skill name',
-  'channels.connect.nameLookupUnavailable':
-    'Automatic bot-name lookup is not available yet. Enter a Label and Skill name below to connect.',
-  'channels.connect.nameHelp': 'Use the Telegram bot name or enter your own.',
+  'channels.connect.optional': '(optional)',
+  'channels.connect.botNameDefault': 'Defaults to the Telegram bot name',
   'channels.connect.tokenRequired': 'Enter the bot token from BotFather.',
-  'channels.connect.nameRequired':
-    'Enter a name while automatic lookup is unavailable.',
   'channels.connect.services': 'Services',
   'channels.connect.selected': '{count} selected',
+  'channels.connect.selectAll': 'Select all',
+  'channels.connect.selectAllResults': 'Select all results',
   'channels.connect.servicesHelp':
     'Select the services this bot can use from your NyxID account.',
   'channels.connect.servicesLoading': 'Loading services',
@@ -113,6 +112,8 @@ export default {
     'Telegram added. Send your bot a message to get started.',
   'channels.connect.error.token':
     'Check the bot token from BotFather and try again.',
+  'channels.connect.error.botName':
+    'Could not read the Telegram bot name. Please try again.',
   'channels.connect.error.services':
     'The selected services are no longer available. Review your selection and try again.',
   'channels.connect.error.skill':
@@ -126,7 +127,7 @@ export default {
   'channels.connect.error.rejected':
     'Could not connect Telegram. Check the bot token, Skill name, and selected services, then try again.',
   'channels.connect.error.uncertain':
-    'The connection result could not be confirmed. Check your channels before starting another connection.',
+    'Could not confirm the connection. Please try again.',
   'channels.connect.discardTitle': 'Discard this connection setup?',
   'channels.connect.discard': 'Discard',
   'channels.connect.stay': 'Stay',
