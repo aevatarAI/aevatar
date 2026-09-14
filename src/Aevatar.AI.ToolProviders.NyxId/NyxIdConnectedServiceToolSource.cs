@@ -52,50 +52,116 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         string? catalogServiceSlug, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_options.EffectiveTransportBaseUrl))
+        {
+            _logger.LogInformation(
+                "NyxID connected-service discovery skipped. reason={Reason} catalogServiceSlug={CatalogServiceSlug}",
+                "transport_base_url_missing",
+                catalogServiceSlug ?? string.Empty);
             return [];
+        }
+
         var context = AgentToolRequestContext.Current;
         if (context is null)
+        {
+            _logger.LogInformation(
+                "NyxID connected-service discovery skipped. reason={Reason} catalogServiceSlug={CatalogServiceSlug}",
+                "request_context_missing",
+                catalogServiceSlug ?? string.Empty);
             return [];
+        }
 
         var executionToken = context.Credentials.NyxIdAccessToken;
         var inventoryToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context.Credentials)
                              ?? executionToken;
         if (string.IsNullOrWhiteSpace(executionToken) || string.IsNullOrWhiteSpace(inventoryToken))
+        {
+            _logger.LogInformation(
+                "NyxID connected-service discovery skipped. reason={Reason} credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug} hasExecutionToken={HasExecutionToken} hasInventoryToken={HasInventoryToken}",
+                "credential_missing",
+                context.Credentials.NyxIdCredentialKind,
+                catalogServiceSlug ?? string.Empty,
+                !string.IsNullOrWhiteSpace(executionToken),
+                !string.IsNullOrWhiteSpace(inventoryToken));
             return [];
+        }
 
         try
         {
             var credentialKind = context.Credentials.NyxIdCredentialKind;
+            _logger.LogInformation(
+                "NyxID connected-service discovery started. credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug}",
+                credentialKind,
+                catalogServiceSlug ?? string.Empty);
             NyxIdMcpCatalogRead? catalog;
             IReadOnlyList<NyxIdServiceInstanceBinding> bindings;
             if (credentialKind == AgentToolNyxIdCredentialKind.AgentKey)
             {
-                bindings = ReadAgentKeySelectorBindings(context, executionToken)
+                var selectorBindings = ReadAgentKeySelectorBindings(context, executionToken, _logger);
+                bindings = selectorBindings
                     .Where(binding => MatchesCatalogService(binding.Instance, catalogServiceSlug))
                     .ToArray();
+                _logger.LogInformation(
+                    "NyxID Agent Key selector bindings filtered. catalogServiceSlug={CatalogServiceSlug} selectorBindingCount={SelectorBindingCount} filteredBindingCount={FilteredBindingCount} selectorSlugs={SelectorSlugs} filteredSlugs={FilteredSlugs}",
+                    catalogServiceSlug ?? string.Empty,
+                    selectorBindings.Count,
+                    bindings.Count,
+                    string.Join(',', selectorBindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)),
+                    string.Join(',', bindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)));
                 if (bindings.Count == 0)
+                {
+                    _logger.LogInformation(
+                        "NyxID connected-service discovery skipped. reason={Reason} credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug} selectorBindingCount={SelectorBindingCount}",
+                        "agent_key_selector_binding_missing",
+                        credentialKind,
+                        catalogServiceSlug ?? string.Empty,
+                        selectorBindings.Count);
                     return [];
+                }
+
                 catalog = null;
             }
             else
             {
-                bindings = (await _client.DiscoverAsync(
-                            inventoryToken,
-                            AgentToolRequestContext.NyxIdOrgToken,
-                            ct)
-                        .ConfigureAwait(false))
+                var discoveredBindings = await _client.DiscoverAsync(
+                        inventoryToken,
+                        AgentToolRequestContext.NyxIdOrgToken,
+                        ct)
+                    .ConfigureAwait(false);
+                bindings = discoveredBindings
                     .Where(binding =>
                         NyxIdServiceInstanceClient.IsCallerExecutable(binding.Instance) &&
                         MatchesCatalogService(binding.Instance, catalogServiceSlug))
                     .ToArray();
+                _logger.LogInformation(
+                    "NyxID caller connected-service bindings filtered. credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug} discoveredBindingCount={DiscoveredBindingCount} filteredBindingCount={FilteredBindingCount} filteredSlugs={FilteredSlugs}",
+                    credentialKind,
+                    catalogServiceSlug ?? string.Empty,
+                    discoveredBindings.Count,
+                    bindings.Count,
+                    string.Join(',', bindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)));
                 if (bindings.Count == 0)
+                {
+                    _logger.LogInformation(
+                        "NyxID connected-service discovery skipped. reason={Reason} credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug} discoveredBindingCount={DiscoveredBindingCount}",
+                        "caller_executable_binding_missing",
+                        credentialKind,
+                        catalogServiceSlug ?? string.Empty,
+                        discoveredBindings.Count);
                     return [];
+                }
+
                 catalog = await ReadMcpCatalogAsync(executionToken, ct);
                 if (catalog is null)
+                {
+                    _logger.LogInformation(
+                        "NyxID connected-service discovery skipped. reason={Reason} credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug} bindingCount={BindingCount}",
+                        "mcp_catalog_unavailable",
+                        credentialKind,
+                        catalogServiceSlug ?? string.Empty,
+                        bindings.Count);
                     return [];
+                }
             }
-            if (bindings.Count == 0)
-                return [];
             var catalogServiceIds = catalog?.Services
                 .Select(static service => service.UserServiceId)
                 .ToHashSet(StringComparer.Ordinal) ?? [];
@@ -117,6 +183,15 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                 _options.ManagedWorkflowAdmissionMode,
                 _delegationTokenLease);
             var services = (catalog?.Services ?? []).Concat(customOpenApiServices).ToArray();
+            _logger.LogInformation(
+                "NyxID connected-service contracts resolved. credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug} bindingCount={BindingCount} catalogServiceCount={CatalogServiceCount} customOpenApiServiceCount={CustomOpenApiServiceCount} contractServiceCount={ContractServiceCount} serviceSlugs={ServiceSlugs}",
+                credentialKind,
+                catalogServiceSlug ?? string.Empty,
+                bindings.Count,
+                catalog?.Services.Count ?? 0,
+                customOpenApiServices.Count,
+                services.Length,
+                string.Join(',', services.Select(static service => service.ServiceSlug).Where(static slug => !string.IsNullOrWhiteSpace(slug)).Order(StringComparer.OrdinalIgnoreCase)));
             var tools = services
                 .Where(service => HasExactRouteBinding(service, bindingsById))
                 .SelectMany(service => service.Endpoints
@@ -174,30 +249,66 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
 
     private static IReadOnlyList<NyxIdServiceInstanceBinding> ReadAgentKeySelectorBindings(
         AgentToolExecutionContext context,
-        string agentKey)
+        string agentKey,
+        ILogger logger)
     {
         if (string.IsNullOrWhiteSpace(context.ConnectedServices.ContextJson))
+        {
+            logger.LogInformation(
+                "NyxID Agent Key selector context missing. reason={Reason}",
+                "connected_services_context_empty");
             return [];
+        }
+
         try
         {
             using var document = JsonDocument.Parse(context.ConnectedServices.ContextJson);
-            if (document.RootElement.ValueKind != JsonValueKind.Object ||
-                !document.RootElement.TryGetProperty("nyxid_service_selectors", out var selectors) ||
-                selectors.ValueKind != JsonValueKind.Array)
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
+                logger.LogInformation(
+                    "NyxID Agent Key selector context ignored. reason={Reason} rootKind={RootKind}",
+                    "context_root_not_object",
+                    document.RootElement.ValueKind);
                 return [];
             }
 
-            return selectors.EnumerateArray()
+            if (!document.RootElement.TryGetProperty("nyxid_service_selectors", out var selectors))
+            {
+                logger.LogInformation(
+                    "NyxID Agent Key selector context ignored. reason={Reason}",
+                    "selector_property_missing");
+                return [];
+            }
+
+            if (selectors.ValueKind != JsonValueKind.Array)
+            {
+                logger.LogInformation(
+                    "NyxID Agent Key selector context ignored. reason={Reason} selectorKind={SelectorKind}",
+                    "selector_property_not_array",
+                    selectors.ValueKind);
+                return [];
+            }
+
+            var bindings = selectors.EnumerateArray()
                 .Select(selector => ReadAgentKeySelectorBinding(selector, agentKey))
                 .Where(static binding => binding is not null)
                 .Select(static binding => binding!)
                 .GroupBy(static binding => binding.Instance.DisplaySlug, StringComparer.OrdinalIgnoreCase)
                 .Select(static group => group.First())
                 .ToArray();
+            logger.LogInformation(
+                "NyxID Agent Key selector context parsed. selectorElementCount={SelectorElementCount} selectorBindingCount={SelectorBindingCount} selectorSlugs={SelectorSlugs}",
+                selectors.GetArrayLength(),
+                bindings.Length,
+                string.Join(',', bindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)));
+            return bindings;
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
+            logger.LogInformation(
+                ex,
+                "NyxID Agent Key selector context ignored. reason={Reason}",
+                "context_json_invalid");
             return [];
         }
     }
@@ -263,6 +374,12 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                             diagnostic.Code,
                             diagnostic.Count);
                     }
+                    _logger.LogInformation(
+                        "NyxID Agent Key OpenAPI contract parsed. selectorSlug={SelectorSlug} catalogSpecSlug={CatalogSpecSlug} serviceCount={ServiceCount} endpointCount={EndpointCount}",
+                        binding.Instance.DisplaySlug,
+                        catalogSpecSlug,
+                        parsed.Services.Count,
+                        parsed.Services.Sum(static service => service.Endpoints.Count));
                     if (parsed.Services.Count > 0)
                     {
                         services.AddRange(parsed.Services);
