@@ -47,13 +47,13 @@ describe('workflow canvas benchmark graph', () => {
           executionFocused: false,
           executionStatus: 'idle',
           kind: 'step',
-          label: expect.any(String),
+          label: node.id,
           parametersSummary: expect.any(String),
           stepId: node.id,
           stepType: expect.any(String),
           subtitle: expect.any(String),
           targetRole: expect.any(String),
-          title: expect.any(String),
+          title: node.id,
         }),
       );
 
@@ -95,6 +95,8 @@ describe('workflow canvas benchmark graph', () => {
     expect(expanded.nodes.at(-1)?.data).toEqual(
       expect.objectContaining({
         branchCount: 0,
+        label: 'benchmark-node-0101',
+        title: 'benchmark-node-0101',
         executionStatus: 'idle',
         kind: 'step',
       }),

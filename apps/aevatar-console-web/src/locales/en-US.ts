@@ -3,6 +3,7 @@ import workflowActivityVNextMessages from './workflowActivityVNextMessages.en-US
 
 const enUSMessages = {
   ...projectMessages,
+  'workflowCanvasBenchmark.title': 'Workflow canvas benchmark',
   ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
   'common.language.english': 'English',

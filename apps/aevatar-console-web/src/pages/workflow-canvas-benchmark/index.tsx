@@ -1,3 +1,4 @@
+import { useIntl } from '@umijs/max';
 import type { Node } from '@xyflow/react';
 import React from 'react';
 import GraphCanvas from '@/shared/graphs/GraphCanvas';
@@ -134,8 +135,15 @@ function readUsedHeapBytes(): number | null {
 }
 
 function InvalidBenchmarkConfiguration({ message }: { message: string }) {
+  const intl = useIntl();
   return (
-    <main aria-label="Workflow canvas benchmark" role="alert">
+    <main
+      aria-label={intl.formatMessage({
+        id: 'workflowCanvasBenchmark.title',
+        defaultMessage: 'Workflow canvas benchmark',
+      })}
+      role="alert"
+    >
       {message}
     </main>
   );
@@ -150,6 +158,7 @@ function BenchmarkCanvas({
   readonly policy: WorkflowCanvasBenchmarkPolicy;
   readonly size: WorkflowCanvasBenchmarkGraphSize;
 }) {
+  const intl = useIntl();
   const [graph, setGraph] = React.useState(initialGraph);
   const [selectedNodeId, setSelectedNodeId] = React.useState<string>();
   const renderedNodesRef = React.useRef<readonly Node[] | undefined>(undefined);
@@ -358,7 +367,10 @@ function BenchmarkCanvas({
 
   return (
     <main
-      aria-label="Workflow canvas benchmark"
+      aria-label={intl.formatMessage({
+        id: 'workflowCanvasBenchmark.title',
+        defaultMessage: 'Workflow canvas benchmark',
+      })}
       className="workflow-canvas-benchmark"
       data-benchmark-ready="true"
       data-graph-size={size}

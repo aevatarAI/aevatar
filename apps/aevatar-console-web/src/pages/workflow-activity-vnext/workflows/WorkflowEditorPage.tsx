@@ -199,11 +199,20 @@ const WorkflowEditorPage: React.FC<{
     const pendingFocus = pendingRunConsoleFocusRef.current;
     if (!pendingFocus) return;
     pendingRunConsoleFocusRef.current = null;
-    if (pendingFocus === 'collapse') {
-      collapseRunConsoleButtonRef.current?.focus();
-      return;
-    }
-    expandRunConsoleButtonRef.current?.focus();
+    let cancelled = false;
+    // Focusing can close an Ant Design popup via flushSync. Wait until this
+    // React commit finishes before dispatching the resulting focus events.
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const button =
+        pendingFocus === 'collapse'
+          ? collapseRunConsoleButtonRef.current
+          : expandRunConsoleButtonRef.current;
+      button?.focus();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [runConsoleExpanded]);
 
   React.useEffect(() => {
