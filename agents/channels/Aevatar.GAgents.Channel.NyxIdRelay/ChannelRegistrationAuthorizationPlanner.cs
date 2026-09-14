@@ -67,6 +67,9 @@ public sealed class VerifiedChannelRegistrationServiceSelection
         SelectedServiceIds = request.RegistrationServiceIds.Concat(request.RequiredServiceIds)
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray();
         Inventory = inventory.ToImmutableArray();
+        RegistrationServices = RegistrationServiceIds
+            .Select(serviceId => Inventory.Single(service => string.Equals(service.Id, serviceId, StringComparison.Ordinal)))
+            .ToImmutableArray();
     }
 
     internal string AccessToken { get; }
@@ -78,6 +81,7 @@ public sealed class VerifiedChannelRegistrationServiceSelection
     public string? TargetOrganizationId { get; }
     public ImmutableArray<string> RegistrationServiceIds { get; }
     public ImmutableArray<string> SelectedServiceIds { get; }
+    public ImmutableArray<NyxIdUserService> RegistrationServices { get; }
 
     public sealed class VerifiedChannelRegistrationAuthorizationPlan
     {

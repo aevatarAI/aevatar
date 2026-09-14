@@ -33,6 +33,28 @@ public sealed class StudioWorkflowScheduleProvisioningExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenStudioMemberEvidenceProjectionIsPending_ShouldReturnRetryableResult()
+    {
+        var port = new RecordingSchedulePort
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+                "studio_member_evidence_not_found"),
+        };
+        var sut = new StudioWorkflowScheduleProvisioningExecutor(port);
+
+        var result = await sut.ExecuteAsync(NewExecution());
+
+        result.Success.Should().BeFalse();
+        result.Retryable.Should().BeTrue();
+        result.FailureCode.Should().Be("studio_member_evidence_not_found");
+        port.GetScheduleIds.Should().BeEmpty();
+        port.CreateRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenServingRevisionProjectionIsPending_ShouldReturnRetryableResult()
     {
         var port = new RecordingSchedulePort

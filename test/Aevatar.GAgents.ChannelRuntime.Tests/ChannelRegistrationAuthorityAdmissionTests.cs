@@ -79,6 +79,128 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
     }
 
     [Fact]
+    public async Task AdmitAsync_ExplicitRuntimeSelectedAgentKeySyntheticTarget_ShouldAllow()
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig();
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+        });
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var result = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "agent-key:api-google-workspace",
+            serviceSlug: "api-google-workspace"));
+
+        result.Allowed.Should().BeTrue();
+        result.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.Allowed);
+        await fixture.Resolver.DidNotReceiveWithAnyArgs().IsAuthorizedDependencyAsync(
+            default!,
+            default!,
+            default!,
+            default);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_ExplicitRuntimeSelectedAgentKeySyntheticEndpoint_ShouldAllowOnlySelectedEndpoint()
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig();
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "readDiningProfileContext" },
+        });
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var allowed = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "agent-key:api-google-workspace",
+            serviceSlug: "api-google-workspace",
+            endpointId: "readDiningProfileContext"));
+        var denied = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "agent-key:api-google-workspace",
+            serviceSlug: "api-google-workspace",
+            endpointId: "writeDiningProfileContext"));
+
+        allowed.Allowed.Should().BeTrue();
+        denied.Allowed.Should().BeFalse();
+        denied.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
+    }
+
+    [Theory]
+    [InlineData("api-calendar")]
+    [InlineData("api-google-workspace ")]
+    public async Task AdmitAsync_ExplicitMismatchedAgentKeySyntheticTarget_ShouldDeny(
+        string operationServiceSlug)
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig();
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+        });
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var result = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "agent-key:api-google-workspace",
+            serviceSlug: operationServiceSlug));
+
+        result.Allowed.Should().BeFalse();
+        result.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.TargetNotGranted);
+        await fixture.Resolver.DidNotReceiveWithAnyArgs().IsAuthorizedDependencyAsync(
+            default!,
+            default!,
+            default!,
+            default);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_ExplicitUnselectedAgentKeySyntheticTarget_ShouldDenyTargetNotAuthorized()
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig();
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+        });
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var result = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "agent-key:api-calendar",
+            serviceSlug: "api-calendar"));
+
+        result.Allowed.Should().BeFalse();
+        result.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_ExplicitDependencyGrantDoesNotAuthorizeAgentKeySyntheticTarget()
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RegistrationServiceAllowlist.ServiceIds.Clear();
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig();
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "ornn-api",
+        });
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var result = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "agent-key:ornn-api",
+            serviceSlug: "ornn-api"));
+
+        result.Allowed.Should().BeFalse();
+        result.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.TargetNotGranted);
+    }
+
+    [Fact]
     public async Task AdmitAsync_UsesVersionedRegistrationSnapshotForDecision()
     {
         var registration = CreateExplicitRegistration();
@@ -572,10 +694,12 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
     private static ChannelRegistrationAuthorityAdmissionRequest CreateRequest(
         ChannelBotRegistrationEntry registration,
         string serviceInstanceId,
-        string? callSiteId = "") =>
+        string? callSiteId = "",
+        string serviceSlug = "service-alpha",
+        string endpointId = "endpoint-alpha") =>
         new(
             CreateCredential(registration),
-            CreateOperation(serviceInstanceId, callSiteId));
+            CreateOperation(serviceInstanceId, callSiteId, serviceSlug, endpointId));
 
     private static DurableCallerCredentialRef CreateCredential(
         ChannelBotRegistrationEntry registration)
@@ -596,11 +720,13 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
 
     private static AgentToolOperationAdmission CreateOperation(
         string serviceInstanceId,
-        string? callSiteId = "") =>
+        string? callSiteId = "",
+        string serviceSlug = "service-alpha",
+        string endpointId = "endpoint-alpha") =>
         new(
             serviceInstanceId,
-            "service-alpha",
-            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
+            serviceSlug,
+            new AgentToolOperationIdentity.PublishedEndpoint(endpointId),
             AgentToolOperationAuthorizationBasis.PublishedContract,
             "POST",
             "/invoke",

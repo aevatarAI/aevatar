@@ -80,6 +80,11 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
         }
 
         var targetServiceInstanceId = request.Operation.ServiceInstanceId;
+        // Agent Key connected-service tools use slug-only NyxID proxy routes, so their operation
+        // target is synthetic. Admission binds those operations to the registration-sealed runtime selector.
+        if (TryAdmitSyntheticAgentKeyService(registration, request.Operation, targetServiceInstanceId, out var syntheticResult))
+            return syntheticResult;
+
         if (!IsCanonicalIdentifier(targetServiceInstanceId) ||
             !ContainsExact(
                 registration.ChannelAgentKey.Grant.AllowedServiceIds,
@@ -111,6 +116,71 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
             ? ChannelRegistrationAuthorityAdmissionResult.Allow()
             : ChannelRegistrationAuthorityAdmissionResult.Deny(
                 ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
+    }
+
+    private static bool TryAdmitSyntheticAgentKeyService(
+        ChannelBotRegistrationEntry registration,
+        AgentToolOperationAdmission operation,
+        string targetServiceInstanceId,
+        out ChannelRegistrationAuthorityAdmissionResult result)
+    {
+        result = ChannelRegistrationAuthorityAdmissionResult.Deny(
+            ChannelRegistrationAuthorityAdmissionReason.TargetNotGranted);
+        if (!TryReadAgentKeySyntheticServiceSlug(targetServiceInstanceId, out var serviceSlug))
+            return false;
+
+        if (!string.Equals(operation.ServiceSlug, serviceSlug, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (registration.RegistrationServiceAllowlist.ServiceIds.Count == 0)
+            return true;
+
+        if (!RuntimeSelectorAllows(registration.RuntimeConfig, serviceSlug, operation))
+        {
+            result = ChannelRegistrationAuthorityAdmissionResult.Deny(
+                ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
+            return true;
+        }
+
+        result = ChannelRegistrationAuthorityAdmissionResult.Allow();
+        return true;
+    }
+
+    private static bool RuntimeSelectorAllows(
+        ChannelBotRuntimeConfig? runtimeConfig,
+        string serviceSlug,
+        AgentToolOperationAdmission operation)
+    {
+        if (runtimeConfig is null)
+            return false;
+
+        foreach (var selector in runtimeConfig.NyxidServiceSelectors)
+        {
+            if (!string.Equals(selector.ServiceSlug, serviceSlug, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (selector.EndpointNames.Count == 0)
+                return true;
+            if (operation.Identity is not AgentToolOperationIdentity.PublishedEndpoint published)
+                return false;
+            return selector.EndpointNames.Any(endpointName =>
+                string.Equals(endpointName, published.EndpointId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return false;
+    }
+
+    private static bool TryReadAgentKeySyntheticServiceSlug(
+        string? serviceInstanceId,
+        out string serviceSlug)
+    {
+        const string prefix = "agent-key:";
+        serviceSlug = string.Empty;
+        if (serviceInstanceId?.StartsWith(prefix, StringComparison.Ordinal) != true)
+            return false;
+        serviceSlug = serviceInstanceId[prefix.Length..];
+        return IsCanonicalIdentifier(serviceSlug) &&
+               !serviceSlug.Contains('/', StringComparison.Ordinal) &&
+               !serviceSlug.Contains('\\', StringComparison.Ordinal);
     }
 
     private static bool MatchesCredentialDescriptor(

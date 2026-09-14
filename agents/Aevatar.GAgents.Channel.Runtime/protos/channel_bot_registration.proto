@@ -98,10 +98,6 @@ message ChannelBotRuntimeNyxIdServiceSelector {
   repeated string endpoint_names = 2;
 }
 
-message ChannelBotRuntimeAgentKeyServiceRequirements {
-  repeated string allowed_service_slugs = 1;
-}
-
 message ChannelBotRuntimeConfig {
   string instructions = 1;
   ChannelBotRuntimeDefaultSkillConfig default_skill = 2;
@@ -109,7 +105,8 @@ message ChannelBotRuntimeConfig {
   repeated string extra_tool_names = 4;
   repeated ChannelBotRuntimeNyxIdServiceSelector nyxid_service_selectors = 5;
   ChannelBotRuntimeCredentialSourceMode credential_source_mode = 6;
-  ChannelBotRuntimeAgentKeyServiceRequirements agent_key_service_requirements = 7;
+  reserved 7;
+  reserved "agent_key_service_requirements";
 }
 
 message ChannelRuntimeConfigProof {

@@ -336,7 +336,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 ? ChannelRegistrationAuthorizationMode.NyxidDefault
                 : ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
             DefaultSkillName = defaultSkillName ?? string.Empty,
-            RuntimeConfig = runtimeConfig?.Clone(),
+            RuntimeConfig = ChannelRegistrationLocalMirrorRuntimeConfig.Build(runtimeConfig, defaultSkillName, authorization),
         };
 
         if (authorization is not null)

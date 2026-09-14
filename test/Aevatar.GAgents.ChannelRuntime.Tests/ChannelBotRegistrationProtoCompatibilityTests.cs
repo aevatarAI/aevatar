@@ -114,16 +114,15 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         AssertFields<ChannelBotRuntimeNyxIdServiceSelector>(
             ("service_slug", 1),
             ("endpoint_names", 2));
-        AssertFields<ChannelBotRuntimeAgentKeyServiceRequirements>(
-            ("allowed_service_slugs", 1));
         AssertFields<ChannelBotRuntimeConfig>(
             ("instructions", 1),
             ("default_skill", 2),
             ("tool_set_refs", 3),
             ("extra_tool_names", 4),
             ("nyxid_service_selectors", 5),
-            ("credential_source_mode", 6),
-            ("agent_key_service_requirements", 7));
+            ("credential_source_mode", 6));
+        ChannelBotRuntimeConfig.Descriptor.FindFieldByName("agent_key_service_requirements")
+            .Should().BeNull();
         AssertFields<ChannelRuntimeConfigProof>(
             ("registration_id", 1),
             ("config_revision", 2),

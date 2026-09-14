@@ -1,3 +1,5 @@
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection;
@@ -16,18 +18,49 @@ public sealed record ChannelRegistrationDependencies(
 public interface IChannelRegistrationDependencyResolver
 {
     Task<ChannelRegistrationDependencies> ResolveAsync(
+        VerifiedChannelRegistrationServiceSelection selection,
         string scopeId, string platform, string defaultSkillName, CancellationToken ct);
 }
 
-public sealed class ChannelRegistrationConfiguredDependencyResolver : IChannelRegistrationDependencyResolver
+public sealed class ChannelRegistrationConfiguredDependencyResolver(
+    NyxIdRelayOptions options) : IChannelRegistrationDependencyResolver
 {
+    private readonly NyxIdRelayOptions _options = options ?? throw new ArgumentNullException(nameof(options));
+
     public Task<ChannelRegistrationDependencies> ResolveAsync(
+        VerifiedChannelRegistrationServiceSelection selection,
         string scopeId, string platform, string defaultSkillName, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(selection);
         ct.ThrowIfCancellationRequested();
-        // Current registration configuration declares no exact Skill/Workflow/LLM service IDs.
-        // Lark's connection is separately resolved from this registration's creation provenance.
-        return Task.FromResult(new ChannelRegistrationDependencies([], platform == NyxLarkProvisioningService.PlatformId));
+        var requiredServiceIds = ResolveRequiredServiceIds(
+            _options.ChannelAgentKeyRequiredServiceSlugs,
+            selection.Inventory);
+        return Task.FromResult(new ChannelRegistrationDependencies(
+            requiredServiceIds,
+            platform == NyxLarkProvisioningService.PlatformId));
+    }
+
+    private static string[] ResolveRequiredServiceIds(
+        IEnumerable<string> requiredServiceSlugs,
+        IReadOnlyList<NyxIdUserService> inventory)
+    {
+        var serviceIds = new List<string>();
+        foreach (var serviceSlug in requiredServiceSlugs
+                     .Select(static slug => slug.Trim())
+                     .Where(static slug => slug.Length > 0)
+                     .Distinct(StringComparer.Ordinal)
+                     .Order(StringComparer.Ordinal))
+        {
+            var services = inventory
+                .Where(service => service.IsActive && string.Equals(service.Slug, serviceSlug, StringComparison.Ordinal))
+                .ToArray();
+            if (services.Length != 1)
+                throw new InvalidOperationException($"Required channel Agent Key service slug '{serviceSlug}' did not resolve to exactly one active UserService.");
+            serviceIds.Add(services[0].Id);
+        }
+
+        return serviceIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
     }
 }
 
@@ -43,14 +76,17 @@ public sealed class VerifiedChannelRegistrationExplicitAuthorization
     // Only the nested preparation flow can mint this final Key-provisioning handoff.
     private VerifiedChannelRegistrationExplicitAuthorization(
         VerifiedChannelRegistrationAuthorizationPlan plan,
-        VerifiedChannelBotServiceConnection? connection)
+        VerifiedChannelBotServiceConnection? connection,
+        IReadOnlyList<ChannelBotRuntimeNyxIdServiceSelector> runtimeSelectors)
     {
         Plan = plan;
         Connection = connection;
+        RuntimeSelectors = runtimeSelectors.Select(static selector => selector.Clone()).ToArray();
     }
 
     public VerifiedChannelRegistrationAuthorizationPlan Plan { get; }
     public VerifiedChannelBotServiceConnection? Connection { get; }
+    public IReadOnlyList<ChannelBotRuntimeNyxIdServiceSelector> RuntimeSelectors { get; }
 
     /// <summary>
     /// Prepares the immutable handoff to restricted Key provisioning. It never creates a Key.
@@ -100,7 +136,7 @@ public sealed class VerifiedChannelRegistrationExplicitAuthorization
 
                 failureCode = "nyxid_scope_plan_unavailable";
                 var required = await dependencies.ResolveAsync(
-                    request.ScopeId, request.Platform, request.DefaultSkillName, ct);
+                    verified.Selection, request.ScopeId, request.Platform, request.DefaultSkillName, ct);
                 if (required.RequiresBotProxyConnection && connection is null)
                 {
                     // Relay-only Telegram has no proxy dependency. A configuration requiring one
@@ -116,7 +152,8 @@ public sealed class VerifiedChannelRegistrationExplicitAuthorization
                     return new(null, planned.ErrorCode);
 
                 completed = true;
-                return new(new VerifiedChannelRegistrationExplicitAuthorization(planned.Plan!, connection), string.Empty);
+                return new(new VerifiedChannelRegistrationExplicitAuthorization(
+                    planned.Plan!, connection, BuildRuntimeSelectors(verified.Selection)), string.Empty);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
@@ -129,6 +166,26 @@ public sealed class VerifiedChannelRegistrationExplicitAuthorization
                 if (!completed && connection is not null)
                     await CleanupConnectionAsync(request.AccessToken, connection);
             }
+        }
+
+        private static IReadOnlyList<ChannelBotRuntimeNyxIdServiceSelector> BuildRuntimeSelectors(
+            VerifiedChannelRegistrationServiceSelection selection)
+        {
+            var selectedSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var selectors = new List<ChannelBotRuntimeNyxIdServiceSelector>();
+            foreach (var service in selection.RegistrationServices)
+            {
+                var serviceSlug = service.Slug.Trim();
+                if (string.IsNullOrWhiteSpace(serviceSlug) || !selectedSlugs.Add(serviceSlug))
+                    continue;
+
+                selectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+                {
+                    ServiceSlug = serviceSlug,
+                });
+            }
+
+            return selectors;
         }
 
         /// <summary>
@@ -149,5 +206,42 @@ public sealed class VerifiedChannelRegistrationExplicitAuthorization
                     "channel_service_connection_cleanup_failed", connection.UserServiceId, connection.RegistrationId, ex.GetType().Name);
             }
         }
+    }
+}
+
+internal static class ChannelRegistrationLocalMirrorRuntimeConfig
+{
+    public static ChannelBotRuntimeConfig? Build(
+        ChannelBotRuntimeConfig? runtimeConfig,
+        string? defaultSkillName,
+        VerifiedChannelRegistrationExplicitAuthorization? authorization)
+    {
+        var config = runtimeConfig?.Clone();
+        var normalizedDefaultSkillName = defaultSkillName?.Trim();
+        if (config is null && !string.IsNullOrWhiteSpace(normalizedDefaultSkillName))
+        {
+            config = new ChannelBotRuntimeConfig
+            {
+                DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+                {
+                    Name = normalizedDefaultSkillName,
+                },
+                CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+                ToolSetRefs = { ToolSetNames.ChannelReplyDefault },
+            };
+        }
+
+        if (authorization is null)
+            return config;
+
+        if (config is null && authorization.RuntimeSelectors.Count == 0)
+            return null;
+
+        config ??= new ChannelBotRuntimeConfig();
+        config.NyxidServiceSelectors.Clear();
+        config.NyxidServiceSelectors.AddRange(authorization.RuntimeSelectors.Select(static selector => selector.Clone()));
+        if (config.CredentialSourceMode == ChannelBotRuntimeCredentialSourceMode.Unspecified)
+            config.CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
+        return config;
     }
 }

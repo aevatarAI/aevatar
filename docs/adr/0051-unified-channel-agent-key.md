@@ -18,9 +18,11 @@ weaker semantics.
 The first unified-key implementation addressed that inconsistency with a
 `NYXID_DEFAULT`-only model. The approved current scope now also requires a
 creation-time Service allowlist without adding an existing-registration update
-lifecycle. A caller must be able to omit `service_ids` and retain NyxID default
-authorization, or explicitly provide a complete array, including an empty array,
-and create a restricted key from an authoritative NyxID scope plan.
+lifecycle. A caller must be able to omit `authorization_mode`, or use
+`nyxid_default`, and retain NyxID default authorization even when legacy
+`service_ids` is present. A caller must also be able to opt into
+`explicit_service_allowlist`, optionally provide a complete array including an
+empty array, and create a restricted key from an authoritative NyxID scope plan.
 
 The registration Actor remains the sole owner of the durable authorization fact.
 Raw key material must remain outside Protobuf state, events, projections, query
@@ -37,15 +39,17 @@ authorization modes:
 
 | Creation input | Persisted mode | Meaning |
 |---|---|---|
-| Root `service_ids` is absent | `NYXID_DEFAULT` | Create a `general`, `read write proxy` key while omitting Service and Node restrictions, both allow-all request fields, and the scope-plan digest. Persist the actual grant returned by NyxID. |
-| Root `service_ids` is a valid array, including `[]` | `EXPLICIT_SERVICE_ALLOWLIST` | Validate the complete business allowlist, plan the exact effective grant, and create a restricted key with both allow-all fields set to false. |
-| Root `service_ids` is `null`, is not an array, or contains an invalid element | No write | Return `invalid_service_ids` before Service lookup, connection creation, scope planning, key creation, Vault mutation, bot or route creation, or Actor dispatch. |
+| Root `authorization_mode` is absent, blank, or `nyxid_default` | `NYXID_DEFAULT` | Create a `general`, `read write proxy` key while omitting Service and Node restrictions, both allow-all request fields, and the scope-plan digest. Persist the actual grant returned by NyxID. Legacy root `service_ids` in this mode is ignored for authorization. |
+| Root `authorization_mode` is `explicit_service_allowlist` and `service_ids` is absent or a valid array, including `[]` | `EXPLICIT_SERVICE_ALLOWLIST` | Validate the complete business allowlist, plan the exact effective grant, and create a restricted key with both allow-all fields set to false. Omitted `service_ids` has the same empty allowlist meaning as `[]`. |
+| Root `authorization_mode` is `explicit_service_allowlist` and `service_ids` is `null`, is not an array, or contains an invalid element | No write | Return `invalid_service_ids` before Service lookup, connection creation, scope planning, key creation, Vault mutation, bot or route creation, or Actor dispatch. |
+| Root `authorization_mode` is an unknown nonblank value or is not a string | No write | Return `invalid_service_ids` before Service lookup, connection creation, scope planning, key creation, Vault mutation, bot or route creation, or Actor dispatch. |
 
 Legal array elements are strings that remain nonempty after trimming. The boundary
-trims, de-duplicates, and sorts them with ordinal semantics. It preserves field
-presence so an explicit empty array cannot be confused with omission. Callers
-cannot supply `authorization_mode`, provider grant fields, runtime dependencies,
-or a scope-plan digest.
+trims, de-duplicates, and sorts them with ordinal semantics. Explicit mode
+preserves the difference between omitted `service_ids` and invalid `service_ids`,
+while treating omitted and `[]` as the same empty business allowlist. Callers may
+supply `authorization_mode`; they cannot supply provider grant fields, runtime
+dependencies, or a scope-plan digest.
 
 Each provisioning entry resolves the authenticated actor and registration owner
 exactly once, before any NyxID mutation. The resulting
