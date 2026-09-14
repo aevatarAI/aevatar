@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
+using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
@@ -32,6 +33,9 @@ public static class ChannelCallbackEndpoints
 
         // Registration CRUD — requires authentication
         group.MapGet("/me", HandleGetCallerInfoAsync).RequireAuthorization();
+        group.MapGet("/services", HandleListServicesAsync)
+            .Produces<object[]>(StatusCodes.Status200OK, "application/json")
+            .RequireAuthorization();
         group.MapPost("/registrations", HandleRegisterAsync)
             .WithEndpointAudit(
                 "channel.registration.create",
@@ -44,6 +48,9 @@ public static class ChannelCallbackEndpoints
             .Produces<object[]>(StatusCodes.Status200OK, "application/json")
             .RequireAuthorization();
         group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
+        group.MapGet("/registrations/{registrationId}/runtime-config", HandleGetRuntimeConfigAsync)
+            .Produces<object>(StatusCodes.Status200OK, "application/json")
+            .RequireAuthorization();
         group.MapPost("/registrations/{registrationId}/runtime-config", HandleUpdateRuntimeConfigAsync)
             .WithEndpointAudit(
                 "channel.registration.runtime-config.update",
@@ -215,6 +222,37 @@ public static class ChannelCallbackEndpoints
         return Results.Json(payload, statusCode: statusCode);
     }
 
+    private static async Task<IResult> HandleListServicesAsync(
+        HttpContext http,
+        [FromServices] IChannelRegistrationNyxIdAuthorizationPort authorizationPort,
+        CancellationToken ct)
+    {
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        var services = await authorizationPort.ReadUserServicesAsync(accessToken, ct);
+        if (!services.Succeeded)
+        {
+            var errorCode = services.Failure?.Code ?? "nyxid_user_services_unavailable";
+            return Results.Json(
+                new { error = errorCode },
+                statusCode: ResolveProvisioningFailureStatusCode(errorCode));
+        }
+
+        return Results.Json(
+            services.Value!.Services.Select(static service => new
+            {
+                id = service.Id,
+                slug = service.Slug,
+                label = service.Label ?? service.CatalogServiceName ?? service.Slug,
+                catalog_service_name = service.CatalogServiceName ?? string.Empty,
+                active = service.IsActive,
+                credential_source = MapCredentialSource(service.CredentialSource),
+            }).ToArray(),
+            RegistrationJsonOptions);
+    }
+
     /// <summary>
     /// Lists channel-bot registrations. Scoped to the caller's own account by default
     /// (a tenant must not see other tenants' bots, and their status is only queryable
@@ -274,6 +312,12 @@ public static class ChannelCallbackEndpoints
                 nyx_agent_api_key_id = e.NyxAgentApiKeyId,
                 nyx_conversation_route_id = e.NyxConversationRouteId,
                 default_skill_name = e.DefaultSkillName,
+                default_skill = MapDefaultSkill(e.RuntimeConfig, e.DefaultSkillName),
+                has_instructions = !string.IsNullOrWhiteSpace(e.RuntimeConfig?.Instructions),
+                has_tool_set_refs = e.RuntimeConfig?.ToolSetRefs.Count > 0,
+                has_extra_tool_names = e.RuntimeConfig?.ExtraToolNames.Count > 0,
+                nyxid_service_selectors = MapNyxIdServiceSelectors(e.RuntimeConfig),
+                agent_key = MapAgentKeyStatus(e),
                 workflow_result_delivery_status = MapCapabilityStatus(e, capabilityStatus),
                 workflow_result_delivery_failure_phase = repairFailed
                     ? MapRepairPhase(e.WorkflowResultDeliveryRepair?.FailurePhase ??
@@ -292,19 +336,47 @@ public static class ChannelCallbackEndpoints
         return Results.Json(result, RegistrationJsonOptions);
     }
 
+    private static async Task<IResult> HandleGetRuntimeConfigAsync(
+        string registrationId,
+        HttpContext http,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        CancellationToken ct)
+    {
+        var snapshot = await queryPort.GetSnapshotAsync(registrationId, ct);
+        if (snapshot is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
+        if (!CallerOwnsRegistration(http, snapshot.Registration))
+            return Results.NotFound(new { error = "Registration not found" });
+
+        return Results.Json(
+            MapRuntimeConfigDetail(snapshot),
+            RegistrationJsonOptions);
+    }
+
     private static async Task<IResult> HandleUpdateRuntimeConfigAsync(
         string registrationId,
         HttpContext http,
         [FromServices] ChannelRegistrationCommandFacade commandFacade,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IChannelRegistrationOwnerResolver ownerResolver,
+        [FromServices] ChannelRegistrationAuthorizationPlanner authorizationPlanner,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
         ChannelBotRuntimeConfig? runtimeConfig;
+        ChannelRegistrationServiceSelection serviceSelection;
         try
         {
             using var document = await JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+            if (!ChannelRegistrationServiceIdsJsonParser.TryParse(
+                    document.RootElement,
+                    out serviceSelection))
+            {
+                return Results.BadRequest(new { error = "invalid_service_ids" });
+            }
+
             if (!ChannelBotRuntimeConfigJsonParser.TryParse(
                     document.RootElement,
                     out runtimeConfig))
@@ -322,23 +394,86 @@ public static class ChannelCallbackEndpoints
         if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        var callerScopeId = ResolveScopeId(http, null, required: false).ScopeId;
-        if (string.IsNullOrWhiteSpace(callerScopeId) ||
-            !string.Equals(registration.ScopeId, callerScopeId, StringComparison.Ordinal))
+        if (!CallerOwnsRegistration(http, registration))
         {
             return Results.NotFound(new { error = "Registration not found" });
         }
 
-        await commandFacade.UpdateRuntimeConfigAsync(
+        var effectiveServiceSelection = serviceSelection.Specified
+            ? serviceSelection
+            : CurrentServiceSelection(registration);
+        var validation = ChannelBotRuntimeConfigValidation.ValidateStructure(runtimeConfig);
+        if (validation.Count > 0)
+        {
+            return Results.Json(
+                new
+                {
+                    error = "invalid_runtime_config",
+                    field_errors = validation,
+                },
+                RegistrationJsonOptions,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var verifiedServiceSlugs = Array.Empty<string>();
+        if (effectiveServiceSelection.AuthorizationMode == ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist)
+        {
+            var accessToken = ResolveBearerAccessToken(http);
+            if (string.IsNullOrWhiteSpace(accessToken))
+                return Results.Unauthorized();
+
+            var owner = await ownerResolver.ResolveAsync(accessToken, registration.ScopeId, ct);
+            if (!owner.Succeeded)
+                return Results.Json(
+                    new { error = owner.ErrorCode },
+                    statusCode: ResolveProvisioningFailureStatusCode(owner.ErrorCode));
+
+            var verified = await authorizationPlanner.VerifySelectionAsync(new(
+                accessToken,
+                owner.Owner!,
+                effectiveServiceSelection.ServiceIds,
+                []), ct);
+            if (verified.Selection is null)
+                return Results.Json(
+                    new { error = verified.ErrorCode },
+                    statusCode: ResolveProvisioningFailureStatusCode(verified.ErrorCode));
+
+            verifiedServiceSlugs = verified.Selection.RegistrationServices
+                .Select(static service => service.Slug)
+                .Where(static slug => !string.IsNullOrWhiteSpace(slug))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        validation = ChannelBotRuntimeConfigValidation.ValidateSelectorAuthorization(
+            runtimeConfig,
+            effectiveServiceSelection.AuthorizationMode,
+            verifiedServiceSlugs);
+        if (validation.Count > 0)
+        {
+            return Results.Json(
+                new
+                {
+                    error = "invalid_runtime_config",
+                    field_errors = validation,
+                },
+                RegistrationJsonOptions,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var receipt = await commandFacade.UpdateRuntimeConfigAsync(
             registrationId,
             runtimeConfig,
             runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
+            effectiveServiceSelection,
             ct);
 
         return Results.Accepted(value: new
         {
             status = "accepted",
             registration_id = registrationId,
+            command_id = receipt.CommandId,
+            correlation_id = receipt.CorrelationId,
             default_skill_name = runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
         });
     }
@@ -678,6 +813,126 @@ public static class ChannelCallbackEndpoints
         }, statusCode: StatusCodes.Status410Gone));
     }
 
+    private static ChannelRegistrationServiceSelection CurrentServiceSelection(
+        ChannelBotRegistrationEntry registration) =>
+        registration.AuthorizationMode == ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist
+            ? ChannelRegistrationServiceSelection.Explicit(
+                registration.RegistrationServiceAllowlist?.ServiceIds.ToArray() ?? [])
+            : ChannelRegistrationServiceSelection.NyxIdDefaultSpecified();
+
+    private static bool CallerOwnsRegistration(HttpContext http, ChannelBotRegistrationEntry registration)
+    {
+        var callerScopeId = ResolveScopeId(http, null, required: false).ScopeId;
+        return !string.IsNullOrWhiteSpace(callerScopeId) &&
+            string.Equals(registration.ScopeId, callerScopeId, StringComparison.Ordinal);
+    }
+
+    private static object MapRuntimeConfigDetail(ChannelBotRegistrationSnapshot snapshot)
+    {
+        var entry = snapshot.Registration;
+        var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(entry);
+        var repairFailed = capabilityStatus ==
+            ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
+        return new
+        {
+            registration_id = entry.Id,
+            platform = entry.Platform,
+            label = entry.Id,
+            scope_id = entry.ScopeId,
+            authorization_mode = MapAuthorizationMode(entry),
+            service_ids = MapRegistrationServiceIds(entry),
+            runtime_config = MapRuntimeConfig(entry.RuntimeConfig),
+            default_skill = MapDefaultSkill(entry.RuntimeConfig, entry.DefaultSkillName),
+            state_version = snapshot.StateVersion,
+            updated_at = (string?)null,
+            agent_key = MapAgentKeyStatus(entry),
+            workflow_result_delivery_status = MapCapabilityStatus(entry, capabilityStatus),
+            workflow_result_delivery_failure_phase = repairFailed
+                ? MapRepairPhase(entry.WorkflowResultDeliveryRepair?.FailurePhase ??
+                    ChannelWorkflowResultDeliveryRepairPhase.Unspecified)
+                : null,
+            workflow_result_delivery_failure_reason = repairFailed
+                ? MapRepairFailureReason(entry.WorkflowResultDeliveryRepair?.FailureReason ??
+                    ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
+                : null,
+            nyxid_service_authorization = new
+            {
+                mode = MapAuthorizationMode(entry),
+                service_ids = MapRegistrationServiceIds(entry) ?? Array.Empty<string>(),
+                selector_service_slugs = MapNyxIdServiceSelectors(entry.RuntimeConfig)
+                    .Select(static selector => selector.ServiceSlug)
+                    .ToArray(),
+            },
+        };
+    }
+
+    private static object MapRuntimeConfig(ChannelBotRuntimeConfig? config) => new
+    {
+        instructions = config?.Instructions ?? string.Empty,
+        default_skill = MapDefaultSkill(config, null),
+        tool_set_refs = config?.ToolSetRefs.ToArray() ?? Array.Empty<string>(),
+        extra_tool_names = config?.ExtraToolNames.ToArray() ?? Array.Empty<string>(),
+        nyxid_service_selectors = MapNyxIdServiceSelectors(config),
+        credential_source_mode = MapCredentialSourceMode(config?.CredentialSourceMode ??
+            ChannelBotRuntimeCredentialSourceMode.Unspecified),
+    };
+
+    private static object MapDefaultSkill(ChannelBotRuntimeConfig? config, string? fallbackName)
+    {
+        var defaultSkill = config?.DefaultSkill;
+        return new
+        {
+            name = defaultSkill?.Name ?? fallbackName ?? string.Empty,
+            version = defaultSkill?.Version ?? string.Empty,
+        };
+    }
+
+    private static IReadOnlyList<NyxIdServiceSelectorResponse> MapNyxIdServiceSelectors(
+        ChannelBotRuntimeConfig? config) =>
+        config?.NyxidServiceSelectors
+            .Select(static selector => new NyxIdServiceSelectorResponse(
+                selector.ServiceSlug ?? string.Empty,
+                selector.EndpointNames.ToArray()))
+            .ToArray() ?? [];
+
+    private static object MapAgentKeyStatus(ChannelBotRegistrationEntry entry) => new
+    {
+        api_key_id = entry.ChannelAgentKey?.ApiKeyId ?? entry.NyxAgentApiKeyId ?? string.Empty,
+        ready = entry.ChannelAgentKey?.SecretReference is not null ||
+            entry.WorkflowResultDeliveryCredential is not null,
+        status = entry.ChannelAgentKey?.SecretReference is not null ||
+            entry.WorkflowResultDeliveryCredential is not null
+                ? "ready"
+                : "missing",
+    };
+
+    private static object MapCredentialSource(NyxIdUserServiceCredentialSource source) => new
+    {
+        kind = source.Kind switch
+        {
+            NyxIdUserServiceCredentialSourceKind.Personal => "personal",
+            NyxIdUserServiceCredentialSourceKind.Organization => "organization",
+            _ => "unspecified",
+        },
+        organization_id = source.OrganizationId ?? string.Empty,
+        organization_role = source.OrganizationRole switch
+        {
+            NyxIdOrganizationRole.Admin => "admin",
+            NyxIdOrganizationRole.Member => "member",
+            NyxIdOrganizationRole.Viewer => "viewer",
+            _ => "unspecified",
+        },
+        allowed = source.Allowed,
+    };
+
+    private static string MapCredentialSourceMode(ChannelBotRuntimeCredentialSourceMode mode) => mode switch
+    {
+        ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey => "registration_agent_key",
+        ChannelBotRuntimeCredentialSourceMode.SenderBinding => "sender_binding",
+        ChannelBotRuntimeCredentialSourceMode.Unspecified => "unspecified",
+        _ => "unsupported",
+    };
+
     private static int ResolveProvisioningFailureStatusCode(string? error)
     {
         var reason = error ?? string.Empty;
@@ -891,6 +1146,169 @@ public static class ChannelCallbackEndpoints
     }
 
     private sealed record ScopeIdResolution(string? ScopeId, string? Error);
+
+    private sealed record NyxIdServiceSelectorResponse(
+        string ServiceSlug,
+        IReadOnlyList<string> EndpointNames);
+
+    private sealed record RuntimeConfigFieldError(
+        string Field,
+        string Code,
+        string Message);
+
+    private static class ChannelBotRuntimeConfigValidation
+    {
+        private const int MaxInstructionsLength = 4000;
+        private const int MaxShortValueLength = 128;
+        private const int MaxToolSetRefs = 32;
+        private const int MaxExtraToolNames = 64;
+        private const int MaxSelectors = 16;
+        private const int MaxEndpointNames = 64;
+
+        public static IReadOnlyList<RuntimeConfigFieldError> ValidateStructure(
+            ChannelBotRuntimeConfig? config)
+        {
+            var errors = new List<RuntimeConfigFieldError>();
+            if (config is null)
+                return errors;
+
+            AddLengthError(errors, "runtime_config.instructions", config.Instructions, MaxInstructionsLength);
+            if (config.DefaultSkill is not null)
+            {
+                AddLengthError(errors, "runtime_config.default_skill.name", config.DefaultSkill.Name, MaxShortValueLength);
+                AddLengthError(errors, "runtime_config.default_skill.version", config.DefaultSkill.Version, MaxShortValueLength);
+                if (string.IsNullOrWhiteSpace(config.DefaultSkill.Name) &&
+                    !string.IsNullOrWhiteSpace(config.DefaultSkill.Version))
+                {
+                    errors.Add(new RuntimeConfigFieldError(
+                        "runtime_config.default_skill.version",
+                        "default_skill_name_required",
+                        "default_skill.version requires default_skill.name."));
+                }
+            }
+
+            ValidateStringList(errors, "runtime_config.tool_set_refs", config.ToolSetRefs, MaxToolSetRefs, MaxShortValueLength);
+            ValidateStringList(errors, "runtime_config.extra_tool_names", config.ExtraToolNames, MaxExtraToolNames, MaxShortValueLength);
+            ValidateSelectors(errors, config);
+            return errors;
+        }
+
+        public static IReadOnlyList<RuntimeConfigFieldError> ValidateSelectorAuthorization(
+            ChannelBotRuntimeConfig? config,
+            ChannelRegistrationAuthorizationMode authorizationMode,
+            IReadOnlyList<string> verifiedServiceSlugs)
+        {
+            var errors = new List<RuntimeConfigFieldError>();
+            if (config is null || config.NyxidServiceSelectors.Count == 0)
+                return errors;
+
+            if (authorizationMode != ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist)
+            {
+                errors.Add(new RuntimeConfigFieldError(
+                    "runtime_config.nyxid_service_selectors",
+                    "explicit_service_allowlist_required",
+                    "nyxid_service_selectors require explicit_service_allowlist authorization."));
+                return errors;
+            }
+
+            var authorizedSelectorSlugs = verifiedServiceSlugs
+                .Where(static slug => !string.IsNullOrWhiteSpace(slug))
+                .ToHashSet(StringComparer.Ordinal);
+            for (var index = 0; index < config.NyxidServiceSelectors.Count; index++)
+            {
+                var serviceSlug = config.NyxidServiceSelectors[index].ServiceSlug;
+                if (authorizedSelectorSlugs.Contains(serviceSlug))
+                    continue;
+
+                errors.Add(new RuntimeConfigFieldError(
+                    $"runtime_config.nyxid_service_selectors[{index}].service_slug",
+                    "service_not_authorized",
+                    "runtime selector service_slug must come from the verified registration service authorization."));
+            }
+
+            return errors;
+        }
+
+        private static void ValidateSelectors(
+            ICollection<RuntimeConfigFieldError> errors,
+            ChannelBotRuntimeConfig config)
+        {
+            if (config.NyxidServiceSelectors.Count > MaxSelectors)
+            {
+                errors.Add(new RuntimeConfigFieldError(
+                    "runtime_config.nyxid_service_selectors",
+                    "too_many_items",
+                    $"nyxid_service_selectors supports at most {MaxSelectors} items."));
+            }
+
+            var seenSlugs = new HashSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < config.NyxidServiceSelectors.Count; index++)
+            {
+                var selector = config.NyxidServiceSelectors[index];
+                var field = $"runtime_config.nyxid_service_selectors[{index}].service_slug";
+                AddLengthError(errors, field, selector.ServiceSlug, MaxShortValueLength);
+                if (!seenSlugs.Add(selector.ServiceSlug))
+                {
+                    errors.Add(new RuntimeConfigFieldError(
+                        field,
+                        "duplicate_service_slug",
+                        "Each nyxid service selector must target a distinct service_slug."));
+                }
+
+                ValidateStringList(
+                    errors,
+                    $"runtime_config.nyxid_service_selectors[{index}].endpoint_names",
+                    selector.EndpointNames,
+                    MaxEndpointNames,
+                    MaxShortValueLength);
+            }
+        }
+
+        private static void ValidateStringList(
+            ICollection<RuntimeConfigFieldError> errors,
+            string field,
+            IReadOnlyList<string> values,
+            int maxCount,
+            int maxLength)
+        {
+            if (values.Count > maxCount)
+            {
+                errors.Add(new RuntimeConfigFieldError(
+                    field,
+                    "too_many_items",
+                    $"{field} supports at most {maxCount} items."));
+            }
+
+            var seenValues = new HashSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < values.Count; index++)
+            {
+                var value = values[index];
+                AddLengthError(errors, $"{field}[{index}]", value, maxLength);
+                if (!seenValues.Add(value))
+                {
+                    errors.Add(new RuntimeConfigFieldError(
+                        $"{field}[{index}]",
+                        "duplicate_value",
+                        "Repeated values are not allowed."));
+                }
+            }
+        }
+
+        private static void AddLengthError(
+            ICollection<RuntimeConfigFieldError> errors,
+            string field,
+            string value,
+            int maxLength)
+        {
+            if ((value?.Length ?? 0) <= maxLength)
+                return;
+
+            errors.Add(new RuntimeConfigFieldError(
+                field,
+                "too_long",
+                $"{field} must be {maxLength} characters or fewer."));
+        }
+    }
 
     private sealed record RegistrationRequest(
         string? Platform,

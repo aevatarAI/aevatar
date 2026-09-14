@@ -38,6 +38,7 @@ const enUSMessages = {
   'nav.items.myTeams': 'My Teams',
   'nav.items.services': 'Services',
   'nav.items.settings': 'Settings',
+  'nav.items.channelSettings': 'Channel Settings',
   'nav.items.topology': 'Topology',
   'pages.gagents.index.platformBreadcrumb': 'Platform',
   'pages.chat.index.chatStopped': 'Chat stopped.',

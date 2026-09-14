@@ -115,8 +115,10 @@ public sealed class ChannelRegistrationCommandFacade
         string registrationId,
         ChannelBotRuntimeConfig? runtimeConfig,
         string defaultSkillName,
+        ChannelRegistrationServiceSelection serviceSelection,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(serviceSelection);
         var result = await _updateRuntimeConfigDispatchService.DispatchAsync(
             new ChannelBotUpdateRuntimeConfigCommand
             {
@@ -124,6 +126,14 @@ public sealed class ChannelRegistrationCommandFacade
                 RuntimeConfig = runtimeConfig?.Clone(),
                 DefaultSkillName = defaultSkillName ?? string.Empty,
                 UpdatedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                AuthorizationMode = serviceSelection.AuthorizationMode,
+                RegistrationServiceAllowlist = serviceSelection.AuthorizationMode ==
+                    ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist
+                        ? new ChannelRegistrationServiceAllowlist
+                        {
+                            ServiceIds = { serviceSelection.ServiceIds },
+                        }
+                        : null,
             },
             ct);
         return ResolveReceipt(result);

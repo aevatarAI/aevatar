@@ -157,6 +157,7 @@ const NAVIGATION_MENU_MESSAGE_IDS: Readonly<Record<string, string>> = {
   "/deployments": "nav.items.deployments",
   "/runtime/explorer": "nav.items.topology",
   "/settings": "nav.items.settings",
+  "/settings/channels": "nav.items.channelSettings",
 };
 const LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT: LiveOpsAttentionSnapshot = {
   hasPendingAttention: false,

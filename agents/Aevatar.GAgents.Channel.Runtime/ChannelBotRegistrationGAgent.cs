@@ -195,6 +195,8 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             UpdatedAtUnixMs = cmd.UpdatedAtUnixMs > 0
                 ? cmd.UpdatedAtUnixMs
                 : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            AuthorizationMode = cmd.AuthorizationMode,
+            RegistrationServiceAllowlist = cmd.RegistrationServiceAllowlist?.Clone(),
         });
         Logger.LogInformation("Updated channel bot runtime config: id={Id}", registrationId);
     }
@@ -567,6 +569,11 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
 
         entry.RuntimeConfig = evt.RuntimeConfig?.Clone();
         entry.DefaultSkillName = evt.DefaultSkillName ?? string.Empty;
+        entry.AuthorizationMode = evt.AuthorizationMode;
+        entry.RegistrationServiceAllowlist = evt.AuthorizationMode ==
+            ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist
+                ? evt.RegistrationServiceAllowlist?.Clone() ?? new ChannelRegistrationServiceAllowlist()
+                : null;
         return next;
     }
 

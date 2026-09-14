@@ -6,24 +6,31 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 public sealed class ChannelRegistrationServiceSelection
 {
     private static readonly ChannelRegistrationServiceSelection DefaultSelection =
-        new(ChannelRegistrationAuthorizationMode.NyxidDefault, []);
+        new(ChannelRegistrationAuthorizationMode.NyxidDefault, [], false);
 
     private ChannelRegistrationServiceSelection(
         ChannelRegistrationAuthorizationMode authorizationMode,
-        IReadOnlyList<string> serviceIds)
+        IReadOnlyList<string> serviceIds,
+        bool specified)
     {
         AuthorizationMode = authorizationMode;
         ServiceIds = serviceIds;
+        Specified = specified;
     }
 
     public ChannelRegistrationAuthorizationMode AuthorizationMode { get; }
 
     public IReadOnlyList<string> ServiceIds { get; }
 
+    public bool Specified { get; }
+
     public static ChannelRegistrationServiceSelection NyxIdDefault => DefaultSelection;
 
     internal static ChannelRegistrationServiceSelection Explicit(IReadOnlyList<string> serviceIds) =>
-        new(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist, serviceIds.ToArray());
+        new(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist, serviceIds.ToArray(), true);
+
+    internal static ChannelRegistrationServiceSelection NyxIdDefaultSpecified() =>
+        new(ChannelRegistrationAuthorizationMode.NyxidDefault, [], true);
 }
 
 public static class ChannelRegistrationServiceIdsJsonParser
@@ -53,8 +60,8 @@ public static class ChannelRegistrationServiceIdsJsonParser
             return true;
         }
 
-        if (serviceIdsPresent)
-            selection = ChannelRegistrationServiceSelection.NyxIdDefault;
+        if (mode == ChannelRegistrationAuthorizationMode.NyxidDefault || serviceIdsPresent)
+            selection = ChannelRegistrationServiceSelection.NyxIdDefaultSpecified();
         return true;
     }
 

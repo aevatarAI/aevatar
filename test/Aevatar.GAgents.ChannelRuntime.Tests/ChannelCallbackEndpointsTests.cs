@@ -9,6 +9,7 @@ using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using FluentAssertions;
@@ -30,6 +31,7 @@ using Xunit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -78,6 +80,7 @@ public sealed class ChannelCallbackEndpointsTests
         routePatterns.Any(pattern => pattern?.Contains("/callback/", StringComparison.Ordinal) == true)
             .Should().BeFalse();
         routePatterns.Should().Contain("/api/channels/registrations");
+        routePatterns.Should().Contain("/api/channels/services");
         routePatterns.Should().Contain("/api/channels/registrations/{registrationId}/runtime-config");
         routePatterns.Should().Contain("/api/channels/diagnostics/errors");
         routePatterns.Should().NotContain("/api/channels/registrations/rebuild");
@@ -101,11 +104,36 @@ public sealed class ChannelCallbackEndpointsTests
             .Single(route => string.Equals(
                 route.RoutePattern.RawText,
                 "/api/channels/registrations/{registrationId}/runtime-config",
-                StringComparison.Ordinal));
+                StringComparison.Ordinal) &&
+                route.Metadata.OfType<HttpMethodMetadata>()
+                    .Single().HttpMethods.Contains("POST"));
 
         endpoint.Metadata.OfType<IAuthorizeData>().Should().NotBeEmpty();
-        endpoint.Metadata.OfType<HttpMethodMetadata>()
-            .Single().HttpMethods.Should().Contain("POST");
+    }
+
+    [Fact]
+    public void MapChannelCallbackEndpoints_ShouldRegisterRuntimeConfigReadRoute()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = "Development",
+        });
+
+        var app = builder.Build();
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        app.MapChannelCallbackEndpoints();
+
+        var endpoint = routeBuilder.DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(route => string.Equals(
+                route.RoutePattern.RawText,
+                "/api/channels/registrations/{registrationId}/runtime-config",
+                StringComparison.Ordinal) &&
+                route.Metadata.OfType<HttpMethodMetadata>()
+                    .Single().HttpMethods.Contains("GET"));
+
+        endpoint.Metadata.OfType<IAuthorizeData>().Should().NotBeEmpty();
     }
 
     [Fact]
@@ -1011,6 +1039,290 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("insecure_webhook_base_url");
     }
 
+    [Fact]
+    public async Task HandleListServicesAsync_ReturnsVerifiedNonSensitiveServiceChoices()
+    {
+        var authorizationPort = Substitute.For<IChannelRegistrationNyxIdAuthorizationPort>();
+        authorizationPort.ReadUserServicesAsync("test-token", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxIdApiAccessResult<NyxIdUserServices>(
+                new NyxIdUserServices([
+                    new NyxIdUserService(
+                        "svc-calendar",
+                        "api-calendar",
+                        "Calendar",
+                        "Calendar API",
+                        true,
+                        new NyxIdUserServiceCredentialSource(
+                            NyxIdUserServiceCredentialSourceKind.Organization,
+                            OrganizationId: "scope-1",
+                            OrganizationRole: NyxIdOrganizationRole.Admin,
+                            Allowed: true)),
+                ]),
+                null)));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleListServicesAsync",
+            http,
+            authorizationPort,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"id\":\"svc-calendar\"");
+        response.Body.Should().Contain("\"slug\":\"api-calendar\"");
+        response.Body.Should().Contain("\"credential_source\":");
+        var lowerBody = response.Body.ToLowerInvariant();
+        lowerBody.Should().NotContain("token");
+        lowerBody.Should().NotContain("secret");
+        lowerBody.Should().NotContain("api_key");
+    }
+
+    [Fact]
+    public async Task HandleGetRuntimeConfigAsync_ReturnsReadModelRuntimeConfigWithoutSecrets()
+    {
+        var registration = ExplicitModelRegistration("reg-runtime", "scope-1", "key-runtime", "svc-calendar");
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig
+        {
+            Instructions = "Use channel-safe replies.",
+            DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+            {
+                Name = "calendar-booking",
+                Version = "1.2.3",
+            },
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+            ToolSetRefs = { "channel.reply.default" },
+            ExtraToolNames = { "calendar_lookup" },
+            NyxidServiceSelectors =
+            {
+                new ChannelBotRuntimeNyxIdServiceSelector
+                {
+                    ServiceSlug = "api-calendar",
+                    EndpointNames = { "events.create" },
+                },
+            },
+        };
+        registration.WorkflowResultDeliveryCredential = new SecretReference
+        {
+            Ref = "sec-hidden-runtime",
+            Purpose = CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            OwnerScopeKey = "scope-1",
+            Version = 1,
+        };
+        var queryPort = QueryPortWithSnapshots(new ChannelBotRegistrationSnapshot(registration, 74));
+        var http = CreateHttpContext("scope-1");
+
+        var result = await InvokeAsync(
+            "HandleGetRuntimeConfigAsync",
+            "reg-runtime",
+            http,
+            queryPort,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"registration_id\":\"reg-runtime\"");
+        response.Body.Should().Contain("\"state_version\":74");
+        response.Body.Should().Contain("\"instructions\":\"Use channel-safe replies.\"");
+        response.Body.Should().Contain("\"name\":\"calendar-booking\"");
+        response.Body.Should().Contain("\"tool_set_refs\":[\"channel.reply.default\"]");
+        response.Body.Should().Contain("\"extra_tool_names\":[\"calendar_lookup\"]");
+        response.Body.Should().Contain("\"service_slug\":\"api-calendar\"");
+        response.Body.Should().Contain("\"api_key_id\":\"key-runtime\"");
+        response.Body.Should().NotContain("sec-hidden-runtime");
+        response.Body.Contains("secret_reference", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        response.Body.Contains("owner_scope_key", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+        response.Body.Contains("allowed_service_ids", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleGetRuntimeConfigAsync_ReturnsNotFound_WhenCallerDoesNotOwnRegistration()
+    {
+        var queryPort = QueryPortWithSnapshots(new ChannelBotRegistrationSnapshot(
+            NewModelRegistration("reg-foreign-runtime", "scope-2", "key-foreign"),
+            11));
+        var http = CreateHttpContext("scope-1");
+
+        var result = await InvokeAsync(
+            "HandleGetRuntimeConfigAsync",
+            "reg-foreign-runtime",
+            http,
+            queryPort,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        response.Body.Should().NotContain("key-foreign");
+    }
+
+    [Fact]
+    public async Task HandleUpdateRuntimeConfigAsync_ReturnsAcceptedReceiptWithCommandId()
+    {
+        var queryPort = QueryPortWith(ExplicitModelRegistration("reg-update", "scope-1", "key-update", "svc-calendar"));
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "runtime_config": {
+                "instructions": "  Trimmed instructions.  ",
+                "default_skill": { "name": "booking-capacity", "version": "1.0" },
+                "tool_set_refs": ["channel.reply.default"],
+                "extra_tool_names": ["calendar_lookup"],
+                "nyxid_service_selectors": [
+                  { "service_slug": "api-calendar", "endpoint_names": ["events.create"] }
+                ]
+              }
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleUpdateRuntimeConfigAsync",
+            "reg-update",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            OwnerResolver("scope-1"),
+            AuthorizationPlanner(("svc-calendar", "api-calendar")),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        response.Body.Should().Contain("\"status\":\"accepted\"");
+        response.Body.Should().Contain("\"registration_id\":\"reg-update\"");
+        response.Body.Should().Contain("\"command_id\":");
+        capturedEnvelope.Should().NotBeNull();
+        var command = capturedEnvelope!.Payload.Unpack<ChannelBotUpdateRuntimeConfigCommand>();
+        command.RegistrationId.Should().Be("reg-update");
+        command.DefaultSkillName.Should().Be("booking-capacity");
+        command.RuntimeConfig.Instructions.Should().Be("Trimmed instructions.");
+        command.RuntimeConfig.NyxidServiceSelectors.Single().ServiceSlug.Should().Be("api-calendar");
+    }
+
+    [Fact]
+    public async Task HandleUpdateRuntimeConfigAsync_ReturnsFieldError_WhenSelectorIsNotAuthorized()
+    {
+        var registration = ExplicitModelRegistration("reg-explicit-update", "scope-1", "key-explicit", "svc-calendar");
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig
+        {
+            NyxidServiceSelectors =
+            {
+                new ChannelBotRuntimeNyxIdServiceSelector { ServiceSlug = "api-calendar" },
+            },
+        };
+        var queryPort = QueryPortWith(registration);
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "runtime_config": {
+                "nyxid_service_selectors": [
+                  { "service_slug": "api-github", "endpoint_names": ["issues.create"] }
+                ]
+              }
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleUpdateRuntimeConfigAsync",
+            "reg-explicit-update",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            OwnerResolver("scope-1"),
+            AuthorizationPlanner(("svc-calendar", "api-calendar")),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("\"error\":\"invalid_runtime_config\"");
+        response.Body.Should().Contain("service_not_authorized");
+        response.Body.Should().Contain("runtime_config.nyxid_service_selectors[0].service_slug");
+        await ((IActorDispatchPort)actorRuntime).DidNotReceiveWithAnyArgs()
+            .DispatchAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task HandleUpdateRuntimeConfigAsync_ReturnsFieldError_WhenDefaultSkillVersionHasNoName()
+    {
+        var queryPort = QueryPortWith(NewModelRegistration("reg-invalid-skill", "scope-1", "key-invalid-skill"));
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "runtime_config": {
+                "default_skill": { "version": "1.0" }
+              }
+            }
+            """,
+            "scope-1");
+
+        var result = await InvokeAsync(
+            "HandleUpdateRuntimeConfigAsync",
+            "reg-invalid-skill",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            OwnerResolver("scope-1"),
+            AuthorizationPlanner(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("default_skill_name_required");
+        await ((IActorDispatchPort)actorRuntime).DidNotReceiveWithAnyArgs()
+            .DispatchAsync(default!, default!, default);
+    }
+
+    private static IChannelRegistrationOwnerResolver OwnerResolver(string scopeId)
+    {
+        var resolver = Substitute.For<IChannelRegistrationOwnerResolver>();
+        resolver.ResolveAsync("test-token", scopeId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelRegistrationOwnerResolution(
+                new VerifiedChannelRegistrationOwner(
+                    "user-alpha",
+                    new ChannelRegistrationKeyOwner(ChannelRegistrationKeyOwnerKind.Organization, scopeId),
+                    scopeId),
+                string.Empty)));
+        return resolver;
+    }
+
+    private static ChannelRegistrationAuthorizationPlanner AuthorizationPlanner(
+        params (string ServiceId, string Slug)[] services)
+    {
+        var authorizationPort = Substitute.For<IChannelRegistrationNyxIdAuthorizationPort>();
+        authorizationPort.ReadUserServicesAsync("test-token", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxIdApiAccessResult<NyxIdUserServices>(
+                new NyxIdUserServices(services.Select(static service => new NyxIdUserService(
+                    service.ServiceId,
+                    service.Slug,
+                    Label: service.Slug,
+                    CatalogServiceName: service.Slug,
+                    IsActive: true,
+                    CredentialSource: new NyxIdUserServiceCredentialSource(
+                        NyxIdUserServiceCredentialSourceKind.Organization,
+                        OrganizationId: "scope-1",
+                        OrganizationRole: NyxIdOrganizationRole.Admin,
+                        Allowed: true))).ToArray()),
+                null)));
+        return new ChannelRegistrationAuthorizationPlanner(authorizationPort);
+    }
+
     private static IChannelBotRegistrationQueryPort QueryPortWith(params ChannelBotRegistrationEntry[] entries)
     {
         var snapshots = entries
@@ -1028,6 +1340,13 @@ public sealed class ChannelCallbackEndpointsTests
                 snapshots.Select(static snapshot => snapshot.Registration).ToArray()));
         queryPort.QueryAllSnapshotsAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationSnapshot>>(snapshots));
+        foreach (var snapshot in snapshots)
+        {
+            queryPort.GetAsync(snapshot.Registration.Id, Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(snapshot.Registration));
+            queryPort.GetSnapshotAsync(snapshot.Registration.Id, Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<ChannelBotRegistrationSnapshot?>(snapshot));
+        }
         return queryPort;
     }
 

@@ -38,6 +38,7 @@ const zhCNMessages = {
   'nav.items.myTeams': '我的团队',
   'nav.items.services': '服务',
   'nav.items.settings': '设置',
+  'nav.items.channelSettings': 'Channel 配置',
   'nav.items.topology': '拓扑',
   'pages.gagents.index.platformBreadcrumb': '平台',
   'pages.chat.index.chatStopped': 'Chat 已停止。',
