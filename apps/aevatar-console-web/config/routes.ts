@@ -37,7 +37,7 @@ export default [
   },
   {
     path: '/scopes',
-    redirect: CONSOLE_HOME_ROUTE,
+    component: './scopes',
     hideInMenu: true,
   },
   {

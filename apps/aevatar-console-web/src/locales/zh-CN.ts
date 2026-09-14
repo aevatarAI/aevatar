@@ -7,6 +7,8 @@ const zhCNMessages = {
   ...channelMessages,
   ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
+  'console.home.unavailable': '暂时无法打开你的工作区',
+  'console.home.retry': '重试',
   'common.language.english': 'English',
   'common.language.label': '语言',
   'common.language.switch': '切换语言',
