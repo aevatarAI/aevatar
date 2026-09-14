@@ -49,6 +49,7 @@ export type WorkflowCanvasBenchmarkReactCommit = {
 };
 
 export type WorkflowCanvasBenchmarkMeasurement = {
+  readonly changedNodeReferencesExcludingMeasurements: number;
   readonly changedNodeReferences: number;
   readonly longTasks: number;
   readonly reactCommits?: readonly WorkflowCanvasBenchmarkReactCommit[];
@@ -231,12 +232,39 @@ export function countChangedNodeReferences(
 export function getChangedNodeReferenceIds(
   previousNodes: readonly Node[],
   nextNodes: readonly Node[],
+  options: { ignoreMeasurementOnlyChanges?: boolean } = {},
 ): ReadonlySet<string> {
   const previousById = new Map(previousNodes.map((node) => [node.id, node]));
   const nextIds = new Set(nextNodes.map((node) => node.id));
   const changedNodeIds = new Set(
     nextNodes
-      .filter((node) => previousById.get(node.id) !== node)
+      .filter((node) => {
+        const previous = previousById.get(node.id);
+        if (previous === node) return false;
+        if (
+          !options.ignoreMeasurementOnlyChanges ||
+          !previous ||
+          node.measured?.width == null ||
+          node.measured?.height == null ||
+          (previous.measured?.width === node.measured.width &&
+            previous.measured?.height === node.measured.height)
+        )
+          return true;
+        // ResizeObserver updates measured bounds when nodes mount or switch
+        // compact bands. Retain all other reference changes, even empty clones.
+        const previousValues = new Map<string, unknown>(
+          Object.entries(previous),
+        );
+        const nextValues = new Map<string, unknown>(Object.entries(node));
+        return [
+          ...new Set([...previousValues.keys(), ...nextValues.keys()]),
+        ].some(
+          (key) =>
+            key !== 'measured' &&
+            (previousValues.has(key) !== nextValues.has(key) ||
+              !Object.is(previousValues.get(key), nextValues.get(key))),
+        );
+      })
       .map((node) => node.id),
   );
   for (const node of previousNodes) {

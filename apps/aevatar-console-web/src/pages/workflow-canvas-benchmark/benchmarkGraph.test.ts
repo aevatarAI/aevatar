@@ -117,6 +117,47 @@ describe('workflow canvas benchmark graph', () => {
     );
   });
 
+  it('separates measurement-only updates while retaining edits, topology and unnecessary clones', () => {
+    const graph = createWorkflowCanvasBenchmarkGraph(100);
+    const options = { ignoreMeasurementOnlyChanges: true };
+    const measured = graph.nodes.map((node) => ({
+      ...node,
+      measured: { width: 244, height: 61 },
+    }));
+    expect(getChangedNodeReferenceIds(graph.nodes, measured).size).toBe(100);
+    expect(
+      getChangedNodeReferenceIds(graph.nodes, measured, options).size,
+    ).toBe(0);
+    const edited = measured.map((node, index) =>
+      index === 0
+        ? {
+            ...node,
+            data: { ...node.data, executionStatus: 'active' as const },
+            position: { x: 48, y: 32 },
+          }
+        : node,
+    );
+    expect(getChangedNodeReferenceIds(graph.nodes, edited, options)).toEqual(
+      new Set([graph.nodes[0].id]),
+    );
+    expect(
+      getChangedNodeReferenceIds(
+        measured,
+        [
+          { ...measured[0], measured: { ...measured[0].measured } },
+          ...measured.slice(1),
+        ],
+        options,
+      ),
+    ).toEqual(new Set([graph.nodes[0].id]));
+    expect(
+      getChangedNodeReferenceIds(measured, measured.slice(1), options),
+    ).toEqual(new Set([graph.nodes[0].id]));
+    expect(
+      getChangedNodeReferenceIds(measured.slice(1), measured, options),
+    ).toEqual(new Set([graph.nodes[0].id]));
+  });
+
   it('retains larger and disjoint reference deltas across later transitions', () => {
     const graph = createWorkflowCanvasBenchmarkGraph(100);
     const changedNodeIds = new Set<string>();

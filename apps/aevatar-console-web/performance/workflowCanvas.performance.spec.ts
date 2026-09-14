@@ -7,6 +7,7 @@ import {
   createWorkflowCanvasBenchmarkProgress,
   WORKFLOW_CANVAS_BENCHMARK_GRAPH_SIZES,
   WORKFLOW_CANVAS_BENCHMARK_SCENARIOS,
+  type WorkflowCanvasBenchmarkMeasurement,
   type WorkflowCanvasBenchmarkPolicy,
   type WorkflowCanvasBenchmarkReactCommit,
   type WorkflowCanvasBenchmarkResult,
@@ -221,6 +222,8 @@ async function findInteractableNodePair(
     }
 
     const paneBounds = pane.getBoundingClientRect();
+    // Keep gestures away from clipped nodes and React Flow's edge auto-pan zone.
+    const gestureMargin = 80;
     const seenIds = new Set<string>();
     const targets: InteractableNodeTarget[] = [];
     const nodes = document.querySelectorAll<HTMLElement>('.react-flow__node');
@@ -239,7 +242,11 @@ async function findInteractableNodePair(
       };
       if (
         intersection.right <= intersection.left ||
-        intersection.bottom <= intersection.top
+        intersection.bottom <= intersection.top ||
+        nodeBounds.left < paneBounds.left + gestureMargin ||
+        nodeBounds.right > paneBounds.right - gestureMargin ||
+        nodeBounds.top < paneBounds.top + gestureMargin ||
+        nodeBounds.bottom > paneBounds.bottom - gestureMargin
       ) {
         continue;
       }
@@ -249,7 +256,11 @@ async function findInteractableNodePair(
         y: (intersection.top + intersection.bottom) / 2,
       };
       const hitTarget = document.elementFromPoint(point.x, point.y);
-      if (!hitTarget || !node.contains(hitTarget)) {
+      if (
+        !hitTarget ||
+        !node.contains(hitTarget) ||
+        hitTarget.closest('.nodrag, .react-flow__handle')
+      ) {
         continue;
       }
 
@@ -266,7 +277,7 @@ async function findInteractableNodePair(
   });
 }
 
-async function readNodeScreenPosition(page: Page, nodeId: string) {
+async function readNodePosition(page: Page, nodeId: string) {
   return page.evaluate((expectedNodeId) => {
     const node = Array.from(
       document.querySelectorAll<HTMLElement>('.react-flow__node'),
@@ -274,8 +285,8 @@ async function readNodeScreenPosition(page: Page, nodeId: string) {
     if (!node) {
       throw new Error(`Workflow node ${expectedNodeId} is unavailable`);
     }
-    const bounds = node.getBoundingClientRect();
-    return { x: bounds.left, y: bounds.top };
+    const transform = new DOMMatrix(getComputedStyle(node).transform);
+    return { x: transform.e, y: transform.f };
   }, nodeId);
 }
 
@@ -342,7 +353,7 @@ async function runSelection(page: Page, targets: InteractableNodePair) {
 
 async function runDrag(page: Page) {
   const [target] = await findInteractableNodePair(page);
-  const before = await readNodeScreenPosition(page, target.id);
+  const before = await readNodePosition(page, target.id);
   await page.mouse.move(target.point.x, target.point.y);
   await page.mouse.down();
   await page.mouse.move(target.point.x + 48, target.point.y + 32, { steps: 8 });
@@ -355,10 +366,10 @@ async function runDrag(page: Page) {
       if (!node) {
         return false;
       }
-      const bounds = node.getBoundingClientRect();
+      const transform = new DOMMatrix(getComputedStyle(node).transform);
       return (
-        Math.abs(bounds.left - position.x) > tolerance ||
-        Math.abs(bounds.top - position.y) > tolerance
+        Math.abs(transform.e - position.x) > tolerance ||
+        Math.abs(transform.f - position.y) > tolerance
       );
     },
     {
@@ -367,7 +378,7 @@ async function runDrag(page: Page) {
       tolerance: POSITION_CHANGE_TOLERANCE,
     },
   );
-  const after = await readNodeScreenPosition(page, target.id);
+  const after = await readNodePosition(page, target.id);
   expect(
     Math.max(Math.abs(after.x - before.x), Math.abs(after.y - before.y)),
   ).toBeGreaterThan(POSITION_CHANGE_TOLERANCE);
@@ -523,9 +534,19 @@ async function runScenarioAction(
   await waitForAnimationFrames(page);
 }
 
-function assertSemanticResult(result: WorkflowCanvasBenchmarkResult) {
-  expect(result.changedNodeReferences).toBe(
-    EXPECTED_CHANGED_NODE_REFERENCES[result.scenario](result.graph.nodes),
+function assertSemanticResult(
+  result: WorkflowCanvasBenchmarkResult,
+  measurement: WorkflowCanvasBenchmarkMeasurement,
+) {
+  // ResizeObserver changes measured bounds on compact/full transitions and
+  // when virtualized nodes enter view. Keep reporting every changed reference,
+  // while checking the interaction contract independently of measurement-only updates.
+  expect(
+    measurement.changedNodeReferencesExcludingMeasurements,
+    `${result.scenario}: ${result.graph.nodes} nodes, ${JSON.stringify(result.policy)}`,
+  ).toBe(EXPECTED_CHANGED_NODE_REFERENCES[result.scenario](result.graph.nodes));
+  expect(result.changedNodeReferences).toBeGreaterThanOrEqual(
+    measurement.changedNodeReferencesExcludingMeasurements,
   );
   if (result.scenario === 'initial-load') {
     expect(result.renderedNodeCount).toBeGreaterThan(0);
@@ -574,7 +595,7 @@ async function appendResult(
     scenario,
     usedHeapBytes: captured.measurement.usedHeapBytes,
   });
-  assertSemanticResult(result);
+  assertSemanticResult(result, captured.measurement);
   const storedResult = await page.evaluate((value) => {
     const api = window.__AEVATAR_WORKFLOW_CANVAS_BENCHMARK__;
     if (!api) {

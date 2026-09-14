@@ -44,6 +44,7 @@ declare global {
 }
 
 type ActiveMeasurement = {
+  readonly changedNodeReferenceIdsExcludingMeasurements: Set<string>;
   readonly changedNodeReferenceIds: Set<string>;
   changedNodeReferences: number;
   readonly reactCommits: WorkflowCanvasBenchmarkReactCommit[];
@@ -168,6 +169,9 @@ function BenchmarkCanvas({
   const resultsRef = React.useRef<WorkflowCanvasBenchmarkResult[]>([]);
   const longTasksRef = React.useRef<LongTaskSample[]>([]);
   const measurementRef = React.useRef<ActiveMeasurement>({
+    changedNodeReferenceIdsExcludingMeasurements: new Set(
+      initialGraph.nodes.map((node) => node.id),
+    ),
     changedNodeReferenceIds: new Set(initialGraph.nodes.map((node) => node.id)),
     changedNodeReferences: size,
     reactCommits: [],
@@ -198,9 +202,19 @@ function BenchmarkCanvas({
 
   const handleRenderedNodesChange = React.useCallback(
     (renderedNodes: readonly Node[]) => {
+      const previousRenderedNodes = renderedNodesRef.current;
       renderedNodesRef.current = renderedNodes;
       const baselineNodes = scenarioBaselineNodesRef.current;
       if (baselineNodes) {
+        for (const nodeId of getChangedNodeReferenceIds(
+          previousRenderedNodes ?? baselineNodes,
+          renderedNodes,
+          { ignoreMeasurementOnlyChanges: true },
+        )) {
+          measurementRef.current.changedNodeReferenceIdsExcludingMeasurements.add(
+            nodeId,
+          );
+        }
         for (const nodeId of getChangedNodeReferenceIds(
           baselineNodes,
           renderedNodes,
@@ -261,6 +275,7 @@ function BenchmarkCanvas({
       }
       scenarioBaselineNodesRef.current = renderedNodesRef.current;
       measurementRef.current = {
+        changedNodeReferenceIdsExcludingMeasurements: new Set(),
         changedNodeReferenceIds: new Set(),
         changedNodeReferences: 0,
         reactCommits: [],
@@ -279,6 +294,8 @@ function BenchmarkCanvas({
         ? [...measurement.reactCommits]
         : undefined;
       return {
+        changedNodeReferencesExcludingMeasurements:
+          measurement.changedNodeReferenceIdsExcludingMeasurements.size,
         changedNodeReferences: measurement.changedNodeReferences,
         longTasks: longTasksRef.current.filter(
           (sample) => sample.startTime >= measurement.startedAt,
