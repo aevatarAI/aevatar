@@ -2,6 +2,8 @@ import React from 'react';
 import { t } from '@/shared/i18n/messages';
 import ActivityPage from './activity/ActivityPage';
 import RunDetailPage from './activity/RunDetailPage';
+import ChannelDetailsPage from './channels/ChannelDetailsPage';
+import ChannelsPage from './channels/ChannelsPage';
 import { useConsoleLocation } from './hooks/useConsoleLocation';
 import SettingsPage from './settings/SettingsPage';
 import WorkflowActivityVNextShell from './WorkflowActivityVNextShell';
@@ -52,6 +54,20 @@ const WorkflowActivityVNextPage: React.FC = () => {
 
   if (pathname.endsWith('/activity')) {
     return <ActivityPage scopeId={scopeId} />;
+  }
+
+  const channelMatch = /\/channels\/([^/]+)$/.exec(pathname);
+  if (channelMatch) {
+    return (
+      <ChannelDetailsPage
+        key={`${scopeId}:${channelMatch[1]}`}
+        scopeId={scopeId}
+        registrationId={decodeURIComponent(channelMatch[1])}
+      />
+    );
+  }
+  if (pathname.endsWith('/channels')) {
+    return <ChannelsPage scopeId={scopeId} />;
   }
 
   if (pathname.endsWith('/settings')) {

@@ -1,0 +1,299 @@
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
+import * as React from 'react';
+import { authFetch } from '@/shared/auth/fetch';
+import { history } from '@/shared/navigation/history';
+import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
+import ChannelDetailsPage from './ChannelDetailsPage';
+import ChannelsPage from './ChannelsPage';
+
+jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
+jest.mock('@/shared/studio/api', () => ({
+  studioApi: {
+    getAuthSession: jest.fn().mockResolvedValue({ authenticated: false }),
+  },
+}));
+const mockToast = {
+  success: jest.fn(),
+  warning: jest.fn(),
+  error: jest.fn(),
+  info: jest.fn(),
+};
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  ...jest.requireActual('@/shared/ui/ConsoleToast'),
+  useConsoleToast: () => mockToast,
+}));
+
+const fetchMock = jest.mocked(authFetch);
+const registration = {
+  id: 'registration:alpha/one',
+  platform: 'telegram',
+  scope_id: 'scope-alpha',
+  owned: true,
+  nyx_channel_bot_id: 'bot-alpha',
+  nyx_provider_slug: 'telegram-provider',
+  nyx_agent_api_key_id: 'key-alpha',
+  default_skill: { name: 'review.skill', version: '2.4' },
+  workflow_result_delivery_status: 'enabled',
+};
+const response = (value: unknown, status = 200) =>
+  ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => value,
+  }) as Response;
+const statusPath =
+  '/api/channels/registrations/registration%3Aalpha%2Fone/status';
+const deletePath = '/api/channels/registrations/registration%3Aalpha%2Fone';
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+beforeEach(() => {
+  fetchMock.mockReset();
+  Object.values(mockToast).forEach((mock) => {
+    mock.mockReset();
+  });
+  jest.spyOn(history, 'push').mockImplementation(() => {});
+  jest.spyOn(history, 'replace').mockImplementation(() => {});
+  fetchMock.mockImplementation(async (input) => {
+    if (input === '/api/channels/registrations')
+      return response([registration]);
+    if (input === statusPath)
+      return response({ registration_id: registration.id, status: 'active' });
+    throw new Error(`Unexpected test request: ${String(input)}`);
+  });
+});
+
+describe('Channel pages', () => {
+  it('loads the connected table, exact Ornn skill link and first-level navigation without enabling unsupported platforms', async () => {
+    const pendingStatus = deferred<Response>();
+    fetchMock.mockImplementation(async (input) =>
+      input === statusPath ? pendingStatus.promise : response([registration]),
+    );
+    renderWithQueryClient(<ChannelsPage scopeId="scope-alpha" />);
+    const table = await screen.findByRole('table', { name: /^Connected/ });
+    expect(within(table).getByText('Checking…')).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Open review.skill in Ornn' }),
+    ).toHaveAttribute('href', 'https://ornn.chrono-ai.fun/skills/review.skill');
+    expect(within(table).getByText('Version 2.4')).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Connect Telegram' }),
+    ).toHaveAttribute(
+      'href',
+      'https://aevatar-console-backend-api.aevatar.ai/channels',
+    );
+    expect(
+      screen.queryByRole('link', { name: 'Connect Slack' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Channels' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    await act(async () =>
+      pendingStatus.resolve(
+        response({ registration_id: registration.id, status: 'active' }),
+      ),
+    );
+    expect(await within(table).findByText('Active')).toBeInTheDocument();
+    fireEvent.click(within(table).getByRole('link', { name: 'Manage' }));
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/channels/registration%3Aalpha%2Fone',
+    );
+  });
+
+  it('keeps status failure distinct from an active bot and shows missing skills without a fabricated version', async () => {
+    fetchMock.mockImplementation(async (input) =>
+      input === statusPath
+        ? response({}, 502)
+        : response([{ ...registration, default_skill: null }]),
+    );
+    renderWithQueryClient(<ChannelsPage scopeId="scope-alpha" />);
+    const table = await screen.findByRole('table');
+    expect(await within(table).findByText('Unknown')).toBeInTheDocument();
+    expect(within(table).getByText('Not set')).toBeInTheDocument();
+    expect(within(table).queryByText(/Version/)).not.toBeInTheDocument();
+    expect(within(table).getByRole('link', { name: 'Manage' })).toBeEnabled();
+  });
+
+  it('recovers a failed collection query into a genuine empty state', async () => {
+    fetchMock
+      .mockResolvedValueOnce(response({}, 503))
+      .mockResolvedValue(response([]));
+    renderWithQueryClient(<ChannelsPage scopeId="scope-alpha" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not load channels',
+    );
+    expect(
+      screen.queryByText('No channels connected yet'),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(
+      await screen.findByText('No channels connected yet'),
+    ).toBeInTheDocument();
+  });
+
+  it('does not flash a previous scope collection when the route scope changes', async () => {
+    const next = deferred<Response>();
+    const view = renderWithQueryClient(<ChannelsPage scopeId="scope-alpha" />);
+    await screen.findByText('bot-alpha');
+    fetchMock.mockImplementation(async (input) =>
+      input === '/api/channels/registrations'
+        ? next.promise
+        : response({ registration_id: registration.id, status: 'active' }),
+    );
+    view.rerender(<div />);
+    renderWithQueryClient(
+      <ChannelsPage scopeId="scope-beta" />,
+      view.queryClient,
+    );
+    expect(screen.queryByText('bot-alpha')).not.toBeInTheDocument();
+    await act(async () => next.resolve(response([])));
+    expect(
+      await screen.findByText('No channels connected yet'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows only safe detail fields and makes Remove the only resource action', async () => {
+    fetchMock.mockImplementation(async (input) =>
+      input === statusPath
+        ? response({ registration_id: registration.id, status: 'active' })
+        : response([
+            {
+              ...registration,
+              access_token: 'TEST_ONLY_SECRET',
+              webhook_url: 'https://example.invalid/private',
+            },
+          ]),
+    );
+    renderWithQueryClient(
+      <ChannelDetailsPage
+        registrationId={registration.id}
+        scopeId="scope-alpha"
+      />,
+    );
+    expect(await screen.findByText('key-alpha')).toBeInTheDocument();
+    expect(screen.getByText('telegram-provider')).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent('TEST_ONLY_SECRET');
+    expect(document.body).not.toHaveTextContent('example.invalid');
+    expect(
+      screen.queryByRole('button', { name: /Repair|Test reply|Replace|Save/ }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Remove this channel?',
+    });
+    expect(dialog).toHaveTextContent('bot-alpha');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE'),
+    ).toBe(false);
+  });
+
+  it('waits for list readback after removal and Check again never repeats DELETE', async () => {
+    let deletedFromList = false;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (input === deletePath && init?.method === 'DELETE')
+        return response({ status: 'deleted', warnings: [] });
+      if (input === statusPath)
+        return response({ registration_id: registration.id, status: 'active' });
+      return response(deletedFromList ? [] : [registration]);
+    });
+    renderWithQueryClient(
+      <ChannelDetailsPage
+        registrationId={registration.id}
+        scopeId="scope-alpha"
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    fireEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', {
+        name: 'Remove',
+      }),
+    );
+    expect(await screen.findByText(/Removal requested/)).toBeInTheDocument();
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(history.replace).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled();
+    deletedFromList = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() =>
+      expect(history.replace).toHaveBeenCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/channels',
+      ),
+    );
+    expect(mockToast.success).toHaveBeenCalledWith('Channel removed.');
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE'),
+    ).toHaveLength(1);
+  });
+
+  it('keeps failed removal retryable and reports cleanup warnings without exposing their content', async () => {
+    let removalCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (input === deletePath && init?.method === 'DELETE') {
+        removalCount += 1;
+        return removalCount === 1
+          ? response({}, 502)
+          : response({ status: 'deleted', warnings: ['TEST_ONLY_SECRET'] });
+      }
+      if (input === statusPath)
+        return response({ registration_id: registration.id, status: 'active' });
+      return response(removalCount > 1 ? [] : [registration]);
+    });
+    renderWithQueryClient(
+      <ChannelDetailsPage
+        registrationId={registration.id}
+        scopeId="scope-alpha"
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Remove' }),
+    );
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Could not remove',
+    );
+    expect(history.replace).not.toHaveBeenCalled();
+    fireEvent.click(
+      await within(dialog).findByRole('button', { name: 'Remove' }),
+    );
+    await waitFor(() => expect(mockToast.warning).toHaveBeenCalled());
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(document.body).not.toHaveTextContent('TEST_ONLY_SECRET');
+  });
+
+  it('hides unavailable registrations and never queries their status or exposes removal', async () => {
+    fetchMock.mockResolvedValue(response([]));
+    renderWithQueryClient(
+      <ChannelDetailsPage
+        registrationId="registration-inaccessible"
+        scopeId="scope-alpha"
+      />,
+    );
+    expect(
+      await screen.findByText(
+        'This channel is unavailable or you do not have access.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Remove' }),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.every(
+        ([input]) => input === '/api/channels/registrations',
+      ),
+    ).toBe(true);
+  });
+});

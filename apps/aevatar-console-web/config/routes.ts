@@ -76,6 +76,16 @@ export default [
     hideInMenu: true,
   },
   {
+    path: '/scopes/:scopeId/workflow-activity-vnext/channels',
+    component: './workflow-activity-vnext',
+    hideInMenu: true,
+  },
+  {
+    path: '/scopes/:scopeId/workflow-activity-vnext/channels/:registrationId',
+    component: './workflow-activity-vnext',
+    hideInMenu: true,
+  },
+  {
     path: '/scopes/:scopeId/workflow-activity-vnext/settings',
     component: './workflow-activity-vnext',
     hideInMenu: true,

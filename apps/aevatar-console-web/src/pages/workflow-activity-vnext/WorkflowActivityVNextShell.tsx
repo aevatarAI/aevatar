@@ -1,4 +1,5 @@
 import {
+  ApiOutlined,
   HistoryOutlined,
   MenuOutlined,
   PartitionOutlined,
@@ -46,6 +47,12 @@ const items = [
     icon: <HistoryOutlined aria-hidden="true" />,
     labelKey: 'activity',
     fallback: 'Activity',
+  },
+  {
+    key: 'channels' as const,
+    icon: <ApiOutlined aria-hidden="true" />,
+    labelKey: 'channels',
+    fallback: 'Channels',
   },
   {
     key: 'settings' as const,

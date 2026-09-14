@@ -1,8 +1,10 @@
+import channelMessages from './channelMessages.zh-CN';
 import projectMessages from './projectMessages.zh-CN';
 import workflowActivityVNextMessages from './workflowActivityVNextMessages.zh-CN';
 
 const zhCNMessages = {
   ...projectMessages,
+  ...channelMessages,
   ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
   'common.language.english': 'English',
