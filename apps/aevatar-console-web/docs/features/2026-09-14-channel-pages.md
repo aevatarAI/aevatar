@@ -8,6 +8,17 @@ The three pages follow the latest simplified [Figma design](https://www.figma.co
 channel details read-only with Remove as the sole resource action. The earlier
 runtime-configuration editor is outside this iteration of issue #3617.
 
+Refresh and Manage use outlined button styling with visible hover/focus states
+and larger touch targets on mobile. Manage retains navigation-link semantics.
+Details omit Scope. Bot ID and Agent key ID are blue underlined external links
+with an external-link icon, opening the corresponding NyxID record in a new tab.
+The website origin is the design's `https://nyx.chrono-ai.fun`, separate from
+the configured NyxID API/OIDC authority. Bot links use `/channel-bots/{botId}`;
+Agent key links use the verified NyxID `/keys/api-key/{agentKeyId}` route.
+The Figma `/keys/xxx` placeholder refers to NyxID service details, so it is not
+used for Agent keys. Each complete source ID is encoded as one URL segment;
+missing IDs remain unlinked placeholders.
+
 ## Routes and existing setup
 
 - `/scopes/:scopeId/workflow-activity-vnext/channels`: platform directory and

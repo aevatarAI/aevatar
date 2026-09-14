@@ -1,4 +1,8 @@
-import { ArrowLeftOutlined, DeleteOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  DeleteOutlined,
+  ExportOutlined,
+} from '@ant-design/icons';
 import { Button, Modal } from 'antd';
 import * as React from 'react';
 import { channelsApi } from '@/shared/api/channelsApi';
@@ -19,6 +23,9 @@ import {
 } from './presentation';
 import { useChannelRegistrations, useChannelStatus } from './queries';
 import { channelsCss } from './styles';
+
+// Figma links to the NyxID website, separate from its API/OIDC authority.
+const NYXID_WEB_BASE_URL = 'https://nyx.chrono-ai.fun';
 
 export default function ChannelDetailsPage({
   scopeId,
@@ -200,14 +207,43 @@ export default function ChannelDetailsPage({
                 </dd>
               </div>
               {[
-                ['botId', 'Bot ID', registration.botId],
-                ['scope', 'Scope', registration.scopeId],
-                ['provider', 'Provider', registration.providerSlug],
-                ['keyId', 'Agent key ID', registration.agentKeyId],
-              ].map(([key, label, value]) => (
-                <div key={key}>
-                  <dt>{t(`channels.${key}`, label ?? '')}</dt>
-                  <dd className="channels__identifier">{value || '—'}</dd>
+                {
+                  label: t('channels.botId', 'Bot ID'),
+                  value: registration.botId,
+                  path: '/channel-bots/',
+                },
+                {
+                  label: t('channels.provider', 'Provider'),
+                  value: registration.providerSlug,
+                },
+                {
+                  label: t('channels.keyId', 'Agent key ID'),
+                  value: registration.agentKeyId,
+                  path: '/keys/api-key/',
+                },
+              ].map(({ label, value, path }) => (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd className="channels__identifier">
+                    {value && path ? (
+                      <a
+                        className="channels__identifier-link"
+                        href={`${NYXID_WEB_BASE_URL}${path}${encodeURIComponent(value)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={t(
+                          'channels.openInNyxID',
+                          'Open {label} {id} in NyxID (new tab)',
+                          { label, id: value },
+                        )}
+                      >
+                        <span>{value}</span>
+                        <ExportOutlined aria-hidden="true" />
+                      </a>
+                    ) : (
+                      value || '—'
+                    )}
+                  </dd>
                 </div>
               ))}
             </dl>

@@ -171,13 +171,15 @@ describe('Channel pages', () => {
     ).toBeInTheDocument();
   });
 
-  it('shows only safe detail fields and makes Remove the only resource action', async () => {
+  it('links exact bot and agent key IDs to NyxID, hides Scope and keeps removal safe', async () => {
     fetchMock.mockImplementation(async (input) =>
       input === statusPath
         ? response({ registration_id: registration.id, status: 'active' })
         : response([
             {
               ...registration,
+              nyx_channel_bot_id: 'bot:alpha/one',
+              nyx_agent_api_key_id: 'key:alpha/two',
               access_token: 'TEST_ONLY_SECRET',
               webhook_url: 'https://example.invalid/private',
             },
@@ -189,7 +191,26 @@ describe('Channel pages', () => {
         scopeId="scope-alpha"
       />,
     );
-    expect(await screen.findByText('key-alpha')).toBeInTheDocument();
+    const keyLink = await screen.findByRole('link', {
+      name: 'Open Agent key ID key:alpha/two in NyxID (new tab)',
+    });
+    const botLink = screen.getByRole('link', {
+      name: 'Open Bot ID bot:alpha/one in NyxID (new tab)',
+    });
+    expect(keyLink).toHaveAttribute(
+      'href',
+      'https://nyx.chrono-ai.fun/keys/api-key/key%3Aalpha%2Ftwo',
+    );
+    expect(botLink).toHaveAttribute(
+      'href',
+      'https://nyx.chrono-ai.fun/channel-bots/bot%3Aalpha%2Fone',
+    );
+    for (const link of [botLink, keyLink]) {
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    }
+    expect(screen.queryByText('Scope')).not.toBeInTheDocument();
+    expect(screen.queryByText('scope-alpha')).not.toBeInTheDocument();
     expect(screen.getByText('telegram-provider')).toBeInTheDocument();
     expect(document.body).not.toHaveTextContent('TEST_ONLY_SECRET');
     expect(document.body).not.toHaveTextContent('example.invalid');
@@ -200,11 +221,36 @@ describe('Channel pages', () => {
     const dialog = await screen.findByRole('dialog', {
       name: 'Remove this channel?',
     });
-    expect(dialog).toHaveTextContent('bot-alpha');
+    expect(dialog).toHaveTextContent('bot:alpha/one');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(
       fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE'),
     ).toBe(false);
+  });
+
+  it('keeps missing bot and agent key IDs as unlinked placeholders', async () => {
+    fetchMock.mockImplementation(async (input) =>
+      input === statusPath
+        ? response({ registration_id: registration.id, status: 'active' })
+        : response([
+            {
+              ...registration,
+              nyx_channel_bot_id: null,
+              nyx_agent_api_key_id: null,
+            },
+          ]),
+    );
+    renderWithQueryClient(
+      <ChannelDetailsPage
+        registrationId={registration.id}
+        scopeId="scope-alpha"
+      />,
+    );
+    const details = await screen.findByRole('region', {
+      name: 'Channel details',
+    });
+    expect(within(details).getAllByText('—')).toHaveLength(2);
+    expect(within(details).queryByRole('link')).not.toBeInTheDocument();
   });
 
   it('waits for list readback after removal and Check again never repeats DELETE', async () => {

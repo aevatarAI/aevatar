@@ -196,7 +196,7 @@ export default function ChannelsPage({
             </p>
           </div>
           <Button
-            type="text"
+            className="channels__refresh"
             icon={<ReloadOutlined />}
             loading={refreshing}
             disabled={registrations.isPending}
