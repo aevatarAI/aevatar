@@ -3,6 +3,14 @@ import enUSMessages from './workflowActivityVNextMessages.en-US';
 const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
   {
     ...enUSMessages,
+    'workflowActivityVNext.home.loading': '正在打开你的工作流…',
+    'workflowActivityVNext.home.unavailable': '暂时无法打开工作流',
+    'workflowActivityVNext.home.loadFailed': '暂时无法获取你的工作区，请重试。',
+    'workflowActivityVNext.home.scopeUnavailable':
+      '当前账号没有可用工作区，请检查访问权限后重试。',
+    'workflowActivityVNext.home.signInRequired': '登录后即可打开你的工作流。',
+    'workflowActivityVNext.home.signIn': '登录',
+
     'workflowActivityVNext.arguments.addItem': '添加一项',
     'workflowActivityVNext.arguments.addItemAria': '向 {path} 添加一项',
     'workflowActivityVNext.arguments.addProperty': '添加属性',

@@ -59,12 +59,15 @@ const STUDIO_HOST_ROUTES = new Set([
 function isFullscreenDisplayRoute(pathname: string): boolean {
   return (
     FULLSCREEN_DISPLAY_ROUTES.has(pathname) ||
-    WORKFLOW_ACTIVITY_VNEXT_ROUTE.test(pathname)
+    isWorkflowActivityVNextRoute(pathname)
   );
 }
 
 function isWorkflowActivityVNextRoute(pathname: string): boolean {
-  return WORKFLOW_ACTIVITY_VNEXT_ROUTE.test(pathname);
+  return (
+    pathname === CONSOLE_HOME_ROUTE ||
+    WORKFLOW_ACTIVITY_VNEXT_ROUTE.test(pathname)
+  );
 }
 
 function isStudioHostRoute(pathname: string): boolean {

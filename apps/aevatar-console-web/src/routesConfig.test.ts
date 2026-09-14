@@ -62,6 +62,10 @@ describe('console routes', () => {
     for (const path of ['/', '/overview', '/scopes']) {
       expect(findRoute(routes, path).redirect).toBe(CONSOLE_HOME_ROUTE);
     }
+    expect(findRoute(routes, '/workflows').component).toBe(
+      './workflow-activity-vnext/WorkflowHomePage',
+    );
+    expect(findRoute(routes, '/workflows').redirect).toBeUndefined();
     expect(findRouteIndex(routes, '/chat')).toBeLessThan(
       findRouteIndex(routes, '/scopes'),
     );
@@ -156,7 +160,6 @@ describe('console routes', () => {
       './scopes/overview',
     );
     expect(hasRoute(routes, '/workflows')).toBe(true);
-    expect(findRoute(routes, '/workflows').redirect).toBe('/runtime/workflows');
     expect(hasRoute(routes, '/primitives')).toBe(true);
     expect(findRoute(routes, '/primitives').redirect).toBe(
       '/runtime/primitives',
@@ -239,7 +242,6 @@ describe('console routes', () => {
       findRouteIndex(routes, `${namespace}/workflows/:workflowId`),
     );
 
-    expect(findRoute(routes, '/workflows').redirect).toBe('/runtime/workflows');
     expect(findRoute(routes, '/runs').redirect).toBe('/runtime/runs');
     expect(findRoute(routes, '/').redirect).toBe(CONSOLE_HOME_ROUTE);
   });

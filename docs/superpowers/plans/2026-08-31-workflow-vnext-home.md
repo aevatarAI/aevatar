@@ -1,6 +1,9 @@
-# Workflow vNext Home Implementation Plan
+# Workflow vNext Home Implementation Plan (Historical)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Superseded on 2026-09-14 by the account-scoped `/workflows` resolver in
+> [the current home specification](../specs/2026-08-31-workflow-vnext-home-design.md).
+> The completed tasks below record the original implementation; do not use the
+> fixed-scope assertions or constants as requirements for new work.
 
 **Goal:** Make the fixed-scope Workflow Activity vNext workflow catalogue the console home without modifying the existing Teams page implementation or breaking explicit login return targets.
 

@@ -278,7 +278,7 @@ export default [
   },
   {
     path: '/workflows',
-    redirect: '/runtime/workflows',
+    component: './workflow-activity-vnext/WorkflowHomePage',
     hideInMenu: true,
   },
   {

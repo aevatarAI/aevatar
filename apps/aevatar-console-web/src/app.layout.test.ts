@@ -91,12 +91,11 @@ describe('layout menu collapse behavior', () => {
     });
   });
 
-  it('renders Workflow Activity vNext without the global console chrome', () => {
-    window.history.replaceState(
-      {},
-      '',
-      '/scopes/scope-a/workflow-activity-vnext/workflows/wf-a',
-    );
+  it.each([
+    '/workflows',
+    '/scopes/scope-a/workflow-activity-vnext/workflows/wf-a',
+  ])('renders workflow route %s without the global console chrome', (pathname) => {
+    window.history.replaceState({}, '', pathname);
 
     const runtimeLayout = layout({
       initialState: {
