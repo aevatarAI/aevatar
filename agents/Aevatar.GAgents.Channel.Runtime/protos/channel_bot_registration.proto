@@ -164,6 +164,8 @@ message ChannelBotUpdateRuntimeConfigCommand {
   ChannelBotRuntimeConfig runtime_config = 2;
   string default_skill_name = 3;
   int64 updated_at_unix_ms = 4;
+  ChannelRegistrationAuthorizationMode authorization_mode = 5;
+  ChannelRegistrationServiceAllowlist registration_service_allowlist = 6;
 }
 
 enum ChannelWorkflowResultDeliveryCapabilityStatus {
@@ -321,6 +323,8 @@ message ChannelBotRuntimeConfigUpdatedEvent {
   ChannelBotRuntimeConfig runtime_config = 2;
   string default_skill_name = 3;
   int64 updated_at_unix_ms = 4;
+  ChannelRegistrationAuthorizationMode authorization_mode = 5;
+  ChannelRegistrationServiceAllowlist registration_service_allowlist = 6;
 }
 
 message ChannelBotCompactTombstonesCommand {

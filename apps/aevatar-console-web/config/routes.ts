@@ -223,6 +223,12 @@ export default [
     hideInMenu: true,
   },
   {
+    path: "/settings/channels",
+    name: "Channel Settings",
+    component: "./settings/channels",
+    menuGroupKey: "settings",
+  },
+  {
     path: "/settings",
     name: "Settings",
     component: "./settings",
