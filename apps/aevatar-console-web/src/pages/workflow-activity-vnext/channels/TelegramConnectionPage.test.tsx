@@ -40,6 +40,15 @@ const service = {
   credential_source: { type: 'personal' },
 };
 const servicePath = 'https://nyx.example.test/api/v1/user-services';
+const catalogPath = 'https://nyx.example.test/api/v1/mcp/config';
+const catalog = {
+  contract_version: '1.0',
+  services: [
+    { service_id: 'user-service-github', is_user_service: true },
+    { service_id: 'user-service-personal', is_user_service: true },
+    { service_id: 'user-service-slack', is_user_service: true },
+  ],
+};
 const listPath = '/api/channels/registrations';
 function enterNames() {
   fireEvent.change(screen.getByLabelText(/^Bot token/), {
@@ -59,7 +68,11 @@ beforeEach(() => {
   jest.spyOn(history, 'push').mockImplementation(() => {});
   jest.spyOn(history, 'replace').mockImplementation(() => {});
   fetchMock.mockImplementation(async (input) =>
-    input === servicePath ? response({ services: [service] }) : response([]),
+    input === catalogPath
+      ? response(catalog)
+      : input === servicePath
+        ? response({ services: [service] })
+        : response([]),
   );
 });
 afterEach(() => {
@@ -71,6 +84,7 @@ it('reads registrations only after acceptance or Check again, never while idle o
   try {
     let attempts = 0;
     fetchMock.mockImplementation(async (input, init) => {
+      if (input === catalogPath) return response(catalog);
       if (init?.method === 'POST') {
         attempts += 1;
         return attempts === 1
@@ -101,7 +115,10 @@ it('reads registrations only after acceptance or Check again, never while idle o
     );
     await screen.findByText(/No services are available/);
     await idleAndReturn();
-    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([servicePath]);
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+      servicePath,
+      catalogPath,
+    ]);
     enterNames();
     fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
     await screen.findByText(
@@ -137,11 +154,17 @@ it('searches services, enforces permissions, submits selected IDs once and waits
   });
   let observed = false;
   fetchMock.mockImplementation(async (input, init) => {
+    if (input === catalogPath) return response(catalog);
     if (init?.method === 'POST') return post;
     if (input === servicePath)
       return response({
         services: [
           service,
+          {
+            ...service,
+            id: 'user-service-ungranted',
+            label: 'GitHub not authorized',
+          },
           {
             ...service,
             id: 'user-service-org',
@@ -180,8 +203,15 @@ it('searches services, enforces permissions, submits selected IDs once and waits
   expect(
     await screen.findByRole('checkbox', { name: /GitHub work/ }),
   ).not.toBeChecked();
-  expect(screen.getByRole('checkbox', { name: /Team Slack/ })).toBeDisabled();
-  expect(screen.getByRole('checkbox', { name: /Drive/ })).toBeDisabled();
+  expect(
+    screen.queryByRole('checkbox', { name: /Team Slack/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('checkbox', { name: /Drive/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('checkbox', { name: /GitHub not authorized/ }),
+  ).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('checkbox', { name: 'Select all' }));
   fireEvent.change(
     screen.getByRole('textbox', { name: 'Search services by name or slug' }),
@@ -257,21 +287,32 @@ it('searches services, enforces permissions, submits selected IDs once and waits
 });
 
 it('selects and clears available results while preserving selections outside the search', async () => {
-  fetchMock.mockResolvedValue(
-    response({
-      services: [
-        service,
-        { ...service, id: 'user-service-personal', label: 'GitHub personal' },
-        { ...service, id: 'user-service-slack', label: 'Slack', slug: 'slack' },
-        { ...service, id: 'inactive', label: 'Inactive', is_active: false },
-        {
-          ...service,
-          id: 'denied',
-          label: 'Denied',
-          credential_source: { type: 'org', allowed: false },
-        },
-      ],
-    }),
+  fetchMock.mockImplementation(async (input) =>
+    input === catalogPath
+      ? response(catalog)
+      : response({
+          services: [
+            service,
+            {
+              ...service,
+              id: 'user-service-personal',
+              label: 'GitHub personal',
+            },
+            {
+              ...service,
+              id: 'user-service-slack',
+              label: 'Slack',
+              slug: 'slack',
+            },
+            { ...service, id: 'inactive', label: 'Inactive', is_active: false },
+            {
+              ...service,
+              id: 'denied',
+              label: 'Denied',
+              credential_source: { type: 'org', allowed: false },
+            },
+          ],
+        }),
   );
   renderWithQueryClient(<TelegramConnectionPage scopeId="scope-alpha" />);
   const all = await screen.findByRole('checkbox', { name: 'Select all' });
@@ -282,8 +323,7 @@ it('selects and clears available results while preserving selections outside the
   expect(all).toBeChecked();
   expect(screen.getByText('3 selected')).toBeInTheDocument();
   for (const name of [/Inactive/, /Denied/]) {
-    expect(screen.getByRole('checkbox', { name })).toBeDisabled();
-    expect(screen.getByRole('checkbox', { name })).not.toBeChecked();
+    expect(screen.queryByRole('checkbox', { name })).not.toBeInTheDocument();
   }
   fireEvent.click(all);
   expect(screen.getByText('0 selected')).toBeInTheDocument();
@@ -309,8 +349,8 @@ it('selects and clears available results while preserving selections outside the
   ).toBePartiallyChecked();
 });
 
-it('recovers service loading failure, requires only a token and defaults optional names with no service access', async () => {
-  let serviceReads = 0;
+it('recovers caller-catalog failure without exposing account services and defaults optional names with no access', async () => {
+  let catalogReads = 0;
   telegramFetch.mockResolvedValue(
     response({
       ok: true,
@@ -322,10 +362,11 @@ it('recovers service loading failure, requires only a token and defaults optiona
     }),
   );
   fetchMock.mockImplementation(async (input, init) => {
-    if (input === servicePath)
-      return ++serviceReads === 1
+    if (input === catalogPath)
+      return ++catalogReads === 1
         ? response({}, 503)
-        : response({ services: [] });
+        : response({ contract_version: '1.0', services: [] });
+    if (input === servicePath) return response({ services: [service] });
     if (init?.method === 'POST')
       return response(
         { error: 'missing_bot_token', note: 'TEST_ONLY_SECRET' },
@@ -389,6 +430,7 @@ it('shows a name-lookup toast and retries with the current token and custom fiel
     new Error(`Failed https://api.telegram.org/bot${telegramToken}/getMe`),
   );
   fetchMock.mockImplementation(async (input, init) => {
+    if (input === catalogPath) return response(catalog);
     if (init?.method === 'POST')
       return response(
         { status: 'accepted', registration_id: 'registration-lookup' },
@@ -442,6 +484,7 @@ it.each([
 ])('shows a toast for %s, preserves inputs and allows a successful manual retry', async (failure) => {
   let attempts = 0;
   fetchMock.mockImplementation(async (input, init) => {
+    if (input === catalogPath) return response(catalog);
     if (init?.method === 'POST') {
       attempts += 1;
       if (attempts === 1) {
@@ -500,6 +543,61 @@ it.each([
       'Telegram added. Send your bot a message to get started.',
     ),
   ).toBeInTheDocument();
+});
+
+it('removes revoked selections after a rejected submission and allows a retry with the remaining grants', async () => {
+  let attempted = false;
+  let resolveCatalog!: (value: Response) => void;
+  const updatedCatalog = new Promise<Response>((resolve) => {
+    resolveCatalog = resolve;
+  });
+  fetchMock.mockImplementation(async (input, init) => {
+    if (input === servicePath) return response({ services: [service] });
+    if (input === catalogPath)
+      return attempted ? updatedCatalog : response(catalog);
+    if (init?.method === 'POST') {
+      attempted = true;
+      return response({ error: 'invalid_service_ids' }, 400);
+    }
+    return response([]);
+  });
+  renderWithQueryClient(<TelegramConnectionPage scopeId="scope-alpha" />);
+  fireEvent.click(await screen.findByRole('checkbox', { name: /GitHub work/ }));
+  enterNames();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+  await screen.findByText(
+    'The selected services are no longer available. Review your selection and try again.',
+  );
+  expect(
+    screen.getByRole('button', { name: 'Connect Telegram' }),
+  ).toBeDisabled();
+  // An old selection cannot be submitted while its replacement is pending.
+  fireEvent.submit(screen.getByRole('form', { name: 'Connect Telegram' }));
+  expect(
+    fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+  ).toHaveLength(1);
+  await act(async () =>
+    resolveCatalog(response({ contract_version: '1.0', services: [] })),
+  );
+  await screen.findByText(/No services are available/);
+  expect(
+    screen.queryByRole('checkbox', { name: /GitHub work/ }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText('0 selected')).toBeInTheDocument();
+  expect(screen.getByLabelText(/^Bot token/)).toHaveValue('TEST_ONLY_TOKEN');
+  expect(
+    screen.getByRole('button', { name: 'Connect Telegram' }),
+  ).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+  await waitFor(() =>
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+    ).toHaveLength(2),
+  );
+  const posts = fetchMock.mock.calls.filter(
+    ([, init]) => init?.method === 'POST',
+  );
+  expect(JSON.parse(String(posts[1][1]?.body)).service_ids).toEqual([]);
 });
 
 it('confirms discarding an edited setup without issuing a registration request', async () => {

@@ -112,6 +112,15 @@ export default function TelegramConnectionPage({
   const dirty = Boolean(botToken || label || skillName || selectedIds.length);
 
   React.useEffect(() => {
+    if (!services.isSuccess || services.isFetching) return;
+    const availableIds = new Set(services.data.map((service) => service.id));
+    setSelectedIds((current) => {
+      const available = current.filter((id) => availableIds.has(id));
+      return available.length === current.length ? current : available;
+    });
+  }, [services.data, services.isSuccess, services.isFetching]);
+
+  React.useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
@@ -169,6 +178,7 @@ export default function TelegramConnectionPage({
       !botToken.trim() ||
       !webhookBaseUrl ||
       !services.isSuccess ||
+      services.isFetching ||
       invalidSelection
     )
       return;
@@ -392,6 +402,7 @@ export default function TelegramConnectionPage({
               locked ||
               !webhookBaseUrl ||
               !services.isSuccess ||
+              services.isFetching ||
               invalidSelection
             }
           >

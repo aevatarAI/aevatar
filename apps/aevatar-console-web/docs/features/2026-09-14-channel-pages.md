@@ -50,13 +50,35 @@ and the authenticated registration POST. It stays in component memory for a
 manual retry after failure and clears after successful admission. No registration
 mutation cache stores it.
 
-Services come from the current NyxID session's
-`GET /api/v1/user-services`, resolved against the existing NyxID authority.
-Its `{services: [...]}` response differs from the Aevatar runtime-config
-inventory: it uses `is_active` and `credential_source.type` (`personal` or
-`org`, with an `allowed` flag on the organization variant). Unknown variants,
-inactive services, and disallowed organization services cannot be selected.
-Only safe display fields enter the query cache.
+Services use two reads against the existing NyxID authority through the current
+session's authenticated fetch:
+
+- `GET /api/v1/user-services` supplies account-owned/inherited records and safe
+  display fields. It does **not** filter the current OAuth bearer's grants.
+  Personal ownership alone therefore does not make a service selectable.
+- `GET /api/v1/mcp/config` (`contract_version: "1.0"`) supplies the current
+  caller's authorized, executable services. Its documented contract applies
+  service/node grants and credential/route availability before publication.
+  Only `is_user_service: true` rows carry exact `UserService.id` values;
+  platform catalog IDs must never enter a bot's service allowlist.
+
+The picker contains only the exact-ID intersection of the two responses,
+further excluding inactive inventory rows, disallowed organization rows and
+unknown credential-source variants. Services outside the current authorization
+are hidden, including from search and Select all. The catalog can omit a
+service whose credential or node route is unavailable even when the account
+owns it. Neither endpoint failing, an unsupported catalog version nor malformed
+or ambiguous identities can fall back to showing the account inventory. Only
+safe display fields from the filtered result enter the query cache; raw
+catalog operation descriptors and credential data are discarded. Both reads
+omit browser cookies and bypass HTTP caching so NyxID evaluates the existing
+bearer session. They run on entry and explicit recovery, without polling,
+window-focus or reconnect refresh.
+
+This contract is documented in NyxID `docs/API.md` (MCP Configuration) and
+`docs/ARCHITECTURE.md`, with implementation in `handlers/mcp.rs` and
+`services/mcp_service.rs`. Backend registration authority remains enforced by
+NyxID/Aevatar; this picker does not mint credentials or broaden OAuth grants.
 
 Options use label, then catalog service name, then slug. Search matches label
 or slug and preserves selections outside the current search. A Select all
@@ -68,8 +90,11 @@ Each selection uses the exact `services[].id`; no default selection is made.
 The registration POST always supplies `authorization_mode: explicit_service_allowlist` and
 `service_ids`, including `[]` for no service access. It never substitutes a
 slug, endpoint ID, API key ID, or omitted field. If a selected service becomes
-unavailable, submission is blocked until it is deselected. Load failure has
-inline retry, while a genuine empty inventory can connect without service access.
+unavailable after an explicit recovery read, it is removed from the selection.
+Submission waits while access is being rechecked, preventing stale hidden IDs
+from entering a retry. Load failure has inline retry; an empty authorized list
+can connect with an explicit empty service allowlist even if the account owns
+other services.
 
 Registration uses existing `POST /api/channels/registrations` with
 `platform`, `bot_token`, `label`, `default_skill_name`, `webhook_base_url`, and
@@ -81,7 +106,7 @@ acceptance or after a failed submission. Accepted registration triggers one
 list read; if it is not visible yet, Check again performs one GET. No polling,
 window-focus refresh, or reconnect refresh runs. Registration failures, including
 504 and network errors, show a shared error toast and restore editable fields and Connect
-Telegram. Inputs and service selections are preserved for an explicit manual
+Telegram. Inputs and still-authorized selections are preserved for an explicit manual
 retry; no automatic registration retry runs. An in-flight request still blocks
 duplicate clicks, and an accepted registration stays locked during observation.
 

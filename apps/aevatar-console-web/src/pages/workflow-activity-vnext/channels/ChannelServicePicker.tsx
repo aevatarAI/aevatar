@@ -55,7 +55,7 @@ export default function ChannelServicePicker({
       <p className="channels__form-help">
         {t(
           'channels.connect.servicesHelp',
-          'Select the services this bot can use from your NyxID account.',
+          'Only services available through your current NyxID authorization are shown.',
         )}
       </p>
       {loading ? (
@@ -80,7 +80,7 @@ export default function ChannelServicePicker({
         <div className="channels__service-state" role="status">
           {t(
             'channels.connect.servicesEmpty',
-            'No services are available in your NyxID account. You can connect this bot without service access.',
+            'No services are available with your current NyxID authorization. You can connect this bot without service access.',
           )}
         </div>
       ) : (
