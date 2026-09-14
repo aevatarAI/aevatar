@@ -1567,14 +1567,19 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ct)
             .ConfigureAwait(false);
         _logger.LogInformation(
-            "Channel AgentRun tool catalog pinned. policy={PolicyVersion} profile={ProfileId} revision={PublishedRevision} intent={IntentId} owned={OwnedCount} schemaBytes={SchemaBytes} digest={CatalogDigest}",
+            "Channel AgentRun tool catalog pinned. policy={PolicyVersion} profile={ProfileId} revision={PublishedRevision} intent={IntentId} owned={OwnedCount} schemaBytes={SchemaBytes} digest={CatalogDigest} finalAllowedToolCount={FinalAllowedToolCount} connectedReadToolCount={ConnectedReadToolCount} connectedWriteToolCount={ConnectedWriteToolCount} toolVisibilityRestricted={ToolVisibilityRestricted} toolVisibilityAllowedToolCount={ToolVisibilityAllowedToolCount}",
             ToolCatalogPolicyVersion,
             profile.ProfileId,
             profile.PublishedRevision,
             materialization.Catalog.SelectedIntentId ?? materialization.Catalog.CandidateIntentId ?? string.Empty,
             materialization.Catalog.Proof.ToolCount,
             materialization.Catalog.Proof.SchemaBytes,
-            materialization.Catalog.Proof.CatalogDigest);
+            materialization.Catalog.Proof.CatalogDigest,
+            materialization.Catalog.FinalAllowedToolNames.Count,
+            materialization.Catalog.Proof.ConnectedReadToolCount,
+            materialization.Catalog.Proof.ConnectedWriteToolCount,
+            generationContext.ToolContext.ToolVisibility.IsRestricted,
+            generationContext.ToolContext.ToolVisibility.AllowedToolNames?.Count ?? -1);
         return new AgentRunTurnCatalogPlan(
             materialization.Catalog,
             profile,

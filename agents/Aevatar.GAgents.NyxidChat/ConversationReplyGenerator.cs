@@ -466,8 +466,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             return;
 
         var validTools = FilterValidTools(tools) ?? [];
+        var profileAllowedExactTools = ResolveProfileAllowedExactTools(turnCatalog).ToArray();
+        var exactConnectedTools = turnCatalog?.ExactTools.Values
+            .Where(static tool => tool is IAgentToolOperationAdmissionOwner)
+            .ToArray() ?? [];
+        var finalConnectedTools = validTools
+            .Where(static tool => tool is IAgentToolOperationAdmissionOwner)
+            .ToArray();
         _logger.LogWarning(
-            "Channel LLM tool plan prepared. surface={Surface} isChannelRelayTurn={IsChannelRelayTurn} isNyxIdChatTurn={IsNyxIdChatTurn} forceDisableTools={ForceDisableTools} replyPlanDisableTools={ReplyPlanDisableTools} disableTools={DisableTools} turnCatalogPresent={TurnCatalogPresent} profileAllowedToolCount={ProfileAllowedToolCount} profileAllowedTools={ProfileAllowedTools} routeOwnedToolCount={ExactToolCount} exactTools={ExactTools} finalToolCount={FinalToolCount} finalTools={FinalTools} inputPartFileRefCount={InputPartFileRefCount} toolContextInputFileRefCount={ToolContextInputFileRefCount}",
+            "Channel LLM tool plan prepared. surface={Surface} isChannelRelayTurn={IsChannelRelayTurn} isNyxIdChatTurn={IsNyxIdChatTurn} forceDisableTools={ForceDisableTools} replyPlanDisableTools={ReplyPlanDisableTools} disableTools={DisableTools} turnCatalogPresent={TurnCatalogPresent} profileAllowedToolCount={ProfileAllowedToolCount} profileAllowedTools={ProfileAllowedTools} profileAllowedConnectedToolCount={ProfileAllowedConnectedToolCount} profileAllowedConnectedSlugs={ProfileAllowedConnectedSlugs} routeOwnedToolCount={ExactToolCount} exactTools={ExactTools} routeOwnedConnectedToolCount={RouteOwnedConnectedToolCount} routeOwnedConnectedSlugs={RouteOwnedConnectedSlugs} finalToolCount={FinalToolCount} finalTools={FinalTools} finalConnectedToolCount={FinalConnectedToolCount} finalConnectedSlugs={FinalConnectedSlugs} toolVisibilityRestricted={ToolVisibilityRestricted} toolVisibilityAllowedToolCount={ToolVisibilityAllowedToolCount} inputPartFileRefCount={InputPartFileRefCount} toolContextInputFileRefCount={ToolContextInputFileRefCount}",
             surface,
             isChannelRelayTurn,
             isNyxIdChatTurn,
@@ -477,10 +484,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             turnCatalog is not null,
             turnCatalog?.FinalAllowedToolNames.Count ?? 0,
             FormatToolNames(turnCatalog?.FinalAllowedToolNames ?? Enumerable.Empty<string>()),
+            profileAllowedExactTools.Count(static tool => tool is IAgentToolOperationAdmissionOwner),
+            FormatConnectedOperationSlugs(profileAllowedExactTools),
             turnCatalog?.ExactTools.Count ?? 0,
             FormatToolNames(turnCatalog?.ExactTools.Values.Select(static tool => tool.Name) ?? Enumerable.Empty<string>()),
+            exactConnectedTools.Length,
+            FormatConnectedOperationSlugs(exactConnectedTools),
             validTools.Count,
             FormatToolNames(validTools.Select(static tool => tool.Name)),
+            finalConnectedTools.Length,
+            FormatConnectedOperationSlugs(finalConnectedTools),
+            toolContext.ToolVisibility.IsRestricted,
+            toolContext.ToolVisibility.AllowedToolNames?.Count ?? -1,
             inputFileRefs.Count,
             toolContext.InputFileRefs.Count);
         LogConnectedReadToolEvidence(surface, validTools);
@@ -2381,6 +2396,35 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         tool is IAgentToolCapabilityDescriptor descriptor &&
         descriptor.Capabilities.Any(declared =>
             string.Equals(declared, capability, StringComparison.OrdinalIgnoreCase));
+
+    private static IEnumerable<IAgentTool> ResolveProfileAllowedExactTools(AgentTurnToolCatalog? turnCatalog)
+    {
+        if (turnCatalog is null)
+            yield break;
+
+        foreach (var toolName in turnCatalog.FinalAllowedToolNames)
+        {
+            if (turnCatalog.ExactTools.TryGetValue(toolName, out var tool))
+                yield return tool;
+        }
+    }
+
+    private static string FormatConnectedOperationSlugs(IEnumerable<IAgentTool> tools)
+    {
+        var slugs = tools
+            .OfType<IAgentToolOperationAdmissionOwner>()
+            .SelectMany(static owner => new[]
+            {
+                owner.OperationAdmission.CatalogServiceSlug,
+                owner.OperationAdmission.ServiceSlug,
+            })
+            .Where(static slug => !string.IsNullOrWhiteSpace(slug))
+            .Select(static slug => slug!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(static slug => slug, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return slugs.Length == 0 ? "<none>" : string.Join(",", slugs);
+    }
 
     private void LogConnectedReadToolEvidence(
         string surface,
