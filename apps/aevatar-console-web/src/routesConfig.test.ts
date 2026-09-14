@@ -215,6 +215,7 @@ describe('console routes', () => {
       `${namespace}/activity`,
       `${namespace}/activity/:runId`,
       `${namespace}/channels`,
+      `${namespace}/channels/connect/telegram`,
       `${namespace}/channels/:registrationId`,
       `${namespace}/settings`,
     ];

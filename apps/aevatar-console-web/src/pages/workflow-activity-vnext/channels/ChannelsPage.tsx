@@ -6,9 +6,11 @@ import type { ChannelRegistration } from '@/shared/api/channelsApi';
 import { t } from '@/shared/i18n/messages';
 import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
-import { buildChannelDetailsHref } from '../navigation';
+import {
+  buildChannelDetailsHref,
+  buildTelegramConnectionHref,
+} from '../navigation';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
-import { getChannelOnboardingUrl } from './config';
 import {
   ChannelBadge,
   ChannelIcon,
@@ -78,7 +80,6 @@ export default function ChannelsPage({
   const toast = useConsoleToast();
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = React.useState(false);
-  const onboardingUrl = getChannelOnboardingUrl();
   async function refresh() {
     setRefreshing(true);
     try {
@@ -104,7 +105,7 @@ export default function ChannelsPage({
       title={t('channels.title', 'Connect your channels to your agent')}
       description={t(
         'channels.description',
-        'Choose a channel and follow the setup: credentials → register → platform setup → reply model → verify.',
+        'Choose a channel to connect your bot and select the services it can use.',
       )}
       mainClassName="channels__main"
       contentClassName="channels__content"
@@ -122,7 +123,7 @@ export default function ChannelsPage({
         </h2>
         <div className="channels__platforms">
           {platforms.map((platform) => {
-            const available = platform === 'lark' || platform === 'telegram';
+            const available = platform === 'telegram';
             return (
               <article
                 className={`channels__platform${available ? '' : ' channels__platform--soon'}`}
@@ -150,12 +151,10 @@ export default function ChannelsPage({
                     }[platform],
                   )}
                 </p>
-                {available && onboardingUrl ? (
-                  <a
+                {available ? (
+                  <ChannelLink
                     className="channels__connect"
-                    href={onboardingUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    href={buildTelegramConnectionHref(scopeId)}
                     aria-label={t(
                       'channels.connectPlatform',
                       'Connect {platform}',
@@ -164,12 +163,10 @@ export default function ChannelsPage({
                   >
                     {t('channels.connect', 'Connect')}
                     <ArrowRightOutlined aria-hidden="true" />
-                  </a>
+                  </ChannelLink>
                 ) : (
                   <span className="channels__muted">
-                    {available
-                      ? t('channels.setupUnavailable', 'Setup unavailable')
-                      : t('channels.soon', 'Soon')}
+                    {t('channels.soon', 'Soon')}
                   </span>
                 )}
               </article>
@@ -258,7 +255,7 @@ export default function ChannelsPage({
             <p>
               {t(
                 'channels.empty.description',
-                'Connect Lark or Telegram above to start talking to your agent.',
+                'Connect Telegram above to start talking to your agent.',
               )}
             </p>
           </div>

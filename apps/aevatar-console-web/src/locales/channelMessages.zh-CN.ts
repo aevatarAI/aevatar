@@ -1,15 +1,13 @@
 export default {
   'workflowActivityVNext.nav.channels': '渠道',
   'channels.title': '将渠道连接到你的 Agent',
-  'channels.description':
-    '选择渠道并完成设置：凭据 → 注册 → 平台设置 → 回复模型 → 验证。',
+  'channels.description': '选择渠道，连接你的机器人并选择它可以使用的服务。',
   'channels.intro': '连接后，即可直接在渠道中与你的 Aevatar 机器人对话。',
   'channels.available': '可用渠道',
   'channels.availableNow': '可用',
   'channels.soon': '即将支持',
   'channels.connect': '连接',
   'channels.connectPlatform': '连接 {platform}',
-  'channels.setupUnavailable': '接入暂不可用',
   'channels.platform.feishu': '飞书',
   'channels.platform.lark.description': '将机器人接入聊天和群组。',
   'channels.platform.feishu.description': '面向飞书的渠道接入。',
@@ -43,8 +41,7 @@ export default {
   'channels.delivery.repairRequired': '需要修复',
   'channels.delivery.notEnabled': '未启用',
   'channels.empty.title': '尚未连接渠道',
-  'channels.empty.description':
-    '在上方连接 Lark 或 Telegram，开始与你的 Agent 对话。',
+  'channels.empty.description': '在上方连接 Telegram，开始与你的 Agent 对话。',
   'channels.retry': '重试',
   'channels.error.load': '无法加载渠道，请重试。',
   'channels.error.refresh': '无法刷新渠道，请重试。',
@@ -70,4 +67,55 @@ export default {
   'channels.remove.check': '重新检查',
   'channels.remove.success': '渠道已移除。',
   'channels.remove.warning': '渠道已移除，部分清理操作需要在 NyxID 中处理。',
+  'channels.connect.title': '连接 Telegram',
+  'channels.connect.description':
+    '添加机器人，选择它可以使用的服务。Telegram Webhook 将自动配置。',
+  'channels.connect.botDetails': '机器人信息',
+  'channels.connect.botToken': '机器人令牌',
+  'channels.connect.showToken': '显示机器人令牌',
+  'channels.connect.hideToken': '隐藏机器人令牌',
+  'channels.connect.botFather': '从 BotFather 获取令牌',
+  'channels.connect.label': '名称',
+  'channels.connect.skillName': '技能名称',
+  'channels.connect.nameLookupUnavailable':
+    '自动识别机器人名称暂不可用。请填写下方的名称和技能名称后连接。',
+  'channels.connect.nameHelp': '使用 Telegram 机器人名称，或填写自定义名称。',
+  'channels.connect.tokenRequired': '请输入从 BotFather 获取的机器人令牌。',
+  'channels.connect.nameRequired': '自动识别暂不可用，请填写名称。',
+  'channels.connect.services': '服务',
+  'channels.connect.selected': '已选 {count} 项',
+  'channels.connect.servicesHelp':
+    '从你的 NyxID 账户中选择此机器人可以使用的服务。',
+  'channels.connect.servicesLoading': '正在加载服务',
+  'channels.connect.servicesError': '无法加载服务，请重试后再连接。',
+  'channels.connect.servicesEmpty':
+    '你的 NyxID 账户暂无可用服务。可以连接机器人，但不授予服务访问权限。',
+  'channels.connect.searchServices': '按名称或标识搜索服务',
+  'channels.connect.serviceUnavailable': '不可用',
+  'channels.connect.personal': '个人',
+  'channels.connect.organization': '组织',
+  'channels.connect.noMatches': '没有匹配的服务。',
+  'channels.connect.selectionHelp': '此机器人只能使用选中的服务。',
+  'channels.connect.selectionChanged':
+    '部分选中服务已不可用，请取消勾选后再连接。',
+  'channels.connect.pending': '已提交 Telegram 接入请求，正在等待渠道显示。',
+  'channels.connect.success': 'Telegram 已添加，给机器人发送消息即可开始。',
+  'channels.connect.error.token': '请检查 BotFather 提供的令牌后重试。',
+  'channels.connect.error.services': '所选服务已不可用，请重新检查选择后重试。',
+  'channels.connect.error.skill':
+    '无法使用此技能名称，请在 Ornn 中检查名称和访问权限。',
+  'channels.connect.error.authorization':
+    '登录状态或服务权限需要处理，请重新登录并检查 NyxID 访问权限。',
+  'channels.connect.error.conflict':
+    '此机器人可能已连接，请先查看渠道列表再重试。',
+  'channels.connect.error.configuration':
+    '渠道接入暂不可用，请联系管理员检查部署配置。',
+  'channels.connect.error.rejected':
+    '无法连接 Telegram，请检查机器人令牌、技能名称和所选服务后重试。',
+  'channels.connect.error.uncertain':
+    '暂时无法确认连接结果，请先查看渠道列表，再尝试新的连接。',
+  'channels.connect.discardTitle': '放弃此次连接设置？',
+  'channels.connect.discard': '放弃',
+  'channels.connect.stay': '继续填写',
+  'channels.connect.discardHelp': '机器人令牌和未保存的选择将被清除。',
 };

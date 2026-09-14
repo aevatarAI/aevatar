@@ -37,6 +37,52 @@ export class ChannelApiError extends Error {
   }
 }
 
+export type ChannelRegistrationFailure =
+  | 'token'
+  | 'services'
+  | 'skill'
+  | 'authorization'
+  | 'conflict'
+  | 'configuration'
+  | 'rejected'
+  | 'uncertain';
+
+export class ChannelRegistrationError extends Error {
+  constructor(readonly reason: ChannelRegistrationFailure) {
+    super('Could not connect Telegram.');
+    this.name = 'ChannelRegistrationError';
+  }
+}
+
+export interface TelegramRegistrationInput {
+  readonly botToken: string;
+  readonly label: string;
+  readonly skillName: string;
+  readonly serviceIds: readonly string[];
+  readonly webhookBaseUrl: string;
+}
+
+function registrationFailure(status: number, value: unknown) {
+  const code =
+    value && typeof value === 'object' && 'error' in value
+      ? value.error
+      : undefined;
+  if (code === 'missing_bot_token' || code === 'invalid_bot_token')
+    return 'token';
+  if (code === 'invalid_service_ids') return 'services';
+  if (code === 'invalid_default_skill' || code === 'skill_not_found')
+    return 'skill';
+  if (status === 401 || status === 403) return 'authorization';
+  if (status === 409) return 'conflict';
+  if (
+    code === 'missing_webhook_base_url' ||
+    code === 'insecure_webhook_base_url' ||
+    code === 'nyx_base_url_not_configured'
+  )
+    return 'configuration';
+  return status >= 500 ? 'uncertain' : 'rejected';
+}
+
 function decodeRegistration(value: unknown): ChannelRegistration {
   const row = expectRecord(value, 'Channel registration');
   const skill =
@@ -105,6 +151,50 @@ function registrationPath(registrationId: string): string {
 }
 
 export const channelsApi = {
+  async registerTelegram(
+    input: TelegramRegistrationInput,
+  ): Promise<{ readonly registrationId: string }> {
+    // This request carries the token only in the authenticated POST body.
+    // Do not use a mutation cache, navigation state, or persistent draft.
+    let response: Response;
+    try {
+      response = await authFetch('/api/channels/registrations', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          platform: 'telegram',
+          bot_token: input.botToken.trim(),
+          label: input.label.trim(),
+          default_skill_name: input.skillName.trim(),
+          webhook_base_url: input.webhookBaseUrl,
+          authorization_mode: 'explicit_service_allowlist',
+          service_ids: [...input.serviceIds],
+        }),
+      });
+    } catch {
+      throw new ChannelRegistrationError('uncertain');
+    }
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok)
+      throw new ChannelRegistrationError(
+        registrationFailure(response.status, body),
+      );
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      !('status' in body) ||
+      body.status !== 'accepted' ||
+      !('registration_id' in body) ||
+      typeof body.registration_id !== 'string' ||
+      !body.registration_id.trim()
+    )
+      throw new ChannelRegistrationError('uncertain');
+    // Retain the identity needed for readback, not raw provisioning output.
+    return { registrationId: body.registration_id };
+  },
   list(signal?: AbortSignal): Promise<ChannelRegistration[]> {
     return request(
       '/api/channels/registrations',

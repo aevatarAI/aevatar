@@ -91,8 +91,11 @@ describe('Channel pages', () => {
       screen.getByRole('link', { name: 'Connect Telegram' }),
     ).toHaveAttribute(
       'href',
-      'https://aevatar-console-backend-api.aevatar.ai/channels',
+      '/scopes/scope-alpha/workflow-activity-vnext/channels/connect/telegram',
     );
+    expect(
+      screen.queryByRole('link', { name: 'Connect Lark' }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('link', { name: 'Connect Slack' }),
     ).not.toBeInTheDocument();
@@ -106,6 +109,10 @@ describe('Channel pages', () => {
       ),
     );
     expect(await within(table).findByText('Active')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: 'Connect Telegram' }));
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/channels/connect/telegram',
+    );
     fireEvent.click(within(table).getByRole('link', { name: 'Manage' }));
     expect(history.push).toHaveBeenCalledWith(
       '/scopes/scope-alpha/workflow-activity-vnext/channels/registration%3Aalpha%2Fone',

@@ -164,8 +164,8 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
       process.env.NYXID_REDIRECT_URI,
     ),
     'process.env.NYXID_SCOPE': JSON.stringify(process.env.NYXID_SCOPE),
-    'process.env.AEVATAR_CHANNELS_ONBOARDING_URL': JSON.stringify(
-      process.env.AEVATAR_CHANNELS_ONBOARDING_URL,
+    'process.env.AEVATAR_CHANNEL_WEBHOOK_BASE_URL': JSON.stringify(
+      process.env.AEVATAR_CHANNEL_WEBHOOK_BASE_URL,
     ),
     'process.env.ORNN_BASE_URL': JSON.stringify(process.env.ORNN_BASE_URL),
     'process.env.AEVATAR_CONSOLE_TEAM_FIRST_ENABLED': JSON.stringify(

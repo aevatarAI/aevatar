@@ -3,8 +3,8 @@
 Channels is a first-level destination in the Workflow Activity vNext sidebar.
 It lets the signed-in owner view their connected bots and inspect a connection.
 
-The two pages follow the latest simplified [Figma design](https://www.figma.com/design/FaVJx5IZeQX9jHcUi55ndB?node-id=6-2)
-(list frame `6:2`, detail frame `6:131`). The current design intentionally keeps
+The three pages follow the latest simplified [Figma design](https://www.figma.com/design/FaVJx5IZeQX9jHcUi55ndB?node-id=7-226)
+(list frame `7:2`, detail frame `6:131`, Telegram form `7:226`). The current design intentionally keeps
 channel details read-only with Remove as the sole resource action. The earlier
 runtime-configuration editor is outside this iteration of issue #3617.
 
@@ -14,16 +14,69 @@ runtime-configuration editor is outside this iteration of issue #3617.
   owner connection list.
 - `/scopes/:scopeId/workflow-activity-vnext/channels/:registrationId`: exact
   connection details. Registration IDs are opaque and encoded as one segment.
-- Connect Lark and Connect Telegram open the existing backend `/channels`
-  onboarding page. That page owns credentials, registration, platform setup,
-  reply model, and verification; it currently has no platform-specific deep
-  link. Feishu, Discord, and Slack remain visibly unavailable.
+- `/scopes/:scopeId/workflow-activity-vnext/channels/connect/telegram`: the
+  single-page Telegram connection form. Connect Telegram navigates here.
+  Lark, Feishu, Discord, and Slack are marked Soon in the current design.
+  The older backend `/channels` onboarding page remains independently available.
 
-`AEVATAR_CHANNELS_ONBOARDING_URL` optionally sets the existing setup page URL
-at build time. The default is the deployed
-`https://aevatar-console-backend-api.aevatar.ai/channels`. Configure this value
-for other deployments; an invalid value disables setup links. No credential is
-added to the URL and the existing onboarding authentication flow is preserved.
+`AEVATAR_CHANNEL_WEBHOOK_BASE_URL` optionally sets the public backend callback
+base URL at build time. The default is
+`https://aevatar-console-backend-api.aevatar.ai`. It must be HTTPS without
+credentials, query, or fragment. An invalid value disables registration with
+an inline deployment-configuration message. It is never inferred from the
+separate Console frontend origin or shown as an editable form field.
+
+## Telegram connection form
+
+The form accepts a masked bot token, Label, Skill name, and an explicit service
+selection. The token reveal control is keyboard accessible. Unsaved form
+navigation asks whether to discard; form data is never persisted. Only the
+authenticated registration POST carries the token, and successful admission
+or an uncertain result clears it. No registration mutation cache stores it.
+
+Services come from the current NyxID session's
+`GET /api/v1/user-services`, resolved against the existing NyxID authority.
+Its `{services: [...]}` response differs from the Aevatar runtime-config
+inventory: it uses `is_active` and `credential_source.type` (`personal` or
+`org`, with an `allowed` flag on the organization variant). Unknown variants,
+inactive services, and disallowed organization services cannot be selected.
+Only safe display fields enter the query cache.
+
+Options use label, then catalog service name, then slug. Search matches label
+or slug and preserves selections outside the current search. Each selection
+uses the exact `services[].id`; no default selection is made. The registration
+POST always supplies `authorization_mode: explicit_service_allowlist` and
+`service_ids`, including `[]` for no service access. It never substitutes a
+slug, endpoint ID, API key ID, or omitted field. If a selected service becomes
+unavailable, submission is blocked until it is deselected. Load failure has
+inline retry, while a genuine empty inventory can connect without service access.
+
+Registration uses existing `POST /api/channels/registrations` with
+`platform`, `bot_token`, `label`, `default_skill_name`, `webhook_base_url`, and
+the explicit selection above. A `202`/`status: accepted` response must contain
+the registration ID. The page waits for that exact Telegram registration in
+the owner list before showing success and opening details; inbound activity
+continues to use its real status. Observation is bounded to 20 seconds and
+Check again performs GET only. Network/server failures with uncertain effects
+require checking Channels before another setup, preventing automatic duplicates.
+
+### Outstanding bot-name contract
+
+The design asks for pre-registration token recognition and independent bot-name
+fallbacks for empty Label and Skill name. The reviewed `feature/integrate`
+backend and #3617/#3620 do not expose a non-mutating token/name lookup route.
+The deployed registration behavior also does not supply these fallbacks: it
+generates a generic label and forwards the skill name unchanged. NyxID's
+existing create/verify operations mutate registrations and cannot serve as a
+read-only preview.
+
+Until that server contract exists, the form explicitly reports that automatic
+lookup is unavailable and requires both names. It does not claim a bot has
+been recognized or submit a sample name. This is the remaining difference from
+the requested design; the frontend does not add a backend route or call Telegram
+directly with a token in its request URL. A future lookup must return the bot's
+`first_name`, preserve user edits, reject stale token results, and fall back
+independently for each name (a custom label must never supply the skill name).
 
 ## API and ownership
 

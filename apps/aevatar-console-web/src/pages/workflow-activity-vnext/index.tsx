@@ -4,6 +4,7 @@ import ActivityPage from './activity/ActivityPage';
 import RunDetailPage from './activity/RunDetailPage';
 import ChannelDetailsPage from './channels/ChannelDetailsPage';
 import ChannelsPage from './channels/ChannelsPage';
+import TelegramConnectionPage from './channels/TelegramConnectionPage';
 import { useConsoleLocation } from './hooks/useConsoleLocation';
 import SettingsPage from './settings/SettingsPage';
 import WorkflowActivityVNextShell from './WorkflowActivityVNextShell';
@@ -56,6 +57,9 @@ const WorkflowActivityVNextPage: React.FC = () => {
     return <ActivityPage scopeId={scopeId} />;
   }
 
+  if (pathname.endsWith('/channels/connect/telegram')) {
+    return <TelegramConnectionPage key={scopeId} scopeId={scopeId} />;
+  }
   const channelMatch = /\/channels\/([^/]+)$/.exec(pathname);
   if (channelMatch) {
     return (
