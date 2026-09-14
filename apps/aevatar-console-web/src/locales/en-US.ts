@@ -1,8 +1,10 @@
+import channelMessages from './channelMessages.en-US';
 import projectMessages from './projectMessages.en-US';
 import workflowActivityVNextMessages from './workflowActivityVNextMessages.en-US';
 
 const enUSMessages = {
   ...projectMessages,
+  ...channelMessages,
   ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
   'common.language.english': 'English',

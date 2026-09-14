@@ -214,6 +214,9 @@ describe('console routes', () => {
       `${namespace}/workflows/:workflowId`,
       `${namespace}/activity`,
       `${namespace}/activity/:runId`,
+      `${namespace}/channels`,
+      `${namespace}/channels/connect/telegram`,
+      `${namespace}/channels/:registrationId`,
       `${namespace}/settings`,
     ];
 
