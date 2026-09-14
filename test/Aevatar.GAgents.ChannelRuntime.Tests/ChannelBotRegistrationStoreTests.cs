@@ -310,6 +310,39 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ReplayRuntimeConfigUpdatedEvent_WhenAuthorizationModeIsLegacyUnspecified_PreservesRegistrationAuthorization()
+    {
+        var command = NewRegistration("reg-runtime-legacy-auth", apiKeyId: "key-runtime");
+        command.AuthorizationMode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist;
+        command.RegistrationServiceAllowlist = new ChannelRegistrationServiceAllowlist
+        {
+            ServiceIds = { "svc-calendar" },
+        };
+        await _agent.HandleRegister(command);
+        await AppendCommittedEventAsync(new ChannelBotRuntimeConfigUpdatedEvent
+        {
+            RegistrationId = "reg-runtime-legacy-auth",
+            RuntimeConfig = new ChannelBotRuntimeConfig
+            {
+                DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+                {
+                    Name = "calendar-reply",
+                },
+            },
+        });
+
+        await _agent.DeactivateAsync();
+        var reactivated = CreateAgent();
+        await reactivated.ActivateAsync();
+
+        var entry = reactivated.State.Registrations.Single();
+        entry.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
+        entry.RegistrationServiceAllowlist.Should().NotBeNull();
+        entry.RegistrationServiceAllowlist!.ServiceIds.Should().Equal("svc-calendar");
+        entry.DefaultSkillName.Should().Be("calendar-reply");
+    }
+
+    [Fact]
     public async Task HandleRegister_RejectsLegacyShapedNewCommand()
     {
         var beforeVersion = _agent.EventSourcing!.CurrentVersion;

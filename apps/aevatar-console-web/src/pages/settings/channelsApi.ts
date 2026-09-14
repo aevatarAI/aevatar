@@ -16,12 +16,19 @@ export type ChannelRuntimeNyxIdServiceSelector = {
   readonly endpointNames: readonly string[];
 };
 
+export type ChannelRuntimeCredentialSourceMode =
+  | "unspecified"
+  | "registration_agent_key"
+  | "sender_binding"
+  | "unsupported";
+
 export type ChannelRuntimeConfig = {
   readonly instructions: string;
   readonly defaultSkill: ChannelRuntimeDefaultSkill;
   readonly toolSetRefs: readonly string[];
   readonly extraToolNames: readonly string[];
   readonly nyxidServiceSelectors: readonly ChannelRuntimeNyxIdServiceSelector[];
+  readonly credentialSourceMode: ChannelRuntimeCredentialSourceMode;
 };
 
 export type ChannelRegistrationSummary = {
@@ -147,6 +154,13 @@ function readAuthorizationMode(record: JsonRecord): ChannelAuthorizationMode {
     : "nyxid_default";
 }
 
+function readCredentialSourceMode(record: JsonRecord): ChannelRuntimeCredentialSourceMode {
+  const value = readString(record, "credential_source_mode");
+  return value === "registration_agent_key" || value === "sender_binding" || value === "unsupported"
+    ? value
+    : "unspecified";
+}
+
 function decodeDefaultSkill(value: unknown): ChannelRuntimeDefaultSkill {
   const record = asRecord(value);
   return {
@@ -186,6 +200,7 @@ function decodeRuntimeConfig(value: unknown): ChannelRuntimeConfig {
     toolSetRefs: readStringArray(record, "tool_set_refs"),
     extraToolNames: readStringArray(record, "extra_tool_names"),
     nyxidServiceSelectors: decodeSelectors(record.nyxid_service_selectors),
+    credentialSourceMode: readCredentialSourceMode(record),
   };
 }
 
@@ -301,6 +316,7 @@ function encodeRuntimeConfig(config: ChannelRuntimeConfig): JsonRecord {
       service_slug: selector.serviceSlug,
       endpoint_names: [...selector.endpointNames],
     })),
+    credential_source_mode: config.credentialSourceMode,
   };
 }
 
