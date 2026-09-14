@@ -8,6 +8,9 @@ The three pages follow the latest simplified [Figma design](https://www.figma.co
 channel details read-only with Remove as the sole resource action. The earlier
 runtime-configuration editor is outside this iteration of issue #3617.
 
+Channel refresh is explicitly user driven. Do not add background polling or
+refresh on focus/reconnection to these pages.
+
 Refresh and Manage use outlined button styling with visible hover/focus states
 and larger touch targets on mobile. Manage retains navigation-link semantics.
 Details omit Scope. Bot ID and Agent key ID are blue underlined external links
@@ -73,9 +76,11 @@ Registration uses existing `POST /api/channels/registrations` with
 the explicit selection above. A `202`/`status: accepted` response must contain
 the registration ID. The page waits for that exact Telegram registration in
 the owner list before showing success and opening details; inbound activity
-continues to use its real status. Observation is bounded to 20 seconds and
-Check again performs GET only. Registration failures, including 504 and network
-errors, show a shared error toast and restore editable fields and Connect
+continues to use its real status. The form does not query registrations before
+acceptance or after a failed submission. Accepted registration triggers one
+list read; if it is not visible yet, Check again performs one GET. No polling,
+window-focus refresh, or reconnect refresh runs. Registration failures, including
+504 and network errors, show a shared error toast and restore editable fields and Connect
 Telegram. Inputs and service selections are preserved for an explicit manual
 retry; no automatic registration retry runs. An in-flight request still blocks
 duplicate clicks, and an accepted registration stays locked during observation.
@@ -113,7 +118,9 @@ API comment in [issue #3617](https://github.com/aevatarAI/aevatar/issues/3617).
   `GET /api/channels/registrations/{registrationId}/status` independently.
   Pending, active, error, and unknown states remain distinct. A status failure
   does not hide the connection or claim it is active. Visible status queries
-  refresh every 30 seconds and on window focus.
+  load on entry and refresh only through the explicit Refresh action. Neither
+  the list nor status queries poll, refresh on window focus, or refresh on
+  network reconnection.
 - Skill uses `default_skill.name` and optional `version` from PR #3620.
   The deployed name-only `default_skill_name` contract is also supported.
   An absent name displays Not set; an absent version is omitted. No skill
@@ -135,8 +142,9 @@ confirmation available for retry. No real connection is removed during QA.
 
 A `status: deleted` response starts list reconciliation. The UI keeps Remove
 disabled and waits for the registration to disappear from a fresh owner list
-before reporting completion and returning to Channels. Automatic observation
-is bounded to 20 seconds; Check again repeats only GET and never DELETE.
+before reporting completion and returning to Channels. Removal triggers one
+list read; if the row is still present, Check again performs one GET and never
+repeats DELETE. No background polling runs while waiting.
 Cleanup warnings produce a safe NyxID follow-up message without displaying
 raw diagnostic values.
 

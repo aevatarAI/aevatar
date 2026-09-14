@@ -1,3 +1,4 @@
+import { focusManager, onlineManager } from '@tanstack/react-query';
 import {
   act,
   fireEvent,
@@ -75,6 +76,40 @@ beforeEach(() => {
 });
 
 describe('Channel pages', () => {
+  it('refreshes the list and statuses only when requested after the initial load', async () => {
+    jest.useFakeTimers();
+    try {
+      const view = renderWithQueryClient(
+        <ChannelsPage scopeId="scope-alpha" />,
+      );
+      await screen.findByText('Active');
+      expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+        '/api/channels/registrations',
+        statusPath,
+      ]);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(60_000);
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+        onlineManager.setOnline(false);
+        onlineManager.setOnline(true);
+        await jest.advanceTimersByTimeAsync(1);
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh channels' }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+      expect(fetchMock.mock.calls.slice(2).map(([input]) => input)).toEqual([
+        '/api/channels/registrations',
+        statusPath,
+      ]);
+      view.unmount();
+    } finally {
+      focusManager.setFocused(undefined);
+      onlineManager.setOnline(true);
+      jest.useRealTimers();
+    }
+  });
+
   it('loads the connected table, exact Ornn skill link and first-level navigation without enabling unsupported platforms', async () => {
     const pendingStatus = deferred<Response>();
     fetchMock.mockImplementation(async (input) =>
@@ -254,41 +289,61 @@ describe('Channel pages', () => {
   });
 
   it('waits for list readback after removal and Check again never repeats DELETE', async () => {
-    let deletedFromList = false;
-    fetchMock.mockImplementation(async (input, init) => {
-      if (input === deletePath && init?.method === 'DELETE')
-        return response({ status: 'deleted', warnings: [] });
-      if (input === statusPath)
-        return response({ registration_id: registration.id, status: 'active' });
-      return response(deletedFromList ? [] : [registration]);
-    });
-    renderWithQueryClient(
-      <ChannelDetailsPage
-        registrationId={registration.id}
-        scopeId="scope-alpha"
-      />,
-    );
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
-    fireEvent.click(
-      within(await screen.findByRole('dialog')).getByRole('button', {
-        name: 'Remove',
-      }),
-    );
-    expect(await screen.findByText(/Removal requested/)).toBeInTheDocument();
-    expect(mockToast.success).not.toHaveBeenCalled();
-    expect(history.replace).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled();
-    deletedFromList = true;
-    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
-    await waitFor(() =>
-      expect(history.replace).toHaveBeenCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/channels',
-      ),
-    );
-    expect(mockToast.success).toHaveBeenCalledWith('Channel removed.');
-    expect(
-      fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE'),
-    ).toHaveLength(1);
+    jest.useFakeTimers();
+    try {
+      let deletedFromList = false;
+      fetchMock.mockImplementation(async (input, init) => {
+        if (input === deletePath && init?.method === 'DELETE')
+          return response({ status: 'deleted', warnings: [] });
+        if (input === statusPath)
+          return response({
+            registration_id: registration.id,
+            status: 'active',
+          });
+        return response(deletedFromList ? [] : [registration]);
+      });
+      renderWithQueryClient(
+        <ChannelDetailsPage
+          registrationId={registration.id}
+          scopeId="scope-alpha"
+        />,
+      );
+      fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+      fireEvent.click(
+        within(await screen.findByRole('dialog')).getByRole('button', {
+          name: 'Remove',
+        }),
+      );
+      expect(await screen.findByText(/Removal requested/)).toBeInTheDocument();
+      expect(mockToast.success).not.toHaveBeenCalled();
+      expect(history.replace).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled();
+      const requestsAfterRemoval = fetchMock.mock.calls.length;
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(60_000);
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+        onlineManager.setOnline(false);
+        onlineManager.setOnline(true);
+        await jest.advanceTimersByTimeAsync(1);
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(requestsAfterRemoval);
+      deletedFromList = true;
+      fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+      await waitFor(() =>
+        expect(history.replace).toHaveBeenCalledWith(
+          '/scopes/scope-alpha/workflow-activity-vnext/channels',
+        ),
+      );
+      expect(mockToast.success).toHaveBeenCalledWith('Channel removed.');
+      expect(
+        fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE'),
+      ).toHaveLength(1);
+    } finally {
+      focusManager.setFocused(undefined);
+      onlineManager.setOnline(true);
+      jest.useRealTimers();
+    }
   });
 
   it('keeps failed removal retryable and reports cleanup warnings without exposing their content', async () => {

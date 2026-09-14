@@ -83,7 +83,6 @@ export default function TelegramConnectionPage({
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
   const [submittedId, setSubmittedId] = React.useState<string | null>(null);
-  const [observeUntil, setObserveUntil] = React.useState(0);
   const [validationAttempted, setValidationAttempted] = React.useState(false);
   const [leaveTarget, setLeaveTarget] = React.useState<string | null>(null);
   const inFlight = React.useRef(false);
@@ -92,13 +91,16 @@ export default function TelegramConnectionPage({
   const toast = useConsoleToast();
   const webhookBaseUrl = getChannelWebhookBaseUrl();
   const listHref = buildWorkflowActivitySectionHref(scopeId, 'channels');
-  const registrations = useChannelRegistrations(scopeId, observeUntil);
+  // Read the list only to confirm an accepted submission or on Check again.
+  const registrations = useChannelRegistrations(scopeId, false);
   const services = useQuery({
     queryKey: ['channels', scopeId, 'service-choices'],
     queryFn: ({ signal }) => listChannelServices(signal),
     enabled: Boolean(scopeId),
     retry: false,
     staleTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const invalidSelection = selectedIds.some(
     (id) =>
@@ -183,7 +185,6 @@ export default function TelegramConnectionPage({
       if (!mounted.current) return;
       setBotToken('');
       setSubmittedId(receipt.registrationId);
-      setObserveUntil(Date.now() + 20_000);
       await registrations.refetch();
     } catch (failure) {
       if (!mounted.current) return;
@@ -371,10 +372,7 @@ export default function TelegramConnectionPage({
             </p>
             <Button
               loading={registrations.isFetching}
-              onClick={() => {
-                setObserveUntil(Date.now() + 20_000);
-                void registrations.refetch();
-              }}
+              onClick={() => void registrations.refetch()}
             >
               {t('channels.remove.check', 'Check again')}
             </Button>

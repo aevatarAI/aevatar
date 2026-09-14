@@ -37,10 +37,9 @@ export default function ChannelDetailsPage({
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [removing, setRemoving] = React.useState(false);
   const [removalAccepted, setRemovalAccepted] = React.useState(false);
-  const [observeUntil, setObserveUntil] = React.useState(0);
   const [hasWarnings, setHasWarnings] = React.useState(false);
   const [removeError, setRemoveError] = React.useState(false);
-  const registrations = useChannelRegistrations(scopeId, observeUntil);
+  const registrations = useChannelRegistrations(scopeId);
   const registration = registrations.data?.find(
     (row) => row.id === registrationId,
   );
@@ -86,7 +85,6 @@ export default function ChannelDetailsPage({
       const result = await channelsApi.remove(registrationId);
       setHasWarnings(result.hasWarnings);
       setRemovalAccepted(true);
-      setObserveUntil(Date.now() + 20_000);
       setConfirmOpen(false);
       await registrations.refetch();
     } catch {
@@ -269,10 +267,7 @@ export default function ChannelDetailsPage({
               </p>
               <Button
                 loading={registrations.isFetching}
-                onClick={() => {
-                  setObserveUntil(Date.now() + 20_000);
-                  void registrations.refetch();
-                }}
+                onClick={() => void registrations.refetch()}
               >
                 {t('channels.remove.check', 'Check again')}
               </Button>

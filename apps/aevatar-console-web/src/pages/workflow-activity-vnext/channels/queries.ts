@@ -7,15 +7,16 @@ export const channelKeys = {
     ['channels', scopeId, 'status', registrationId] as const,
 };
 
-export function useChannelRegistrations(scopeId: string, observeUntil = 0) {
+export function useChannelRegistrations(scopeId: string, enabled = true) {
   return useQuery({
     queryKey: channelKeys.list(scopeId),
     queryFn: ({ signal }) => channelsApi.list(signal),
-    enabled: Boolean(scopeId),
+    enabled: Boolean(scopeId) && enabled,
     retry: false,
     staleTime: 0,
-    refetchOnWindowFocus: true,
-    refetchInterval: () => (Date.now() < observeUntil ? 2000 : false),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchInterval: false,
   });
 }
 
@@ -26,7 +27,8 @@ export function useChannelStatus(scopeId: string, registrationId: string) {
     enabled: Boolean(scopeId && registrationId),
     retry: false,
     staleTime: 15_000,
-    refetchOnWindowFocus: true,
-    refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchInterval: false,
   });
 }

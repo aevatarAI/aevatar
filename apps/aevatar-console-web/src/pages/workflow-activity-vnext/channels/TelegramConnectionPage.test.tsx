@@ -1,3 +1,4 @@
+import { focusManager, onlineManager } from '@tanstack/react-query';
 import {
   act,
   fireEvent,
@@ -63,6 +64,70 @@ beforeEach(() => {
 });
 afterEach(() => {
   global.fetch = originalFetch;
+});
+
+it('reads registrations only after acceptance or Check again, never while idle or after failure', async () => {
+  jest.useFakeTimers();
+  try {
+    let attempts = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (init?.method === 'POST') {
+        attempts += 1;
+        return attempts === 1
+          ? response({}, 504)
+          : response(
+              { status: 'accepted', registration_id: 'registration-new' },
+              202,
+            );
+      }
+      return input === servicePath ? response({ services: [] }) : response([]);
+    });
+    const listReads = () =>
+      fetchMock.mock.calls.filter(
+        ([input, init]) => input === listPath && init?.method !== 'POST',
+      ).length;
+    const idleAndReturn = async () => {
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(60_000);
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+        onlineManager.setOnline(false);
+        onlineManager.setOnline(true);
+        await jest.advanceTimersByTimeAsync(1);
+      });
+    };
+    const view = renderWithQueryClient(
+      <TelegramConnectionPage scopeId="scope-alpha" />,
+    );
+    await screen.findByText(/No services are available/);
+    await idleAndReturn();
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([servicePath]);
+    enterNames();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+    await screen.findByText(
+      'Could not confirm the connection. Please try again.',
+    );
+    await idleAndReturn();
+    expect(listReads()).toBe(0);
+    expect(attempts).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+    await screen.findByRole('button', { name: 'Check again' });
+    expect(listReads()).toBe(1);
+    await idleAndReturn();
+    expect(listReads()).toBe(1);
+    expect(history.replace).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(listReads()).toBe(2));
+    expect(attempts).toBe(2);
+    view.unmount();
+  } finally {
+    focusManager.setFocused(undefined);
+    onlineManager.setOnline(true);
+    await act(async () => {
+      await jest.runOnlyPendingTimersAsync();
+    });
+    jest.useRealTimers();
+  }
 });
 
 it('searches services, enforces permissions, submits selected IDs once and waits for the new registration', async () => {
