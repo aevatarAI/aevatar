@@ -50,35 +50,41 @@ and the authenticated registration POST. It stays in component memory for a
 manual retry after failure and clears after successful admission. No registration
 mutation cache stores it.
 
-Services use two reads against the existing NyxID authority through the current
-session's authenticated fetch:
+Services use the current NyxID session's complete `GET /api/v1/user-services`
+inventory and its exact bearer service grants. The account inventory includes
+HTTP tools and LLM services; personal ownership alone does not establish that
+the current Aevatar session can grant a service to a bot.
 
-- `GET /api/v1/user-services` supplies account-owned/inherited records and safe
-  display fields. It does **not** filter the current OAuth bearer's grants.
-  Personal ownership alone therefore does not make a service selectable.
-- `GET /api/v1/mcp/config` (`contract_version: "1.0"`) supplies the current
-  caller's authorized, executable services. Its documented contract applies
-  service/node grants and credential/route availability before publication.
-  Only `is_user_service: true` rows carry exact `UserService.id` values;
-  platform catalog IDs must never enter a bot's service allowlist.
+The existing session helper refreshes an expired session before selection.
+The auth adapter reads `allow_all_services` and `allowed_service_ids` from that
+access token. Explicit `true` permits all active, account-accessible UserServices;
+explicit `false` permits only exact IDs in the list, including an empty grant.
+Inactive services, disallowed organization memberships and unknown credential
+sources remain excluded. Names, slugs, catalog IDs and credential IDs never
+substitute for `UserService.id`. No service type is excluded: an authorized LLM
+service such as Chrono Public remains selectable even without MCP operations.
 
-The picker contains only the exact-ID intersection of the two responses,
-further excluding inactive inventory rows, disallowed organization rows and
-unknown credential-source variants. Services outside the current authorization
-are hidden, including from search and Select all. The catalog can omit a
-service whose credential or node route is unavailable even when the account
-owns it. Neither endpoint failing, an unsupported catalog version nor malformed
-or ambiguous identities can fall back to showing the account inventory. Only
-safe display fields from the filtered result enter the query cache; raw
-catalog operation descriptors and credential data are discarded. Both reads
-omit browser cookies and bypass HTTP caching so NyxID evaluates the existing
-bearer session. They run on entry and explicit recovery, without polling,
-window-focus or reconnect refresh.
+These claims are used only for display filtering, not as client-side signature
+verification or proof that registration will succeed. The inventory request is
+pinned to the exact bearer used for filtering; NyxID authenticates it and the
+registration backend enforces delegation limits. Unsupported/malformed claims,
+a mismatched account subject, an expired JWT or a failed inventory read leave
+the picker in a retryable error state. There is no allow-all fallback when
+claims are absent. Token/parser errors are sanitized, and token/claim payloads
+never enter the query cache. Only the filtered safe display fields are retained.
 
-This contract is documented in NyxID `docs/API.md` (MCP Configuration) and
-`docs/ARCHITECTURE.md`, with implementation in `handlers/mcp.rs` and
-`services/mcp_service.rs`. Backend registration authority remains enforced by
-NyxID/Aevatar; this picker does not mint credentials or broaden OAuth grants.
+Do not substitute `/api/v1/mcp/config` for this authorization list: its documented
+contract describes executable tool operations and omits LLM services and some
+services with unavailable runtime routes. `/api/v1/llm/status` is also not an
+exact current-bearer grant inventory, and account consent records may differ
+from the current token's resource restrictions. The NyxID access-token producer
+in `backend/src/crypto/jwt.rs` emits explicit service grants for OAuth clients;
+`backend/src/mw/auth.rs` consumes the same fields for service authorization.
+
+The inventory read omits browser cookies and bypasses HTTP caching. It runs on
+entry and explicit recovery only; no polling, window-focus or reconnect refresh
+is added. A bearer with only some account services authorized sees only that
+subset, across HTTP and LLM service types.
 
 Options use label, then catalog service name, then slug. Search matches label
 or slug and preserves selections outside the current search. A Select all
