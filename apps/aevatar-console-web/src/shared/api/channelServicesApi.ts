@@ -1,5 +1,7 @@
+import { ensureActiveAuthSession } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { authFetch } from '@/shared/auth/fetch';
+import { readAccessTokenServiceGrants } from '@/shared/auth/serviceGrants';
 import { ChannelApiError } from './channelsApi';
 import {
   expectArray,
@@ -28,7 +30,7 @@ function decodeService(value: unknown): ChannelServiceChoice {
   const personal = source.type === 'personal';
   const organization = source.type === 'org';
   // This is account-level availability only. Current bearer access is checked
-  // separately against NyxID's caller-scoped catalog before returning choices.
+  // separately against the current access token before returning choices.
   return {
     id,
     slug,
@@ -51,53 +53,32 @@ export async function listChannelServices(
   const config = getNyxIDRuntimeConfig();
   if (config.configurationError || !config.baseUrl)
     throw new Error('NyxID is unavailable.');
-  const [body, catalog] = await Promise.all(
-    ['/api/v1/user-services', '/api/v1/mcp/config'].map(async (path) => {
-      const response = await authFetch(`${config.baseUrl}${path}`, {
-        signal,
-        credentials: 'omit',
-        cache: 'no-store',
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) throw new ChannelApiError(response.status);
-      return expectRecord(await response.json(), 'NyxID service inventory');
-    }),
+  const session = await ensureActiveAuthSession();
+  if (!session) throw new ChannelApiError(401);
+  const grants = readAccessTokenServiceGrants(
+    session.tokens.accessToken,
+    session.user.sub,
   );
-  // The account inventory does not enforce OAuth service grants. The v1 MCP
-  // catalog does, and only is_user_service rows carry exact UserService IDs.
-  if (catalog.contract_version !== '1.0')
-    throw new Error('Unsupported NyxID service catalog.');
-  const catalogServices = expectArray(
-    catalog.services,
-    'Service catalog',
-    (value) => {
-      const row = expectRecord(value, 'Catalog service');
-      const id = readString(row, 'service_id', 'Catalog service ID');
-      if (!id.trim()) throw new Error('Missing catalog service identity.');
-      return {
-        id,
-        userService: expectBoolean(
-          row.is_user_service,
-          'User service identity',
-        ),
-      };
+  const response = await authFetch(`${config.baseUrl}/api/v1/user-services`, {
+    signal,
+    credentials: 'omit',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      // Pin the inventory to the exact bearer whose grants were read above.
+      Authorization: `Bearer ${session.tokens.accessToken}`,
     },
-  );
-  if (
-    new Set(catalogServices.map((service) => service.id)).size !==
-    catalogServices.length
-  )
-    throw new Error('Ambiguous catalog service identity.');
-  const authorizedIds = new Set(
-    catalogServices
-      .filter((service) => service.userService)
-      .map((service) => service.id),
-  );
+  });
+  if (!response.ok) throw new ChannelApiError(response.status);
+  const body = expectRecord(await response.json(), 'User services');
+  const authorizedIds = new Set(grants.allowedServiceIds);
   const services = expectArray(body.services, 'User services', decodeService);
   if (new Set(services.map((service) => service.id)).size !== services.length)
     throw new Error('Ambiguous user service identity.');
   return services.filter(
     (service) =>
-      service.active && service.allowed && authorizedIds.has(service.id),
+      service.active &&
+      service.allowed &&
+      (grants.allowAllServices || authorizedIds.has(service.id)),
   );
 }
