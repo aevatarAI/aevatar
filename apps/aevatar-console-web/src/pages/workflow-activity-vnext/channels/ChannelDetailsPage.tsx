@@ -16,6 +16,7 @@ import {
   ChannelIcon,
   ChannelLink,
   ChannelLoadError,
+  ChannelSkill,
   compactChannelIdentifier,
   DeliveryStatus,
   InboundStatus,
@@ -182,6 +183,12 @@ export default function ChannelDetailsPage({
               <div>
                 <dt>{t('channels.column.channel', 'Channel')}</dt>
                 <dd>{platformName(registration.platform)}</dd>
+              </div>
+              <div>
+                <dt>{t('channels.column.skill', 'Skill')}</dt>
+                <dd>
+                  <ChannelSkill skill={registration.skill} />
+                </dd>
               </div>
               <div>
                 <dt>{t('channels.inboundMessages', 'Inbound messages')}</dt>

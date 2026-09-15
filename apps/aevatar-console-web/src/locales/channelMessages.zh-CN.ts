@@ -9,15 +9,14 @@ export default {
   'channels.connect': '连接',
   'channels.connectPlatform': '连接 {platform}',
   'channels.platform.feishu': '飞书',
-  'channels.platform.lark.description': '将机器人接入聊天和群组。',
-  'channels.platform.feishu.description': '面向飞书的渠道接入。',
   'channels.platform.telegram.description':
     '使用 BotFather 机器人令牌接入，Webhook 自动配置。',
-  'channels.platform.discord.description': '支持服务器频道与私信。',
-  'channels.platform.slack.description': '工作区机器人支持。',
+  'channels.platform.whatsapp.description': '在 WhatsApp 中与你的机器人对话。',
   'channels.connected': '已连接',
   'channels.connectedDescription': '连接到你账户的渠道。',
-  'channels.bot': '{platform} 机器人',
+  'channels.name.loading': '正在加载名称…',
+  'channels.name.unavailable': '名称暂不可用',
+  'channels.column.name': 'Channel 名字',
   'channels.skill.notSet': '未设置',
   'channels.skill.version': '版本 {version}',
   'channels.skill.open': '在 Ornn 中打开 {name}',
@@ -45,6 +44,7 @@ export default {
   'channels.retry': '重试',
   'channels.error.load': '无法加载渠道，请重试。',
   'channels.error.refresh': '无法刷新渠道，请重试。',
+  'channels.error.names': '无法加载 Channel 名称，请点击刷新重试。',
   'channels.error.unavailable': '此渠道不可用或你没有访问权限。',
   'channels.details': '渠道详情',
   'channels.details.loading': '正在加载渠道详情',
@@ -75,8 +75,7 @@ export default {
   'channels.connect.showToken': '显示机器人令牌',
   'channels.connect.hideToken': '隐藏机器人令牌',
   'channels.connect.botFather': '从 BotFather 获取令牌',
-  'channels.connect.label': '名称',
-  'channels.connect.skillName': '技能名称',
+  'channels.connect.name': 'Channel 名字',
   'channels.connect.optional': '（可选）',
   'channels.connect.botNameDefault': '默认使用 Telegram 机器人名称',
   'channels.connect.tokenRequired': '请输入从 BotFather 获取的机器人令牌。',
@@ -104,7 +103,7 @@ export default {
     '暂时无法获取 Telegram 机器人名称，请重试。',
   'channels.connect.error.services': '所选服务已不可用，请重新检查选择后重试。',
   'channels.connect.error.skill':
-    '无法使用此技能名称，请在 Ornn 中检查名称和访问权限。',
+    '无法配置机器人 Skill，请检查 Channel 名字和你在 Ornn 中的访问权限。',
   'channels.connect.error.authorization':
     '登录状态或服务权限需要处理，请重新登录并检查 NyxID 访问权限。',
   'channels.connect.error.conflict':
@@ -112,7 +111,7 @@ export default {
   'channels.connect.error.configuration':
     '渠道接入暂不可用，请联系管理员检查部署配置。',
   'channels.connect.error.rejected':
-    '无法连接 Telegram，请检查机器人令牌、技能名称和所选服务后重试。',
+    '无法连接 Telegram，请检查机器人令牌、Channel 名字和所选服务后重试。',
   'channels.connect.error.uncertain': '暂时无法确认连接结果，请重试。',
   'channels.connect.discardTitle': '放弃此次连接设置？',
   'channels.connect.discard': '放弃',

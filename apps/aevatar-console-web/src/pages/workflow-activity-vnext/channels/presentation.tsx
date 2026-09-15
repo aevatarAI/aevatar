@@ -3,6 +3,7 @@ import {
   LinkOutlined,
   MessageOutlined,
   SendOutlined,
+  WhatsAppOutlined,
 } from '@ant-design/icons';
 import { Button } from 'antd';
 import * as React from 'react';
@@ -51,6 +52,8 @@ export function platformName(platform: string): string {
       return t('channels.platform.feishu', 'Feishu');
     case 'telegram':
       return 'Telegram';
+    case 'whatsapp':
+      return 'WhatsApp';
     case 'discord':
       return 'Discord';
     case 'slack':
@@ -68,6 +71,8 @@ export function ChannelIcon({ platform }: { readonly platform: string }) {
     >
       {platform === 'telegram' ? (
         <SendOutlined />
+      ) : platform === 'whatsapp' ? (
+        <WhatsAppOutlined />
       ) : ['lark', 'feishu', 'discord', 'slack'].includes(platform) ? (
         <MessageOutlined />
       ) : (
@@ -83,8 +88,12 @@ export function compactChannelIdentifier(value: string): string {
 
 export function ChannelIdentity({
   registration,
+  label,
+  pending,
 }: {
   readonly registration: ChannelRegistration;
+  readonly label: string | null;
+  readonly pending: boolean;
 }) {
   const identifier = registration.botId ?? registration.id;
   return (
@@ -92,9 +101,10 @@ export function ChannelIdentity({
       <ChannelIcon platform={registration.platform} />
       <div className="channels__identity-copy">
         <strong>
-          {t('channels.bot', '{platform} bot', {
-            platform: platformName(registration.platform),
-          })}
+          {label ??
+            (pending
+              ? t('channels.name.loading', 'Loading name…')
+              : t('channels.name.unavailable', 'Name unavailable'))}
         </strong>
         <span className="channels__identifier" title={identifier}>
           {compactChannelIdentifier(identifier)}
