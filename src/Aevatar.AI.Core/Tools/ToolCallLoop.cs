@@ -463,7 +463,7 @@ public sealed class ToolCallLoop
                 string.IsNullOrWhiteSpace(audioBase64) &&
                 string.IsNullOrWhiteSpace(videoBase64))
             {
-                imageBase64 = TryGetStringByKeys(root, "base64", "data");
+                imageBase64 = TryGetStringByKeys(root, "base64") ?? TryGetRootDataMediaBase64(root);
             }
 
             var kind = ResolveMediaKind(imageBase64, audioBase64, videoBase64);
@@ -531,6 +531,21 @@ public sealed class ToolCallLoop
         {
             return false;
         }
+    }
+
+    private static string? TryGetRootDataMediaBase64(JsonElement root)
+    {
+        var data = TryGetStringByKeys(root, "data");
+        if (string.IsNullOrWhiteSpace(data))
+            return null;
+
+        if (data.TrimStart().StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+            TryGetStringByKeys(root, "mime_type", "mimeType", "media_type", "mediaType", "content_type") is not null)
+        {
+            return data;
+        }
+
+        return null;
     }
 
     private static string? TryGetNestedMediaBase64(JsonElement root, string propertyName, params string[] legacyAliasKeys)
