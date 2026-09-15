@@ -356,6 +356,48 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldStampChannelRuntimeConfigFromResolvedRegistrationWithoutSnapshotLookup()
+    {
+        var registration = BuildRegistrationEntry();
+        registration.DefaultSkillName = "/booking-capacity";
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig
+        {
+            Instructions = "Only answer booking capacity questions.",
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+        };
+        registration.RuntimeConfig.ToolSetRefs.Add("channel.reply.default");
+        registration.RuntimeConfig.ExtraToolNames.Add("ask_user");
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "calendar_create_event" },
+        });
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-runtime-config-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var runtimeConfig = result.LlmReplyRequest!.ChannelRuntimeConfig;
+        runtimeConfig.Should().NotBeNull();
+        runtimeConfig.RegistrationId.Should().Be("reg-1");
+        runtimeConfig.ConfigRevision.Should().Be(17);
+        runtimeConfig.Instructions.Should().Be("Only answer booking capacity questions.");
+        runtimeConfig.DefaultSkillName.Should().Be("booking-capacity");
+        runtimeConfig.ToolSetRefs.Should().ContainSingle().Which.Should().Be("channel.reply.default");
+        runtimeConfig.ExtraToolNames.Should().ContainSingle().Which.Should().Be("ask_user");
+        runtimeConfig.NyxidServiceSelectors.Should().ContainSingle()
+            .Which.ServiceSlug.Should().Be("api-google-workspace");
+        runtimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);
+        await registrationQueryPort.Received(1).GetSnapshotAsync("reg-1", Arg.Any<CancellationToken>());
+        await registrationQueryPort.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldStampInboundBotProviderSlugOntoDeferredReplyActivity()
     {
         // Cross-talk regression: the deferred reply activity must carry the slug of the bot that
@@ -421,6 +463,8 @@ public sealed class ChannelConversationTurnRunnerTests
             OwnerScopeKey = "scope-1",
         };
         var registrationQueryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        registrationQueryPort.GetSnapshotAsync("reg-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationSnapshot?>(new ChannelBotRegistrationSnapshot(registration, 29)));
         var registrationByNyxIdentityPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
         registrationByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync("nyx-agent-key-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>([registration]));
@@ -444,7 +488,8 @@ public sealed class ChannelConversationTurnRunnerTests
 
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().NotBeNull();
-        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        result.LlmReplyRequest!.ChannelRuntimeConfig.ConfigRevision.Should().Be(29);
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
         var deliveryCredential = toolContext.Channel.WorkflowResultDeliveryCredential;
         deliveryCredential.Should().NotBeNull();
         // The vault ref authorizes delivery; the raw api-key id is only the vault subject, never the credential.
@@ -5653,6 +5698,8 @@ public sealed class ChannelConversationTurnRunnerTests
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         queryPort.GetAsync(registration.Id, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
+        queryPort.GetSnapshotAsync(registration.Id, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationSnapshot?>(new ChannelBotRegistrationSnapshot(registration, 17)));
         return queryPort;
     }
 

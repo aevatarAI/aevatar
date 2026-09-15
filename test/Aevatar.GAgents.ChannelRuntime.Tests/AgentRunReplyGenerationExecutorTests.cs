@@ -296,6 +296,29 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildInitialStepState_WhenChannelRelayRuntimeConfigIsMissing_ShouldNotResolveAgentProfile()
+    {
+        var fixture = CreateProfiledChannelExecutor();
+        var request = fixture.Request.Clone();
+        request.RegistrationId = "reg-channel-alpha";
+        request.ChannelRuntimeConfig = null;
+
+        var act = async () => await fixture.Executor.BuildInitialStepStateAsync(
+            new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
+            CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<AgentTurnToolCatalogException>();
+        exception.Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.CatalogNeedsDisambiguation);
+        exception.Which.Message.Should().Contain("Channel Relay runtime config is unavailable");
+        await fixture.ProfileResolver.DidNotReceive().ResolveAsync(
+            Arg.Any<string>(),
+            Arg.Any<string>(),
+            Arg.Any<ChatRouteAgentProfileKind>(),
+            Arg.Any<ChatRouteAgentProfileRef?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task BuildLlmStepExecution_WhenFinalNoToolsStepCarriesChannelRuntimeConfig_ShouldSkipCatalogRematerialization()
     {
         var fixture = CreateProfiledChannelExecutor();
