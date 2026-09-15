@@ -171,9 +171,11 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     {
         ArgumentNullException.ThrowIfNull(activity);
 
-        var registration = await ResolveRegistrationAsync(activity, ct);
-        if (registration is null)
+        var registrationSnapshot = await ResolveRegistrationSnapshotAsync(activity, ct);
+        if (registrationSnapshot is null)
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
+        var registration = registrationSnapshot.Registration;
+        var registrationStateVersion = registrationSnapshot.StateVersion;
         if (ChannelRegistrationAuthorizationContract.Classify(registration) ==
             ChannelRegistrationAuthorizationContractKind.Invalid)
         {
@@ -279,6 +281,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                             formSubmitInboundEvent,
                             runtimeContext,
                             senderBinding,
+                            registrationStateVersion,
                             ct)
                         .ConfigureAwait(false));
             }
@@ -301,6 +304,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                             buttonInboundEvent,
                             runtimeContext,
                             senderBinding,
+                            registrationStateVersion,
                             ct)
                         .ConfigureAwait(false));
             }
@@ -333,6 +337,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     inboundEvent,
                     runtimeContext,
                     senderBinding,
+                    registrationStateVersion,
                     ct,
                     allowDefaultSkillRouting: true)
                 .ConfigureAwait(false));
@@ -1935,6 +1940,56 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             : ToRelayFailure(emit);
     }
 
+    private async Task<ChannelBotRegistrationSnapshot?> ResolveRegistrationSnapshotAsync(
+        string? registrationId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(registrationId))
+            return null;
+
+        var snapshot = await _registrationQueryPort.GetSnapshotAsync(registrationId, ct);
+        if (snapshot is not null)
+            return snapshot;
+
+        var registration = await _registrationQueryPort.GetAsync(registrationId, ct);
+        return registration is null ? null : new ChannelBotRegistrationSnapshot(registration, 0);
+    }
+
+    private async Task<ChannelBotRegistrationSnapshot?> ResolveRegistrationSnapshotAsync(
+        ChatActivity activity,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(activity);
+
+        var nyxAgentApiKeyId = NormalizeOptional(activity.TransportExtras?.NyxAgentApiKeyId);
+        var canonicalScopeId = NormalizeOptional(activity.TransportExtras?.NyxRegistrationScopeId);
+        if (!string.IsNullOrWhiteSpace(nyxAgentApiKeyId))
+        {
+            if (_registrationQueryByNyxIdentityPort is null)
+                return null;
+
+            var registrations = await _registrationQueryByNyxIdentityPort.ListByNyxAgentApiKeyIdAsync(
+                nyxAgentApiKeyId,
+                ct);
+            var byNyxIdentity = ResolveRegistrationByNyxIdentityCandidates(registrations, canonicalScopeId);
+
+            if (byNyxIdentity is not null)
+            {
+                var snapshot = await _registrationQueryPort.GetSnapshotAsync(byNyxIdentity.Id, ct);
+                return snapshot ?? new ChannelBotRegistrationSnapshot(byNyxIdentity, 0);
+            }
+
+            if (registrations.Count > 0)
+                return null;
+        }
+
+        var byBotId = await ResolveRegistrationSnapshotAsync(activity.Bot?.Value, ct);
+        return byBotId is not null &&
+               IsBotIdFallbackRegistrationAllowed(byBotId.Registration, canonicalScopeId, nyxAgentApiKeyId)
+            ? byBotId
+            : null;
+    }
+
     private async Task<ChannelBotRegistrationEntry?> ResolveRegistrationAsync(string? registrationId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(registrationId))
@@ -2604,6 +2659,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
         ResolvedSenderBinding? senderBinding,
+        long registrationStateVersion,
         CancellationToken ct,
         bool allowDefaultSkillRouting = false)
     {
@@ -2642,7 +2698,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             RunId = AgentRunId.New().Value,
             RegistrationId = registration.Id,
             Activity = requestActivity,
-            ChannelRuntimeConfig = ChannelRuntimeConfigProofBuilder.Build(registration, configRevision: 0),
+            ChannelRuntimeConfig = ChannelRuntimeConfigProofBuilder.Build(registration, registrationStateVersion),
             // Refactor (iter394/cluster-issue-394-design): Old pattern: runner filled a canonical TargetActorId placeholder. New principle: ConversationGAgent stamps its owning actor id before persistence/dispatch.
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
