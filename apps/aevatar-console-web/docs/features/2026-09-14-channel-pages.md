@@ -11,6 +11,12 @@ runtime-configuration editor is outside this iteration of issue #3617.
 Channel refresh is explicitly user driven. Do not add background polling or
 refresh on focus/reconnection to these pages.
 
+The page header and content are horizontally centered within the area beside
+the navigation rail, using the same maximum width and responsive side padding.
+The connection form and details share this alignment; the form keeps its
+narrower maximum width. On small screens the containers fill the available
+width while retaining the shell's side padding.
+
 Refresh and Manage use outlined button styling with visible hover/focus states
 and larger touch targets on mobile. Manage retains navigation-link semantics.
 Details omit Scope. Bot ID and Agent key ID are blue underlined external links

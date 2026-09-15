@@ -6,9 +6,10 @@ export const channelsCss = `
   --channels-action-shadow: 0 1px 2px rgb(16 24 40 / 5%);
   background: var(--wa-subtle);
 }
+.channels__main .wa-vnext__header, .channels__content { margin-inline: auto; max-width: 1160px; width: 100%; }
 .channels__main .wa-vnext__header { padding-top: 40px; }
 .channels__main .wa-vnext__header h1 { font-size: 24px; line-height: 32px; }
-.channels__content { max-width: 1160px; padding-top: 0; }
+.channels__content { padding-top: 0; }
 .channels__intro { color: var(--wa-muted); line-height: 20px; margin: 4px 0 28px; }
 .channels__section-label { color: var(--wa-muted); font-size: 12px; font-weight: 500; margin: 0 0 12px; }
 .channels__platforms { display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
