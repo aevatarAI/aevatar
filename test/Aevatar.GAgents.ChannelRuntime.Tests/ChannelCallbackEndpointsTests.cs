@@ -855,14 +855,70 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
         response.Body.Should().Contain("\"status\":\"error\"");
         response.Body.Should().Contain("\"error\":\"channel_bot_id_request_failed\"");
+        response.Body.Should().NotContain("error_detail");
         response.Body.Should().NotContain("invalid app secret");
         response.Body.Should().NotContain("bad-secret");
+    }
+
+    [Fact]
+    public async Task HandleRegisterAsync_DoesNotTrustUnsafeAdapterErrorDetail()
+    {
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("telegram");
+        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: false,
+                Status: "error",
+                Platform: "telegram",
+                Error: "channel_bot_id_request_failed nyx_status=401 body=invalid token",
+                ErrorDetail: "provider echoed bad-token-secret")));
+
+        var http = CreateJsonHttpContext(
+            """{"platform":"telegram","bot_token":"bad-token-secret","webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync("HandleRegisterAsync", http, CreateRegistrationFacade(provisioningService), NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+        response.Body.Should().Contain("\"error\":\"channel_bot_id_request_failed\"");
+        response.Body.Should().NotContain("error_detail");
+        response.Body.Should().NotContain("provider echoed");
+        response.Body.Should().NotContain("bad-token-secret");
+    }
+
+    [Fact]
+    public async Task HandleRegisterAsync_ReturnsSafeErrorDetail_WhenKnownProviderFailureOccurs()
+    {
+        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
+        provisioningService.Platform.Returns("telegram");
+        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+                Succeeded: false,
+                Status: "error",
+                Platform: "telegram",
+                Error: "channel_bot_id_request_failed nyx_status=401 body=Telegram getMe failed: Not Found")));
+
+        var http = CreateJsonHttpContext(
+            """{"platform":"telegram","bot_token":"bad-token","webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync("HandleRegisterAsync", http, CreateRegistrationFacade(provisioningService), NullLoggerFactory.Instance, CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+        response.Body.Should().Contain("\"error\":\"channel_bot_id_request_failed\"");
+        response.Body.Should().Contain("\"error_detail\":\"telegram_bot_credential_rejected\"");
+        response.Body.Should().NotContain("Telegram getMe failed");
+        response.Body.Should().NotContain("bad-token");
     }
 
     [Theory]
     [InlineData("secret_vault_unavailable", StatusCodes.Status503ServiceUnavailable)]
     [InlineData("service_owner_forbidden", StatusCodes.Status403Forbidden)]
-    [InlineData("user_service_not_found", StatusCodes.Status404NotFound)]
+    [InlineData("nyxid_user_service_not_accessible", StatusCodes.Status404NotFound)]
     [InlineData("scope_plan_changed", StatusCodes.Status409Conflict)]
     [InlineData("nyxid_scope_plan_unavailable", StatusCodes.Status502BadGateway)]
     [InlineData("channel_service_connection_unavailable", StatusCodes.Status502BadGateway)]
@@ -1010,6 +1066,7 @@ public sealed class ChannelCallbackEndpointsTests
 
         response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         response.Body.Should().Contain("\"error\":\"channel_bot_already_exists\"");
+        response.Body.Should().Contain("\"error_detail\":\"channel_bot_already_exists\"");
         response.Body.Should().NotContain("already registered");
     }
 

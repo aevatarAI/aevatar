@@ -568,7 +568,9 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             return current;
 
         entry.RuntimeConfig = evt.RuntimeConfig?.Clone();
-        entry.DefaultSkillName = evt.DefaultSkillName ?? string.Empty;
+        entry.DefaultSkillName = NormalizeDefaultSkillName(evt.DefaultSkillName);
+        if (string.IsNullOrEmpty(entry.DefaultSkillName))
+            entry.DefaultSkillName = NormalizeDefaultSkillName(entry.RuntimeConfig?.DefaultSkill?.Name);
         if (evt.AuthorizationMode != ChannelRegistrationAuthorizationMode.Unspecified)
         {
             entry.AuthorizationMode = evt.AuthorizationMode;

@@ -28,7 +28,8 @@ public sealed record NyxTelegramProvisioningResult(
     string? RelayCallbackUrl = null,
     string? WebhookUrl = null,
     string? Error = null,
-    string? Note = null);
+    string? Note = null,
+    string? ErrorDetail = null);
 
 public interface INyxTelegramProvisioningService
 {
@@ -196,6 +197,9 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                 : acceptanceUnknown
                     ? "local_mirror_acceptance_unknown_remote_cleanup_skipped"
                     : NyxApiResponseHelper.SanitizeFailureReason(ex);
+            var failureDetail = localMirrorAccepted || acceptanceUnknown
+                ? null
+                : NyxApiResponseHelper.SanitizeFailureDetail(ex, PlatformId);
             _logger.LogWarning(
                 "Nyx-backed Telegram provisioning failed: registration={RegistrationId}, botId={ChannelBotId}, apiKeyId={ApiKeyId}, routeId={RouteId}, failureCode={FailureCode}, failureType={FailureType}",
                 registrationId,
@@ -218,7 +222,7 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
                     await _authorizationPreparation!.CleanupConnectionAsync(request.AccessToken, connection);
             }
 
-            return Failure(failureReason);
+            return Failure(failureReason, failureDetail);
         }
     }
 
@@ -349,11 +353,12 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
         await _commandFacade.RegisterLocalMirrorAsync(cmd, ct);
     }
 
-    private static NyxTelegramProvisioningResult Failure(string error) =>
+    private static NyxTelegramProvisioningResult Failure(string error, string? errorDetail = null) =>
         new(
             Succeeded: false,
             Status: "error",
-            Error: string.IsNullOrWhiteSpace(error) ? "unknown_error" : error.Trim());
+            Error: string.IsNullOrWhiteSpace(error) ? "unknown_error" : error.Trim(),
+            ErrorDetail: string.IsNullOrWhiteSpace(errorDetail) ? null : errorDetail.Trim());
 
     private static NyxChannelBotProvisioningResult ToGenericResult(NyxTelegramProvisioningResult result) =>
         new(
@@ -368,5 +373,6 @@ public sealed class NyxTelegramProvisioningService : INyxTelegramProvisioningSer
             RelayCallbackUrl: result.RelayCallbackUrl,
             WebhookUrl: result.WebhookUrl,
             Error: result.Error,
-            Note: result.Note);
+            Note: result.Note,
+            ErrorDetail: result.ErrorDetail);
 }

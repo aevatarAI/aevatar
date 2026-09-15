@@ -29,6 +29,29 @@ public class NyxApiResponseHelperTests
             .Should().Be("provisioning_failed");
     }
 
+    [Theory]
+    [InlineData("channel_bot_id_request_failed nyx_status=401 body=Telegram getMe failed: Not Found", "telegram", "telegram_bot_credential_rejected")]
+    [InlineData("channel_bot_id_request_failed nyx_status=429 body=channel bot limit reached", "lark", "channel_bot_limit_reached")]
+    [InlineData("channel_bot_id_request_failed nyx_status=409 body=Bot lark_bot is already registered on lark", "lark", "channel_bot_already_exists")]
+    public void NormalizePublicFailureDetail_ReturnsKnownSafeDetail(
+        string reason,
+        string platform,
+        string expectedDetail)
+    {
+        NyxApiResponseHelper.NormalizePublicFailureDetail(reason, platform).Should().Be(expectedDetail);
+    }
+
+    [Theory]
+    [InlineData("channel_bot_id_request_failed nyx_status=401 body=invalid app secret", "lark")]
+    [InlineData("channel_bot_id_request_failed nyx_status=429 body=rate limited", "lark")]
+    [InlineData("conversation_route_id_request_failed nyx_status=429 body=route limit reached", "telegram")]
+    [InlineData("not-json provider-echoed-secret-value", "telegram")]
+    [InlineData("", "telegram")]
+    public void NormalizePublicFailureDetail_OmitsUnknownOrUnsafeDetail(string reason, string platform)
+    {
+        NyxApiResponseHelper.NormalizePublicFailureDetail(reason, platform).Should().BeNull();
+    }
+
     [Fact]
     public void ExtractOptionalProxyUrlSlug_Prefers_Slug_Over_ProxyUrlSlug_Template()
     {

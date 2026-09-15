@@ -191,7 +191,7 @@ public sealed class VerifiedChannelRegistrationServiceSelection
                     .Where(service => selectedServiceIds.Contains(service.Id, StringComparer.Ordinal))
                     .ToArray();
                 if (selectedServices.Length != selectedServiceIds.Length)
-                    return new(null, "user_service_not_found");
+                    return new(null, "nyxid_user_service_not_accessible");
 
                 if (!ServicesMatchOwner(selectedServices, request.RegistrationOwner))
                     return new(null, "service_owner_forbidden");

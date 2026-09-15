@@ -45,8 +45,8 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         result.DiagnosticId.Should().Be("chrono-1");
         handler.PathAndQuery.Should().Be(
             "/api/v1/proxy/s/chrono-sandbox/codex/execute?_nyxid_via=us-sandbox");
-        handler.Authorization.Should().BeNull();
-        handler.ApiKeys.Should().Equal(RawKey);
+        handler.Authorization.Should().Be($"Bearer {RawKey}");
+        handler.ApiKeys.Should().BeEmpty();
         using var body = JsonDocument.Parse(handler.Body!);
         body.RootElement.EnumerateObject().Select(static property => property.Name)
             .Should().Equal("prompt", "timeout_secs", "workspace");

@@ -378,13 +378,8 @@ internal static class NyxApiResponseHelper
         if (string.IsNullOrWhiteSpace(normalized))
             return "provisioning_failed";
 
-        if (normalized.StartsWith("channel_bot_id_request_failed ", StringComparison.Ordinal) &&
-            (normalized.Contains("nyx_status=409", StringComparison.Ordinal) ||
-             normalized.Contains("already registered", StringComparison.OrdinalIgnoreCase) ||
-             normalized.Contains("channel bot already exists", StringComparison.OrdinalIgnoreCase)))
-        {
+        if (IsChannelBotAlreadyExists(normalized))
             return "channel_bot_already_exists";
-        }
 
         foreach (var publicCode in PublicProvisioningFailureCodes)
         {
@@ -397,6 +392,77 @@ internal static class NyxApiResponseHelper
 
         return "provisioning_failed";
     }
+
+    public static string? SanitizeFailureDetail(Exception ex, string platform) =>
+        ex is InvalidOperationException ? NormalizePublicFailureDetail(ex.Message, platform) : null;
+
+    public static string? NormalizePublicFailureDetailCode(string? detail)
+    {
+        var normalized = detail?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return null;
+
+        foreach (var publicDetail in PublicProvisioningFailureDetails)
+        {
+            if (string.Equals(normalized, publicDetail, StringComparison.Ordinal))
+                return publicDetail;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns a stable client-visible detail for known channel registration failures only.
+    /// Unknown provider bodies are intentionally omitted.
+    /// </summary>
+    public static string? NormalizePublicFailureDetail(string? reason, string platform)
+    {
+        var normalized = reason?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            !normalized.StartsWith("channel_bot_id_request_failed ", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (IsChannelBotAlreadyExists(normalized))
+            return "channel_bot_already_exists";
+
+        if (IsChannelBotLimitReached(normalized))
+            return "channel_bot_limit_reached";
+
+        if (string.Equals(platform?.Trim(), "telegram", StringComparison.OrdinalIgnoreCase) &&
+            IsTelegramBotCredentialRejected(normalized))
+        {
+            return "telegram_bot_credential_rejected";
+        }
+
+        return null;
+    }
+
+    private static bool IsChannelBotAlreadyExists(string reason) =>
+        reason.StartsWith("channel_bot_id_request_failed ", StringComparison.Ordinal) &&
+        (reason.Contains("nyx_status=409", StringComparison.Ordinal) ||
+         reason.Contains("already registered", StringComparison.OrdinalIgnoreCase) ||
+         reason.Contains("channel bot already exists", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsChannelBotLimitReached(string reason) =>
+        reason.Contains("channel bot limit reached", StringComparison.OrdinalIgnoreCase) ||
+        reason.Contains("channel-bot limit reached", StringComparison.OrdinalIgnoreCase) ||
+        reason.Contains("channel_bot_limit", StringComparison.OrdinalIgnoreCase) ||
+        reason.Contains("maximum number of channel bots", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsTelegramBotCredentialRejected(string reason) =>
+        reason.Contains("Telegram getMe failed", StringComparison.OrdinalIgnoreCase) ||
+        reason.Contains("bot token", StringComparison.OrdinalIgnoreCase) ||
+        reason.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
+        reason.Contains("Not Found", StringComparison.OrdinalIgnoreCase);
+
+    private static readonly string[] PublicProvisioningFailureDetails =
+    [
+        "telegram_bot_credential_rejected",
+        "channel_bot_limit_reached",
+        "channel_bot_already_exists",
+    ];
 
     private static readonly string[] PublicProvisioningFailureCodes =
     [
@@ -412,7 +478,7 @@ internal static class NyxApiResponseHelper
         "channel_authorization_contract_invalid",
         "secret_vault_unavailable",
         "service_owner_forbidden",
-        "user_service_not_found",
+        "nyxid_user_service_not_accessible",
         "scope_plan_changed",
         "nyxid_scope_plan_unavailable",
         "channel_service_connection_unavailable",

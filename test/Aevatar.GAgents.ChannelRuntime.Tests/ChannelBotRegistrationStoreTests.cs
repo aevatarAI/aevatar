@@ -318,6 +318,12 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         {
             ServiceIds = { "svc-calendar" },
         };
+        command.ChannelAgentKey.Grant.AllowAllServices = false;
+        command.ChannelAgentKey.Grant.AllowAllNodes = false;
+        command.ChannelAgentKey.Grant.AllowedServiceIds.Add("svc-calendar");
+        command.ChannelAgentKey.Grant.AllowedNodeIds.Add("node-runtime");
+        command.ChannelAgentKey.Grant.ScopePlanDigest =
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         await _agent.HandleRegister(command);
         await AppendCommittedEventAsync(new ChannelBotRuntimeConfigUpdatedEvent
         {

@@ -199,7 +199,9 @@ public sealed class ChannelRelayRegistrationFacade
             return result;
 
         var failureReason = NyxApiResponseHelper.NormalizePublicFailureReason(result.Error);
-        return result with { Error = failureReason };
+        var failureDetail = NyxApiResponseHelper.NormalizePublicFailureDetail(result.Error, result.Platform) ??
+            NyxApiResponseHelper.NormalizePublicFailureDetailCode(result.ErrorDetail);
+        return result with { Error = failureReason, ErrorDetail = failureDetail };
     }
 
     private static IReadOnlyDictionary<string, INyxChannelBotProvisioningService> BuildProvisioningServiceMap(

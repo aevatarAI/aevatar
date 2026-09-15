@@ -440,7 +440,7 @@ public sealed class ChannelRegistrationExplicitAuthorizationPreparationTests
     }
 
     [Theory]
-    [InlineData("missing", "user_service_not_found")]
+    [InlineData("missing", "nyxid_user_service_not_accessible")]
     [InlineData("inactive", "service_owner_forbidden")]
     [InlineData("foreign-organization", "service_owner_forbidden")]
     public async Task InvalidBusinessSelection_HasNoConnectionOrScopePlanSideEffects(string invalid, string error)
@@ -491,7 +491,7 @@ public sealed class ChannelRegistrationExplicitAuthorizationPreparationTests
     }
 
     [Theory]
-    [InlineData("missing", "user_service_not_found")]
+    [InlineData("missing", "nyxid_user_service_not_accessible")]
     [InlineData("invalid", "nyxid_scope_plan_unavailable")]
     [InlineData("resolver-failure", "nyxid_scope_plan_unavailable")]
     [InlineData("scope-failure", "nyxid_scope_plan_unavailable")]

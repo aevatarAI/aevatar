@@ -217,6 +217,22 @@ public class NyxTelegramProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_ShouldReturnSafeErrorDetail_WhenTelegramBotCredentialIsRejected()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", AgentKeyResponse("key-tg-1", "full-key"));
+        handler.Enqueue("/api/v1/channel-bots", """{"error":true,"status":401,"body":"Telegram getMe failed: Not Found"}""");
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-tg-1", """{"ok":true}""");
+        var service = CreateService(handler);
+
+        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("channel_bot_id_request_failed");
+        result.ErrorDetail.Should().Be("telegram_bot_credential_rejected");
+    }
+
+    [Fact]
     public async Task ProvisionAsync_WhenVaultPutFails_DeletesKeyBeforeBotRouteOrActorWrites()
     {
         var handler = new RecordingHandler();
