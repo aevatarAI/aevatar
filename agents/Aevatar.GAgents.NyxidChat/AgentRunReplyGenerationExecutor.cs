@@ -1446,6 +1446,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (forward is null || forward.ProfileKind == ChatRouteAgentProfileKind.Unspecified)
             return new AgentRunTurnCatalogPlan(AgentTurnToolCatalogFactory.RestrictedEmpty());
 
+        if (forward.ProfileKind == ChatRouteAgentProfileKind.ChannelReply &&
+            NormalizeOptional(replyRequest.RegistrationId) is not null)
+        {
+            throw CatalogFailure(
+                AgentTurnToolCatalogFailureCode.CatalogNeedsDisambiguation,
+                "The Channel Relay runtime config is unavailable for this channel turn.");
+        }
+
         if (_profileCatalogPlanner is null)
         {
             throw CatalogFailure(

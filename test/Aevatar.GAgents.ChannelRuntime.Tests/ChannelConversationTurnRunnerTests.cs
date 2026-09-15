@@ -356,6 +356,47 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldStampChannelRuntimeConfigFromResolvedRegistrationWithoutSnapshotLookup()
+    {
+        var registration = BuildRegistrationEntry();
+        registration.DefaultSkillName = "/booking-capacity";
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig
+        {
+            Instructions = "Only answer booking capacity questions.",
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+        };
+        registration.RuntimeConfig.ToolSetRefs.Add("channel.reply.default");
+        registration.RuntimeConfig.ExtraToolNames.Add("ask_user");
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "calendar_create_event" },
+        });
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
+        var adapter = new RecordingPlatformAdapter();
+        var runner = CreateRunner(registrationQueryPort, adapter);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity("hello", "msg-runtime-config-1"),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var runtimeConfig = result.LlmReplyRequest!.ChannelRuntimeConfig;
+        runtimeConfig.Should().NotBeNull();
+        runtimeConfig.RegistrationId.Should().Be("reg-1");
+        runtimeConfig.ConfigRevision.Should().Be(0);
+        runtimeConfig.Instructions.Should().Be("Only answer booking capacity questions.");
+        runtimeConfig.DefaultSkillName.Should().Be("booking-capacity");
+        runtimeConfig.ToolSetRefs.Should().ContainSingle().Which.Should().Be("channel.reply.default");
+        runtimeConfig.ExtraToolNames.Should().ContainSingle().Which.Should().Be("ask_user");
+        runtimeConfig.NyxidServiceSelectors.Should().ContainSingle()
+            .Which.ServiceSlug.Should().Be("api-google-workspace");
+        runtimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);
+        await registrationQueryPort.DidNotReceive().GetSnapshotAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldStampInboundBotProviderSlugOntoDeferredReplyActivity()
     {
         // Cross-talk regression: the deferred reply activity must carry the slug of the bot that

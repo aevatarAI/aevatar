@@ -2642,6 +2642,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             RunId = AgentRunId.New().Value,
             RegistrationId = registration.Id,
             Activity = requestActivity,
+            ChannelRuntimeConfig = ChannelRuntimeConfigProofBuilder.Build(registration, configRevision: 0),
             // Refactor (iter394/cluster-issue-394-design): Old pattern: runner filled a canonical TargetActorId placeholder. New principle: ConversationGAgent stamps its owning actor id before persistence/dispatch.
             RequestedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
