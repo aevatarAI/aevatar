@@ -11,6 +11,12 @@ runtime-configuration editor is outside this iteration of issue #3617.
 Channel refresh is explicitly user driven. Do not add background polling or
 refresh on focus/reconnection to these pages.
 
+The page header and content are horizontally centered within the area beside
+the navigation rail, using the same maximum width and responsive side padding.
+The connection form and details share this alignment; the form keeps its
+narrower maximum width. On small screens the containers fill the available
+width while retaining the shell's side padding.
+
 Refresh and Manage use outlined button styling with visible hover/focus states
 and larger touch targets on mobile. Manage retains navigation-link semantics.
 Details omit Scope. Bot ID and Agent key ID are blue underlined external links
@@ -30,7 +36,10 @@ missing IDs remain unlinked placeholders.
   connection details. Registration IDs are opaque and encoded as one segment.
 - `/scopes/:scopeId/workflow-activity-vnext/channels/connect/telegram`: the
   single-page Telegram connection form. Connect Telegram navigates here.
-  Lark, Feishu, Discord, and Slack are marked Soon in the current design.
+  The channel directory shows Telegram and WhatsApp only. WhatsApp replaces
+  the Lark/Feishu placeholders and is marked Soon without a connection action;
+  Discord and Slack placeholders are omitted. Existing connected records still
+  render the platform returned by the API.
   The older backend `/channels` onboarding page remains independently available.
 
 `AEVATAR_CHANNEL_WEBHOOK_BASE_URL` optionally sets the public backend callback
@@ -42,8 +51,9 @@ separate Console frontend origin or shown as an editable form field.
 
 ## Telegram connection form
 
-The form requires a masked bot token. Label and Skill name are independently
-optional, and the service selection may be empty. The token reveal control is
+The form requires a masked bot token and shows one optional Channel name field
+(「Channel 名字」 in Chinese). It has no separate Skill name input. The service
+selection may be empty. The token reveal control is
 keyboard accessible. Unsaved form navigation asks whether to discard; form data
 is never persisted. The token is used only for Telegram's official name lookup
 and the authenticated registration POST. It stays in component memory for a
@@ -116,15 +126,15 @@ Telegram. Inputs and still-authorized selections are preserved for an explicit m
 retry; no automatic registration retry runs. An in-flight request still blocks
 duplicate clicks, and an accepted registration stays locked during observation.
 
-### Optional names and Telegram bot-name defaults
+### Channel name and Telegram bot-name defaults
 
-Label and Skill name show an optional marker and a bot-name placeholder. When
-either trimmed value is blank, the registration adapter first calls Telegram's
-official `getMe` endpoint and reads the bot's `first_name`, not its `username`.
-Each field resolves independently as its trimmed custom value or that bot name;
-a custom label never supplies an empty skill name. Both custom names bypass
-lookup. The UI locks while resolving/submitting so the result cannot overwrite
-an edit to another token; retries resolve the current token again.
+The optional Channel name is the only naming decision. The registration adapter
+trims it and sends the same resolved value as both `label` and
+`default_skill_name`. A nonblank custom name bypasses Telegram name lookup.
+When blank or omitted, the adapter calls Telegram's official `getMe` endpoint
+once and uses the bot's `first_name`, never its `username`, for both fields.
+The form locks during lookup/submission and preserves its input after failure;
+a manual retry resolves the current token/name again.
 
 This uses the same official API flow as NyxID's existing Telegram onboarding,
 because the reviewed Aevatar/NyxID backend has no separate pre-registration
@@ -135,6 +145,29 @@ never enters browser navigation, logs, toast text, persistent state, or the
 authenticated fetch helper. Raw fetch errors and response bodies are discarded.
 A rejected token, unavailable lookup or absent bot name prevents registration,
 shows a safe toast and leaves the form available for retry.
+
+## Connected names, channels and skills
+
+The connected table separates Channel name from Channel (platform). The current
+Aevatar registration summary does not return the submitted label: provisioning
+stores it on the NyxID bot. For a nonempty list with bot references, the page
+therefore reads `GET /api/v1/channel-bots` once through existing NyxID auth/config,
+without an organization selector. This endpoint returns the caller's active
+personal bots as `{ bots, total }`. Only `id`, `platform` and `label` enter the
+query cache. Registration `nyx_channel_bot_id` must exactly match `bots[].id`,
+and platforms must agree; registration IDs, platform bot IDs, usernames and
+skill names never substitute for that join or for the Channel name.
+
+Names load independently of registrations and statuses. Missing/deactivated
+bots, empty labels and failed reads show Name unavailable beside the existing
+identifier; loading is shown explicitly. A name-read failure preserves the
+connected rows and actions, shows a safe error toast and can be retried with
+Refresh. Refresh reads the names once with the list/status reads. No per-row
+name request, automatic retry, polling, focus or reconnect refresh is added.
+
+Channel details include Skill using the same name, optional version and Ornn
+link as the connected list. Missing skills show Not set. Reading names/skills
+does not request full runtime configuration or alter bot resources.
 
 ## API and ownership
 
