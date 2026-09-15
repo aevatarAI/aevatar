@@ -23,7 +23,12 @@ describe('Channel identifier disclosure', () => {
       workflowDeliveryStatus: null,
       owned: true,
     };
-    render(<ChannelIdentity registration={registration} />);
+    const identityProps = {
+      registration,
+      label: 'Channel for ID test',
+      pending: false,
+    };
+    render(<ChannelIdentity {...identityProps} />);
     const identifier = screen.getByRole('button', { name: 'Show full ID' });
     expect(identifier).not.toHaveTextContent(fullId);
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
