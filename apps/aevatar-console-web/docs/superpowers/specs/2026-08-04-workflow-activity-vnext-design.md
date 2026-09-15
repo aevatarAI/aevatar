@@ -100,8 +100,8 @@ cached, or hard-coded data appear to be an API result.
   login, callback, or authentication routes. Login, callback, language, and
   account presentation may adopt the vNext visual system without changing
   their behavior.
-- No global navigation change in the first implementation. The vNext routes
-  remain hidden from the existing menu and are entered by their explicit URL.
+- No global menu expansion. The vNext routes remain hidden from the existing
+  menu; the console home uses the account resolver described below.
 - No assumption that `memberId`, `workflowId`, `definitionActorId`, or
   `publishedServiceId` are interchangeable.
 - No locally fabricated revision history, Run lineage, Activity records,
@@ -156,7 +156,14 @@ identity.
 
 ## Route And Navigation Model
 
-All vNext pages live below one new namespace:
+The 2026-09-14 console home decision adds `/workflows` as an unscoped account
+resolver. It refreshes `/api/auth/me` and opens the catalogue using the returned
+`scopeId`; it never uses a fixed workspace, browser subject, or stale cached scope.
+The repository-root `docs/superpowers/specs/2026-08-31-workflow-vnext-home-design.md`
+defines its recovery behavior and supersedes the original preview-only entry.
+This is the explicit exception to the original global-navigation non-goal.
+
+All vNext resource pages live below one scoped namespace:
 
 | Route | Purpose | Existing route impact |
 | --- | --- | --- |
@@ -174,8 +181,9 @@ Route requirements:
   `workflows/:workflowId` route.
 - Set every vNext route to `hideInMenu: true`. Do not add or alter a global
   menu item during the isolated implementation.
-- Leave all existing redirects exactly as they are. The namespace entry may
-  redirect to its own `workflows` child only.
+- `/`, `/overview`, `/scopes`, and default login/callback fallback open
+  `/workflows`. Preserve explicit safe deep links. The scoped namespace entry
+  redirects to its own `workflows` child.
 - Keep the existing authenticated app and runtime providers. Do not set
   `layout: false`, because that would bypass established shell behavior.
 - The new surface may hide the current ProLayout chrome through a narrowly
@@ -932,13 +940,13 @@ graph dependency unless an existing capability is demonstrably insufficient.
 
 - Approve this specification and explicitly accept the backend-honest
   deviations.
-- Confirm the direct-URL-only initial entry and the namespace spelling.
+- Confirm the account-resolving home entry and the scoped namespace spelling.
 - Recheck `origin/feature/integrate` before implementation in case its contract
   commit has moved; record any change in this document before coding.
 
 ### Phase 1: Isolated Shell And Typed Boundaries
 
-- Add new hidden routes without altering legacy routes or redirects.
+- Add hidden scoped routes and the account-resolving home described above.
 - Add the vNext-local workbench shell and scoped navigation.
 - Add typed Activity/fork decoders and query keys at shared boundaries.
 - Prove route scope and identity isolation before building product pages.
@@ -979,7 +987,8 @@ Tests must protect observable contracts rather than internal implementation.
 The expected high-value coverage is:
 
 - route/config integration proves all vNext URLs resolve, `new` is not captured
-  as a Workflow ID, and legacy routes/redirects are unchanged;
+  as a Workflow ID, the home resolves the account scope, and explicit deep links
+  and scoped Team routes keep their destinations;
 - auth-route integration proves an unauthenticated vNext URL uses the current
   sanitized Login redirect and callback return path, while existing Login,
   callback, retry, service-access review, and other protected routes retain
@@ -1064,9 +1073,10 @@ are true:
   API responses, or browser-storage substitute for unavailable remote state.
 - API loading, empty, delayed, unavailable, decoding-failure, and request-error
   states remain visibly distinct when tested without fixture fallbacks.
-- All vNext pages resolve only under
-  `/scopes/:scopeId/workflow-activity-vnext`; old routes, redirects, menu
-  behavior, and legacy page behavior remain intact.
+- All vNext resource pages resolve under
+  `/scopes/:scopeId/workflow-activity-vnext`; the unscoped `/workflows` home
+  resolves the account scope. Home aliases follow this entry; scoped Team and
+  runtime page behavior remains intact.
 - Unauthenticated vNext entry uses the existing protected-route redirect,
   `/login`, `/auth/callback`, sanitized `returnTo`, session restoration, and
   service-access review behavior, returning to the original scoped URL.

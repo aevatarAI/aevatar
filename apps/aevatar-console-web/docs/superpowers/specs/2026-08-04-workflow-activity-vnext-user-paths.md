@@ -70,7 +70,14 @@ The user must never be led to believe that:
 
 ### Entry Contract
 
-The isolated preview entry is a direct authenticated URL:
+The default console home is `/workflows`. On each entry it refreshes
+`GET /api/auth/me`, waits for the authoritative account `scopeId`, and replaces
+the URL with the scoped Workflows catalogue. Request failure or missing scope
+stays recoverable through Retry; stale cache and browser user IDs never supply
+the scope. Explicitly unauthenticated sessions use the existing login route.
+This 2026-09-14 decision supersedes the original preview-only entry restriction.
+
+A direct authenticated scoped entry also remains available:
 
 ```text
 /scopes/:scopeId/workflow-activity-vnext
@@ -82,9 +89,10 @@ It redirects only within the new namespace to:
 /scopes/:scopeId/workflow-activity-vnext/workflows
 ```
 
-There is no new global menu entry in the first implementation. Existing menu,
-Team, Workflow, Run, Settings, Studio, login, callback, and redirect routes do
-not change.
+The home aliases `/`, `/overview`, and `/scopes`, plus default login/callback
+fallback, open `/workflows`. Explicit safe return targets retain their path,
+query, and fragment. Scoped Team/member and runtime routes keep their existing
+owners; opening Workflows does not require visiting a Teams or members home.
 
 If authentication is missing or expired, existing authentication behavior owns
 the interruption and return. If the server rejects the route `scopeId`, the
@@ -884,5 +892,6 @@ Every frame has a corresponding user path:
   authoritative API progress.
 - Desktop, tablet, and mobile use the same identities, APIs, and completion
   evidence.
-- Existing routes, redirects, menu behavior, backend files, and backend
-  contracts remain unchanged.
+- Home aliases resolve through `/workflows`; explicit safe deep links and scoped
+  Team/member routes retain their destination. Backend files and contracts
+  remain unchanged.

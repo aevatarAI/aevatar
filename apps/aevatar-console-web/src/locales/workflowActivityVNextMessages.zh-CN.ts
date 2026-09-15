@@ -3,20 +3,35 @@ import enUSMessages from './workflowActivityVNextMessages.en-US';
 const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
   {
     ...enUSMessages,
-    'workflowActivityVNext.workflows.refreshFailed': '工作流列表刷新失败，当前仍显示上次加载的列表。',
+    'workflowActivityVNext.home.loading': '正在打开你的工作流…',
+    'workflowActivityVNext.home.unavailable': '暂时无法打开工作流',
+    'workflowActivityVNext.home.loadFailed': '暂时无法获取你的工作区，请重试。',
+    'workflowActivityVNext.home.scopeUnavailable':
+      '当前账号没有可用工作区，请检查访问权限后重试。',
+    'workflowActivityVNext.home.signInRequired': '登录后即可打开你的工作流。',
+    'workflowActivityVNext.home.signIn': '登录',
+
+    'workflowActivityVNext.workflows.refreshFailed':
+      '工作流列表刷新失败，当前仍显示上次加载的列表。',
     'workflowActivityVNext.new.cancelGeneration': '取消生成',
     'workflowActivityVNext.new.generating': '正在生成工作流…',
     'workflowActivityVNext.new.validating': '正在校验生成的工作流…',
     'workflowActivityVNext.new.savingGenerated': '正在保存工作流…',
-    'workflowActivityVNext.new.generationTimedOut': '生成已超过两分钟，未保存草稿。你可以重试。',
-    'workflowActivityVNext.new.generationCancelled': '已取消生成，名称和描述已保留，未保存草稿。',
-    'workflowActivityVNext.new.generationReceiving': '已收到生成进度，正在等待完整工作流。',
-    'workflowActivityVNext.new.generationWaiting': '正在等待生成进度，你可以随时取消。',
+    'workflowActivityVNext.new.generationTimedOut':
+      '生成已超过两分钟，未保存草稿。你可以重试。',
+    'workflowActivityVNext.new.generationCancelled':
+      '已取消生成，名称和描述已保留，未保存草稿。',
+    'workflowActivityVNext.new.generationReceiving':
+      '已收到生成进度，正在等待完整工作流。',
+    'workflowActivityVNext.new.generationWaiting':
+      '正在等待生成进度，你可以随时取消。',
     'workflowActivityVNext.new.generationDetails': '生成详情',
     'workflowActivityVNext.workflows.deleteSuccess': '草稿已删除',
     'workflowActivityVNext.workflows.checkFailed': '暂时无法确认操作是否完成',
-    'workflowActivityVNext.workflows.changeObserving': '请求已接受，正在确认是否完成…',
-    'workflowActivityVNext.workflows.changeDelayed': '处理时间比预期更长，暂时还无法确认是否完成。',
+    'workflowActivityVNext.workflows.changeObserving':
+      '请求已接受，正在确认是否完成…',
+    'workflowActivityVNext.workflows.changeDelayed':
+      '处理时间比预期更长，暂时还无法确认是否完成。',
     'workflowActivityVNext.workflows.checkingDescription':
       '将持续检查最多 30 秒。关闭弹窗不会撤销已提交的请求。',
     'workflowActivityVNext.workflows.checkAgainDescription':

@@ -1,4 +1,14 @@
 const workflowActivityVNextMessages = {
+  'workflowActivityVNext.home.loading': 'Opening your workflows…',
+  'workflowActivityVNext.home.unavailable': 'Workflows unavailable',
+  'workflowActivityVNext.home.loadFailed':
+    "We couldn't load your workspace. Try again.",
+  'workflowActivityVNext.home.scopeUnavailable':
+    'Your account has no available workspace. Check your access and try again.',
+  'workflowActivityVNext.home.signInRequired':
+    'Sign in to open your workflows.',
+  'workflowActivityVNext.home.signIn': 'Sign in',
+
   'workflowActivityVNext.workflows.refreshFailed':
     "The workflow list couldn't refresh. The last loaded list is still shown.",
   'workflowActivityVNext.new.cancelGeneration': 'Cancel generation',
