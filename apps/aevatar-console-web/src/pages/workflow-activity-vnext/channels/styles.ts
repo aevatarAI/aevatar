@@ -27,7 +27,7 @@ export const channelsCss = `
 .channels__section-heading h2 { align-items: center; display: flex; font-size: 16px; gap: 10px; line-height: 24px; margin: 0; }
 .channels__section-heading p { color: var(--wa-muted); line-height: 20px; margin: 4px 0 0; }
 .channels__count { background: var(--wa-surface); border: 1px solid var(--channels-border); border-radius: 5px; color: var(--wa-muted); font-size: 11px; font-weight: 500; line-height: 20px; min-width: 24px; padding: 0 6px; text-align: center; }
-.channels__table-wrap { background: var(--wa-surface); border: 1px solid var(--channels-border); border-radius: var(--wa-radius); overflow: hidden; }
+.channels__table-wrap { background: var(--wa-surface); border: 1px solid var(--channels-border); border-radius: var(--wa-radius); overflow: hidden; position: relative; }
 .channels__table { border-collapse: collapse; table-layout: fixed; width: 100%; }
 .channels__table th { background: var(--wa-subtle); border-bottom: 1px solid var(--channels-border); color: var(--wa-muted); font-size: 10px; font-weight: 600; line-height: 16px; padding: 12px 16px; text-align: left; text-transform: uppercase; }
 .channels__table th:nth-child(1) { width: auto; }

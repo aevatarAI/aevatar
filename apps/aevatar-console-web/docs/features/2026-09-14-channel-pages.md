@@ -11,6 +11,13 @@ runtime-configuration editor is outside this iteration of issue #3617.
 Channel refresh is explicitly user driven. Do not add background polling or
 refresh on focus/reconnection to these pages.
 
+Manual Refresh keeps the connected table mounted and displays the shared
+loading overlay over that table while the registration list, bot names, and
+active status refreshes settle. Table actions are inert during the refresh;
+the button blocks duplicate submissions. Completion or failure removes the
+overlay and restores interaction, with the existing error toast and manual
+retry behavior retained.
+
 The page header and content are horizontally centered within the area beside
 the navigation rail, using the same maximum width and responsive side padding.
 The connection form and details share this alignment; the form keeps its
