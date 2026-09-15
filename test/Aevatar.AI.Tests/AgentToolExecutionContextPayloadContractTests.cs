@@ -31,6 +31,16 @@ public sealed class AgentToolExecutionContextPayloadContractTests
             .Should()
             .Equal((1, "schedule_id"));
 
+        AgentToolConnectedServicesContextPayload.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Equal((1, "context_json"), (2, "agent_key_authorization_evidence"));
+
+        AgentKeyServiceAuthorizationEvidencePayload.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Equal((1, "allowed_service_ids"), (2, "scope_plan_digest"), (3, "allow_all_services"));
+
         AgentToolCredentialsPayload.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()

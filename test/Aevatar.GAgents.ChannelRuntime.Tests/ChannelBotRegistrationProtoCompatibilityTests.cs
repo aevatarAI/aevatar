@@ -135,7 +135,8 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
             ("nyxid_service_selectors", 9),
             ("credential_source_mode", 10),
             ("exposed_tool_catalog", 11),
-            ("instructions", 12));
+            ("instructions", 12),
+            ("agent_key_grant", 13));
 
         var original = new ChannelAgentKeyGrantSnapshot
         {

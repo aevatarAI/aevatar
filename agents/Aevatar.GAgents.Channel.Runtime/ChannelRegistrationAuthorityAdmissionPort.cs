@@ -86,12 +86,18 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
             return syntheticResult;
 
         if (!IsCanonicalIdentifier(targetServiceInstanceId) ||
-            !ContainsExact(
-                registration.ChannelAgentKey.Grant.AllowedServiceIds,
-                targetServiceInstanceId))
+            !GrantAllowsService(registration.ChannelAgentKey.Grant, targetServiceInstanceId))
         {
             return ChannelRegistrationAuthorityAdmissionResult.Deny(
                 ChannelRegistrationAuthorityAdmissionReason.TargetNotGranted);
+        }
+
+        if (IsConnectedServiceOperation(request.Operation))
+        {
+            return RuntimeSelectorsAllow(registration.RuntimeConfig, request.Operation)
+                ? ChannelRegistrationAuthorityAdmissionResult.Allow()
+                : ChannelRegistrationAuthorityAdmissionResult.Deny(
+                    ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
         }
 
         if (ContainsExact(
@@ -146,6 +152,28 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
         return true;
     }
 
+    private static bool RuntimeSelectorsAllow(
+        ChannelBotRuntimeConfig? runtimeConfig,
+        AgentToolOperationAdmission operation)
+    {
+        if (runtimeConfig?.NyxidServiceSelectors.Count is null or 0)
+            return true;
+
+        foreach (var selector in runtimeConfig.NyxidServiceSelectors)
+        {
+            if (!MatchesSelector(selector, operation))
+                continue;
+            if (selector.EndpointNames.Count == 0)
+                return true;
+            if (operation.Identity is not AgentToolOperationIdentity.PublishedEndpoint published)
+                return false;
+            return selector.EndpointNames.Any(endpointName =>
+                string.Equals(endpointName, published.EndpointId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return false;
+    }
+
     private static bool RuntimeSelectorAllows(
         ChannelBotRuntimeConfig? runtimeConfig,
         string serviceSlug,
@@ -168,6 +196,20 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
 
         return false;
     }
+
+    private static bool MatchesSelector(
+        ChannelBotRuntimeNyxIdServiceSelector selector,
+        AgentToolOperationAdmission operation) =>
+        string.Equals(selector.ServiceSlug, operation.ServiceSlug, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(selector.ServiceSlug, operation.CatalogServiceSlug, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsConnectedServiceOperation(AgentToolOperationAdmission operation) =>
+        !string.IsNullOrWhiteSpace(operation.CatalogServiceSlug);
+
+    private static bool GrantAllowsService(
+        ChannelAgentKeyGrantSnapshot grant,
+        string serviceInstanceId) =>
+        grant.AllowAllServices == true || ContainsExact(grant.AllowedServiceIds, serviceInstanceId);
 
     private static bool TryReadAgentKeySyntheticServiceSlug(
         string? serviceInstanceId,

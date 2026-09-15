@@ -278,9 +278,53 @@ public sealed record AgentToolSenderBindingContext(string? BindingId, string? Ny
     public static AgentToolSenderBindingContext Empty { get; } = new((string?)null, null, null);
 }
 
-public sealed record AgentToolConnectedServicesContext(string? ContextJson)
+public sealed record AgentToolConnectedServicesContext(
+    string? ContextJson,
+    AgentKeyServiceAuthorizationEvidence AgentKeyAuthorizationEvidence)
 {
+    public AgentToolConnectedServicesContext(string? ContextJson)
+        : this(ContextJson, AgentKeyServiceAuthorizationEvidence.Empty)
+    {
+    }
+
     public static AgentToolConnectedServicesContext Empty { get; } = new((string?)null);
+}
+
+public sealed record AgentKeyServiceAuthorizationEvidence(
+    IReadOnlyList<string> AllowedServiceIds,
+    string? ScopePlanDigest,
+    bool? AllowAllServices)
+{
+    public static AgentKeyServiceAuthorizationEvidence Empty { get; } = new([], null, null);
+
+    public bool HasServiceAuthority =>
+        AllowAllServices == true ||
+        AllowedServiceIds.Count > 0;
+
+    public bool AllowsService(string? serviceId) =>
+        AllowAllServices == true ||
+        (!string.IsNullOrWhiteSpace(serviceId) &&
+         AllowedServiceIds.Any(allowedServiceId => string.Equals(
+             allowedServiceId,
+             serviceId,
+             StringComparison.Ordinal)));
+
+    public static AgentKeyServiceAuthorizationEvidence FromAllowedServices(
+        IEnumerable<string> allowedServiceIds,
+        string? scopePlanDigest,
+        bool? allowAllServices)
+    {
+        var normalizedServiceIds = allowedServiceIds
+            .Select(AgentToolExecutionContext.Normalize)
+            .Where(static serviceId => serviceId is not null)
+            .Select(static serviceId => serviceId!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return new AgentKeyServiceAuthorizationEvidence(
+            normalizedServiceIds,
+            AgentToolExecutionContext.Normalize(scopePlanDigest),
+            allowAllServices);
+    }
 }
 
 public sealed record AgentWorkflowRuntimeContext(

@@ -609,6 +609,57 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task ChannelRuntimeCatalog_WhenNoRuntimeSelectors_ShouldExposeVisibleConnectedOperations()
+    {
+        var routeTool = new CountingTool("route_tool");
+        var connectedOperation = new ConnectedOperationTool(
+            "calendar_create_event",
+            "api-google-workspace",
+            "calendar_create_event");
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.default", new StaticToolSource([routeTool, connectedOperation]));
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(registry);
+
+        var catalog = await materializer.MaterializeAsync(
+            new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.default" } },
+            [],
+            AgentToolExecutionContext.Empty,
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool", "calendar_create_event");
+        catalog.Proof.ToolDescriptors.Single(static descriptor => descriptor.Name == "calendar_create_event")
+            .Origin.Should().Be(AgentTurnToolOrigin.ConnectedService);
+    }
+
+    [Fact]
+    public async Task ChannelRuntimeCatalog_WhenRuntimeGrantPresent_ShouldPassAgentKeyEvidenceToDiscoveryContext()
+    {
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.default", new StaticToolSource([new CountingTool("route_tool")]));
+        var discoveryService = new RecordingDiscoveryService([new CountingTool("route_tool")]);
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(registry, discoveryService);
+        var runtimeConfig = new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.default" } };
+        runtimeConfig.AgentKeyGrant = new ChannelAgentKeyGrantSnapshot
+        {
+            ScopePlanDigest = "sha256:grant-alpha",
+            AllowAllServices = false,
+            AllowedServiceIds = { "usvc-google-workspace" },
+        };
+
+        await materializer.MaterializeAsync(
+            runtimeConfig,
+            [],
+            AgentToolExecutionContext.Empty,
+            CancellationToken.None);
+
+        var evidence = discoveryService.Contexts.Should().ContainSingle().Subject
+            .ConnectedServices.AgentKeyAuthorizationEvidence;
+        evidence.AllowedServiceIds.Should().Equal("usvc-google-workspace");
+        evidence.ScopePlanDigest.Should().Be("sha256:grant-alpha");
+        evidence.AllowAllServices.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task ChannelRuntimeCatalog_WhenRuntimeSelectorsPresent_ShouldPassSelectorsToDiscoveryContext()
     {
         var registry = new RecordingToolSetRegistry();

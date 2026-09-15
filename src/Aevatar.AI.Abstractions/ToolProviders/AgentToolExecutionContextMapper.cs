@@ -159,7 +159,10 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.NyxUserId),
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.SenderTenant)),
             FromRoutingPayload(payload.Routing),
-            new AgentToolConnectedServicesContext(AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
+            new AgentToolConnectedServicesContext(
+                AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson),
+                FromAgentKeyAuthorizationEvidencePayload(
+                    payload.ConnectedServices?.AgentKeyAuthorizationEvidence)),
             FromWorkflowRuntimePayload(payload.WorkflowRuntime),
             new AgentToolScheduleContext(AgentToolExecutionContext.Normalize(payload.Schedule?.ScheduleId)),
             FromCredentialSourcePayload(payload.CredentialSource),
@@ -233,6 +236,8 @@ public static class AgentToolExecutionContextMapper
             ConnectedServices = new AgentToolConnectedServicesContextPayload
             {
                 ContextJson = context.ConnectedServices.ContextJson ?? string.Empty,
+                AgentKeyAuthorizationEvidence = ToAgentKeyAuthorizationEvidencePayload(
+                    context.ConnectedServices.AgentKeyAuthorizationEvidence),
             },
             WorkflowRuntime = ToWorkflowRuntimePayload(context.WorkflowRuntime),
             CredentialSource = ToCredentialSourcePayload(context.CredentialSource),
@@ -499,6 +504,28 @@ public static class AgentToolExecutionContextMapper
                 Value = value,
             });
         }
+    }
+
+    private static AgentKeyServiceAuthorizationEvidence FromAgentKeyAuthorizationEvidencePayload(
+        AgentKeyServiceAuthorizationEvidencePayload? payload) =>
+        payload is null
+            ? AgentKeyServiceAuthorizationEvidence.Empty
+            : AgentKeyServiceAuthorizationEvidence.FromAllowedServices(
+                payload.AllowedServiceIds,
+                payload.ScopePlanDigest,
+                payload.HasAllowAllServices ? payload.AllowAllServices : null);
+
+    private static AgentKeyServiceAuthorizationEvidencePayload ToAgentKeyAuthorizationEvidencePayload(
+        AgentKeyServiceAuthorizationEvidence evidence)
+    {
+        var payload = new AgentKeyServiceAuthorizationEvidencePayload
+        {
+            ScopePlanDigest = evidence.ScopePlanDigest ?? string.Empty,
+        };
+        payload.AllowedServiceIds.AddRange(evidence.AllowedServiceIds);
+        if (evidence.AllowAllServices.HasValue)
+            payload.AllowAllServices = evidence.AllowAllServices.Value;
+        return payload;
     }
 
     private static void ApplyOptionalPayloads(

@@ -333,6 +333,43 @@ public class NyxIdConnectedServiceToolSourceTests
         proxyRequest.ApiKey.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task DiscoverToolsAsync_AgentKeyEvidence_ShouldMaterializeOpenApiOperationsFromGrantedServiceIds()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["agent-key-token"] = Keys(
+            InstanceWithCatalogSlug(
+                "usvc-google-workspace",
+                "api-google-workspace",
+                "svc-google-workspace",
+                "api-google-workspace"),
+            InstanceWithCatalogSlug("usvc-calendar", "api-calendar", "svc-calendar", "api-calendar"));
+        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/api-google-workspace/openapi.json"] = CustomOpenApi;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext(
+            "agent-key-token",
+            credentialKind: AgentToolNyxIdCredentialKind.AgentKey,
+            agentKeyEvidence: AgentKeyServiceAuthorizationEvidence.FromAllowedServices(
+                ["usvc-google-workspace"],
+                "sha256:grant-alpha",
+                allowAllServices: false));
+        var tools = await source.DiscoverToolsAsync();
+
+        var tool = tools.Should().ContainSingle().Subject;
+        var owner = tool.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
+        owner.OperationAdmission.ServiceInstanceId.Should().Be("usvc-google-workspace");
+        owner.OperationAdmission.ServiceSlug.Should().Be("api-google-workspace");
+        owner.OperationAdmission.CatalogServiceSlug.Should().Be("api-google-workspace");
+        owner.OperationAdmission.Identity.Should().Be(
+            new AgentToolOperationIdentity.PublishedEndpoint("readDiningProfileContext"));
+        handler.DiscoveryRequests.Should().Be(1);
+        handler.DiscoveryTokens.Should().Equal("agent-key-token");
+        handler.McpConfigRequests.Should().Be(0);
+        handler.RawOpenApiRequests.Should().Equal(
+            "/api/v1/catalog-specs/api-google-workspace/openapi.json");
+    }
+
     [Theory]
     [InlineData("expired", true, null, null)]
     [InlineData("revoked", true, null, null)]
@@ -1853,7 +1890,8 @@ public class NyxIdConnectedServiceToolSourceTests
         string? organizationToken = null,
         string? sourceReadableToken = null,
         AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified,
-        string? connectedServicesContextJson = null) =>
+        string? connectedServicesContextJson = null,
+        AgentKeyServiceAuthorizationEvidence? agentKeyEvidence = null) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials(
@@ -1862,7 +1900,9 @@ public class NyxIdConnectedServiceToolSourceTests
                 null,
                 credentialKind,
                 sourceReadableToken),
-            ConnectedServices = new AgentToolConnectedServicesContext(connectedServicesContextJson),
+            ConnectedServices = new AgentToolConnectedServicesContext(
+                connectedServicesContextJson,
+                agentKeyEvidence ?? AgentKeyServiceAuthorizationEvidence.Empty),
             Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
         });
 
