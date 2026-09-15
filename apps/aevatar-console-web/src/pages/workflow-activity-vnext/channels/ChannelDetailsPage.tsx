@@ -12,6 +12,7 @@ import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { buildWorkflowActivitySectionHref } from '../navigation';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import ChannelAuthorizedServices from './ChannelAuthorizedServices';
 import {
   ChannelIcon,
   ChannelLink,
@@ -188,6 +189,15 @@ export default function ChannelDetailsPage({
                 <dt>{t('channels.column.skill', 'Skill')}</dt>
                 <dd>
                   <ChannelSkill skill={registration.skill} />
+                </dd>
+              </div>
+              <div>
+                <dt>{t('channels.services.title', 'Authorized services')}</dt>
+                <dd>
+                  <ChannelAuthorizedServices
+                    scopeId={scopeId}
+                    authorization={registration.serviceAuthorization}
+                  />
                 </dd>
               </div>
               <div>

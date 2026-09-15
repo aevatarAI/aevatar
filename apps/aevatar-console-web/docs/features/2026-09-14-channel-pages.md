@@ -121,16 +121,19 @@ other services.
 Registration uses existing `POST /api/channels/registrations` with
 `platform`, `bot_token`, `label`, `default_skill_name`, `webhook_base_url`, and
 the explicit selection above. A `202`/`status: accepted` response must contain
-the registration ID. The page waits for that exact Telegram registration in
-the owner list before showing success and opening details; inbound activity
-continues to use its real status. The form does not query registrations before
-acceptance or after a failed submission. Accepted registration triggers one
-list read; if it is not visible yet, Check again performs one GET. No polling,
-window-focus refresh, or reconnect refresh runs. Registration failures, including
+the registration ID. After admission, the form clears its token, shows an
+informational "request submitted" toast, and immediately returns to Channels.
+It does not claim that provisioning has completed, wait for a list read, or
+leave the user on a locked connection form. The Channels page owns the normal
+list load and its existing manual Refresh action if the new row is not visible
+yet. Inbound activity continues to use its real status. The form never queries
+registrations; no polling, window-focus refresh, or reconnect refresh runs.
+Registration failures, including
 504 and network errors, show a shared error toast and restore editable fields and Connect
 Telegram. Inputs and still-authorized selections are preserved for an explicit manual
 retry; no automatic registration retry runs. An in-flight request still blocks
-duplicate clicks, and an accepted registration stays locked during observation.
+duplicate clicks. An accepted submission cannot be sent again while navigation
+is completing; late responses after unmount cannot show a toast or navigate.
 
 ### Channel name, Skill name and Telegram bot-name defaults
 
@@ -180,6 +183,22 @@ name request, automatic retry, polling, focus or reconnect refresh is added.
 Channel details include Skill using the same name, optional version and Ornn
 link as the connected list. Missing skills show Not set. Reading names/skills
 does not request full runtime configuration or alter bot resources.
+
+### Authorized services in channel details
+
+The detail page displays the registration's saved `authorization_mode` and
+`service_ids` from `GET /api/channels/registrations`. For an explicit allowlist,
+only those exact UserService IDs are shown. One account inventory read resolves
+their labels and slugs; the current session's selectable grants and service
+activity do not hide saved channel authorizations or add other services.
+Only safe ID, label and slug fields enter the service-name query cache.
+
+Missing service names retain their saved IDs. A failed name lookup preserves
+other details and the saved authorization list, shows a safe toast, and offers
+a manual retry of the names alone. Explicit empty authorization shows no
+services authorized; NyxID default authorization and unavailable or legacy
+authorization details have distinct messages and do not query the inventory.
+No automatic refresh or registration change is introduced by this display.
 
 ## API and ownership
 

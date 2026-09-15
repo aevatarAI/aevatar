@@ -22,6 +22,7 @@ describe('Channel identifier disclosure', () => {
       skill: null,
       workflowDeliveryStatus: null,
       owned: true,
+      serviceAuthorization: { kind: 'unavailable' },
     };
     const identityProps = {
       registration,

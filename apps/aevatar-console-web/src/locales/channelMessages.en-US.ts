@@ -57,6 +57,15 @@ export default {
   'channels.breadcrumb': 'Channel navigation',
   'channels.registration': 'Registration',
   'channels.inboundMessages': 'Inbound messages',
+  'channels.services.title': 'Authorized services',
+  'channels.services.loading': 'Loading service names',
+  'channels.services.empty': 'No services authorized.',
+  'channels.services.default':
+    'Uses NyxID default authorization; individual services are not listed.',
+  'channels.services.unavailable':
+    'Authorization details are unavailable for this channel.',
+  'channels.services.namesError':
+    'Could not load service names. Please try again.',
   'channels.botId': 'Bot ID',
   'channels.provider': 'Provider',
   'channels.keyId': 'Agent key ID',
@@ -110,10 +119,9 @@ export default {
     'Only selected services will be available to this bot.',
   'channels.connect.selectionChanged':
     'Some selected services are no longer available. Deselect them before connecting.',
-  'channels.connect.pending':
-    'Telegram setup was submitted. Waiting for your channel to appear.',
-  'channels.connect.success':
-    'Telegram added. Send your bot a message to get started.',
+  'channels.connect.accepted':
+    'Telegram connection request submitted. Use Refresh if the channel is not visible yet.',
+  'channels.connect.submitted': 'Request submitted',
   'channels.connect.error.token':
     'Check the bot token from BotFather and try again.',
   'channels.connect.error.botName':

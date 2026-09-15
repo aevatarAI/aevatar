@@ -42,8 +42,6 @@ export const channelConnectionCss = `
 .channels__service-state p { margin: 0 0 12px; }
 .channels__form-actions { align-items: center; border-top: 1px solid var(--channels-border); display: flex; gap: 12px; justify-content: space-between; margin-top: 28px; padding-top: 20px; }
 .channels__form-actions .ant-btn { font-size: 12px; min-height: 40px; padding-inline: 18px; }
-.channels__connection-pending { color: var(--wa-muted); line-height: 22px; margin-top: 20px; }
-.channels__connection-pending p { margin: 0 0 12px; }
 @media (max-width: 767px) {
   .channels__name-fields { gap: 0; grid-template-columns: 1fr; }
   .channels__main--connect .channels__content { padding-top: 20px; }

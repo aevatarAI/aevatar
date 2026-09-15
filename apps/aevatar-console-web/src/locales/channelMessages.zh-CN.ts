@@ -52,6 +52,12 @@ export default {
   'channels.breadcrumb': '渠道导航',
   'channels.registration': '接入记录',
   'channels.inboundMessages': '消息入站',
+  'channels.services.title': '已授权服务',
+  'channels.services.loading': '正在加载服务名称',
+  'channels.services.empty': '未授权任何服务。',
+  'channels.services.default': '使用 NyxID 默认授权，未列出具体服务。',
+  'channels.services.unavailable': '此渠道的授权详情暂不可用。',
+  'channels.services.namesError': '无法加载服务名称，请重试。',
   'channels.botId': '机器人 ID',
   'channels.provider': '提供方',
   'channels.keyId': 'Agent 密钥 ID',
@@ -99,8 +105,9 @@ export default {
   'channels.connect.selectionHelp': '此机器人只能使用选中的服务。',
   'channels.connect.selectionChanged':
     '部分选中服务已不可用，请取消勾选后再连接。',
-  'channels.connect.pending': '已提交 Telegram 接入请求，正在等待渠道显示。',
-  'channels.connect.success': 'Telegram 已添加，给机器人发送消息即可开始。',
+  'channels.connect.accepted':
+    'Telegram 连接请求已提交。如果渠道尚未显示，可点击刷新查看。',
+  'channels.connect.submitted': '请求已提交',
   'channels.connect.error.token': '请检查 BotFather 提供的令牌后重试。',
   'channels.connect.error.botName':
     '暂时无法获取 Telegram 机器人名称，请重试。',

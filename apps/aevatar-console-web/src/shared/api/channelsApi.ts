@@ -7,6 +7,11 @@ import {
   readString,
 } from './http/decoders';
 
+export type ChannelServiceAuthorization =
+  | { readonly kind: 'explicit'; readonly serviceIds: readonly string[] }
+  | { readonly kind: 'nyxidDefault' }
+  | { readonly kind: 'unavailable' };
+
 export interface ChannelRegistration {
   readonly id: string;
   readonly platform: string;
@@ -20,6 +25,7 @@ export interface ChannelRegistration {
   } | null;
   readonly workflowDeliveryStatus: string | null;
   readonly owned: boolean;
+  readonly serviceAuthorization: ChannelServiceAuthorization;
 }
 
 export interface ChannelStatus {
@@ -171,7 +177,30 @@ function decodeRegistration(value: unknown): ChannelRegistration {
         'Workflow delivery status',
       ) || null,
     owned: expectBoolean(row.owned, 'Channel ownership'),
+    serviceAuthorization: decodeServiceAuthorization(row),
   };
+}
+
+function decodeServiceAuthorization(
+  row: Record<string, unknown>,
+): ChannelServiceAuthorization {
+  if (row.authorization_mode === 'nyxid_default')
+    return { kind: 'nyxidDefault' };
+  if (
+    row.authorization_mode !== 'explicit_service_allowlist' ||
+    row.service_ids == null
+  )
+    return { kind: 'unavailable' };
+  const serviceIds = expectArray(
+    row.service_ids,
+    'Authorized services',
+    (id) => {
+      if (typeof id !== 'string' || !id.trim())
+        throw new Error('Invalid authorized service identity.');
+      return id;
+    },
+  );
+  return { kind: 'explicit', serviceIds: [...new Set(serviceIds)] };
 }
 
 async function request<T>(
