@@ -39,7 +39,6 @@ it('preserves an explicit empty allowlist and retains only the accepted registra
     await channelsApi.registerTelegram({
       botToken: ' TEST_ONLY_TOKEN ',
       label: ' Label ',
-      skillName: ' Skill ',
       serviceIds: [],
       webhookBaseUrl: 'https://api.example.test',
     }),
@@ -50,7 +49,7 @@ it('preserves an explicit empty allowlist and retains only the accepted registra
     platform: 'telegram',
     bot_token: 'TEST_ONLY_TOKEN',
     label: 'Label',
-    default_skill_name: 'Skill',
+    default_skill_name: 'Label',
     authorization_mode: 'explicit_service_allowlist',
     service_ids: [],
     webhook_base_url: 'https://api.example.test',
@@ -65,7 +64,6 @@ it('preserves an explicit empty allowlist and retains only the accepted registra
     channelsApi.registerTelegram({
       botToken: 'TEST_ONLY_TOKEN',
       label: 'Label',
-      skillName: 'Skill',
       serviceIds: [],
       webhookBaseUrl: 'https://api.example.test',
     }),
@@ -73,30 +71,9 @@ it('preserves an explicit empty allowlist and retains only the accepted registra
 });
 
 it.each([
-  {
-    label: undefined,
-    skillName: undefined,
-    expectedLabel: 'My Bot',
-    expectedSkill: 'My Bot',
-  },
-  {
-    label: ' Custom label ',
-    skillName: ' ',
-    expectedLabel: 'Custom label',
-    expectedSkill: 'My Bot',
-  },
-  {
-    label: ' ',
-    skillName: ' Custom skill ',
-    expectedLabel: 'My Bot',
-    expectedSkill: 'Custom skill',
-  },
-])('defaults only blank names from Telegram first_name: $expectedLabel / $expectedSkill', async ({
-  label,
-  skillName,
-  expectedLabel,
-  expectedSkill,
-}) => {
+  undefined,
+  '   ',
+])('uses Telegram first_name for both backend names when the channel name is blank (%s)', async (label) => {
   const token = '123456:TEST_ONLY_TOKEN';
   telegramFetch.mockResolvedValue(
     response({
@@ -117,7 +94,6 @@ it.each([
   await channelsApi.registerTelegram({
     botToken: ` ${token} `,
     label,
-    skillName,
     serviceIds: ['user-service-a'],
     webhookBaseUrl: 'https://api.example.test',
   });
@@ -134,8 +110,8 @@ it.each([
     },
   );
   expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
-    label: expectedLabel,
-    default_skill_name: expectedSkill,
+    label: 'My Bot',
+    default_skill_name: 'My Bot',
     bot_token: token,
     service_ids: ['user-service-a'],
   });

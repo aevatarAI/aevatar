@@ -20,7 +20,6 @@ export const channelConnectionCss = `
 .channels__form-error { color: var(--wa-red); font-size: 12px; line-height: 20px; margin: 8px 0 0; }
 .channels__connection-form button.ant-input-password-icon { background: transparent; border: 0; cursor: pointer; padding: 4px; }
 .channels__connection-form button.ant-input-password-icon:focus-visible { outline: 2px solid var(--wa-blue); outline-offset: 2px; }
-.channels__name-fields { display: grid; gap: 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .channels__services-heading { align-items: center; display: flex; gap: 16px; justify-content: space-between; }
 .channels__services-heading > span { color: var(--wa-blue); font-size: 11px; }
 .channels__service-picker { border: 1px solid var(--channels-border); border-radius: 5px; margin-top: 12px; padding: 10px 10px 0; }
@@ -49,7 +48,6 @@ export const channelConnectionCss = `
   .channels__connect-heading h1 { font-size: 24px; line-height: 32px; }
   .channels__connect-heading { margin-bottom: 20px; }
   .channels__connection-form { padding: 20px; }
-  .channels__name-fields { gap: 0; grid-template-columns: minmax(0, 1fr); }
   .channels__service-option { align-items: flex-start; gap: 8px; padding-inline: 2px; }
   .channels__service-bulk { padding-inline: 2px; }
   .channels__service-source { flex-basis: 80px; padding-top: 3px; }
