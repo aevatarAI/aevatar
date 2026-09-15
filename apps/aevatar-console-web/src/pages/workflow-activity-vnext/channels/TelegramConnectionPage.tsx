@@ -43,7 +43,7 @@ function registrationErrorMessage(reason: ChannelRegistrationFailure) {
     ],
     skill: [
       'channels.connect.error.skill',
-      'The Skill name could not be used. Check the name and your access in Ornn.',
+      'Could not configure the bot skill. Check the Channel name and your access in Ornn.',
     ],
     authorization: [
       'channels.connect.error.authorization',
@@ -59,7 +59,7 @@ function registrationErrorMessage(reason: ChannelRegistrationFailure) {
     ],
     rejected: [
       'channels.connect.error.rejected',
-      'Could not connect Telegram. Check the bot token, Skill name, and selected services, then try again.',
+      'Could not connect Telegram. Check the bot token, Channel name, and selected services, then try again.',
     ],
     uncertain: [
       'channels.connect.error.uncertain',
@@ -78,8 +78,7 @@ export default function TelegramConnectionPage({
   // Secret input stays in this component only, never in Query mutation state,
   // a persisted draft, navigation URL, or navigation state.
   const [botToken, setBotToken] = React.useState('');
-  const [label, setLabel] = React.useState('');
-  const [skillName, setSkillName] = React.useState('');
+  const [channelName, setChannelName] = React.useState('');
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
   const [submittedId, setSubmittedId] = React.useState<string | null>(null);
@@ -109,7 +108,7 @@ export default function TelegramConnectionPage({
       ),
   );
   const locked = submitting || submittedId !== null;
-  const dirty = Boolean(botToken || label || skillName || selectedIds.length);
+  const dirty = Boolean(botToken || channelName || selectedIds.length);
 
   React.useEffect(() => {
     if (!services.isSuccess || services.isFetching) return;
@@ -187,8 +186,7 @@ export default function TelegramConnectionPage({
     try {
       const receipt = await channelsApi.registerTelegram({
         botToken,
-        label,
-        skillName,
+        label: channelName,
         serviceIds: selectedIds,
         webhookBaseUrl,
       });
@@ -312,40 +310,23 @@ export default function TelegramConnectionPage({
             </p>
           ) : null}
         </div>
-        <div className="channels__name-fields">
-          {[
-            {
-              id: 'telegram-label',
-              title: t('channels.connect.label', 'Label'),
-              value: label,
-              change: setLabel,
-            },
-            {
-              id: 'telegram-skill',
-              title: t('channels.connect.skillName', 'Skill name'),
-              value: skillName,
-              change: setSkillName,
-            },
-          ].map((field) => (
-            <div className="channels__field" key={field.id}>
-              <div className="channels__field-heading">
-                <label htmlFor={field.id}>
-                  {field.title}{' '}
-                  <span>{t('channels.connect.optional', '(optional)')}</span>
-                </label>
-              </div>
-              <Input
-                id={field.id}
-                value={field.value}
-                placeholder={t(
-                  'channels.connect.botNameDefault',
-                  'Defaults to the Telegram bot name',
-                )}
-                disabled={locked}
-                onChange={(event) => field.change(event.target.value)}
-              />
-            </div>
-          ))}
+        <div className="channels__field">
+          <div className="channels__field-heading">
+            <label htmlFor="telegram-channel-name">
+              {t('channels.connect.name', 'Channel name')}{' '}
+              <span>{t('channels.connect.optional', '(optional)')}</span>
+            </label>
+          </div>
+          <Input
+            id="telegram-channel-name"
+            value={channelName}
+            placeholder={t(
+              'channels.connect.botNameDefault',
+              'Defaults to the bot name + 6 random digits',
+            )}
+            disabled={locked}
+            onChange={(event) => setChannelName(event.target.value)}
+          />
         </div>
         <ChannelServicePicker
           services={services.data ?? []}

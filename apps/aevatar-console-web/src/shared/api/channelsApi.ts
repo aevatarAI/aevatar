@@ -58,7 +58,6 @@ export class ChannelRegistrationError extends Error {
 export interface TelegramRegistrationInput {
   readonly botToken: string;
   readonly label?: string;
-  readonly skillName?: string;
   readonly serviceIds: readonly string[];
   readonly webhookBaseUrl: string;
 }
@@ -199,9 +198,9 @@ export const channelsApi = {
   ): Promise<{ readonly registrationId: string }> {
     const botToken = input.botToken.trim();
     const label = input.label?.trim() ?? '';
-    const skillName = input.skillName?.trim() ?? '';
-    const botName =
-      !label || !skillName ? await readTelegramBotName(botToken) : '';
+    const channelName =
+      label ||
+      `${await readTelegramBotName(botToken)}-${Math.floor(100_000 + Math.random() * 900_000)}`;
     // This request carries the token only in the authenticated POST body.
     // Do not use a mutation cache, navigation state, or persistent draft.
     let response: Response;
@@ -215,8 +214,8 @@ export const channelsApi = {
         body: JSON.stringify({
           platform: 'telegram',
           bot_token: botToken,
-          label: label || botName,
-          default_skill_name: skillName || botName,
+          label: channelName,
+          default_skill_name: channelName,
           webhook_base_url: input.webhookBaseUrl,
           authorization_mode: 'explicit_service_allowlist',
           service_ids: [...input.serviceIds],

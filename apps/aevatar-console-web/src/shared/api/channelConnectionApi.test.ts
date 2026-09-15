@@ -22,9 +22,11 @@ beforeEach(() => {
 afterEach(() => {
   fetchMock.mockReset();
   global.fetch = originalFetch;
+  jest.restoreAllMocks();
 });
 
 it('preserves an explicit empty allowlist and retains only the accepted registration identity', async () => {
+  const random = jest.spyOn(Math, 'random');
   fetchMock.mockResolvedValue(
     response(
       {
@@ -39,18 +41,18 @@ it('preserves an explicit empty allowlist and retains only the accepted registra
     await channelsApi.registerTelegram({
       botToken: ' TEST_ONLY_TOKEN ',
       label: ' Label ',
-      skillName: ' Skill ',
       serviceIds: [],
       webhookBaseUrl: 'https://api.example.test',
     }),
   ).toEqual({ registrationId: 'registration-new' });
   expect(fetchMock.mock.calls[0][0]).toBe('/api/channels/registrations');
   expect(telegramFetch).not.toHaveBeenCalled();
+  expect(random).not.toHaveBeenCalled();
   expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
     platform: 'telegram',
     bot_token: 'TEST_ONLY_TOKEN',
     label: 'Label',
-    default_skill_name: 'Skill',
+    default_skill_name: 'Label',
     authorization_mode: 'explicit_service_allowlist',
     service_ids: [],
     webhook_base_url: 'https://api.example.test',
@@ -65,7 +67,6 @@ it('preserves an explicit empty allowlist and retains only the accepted registra
     channelsApi.registerTelegram({
       botToken: 'TEST_ONLY_TOKEN',
       label: 'Label',
-      skillName: 'Skill',
       serviceIds: [],
       webhookBaseUrl: 'https://api.example.test',
     }),
@@ -73,30 +74,14 @@ it('preserves an explicit empty allowlist and retains only the accepted registra
 });
 
 it.each([
-  {
-    label: undefined,
-    skillName: undefined,
-    expectedLabel: 'My Bot',
-    expectedSkill: 'My Bot',
-  },
-  {
-    label: ' Custom label ',
-    skillName: ' ',
-    expectedLabel: 'Custom label',
-    expectedSkill: 'My Bot',
-  },
-  {
-    label: ' ',
-    skillName: ' Custom skill ',
-    expectedLabel: 'My Bot',
-    expectedSkill: 'Custom skill',
-  },
-])('defaults only blank names from Telegram first_name: $expectedLabel / $expectedSkill', async ({
+  { label: undefined, randomValue: 0, expectedName: 'My Bot-100000' },
+  { label: '   ', randomValue: 0.99999999, expectedName: 'My Bot-999999' },
+])('uses the bot name plus six random digits for both backend names when the label is $label', async ({
   label,
-  skillName,
-  expectedLabel,
-  expectedSkill,
+  randomValue,
+  expectedName,
 }) => {
+  const random = jest.spyOn(Math, 'random').mockReturnValue(randomValue);
   const token = '123456:TEST_ONLY_TOKEN';
   telegramFetch.mockResolvedValue(
     response({
@@ -117,7 +102,6 @@ it.each([
   await channelsApi.registerTelegram({
     botToken: ` ${token} `,
     label,
-    skillName,
     serviceIds: ['user-service-a'],
     webhookBaseUrl: 'https://api.example.test',
   });
@@ -134,11 +118,12 @@ it.each([
     },
   );
   expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
-    label: expectedLabel,
-    default_skill_name: expectedSkill,
+    label: expectedName,
+    default_skill_name: expectedName,
     bot_token: token,
     service_ids: ['user-service-a'],
   });
+  expect(random).toHaveBeenCalledTimes(1);
 });
 
 it('does not register using a username when Telegram omits a usable bot name', async () => {

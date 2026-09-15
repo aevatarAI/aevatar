@@ -11,18 +11,18 @@ export default {
   'channels.connect': 'Connect',
   'channels.connectPlatform': 'Connect {platform}',
   'channels.platform.feishu': 'Feishu',
-  'channels.platform.lark.description': 'Connect your bot to chats and groups.',
-  'channels.platform.feishu.description': 'Feishu, using the same local flow.',
   'channels.platform.telegram.description':
     'Connect with a BotFather bot token. Webhook setup is handled for you.',
-  'channels.platform.discord.description': 'Server and direct-message support.',
-  'channels.platform.slack.description': 'Workspace bot support.',
+  'channels.platform.whatsapp.description': 'Chat with your bot on WhatsApp.',
   'channels.connected': 'Connected',
   'channels.connectedDescription': 'Channels connected to your account.',
-  'channels.bot': '{platform} bot',
+  'channels.name.loading': 'Loading name…',
+  'channels.name.unavailable': 'Name unavailable',
+  'channels.column.name': 'Channel name',
   'channels.skill.notSet': 'Not set',
   'channels.skill.version': 'Version {version}',
   'channels.skill.open': 'Open {name} in Ornn',
+  'channels.identifier.showFull': 'Show full ID',
   'channels.column.channel': 'Channel',
   'channels.column.skill': 'Skill',
   'channels.column.inbound': 'Inbound',
@@ -48,6 +48,8 @@ export default {
   'channels.retry': 'Try again',
   'channels.error.load': 'Could not load channels. Please try again.',
   'channels.error.refresh': 'Could not refresh channels. Try again.',
+  'channels.error.names':
+    'Could not load channel names. Use Refresh to try again.',
   'channels.error.unavailable':
     'This channel is unavailable or you do not have access.',
   'channels.details': 'Channel details',
@@ -81,10 +83,10 @@ export default {
   'channels.connect.showToken': 'Show bot token',
   'channels.connect.hideToken': 'Hide bot token',
   'channels.connect.botFather': 'Get token from BotFather',
-  'channels.connect.label': 'Label',
-  'channels.connect.skillName': 'Skill name',
+  'channels.connect.name': 'Channel name',
   'channels.connect.optional': '(optional)',
-  'channels.connect.botNameDefault': 'Defaults to the Telegram bot name',
+  'channels.connect.botNameDefault':
+    'Defaults to the bot name + 6 random digits',
   'channels.connect.tokenRequired': 'Enter the bot token from BotFather.',
   'channels.connect.services': 'Services',
   'channels.connect.selected': '{count} selected',
@@ -117,7 +119,7 @@ export default {
   'channels.connect.error.services':
     'The selected services are no longer available. Review your selection and try again.',
   'channels.connect.error.skill':
-    'The Skill name could not be used. Check the name and your access in Ornn.',
+    'Could not configure the bot skill. Check the Channel name and your access in Ornn.',
   'channels.connect.error.authorization':
     'Your session or service access needs attention. Sign in again and review your NyxID access.',
   'channels.connect.error.conflict':
@@ -125,7 +127,7 @@ export default {
   'channels.connect.error.configuration':
     'Channel setup is unavailable. Ask your administrator to check the deployment configuration.',
   'channels.connect.error.rejected':
-    'Could not connect Telegram. Check the bot token, Skill name, and selected services, then try again.',
+    'Could not connect Telegram. Check the bot token, Channel name, and selected services, then try again.',
   'channels.connect.error.uncertain':
     'Could not confirm the connection. Please try again.',
   'channels.connect.discardTitle': 'Discard this connection setup?',

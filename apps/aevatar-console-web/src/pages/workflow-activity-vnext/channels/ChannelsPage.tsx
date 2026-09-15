@@ -22,23 +22,39 @@ import {
   InboundStatus,
   platformName,
 } from './presentation';
-import { useChannelRegistrations, useChannelStatus } from './queries';
+import {
+  channelKeys,
+  useChannelBotIdentities,
+  useChannelRegistrations,
+  useChannelStatus,
+} from './queries';
 import { channelsCss } from './styles';
 
-const platforms = ['lark', 'feishu', 'telegram', 'discord', 'slack'] as const;
+const platforms = ['telegram', 'whatsapp'] as const;
 
 function ConnectedRow({
   registration,
   scopeId,
+  label,
+  namePending,
 }: {
   readonly registration: ChannelRegistration;
   readonly scopeId: string;
+  readonly label: string | null;
+  readonly namePending: boolean;
 }) {
   const status = useChannelStatus(scopeId, registration.id);
   return (
     <tr>
+      <td data-label={t('channels.column.name', 'Channel name')}>
+        <ChannelIdentity
+          registration={registration}
+          label={label}
+          pending={namePending}
+        />
+      </td>
       <td data-label={t('channels.column.channel', 'Channel')}>
-        <ChannelIdentity registration={registration} />
+        {platformName(registration.platform)}
       </td>
       <td data-label={t('channels.column.skill', 'Skill')}>
         <ChannelSkill skill={registration.skill} />
@@ -77,9 +93,36 @@ export default function ChannelsPage({
   readonly scopeId: string;
 }) {
   const registrations = useChannelRegistrations(scopeId);
+  const hasBotIds = Boolean(registrations.data?.some((row) => row.botId));
+  const bots = useChannelBotIdentities(scopeId, hasBotIds);
   const toast = useConsoleToast();
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = React.useState(false);
+  const reportedNamesError = React.useRef(0);
+  React.useEffect(() => {
+    if (
+      refreshing ||
+      !bots.isError ||
+      bots.isFetching ||
+      bots.errorUpdatedAt === reportedNamesError.current
+    )
+      return;
+    reportedNamesError.current = bots.errorUpdatedAt;
+    if (!registrations.isError)
+      toast.error(
+        t(
+          'channels.error.names',
+          'Could not load channel names. Use Refresh to try again.',
+        ),
+      );
+  }, [
+    bots.errorUpdatedAt,
+    bots.isError,
+    bots.isFetching,
+    refreshing,
+    registrations.isError,
+    toast,
+  ]);
   async function refresh() {
     setRefreshing(true);
     try {
@@ -87,6 +130,10 @@ export default function ChannelsPage({
         registrations.refetch(),
         queryClient.refetchQueries({
           queryKey: ['channels', scopeId, 'status'],
+          type: 'active',
+        }),
+        queryClient.refetchQueries({
+          queryKey: channelKeys.bots(scopeId),
           type: 'active',
         }),
       ]);
@@ -142,12 +189,9 @@ export default function ChannelsPage({
                   {t(
                     `channels.platform.${platform}.description`,
                     {
-                      lark: 'Connect your bot to chats and groups.',
-                      feishu: 'Feishu, using the same local flow.',
                       telegram:
                         'Connect with a BotFather bot token. Webhook setup is handled for you.',
-                      discord: 'Server and direct-message support.',
-                      slack: 'Workspace bot support.',
+                      whatsapp: 'Chat with your bot on WhatsApp.',
                     }[platform],
                   )}
                 </p>
@@ -225,6 +269,7 @@ export default function ChannelsPage({
               <thead>
                 <tr>
                   {[
+                    ['name', 'Channel name'],
                     ['channel', 'Channel'],
                     ['skill', 'Skill'],
                     ['inbound', 'Inbound'],
@@ -243,6 +288,15 @@ export default function ChannelsPage({
                     key={registration.id}
                     registration={registration}
                     scopeId={scopeId}
+                    label={
+                      bots.data?.find(
+                        (bot) =>
+                          bot.id === registration.botId &&
+                          bot.platform.toLowerCase() ===
+                            registration.platform.toLowerCase(),
+                      )?.label ?? null
+                    }
+                    namePending={Boolean(registration.botId) && bots.isPending}
                   />
                 ))}
               </tbody>
