@@ -50,7 +50,7 @@ export default [
   },
   {
     path: '/scopes',
-    redirect: CONSOLE_HOME_ROUTE,
+    component: './scopes',
     hideInMenu: true,
   },
   {
@@ -85,6 +85,21 @@ export default [
   },
   {
     path: '/scopes/:scopeId/workflow-activity-vnext/activity/:runId',
+    component: './workflow-activity-vnext',
+    hideInMenu: true,
+  },
+  {
+    path: '/scopes/:scopeId/workflow-activity-vnext/channels',
+    component: './workflow-activity-vnext',
+    hideInMenu: true,
+  },
+  {
+    path: '/scopes/:scopeId/workflow-activity-vnext/channels/connect/telegram',
+    component: './workflow-activity-vnext',
+    hideInMenu: true,
+  },
+  {
+    path: '/scopes/:scopeId/workflow-activity-vnext/channels/:registrationId',
     component: './workflow-activity-vnext',
     hideInMenu: true,
   },
