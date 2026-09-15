@@ -11,12 +11,9 @@ export default {
   'channels.connect': 'Connect',
   'channels.connectPlatform': 'Connect {platform}',
   'channels.platform.feishu': 'Feishu',
-  'channels.platform.lark.description': 'Connect your bot to chats and groups.',
-  'channels.platform.feishu.description': 'Feishu, using the same local flow.',
   'channels.platform.telegram.description':
     'Connect with a BotFather bot token. Webhook setup is handled for you.',
-  'channels.platform.discord.description': 'Server and direct-message support.',
-  'channels.platform.slack.description': 'Workspace bot support.',
+  'channels.platform.whatsapp.description': 'Chat with your bot on WhatsApp.',
   'channels.connected': 'Connected',
   'channels.connectedDescription': 'Channels connected to your account.',
   'channels.bot': '{platform} bot',

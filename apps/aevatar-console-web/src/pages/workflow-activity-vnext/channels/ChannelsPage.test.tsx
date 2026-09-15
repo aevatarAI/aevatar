@@ -128,12 +128,16 @@ describe('Channel pages', () => {
       'href',
       '/scopes/scope-alpha/workflow-activity-vnext/channels/connect/telegram',
     );
+    const availableChannels = screen.getByRole('region', {
+      name: 'Available channels',
+    });
     expect(
-      screen.queryByRole('link', { name: 'Connect Lark' }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('link', { name: 'Connect Slack' }),
-    ).not.toBeInTheDocument();
+      within(availableChannels)
+        .getAllByRole('heading', { level: 3 })
+        .map((heading) => heading.textContent),
+    ).toEqual(['Telegram', 'WhatsApp']);
+    expect(within(availableChannels).getAllByRole('link')).toHaveLength(1);
+    expect(within(availableChannels).getAllByText('Soon')).toHaveLength(2);
     expect(screen.getByRole('link', { name: 'Channels' })).toHaveAttribute(
       'aria-current',
       'page',

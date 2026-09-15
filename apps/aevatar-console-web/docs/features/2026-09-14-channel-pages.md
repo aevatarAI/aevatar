@@ -30,7 +30,10 @@ missing IDs remain unlinked placeholders.
   connection details. Registration IDs are opaque and encoded as one segment.
 - `/scopes/:scopeId/workflow-activity-vnext/channels/connect/telegram`: the
   single-page Telegram connection form. Connect Telegram navigates here.
-  Lark, Feishu, Discord, and Slack are marked Soon in the current design.
+  The channel directory shows Telegram and WhatsApp only. WhatsApp replaces
+  the Lark/Feishu placeholders and is marked Soon without a connection action;
+  Discord and Slack placeholders are omitted. Existing connected records still
+  render the platform returned by the API.
   The older backend `/channels` onboarding page remains independently available.
 
 `AEVATAR_CHANNEL_WEBHOOK_BASE_URL` optionally sets the public backend callback

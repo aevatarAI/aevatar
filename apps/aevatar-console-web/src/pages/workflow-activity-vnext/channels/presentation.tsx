@@ -3,6 +3,7 @@ import {
   LinkOutlined,
   MessageOutlined,
   SendOutlined,
+  WhatsAppOutlined,
 } from '@ant-design/icons';
 import { Button } from 'antd';
 import * as React from 'react';
@@ -51,6 +52,8 @@ export function platformName(platform: string): string {
       return t('channels.platform.feishu', 'Feishu');
     case 'telegram':
       return 'Telegram';
+    case 'whatsapp':
+      return 'WhatsApp';
     case 'discord':
       return 'Discord';
     case 'slack':
@@ -68,6 +71,8 @@ export function ChannelIcon({ platform }: { readonly platform: string }) {
     >
       {platform === 'telegram' ? (
         <SendOutlined />
+      ) : platform === 'whatsapp' ? (
+        <WhatsAppOutlined />
       ) : ['lark', 'feishu', 'discord', 'slack'].includes(platform) ? (
         <MessageOutlined />
       ) : (

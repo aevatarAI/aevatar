@@ -25,7 +25,7 @@ import {
 import { useChannelRegistrations, useChannelStatus } from './queries';
 import { channelsCss } from './styles';
 
-const platforms = ['lark', 'feishu', 'telegram', 'discord', 'slack'] as const;
+const platforms = ['telegram', 'whatsapp'] as const;
 
 function ConnectedRow({
   registration,
@@ -142,12 +142,9 @@ export default function ChannelsPage({
                   {t(
                     `channels.platform.${platform}.description`,
                     {
-                      lark: 'Connect your bot to chats and groups.',
-                      feishu: 'Feishu, using the same local flow.',
                       telegram:
                         'Connect with a BotFather bot token. Webhook setup is handled for you.',
-                      discord: 'Server and direct-message support.',
-                      slack: 'Workspace bot support.',
+                      whatsapp: 'Chat with your bot on WhatsApp.',
                     }[platform],
                   )}
                 </p>

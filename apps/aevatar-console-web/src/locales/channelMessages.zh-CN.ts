@@ -9,12 +9,9 @@ export default {
   'channels.connect': '连接',
   'channels.connectPlatform': '连接 {platform}',
   'channels.platform.feishu': '飞书',
-  'channels.platform.lark.description': '将机器人接入聊天和群组。',
-  'channels.platform.feishu.description': '面向飞书的渠道接入。',
   'channels.platform.telegram.description':
     '使用 BotFather 机器人令牌接入，Webhook 自动配置。',
-  'channels.platform.discord.description': '支持服务器频道与私信。',
-  'channels.platform.slack.description': '工作区机器人支持。',
+  'channels.platform.whatsapp.description': '在 WhatsApp 中与你的机器人对话。',
   'channels.connected': '已连接',
   'channels.connectedDescription': '连接到你账户的渠道。',
   'channels.bot': '{platform} 机器人',
