@@ -58,8 +58,9 @@ describe('console routes', () => {
     expect(findRoute(routes, '/runtime/runs').menuGroupKey).toBe('platform');
     expect(findRoute(routes, '/scopes/overview').hideInMenu).toBe(true);
     expect(findRoute(routes, '/scopes').name).toBeUndefined();
-    expect(findRoute(routes, '/scopes').component).toBeUndefined();
-    for (const path of ['/', '/overview', '/scopes']) {
+    expect(findRoute(routes, '/scopes').component).toBe('./scopes');
+    expect(findRoute(routes, '/scopes').redirect).toBeUndefined();
+    for (const path of ['/', '/overview']) {
       expect(findRoute(routes, path).redirect).toBe(CONSOLE_HOME_ROUTE);
     }
     expect(findRoute(routes, '/workflows').component).toBe(
@@ -217,6 +218,9 @@ describe('console routes', () => {
       `${namespace}/workflows/:workflowId`,
       `${namespace}/activity`,
       `${namespace}/activity/:runId`,
+      `${namespace}/channels`,
+      `${namespace}/channels/connect/telegram`,
+      `${namespace}/channels/:registrationId`,
       `${namespace}/settings`,
     ];
 

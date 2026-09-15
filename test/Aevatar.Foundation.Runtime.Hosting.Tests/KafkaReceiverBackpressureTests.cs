@@ -539,6 +539,7 @@ public sealed class KafkaReceiverBackpressureTests(ITestOutputHelper output)
             harness.Consumer.AddRecord(0);
             harness.Consumer.AddRecord(1);
             await harness.Consumer.AwaitReturnedOffsetAsync(1);
+            await harness.Consumer.AwaitConsumeCountAsync(harness.Consumer.ConsumeCount + 1);
             var batches = (await harness.Receiver.GetQueueMessagesAsync(2))
                 .OfType<KafkaProviderBatchContainer>()
                 .ToDictionary(batch => batch.KafkaOffset);

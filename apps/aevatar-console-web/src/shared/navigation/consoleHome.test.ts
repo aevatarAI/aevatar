@@ -18,4 +18,10 @@ describe('consoleHome', () => {
     expect(module.getConsoleHomeRoute()).toBe(expectedRoute);
     expect(module.CONSOLE_HOME_ROUTE).toBe(expectedRoute);
   });
+
+  it('keeps the session scope resolver as a separate technical entry', () => {
+    const module = loadModule();
+
+    expect(module.CONSOLE_SCOPE_ENTRY_ROUTE).toBe('/scopes');
+  });
 });

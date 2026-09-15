@@ -1,10 +1,14 @@
+import channelMessages from './channelMessages.en-US';
 import projectMessages from './projectMessages.en-US';
 import workflowActivityVNextMessages from './workflowActivityVNextMessages.en-US';
 
 const enUSMessages = {
   ...projectMessages,
+  ...channelMessages,
   ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
+  'console.home.unavailable': 'Could not open your workspace',
+  'console.home.retry': 'Try again',
   'common.language.english': 'English',
   'common.language.label': 'Language',
   'common.language.switch': 'Switch language',

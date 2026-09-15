@@ -1,4 +1,8 @@
-export type WorkflowActivitySection = 'workflows' | 'activity' | 'settings';
+export type WorkflowActivitySection =
+  | 'workflows'
+  | 'activity'
+  | 'channels'
+  | 'settings';
 export type WorkflowActivitySettingsSection = 'ai' | 'account' | 'advanced';
 
 function encode(value: string): string {
@@ -71,4 +75,15 @@ export function buildWorkflowActivityRunHref(
   const base = `${buildWorkflowActivitySectionHref(scopeId, 'activity')}/${encode(runId)}`;
   const suffix = buildQuerySuffix(query);
   return suffix ? `${base}?${suffix}` : base;
+}
+
+export function buildChannelDetailsHref(
+  scopeId: string,
+  registrationId: string,
+): string {
+  return `${buildWorkflowActivitySectionHref(scopeId, 'channels')}/${encodeURIComponent(registrationId)}`;
+}
+
+export function buildTelegramConnectionHref(scopeId: string): string {
+  return `${buildWorkflowActivitySectionHref(scopeId, 'channels')}/connect/telegram`;
 }
