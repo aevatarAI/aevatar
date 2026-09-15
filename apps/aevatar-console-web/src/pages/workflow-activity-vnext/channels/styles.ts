@@ -60,9 +60,8 @@ export const channelsCss = `
 .channels__row-action { text-align: right; }
 .channels__manage { align-items: center; background: var(--wa-surface); border: 1px solid var(--wa-line); border-radius: var(--wa-radius); box-shadow: var(--channels-action-shadow); color: var(--wa-ink); display: inline-flex; font-size: 12px; font-weight: 500; gap: 8px; justify-content: center; min-height: var(--channels-action-height); padding: 0 12px; white-space: nowrap; }
 .channels__manage .anticon { font-size: 10px; }
-.channels__refresh.ant-btn { background: var(--wa-surface); border-color: var(--wa-line); box-shadow: var(--channels-action-shadow); flex: 0 0 auto; height: var(--channels-action-height); width: var(--channels-action-height); }
-.channels__manage:hover, .channels__refresh.ant-btn:not(:disabled):hover { background: var(--wa-blue-bg); border-color: var(--wa-blue); color: var(--wa-blue); }
-.channels__manage:active, .channels__refresh.ant-btn:not(:disabled):active { box-shadow: none; }
+.channels__manage:hover { background: var(--wa-blue-bg); border-color: var(--wa-blue); color: var(--wa-blue); }
+.channels__manage:active { box-shadow: none; }
 .channels__state { background: var(--wa-surface); border: 1px solid var(--channels-border); border-radius: var(--wa-radius); color: var(--wa-muted); padding: 36px var(--channels-space); text-align: center; }
 .channels__state h3 { color: var(--wa-ink); margin: 16px 0 8px; }
 .channels__state p { line-height: 20px; margin: 0 0 16px; }
