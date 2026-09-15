@@ -167,7 +167,10 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   );
 
   const finishSave = React.useCallback(
-    async (result: StudioWorkflowSaveResult, isCurrent = () => true) => {
+    async (
+      result: StudioWorkflowSaveResult,
+      isCurrent: () => boolean = () => true,
+    ) => {
       if (!isCurrent()) return;
       if (result.kind === 'materialized') {
         navigateToWorkflow(result.workflow.workflowId);
@@ -182,7 +185,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   const persistDraft = async (
     nextYaml: string,
     workflowName: string,
-    isCurrent = () => true,
+    isCurrent: () => boolean = () => true,
   ) => {
     if (!directoryId) {
       setFailure(

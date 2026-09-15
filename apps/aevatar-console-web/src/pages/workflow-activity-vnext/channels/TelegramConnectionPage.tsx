@@ -316,15 +316,13 @@ export default function TelegramConnectionPage({
           {[
             {
               id: 'telegram-label',
-              key: 'label',
-              title: 'Label',
+              title: t('channels.connect.label', 'Label'),
               value: label,
               change: setLabel,
             },
             {
               id: 'telegram-skill',
-              key: 'skillName',
-              title: 'Skill name',
+              title: t('channels.connect.skillName', 'Skill name'),
               value: skillName,
               change: setSkillName,
             },
@@ -332,7 +330,7 @@ export default function TelegramConnectionPage({
             <div className="channels__field" key={field.id}>
               <div className="channels__field-heading">
                 <label htmlFor={field.id}>
-                  {t(`channels.connect.${field.key}`, field.title)}{' '}
+                  {field.title}{' '}
                   <span>{t('channels.connect.optional', '(optional)')}</span>
                 </label>
               </div>
