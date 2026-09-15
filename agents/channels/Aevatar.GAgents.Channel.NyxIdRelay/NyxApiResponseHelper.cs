@@ -396,6 +396,21 @@ internal static class NyxApiResponseHelper
     public static string? SanitizeFailureDetail(Exception ex, string platform) =>
         ex is InvalidOperationException ? NormalizePublicFailureDetail(ex.Message, platform) : null;
 
+    public static string? NormalizePublicFailureDetailCode(string? detail)
+    {
+        var normalized = detail?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+            return null;
+
+        foreach (var publicDetail in PublicProvisioningFailureDetails)
+        {
+            if (string.Equals(normalized, publicDetail, StringComparison.Ordinal))
+                return publicDetail;
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Returns a stable client-visible detail for known channel registration failures only.
     /// Unknown provider bodies are intentionally omitted.
@@ -431,9 +446,9 @@ internal static class NyxApiResponseHelper
          reason.Contains("channel bot already exists", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsChannelBotLimitReached(string reason) =>
-        reason.Contains("nyx_status=429", StringComparison.Ordinal) ||
-        reason.Contains("limit reached", StringComparison.OrdinalIgnoreCase) ||
-        reason.Contains("quota", StringComparison.OrdinalIgnoreCase) ||
+        reason.Contains("channel bot limit reached", StringComparison.OrdinalIgnoreCase) ||
+        reason.Contains("channel-bot limit reached", StringComparison.OrdinalIgnoreCase) ||
+        reason.Contains("channel_bot_limit", StringComparison.OrdinalIgnoreCase) ||
         reason.Contains("maximum number of channel bots", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsTelegramBotCredentialRejected(string reason) =>
@@ -441,6 +456,13 @@ internal static class NyxApiResponseHelper
         reason.Contains("bot token", StringComparison.OrdinalIgnoreCase) ||
         reason.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
         reason.Contains("Not Found", StringComparison.OrdinalIgnoreCase);
+
+    private static readonly string[] PublicProvisioningFailureDetails =
+    [
+        "telegram_bot_credential_rejected",
+        "channel_bot_limit_reached",
+        "channel_bot_already_exists",
+    ];
 
     private static readonly string[] PublicProvisioningFailureCodes =
     [

@@ -610,7 +610,7 @@ const state = {
   platform:"lark",                    // active wizard platform (lark | telegram)
   step:1,                             // 1..5
   s:"idle",                           // idle | running | done | failed
-  err:null,                           // step2: 'auth' | '409' | 'cred' | 'infra' | 'other' | 'network'
+  err:null,                           // step2: 'auth' | '409' | 'cred' | 'limit' | 'infra' | 'other' | 'network'
   errMsg:null,
   cred:{ app_id:"", app_secret:"", verification_token:"", encrypt_key:"", bot_token:"", label:"" },
   reg:null,                           // last registration result
@@ -896,18 +896,27 @@ async function doRegister(){
     loadRegistrations();
     return;
   }
-  const errText = ((r.data && r.data.error) || "") + " " + ((r.data && r.data.note) || "");
+  const detail = (r.data && r.data.error_detail) || "";
+  const errText = detail + " " + ((r.data && r.data.error) || "") + " " + ((r.data && r.data.note) || "");
   state.err = classifyRegError(r.status, errText);
-  state.errMsg = (r.data && (r.data.error || r.data.note)) || ("HTTP " + r.status);
+  state.errMsg = registrationErrorMessage(r.data, r.status);
   state.s="failed"; render();
 }
 function classifyRegError(status, errText){
   const t=(errText||"").toLowerCase();
   if(status===401) return "auth";
-  if(t.includes("nyx_status=409") || t.includes("already")) return "409";
-  if(t.includes("nyx_status=401") || t.includes("nyx_status=400") || t.includes("secret") || t.includes("invalid")) return "cred";
+  if(t.includes("channel_bot_already_exists") || t.includes("nyx_status=409") || t.includes("already")) return "409";
+  if(t.includes("telegram_bot_credential_rejected") || t.includes("nyx_status=401") || t.includes("nyx_status=400") || t.includes("secret") || t.includes("invalid")) return "cred";
+  if(t.includes("channel_bot_limit_reached")) return "limit";
   if(t.includes("nyx_base_url")) return "infra";
   return "other";
+}
+function registrationErrorMessage(data, status){
+  const detail=(data && data.error_detail) || "";
+  if(detail==="telegram_bot_credential_rejected") return "Telegram bot token 校验失败，请回上一步检查 token 后重试。";
+  if(detail==="channel_bot_limit_reached") return "NyxID channel-bot 数量已达上限，请清理不用的 bot 后重试。";
+  if(detail==="channel_bot_already_exists") return "该 bot 已被接入。";
+  return (data && (data.error || data.note)) || ("HTTP " + status);
 }
 async function doDelete(regId){
   state.registrationActionError=null;
@@ -1424,7 +1433,10 @@ function renderStep2(){
     wrap.appendChild(regProgress(["run","run","run","run"]));
     wrap.appendChild(el("div",{class:"live-chip",style:"margin-top:8px"},`<span class="dot s-running"></span><span>正在调用 facade · POST /api/channels/registrations</span>`));
   } else if(state.s==="failed"){
-    if(state.err==="409"){
+    if(state.err==="limit"){
+      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">NyxID channel-bot 数量已达上限</span><div class="errnote mono">${esc(state.errMsg||"")}</div>请清理不用的 bot 后重试。</div>`));
+      wrap.appendChild(footer([ btn("重试","primary",ICON.refresh,doRegister), "spacer", btn("上一步","ghost",ICON.back,()=>{ goStep(1); }) ]));
+    } else if(state.err==="409"){
       const P=curP();
       const msg = P.consoleStep
         ? `同一个 app_id 在 NyxID 全局只能有一个 active channel-bot。可以删旧重建 —— 但<b>重建会换一个新的 bot_id 和 webhook_url</b>，你需要回 ${esc(P.connect)} 后台把回调地址改成新的。`

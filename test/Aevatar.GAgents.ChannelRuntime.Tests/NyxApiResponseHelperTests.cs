@@ -43,6 +43,7 @@ public class NyxApiResponseHelperTests
 
     [Theory]
     [InlineData("channel_bot_id_request_failed nyx_status=401 body=invalid app secret", "lark")]
+    [InlineData("channel_bot_id_request_failed nyx_status=429 body=rate limited", "lark")]
     [InlineData("conversation_route_id_request_failed nyx_status=429 body=route limit reached", "telegram")]
     [InlineData("not-json provider-echoed-secret-value", "telegram")]
     [InlineData("", "telegram")]

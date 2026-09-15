@@ -199,9 +199,8 @@ public sealed class ChannelRelayRegistrationFacade
             return result;
 
         var failureReason = NyxApiResponseHelper.NormalizePublicFailureReason(result.Error);
-        var failureDetail = string.IsNullOrWhiteSpace(result.ErrorDetail)
-            ? NyxApiResponseHelper.NormalizePublicFailureDetail(result.Error, result.Platform)
-            : result.ErrorDetail.Trim();
+        var failureDetail = NyxApiResponseHelper.NormalizePublicFailureDetail(result.Error, result.Platform) ??
+            NyxApiResponseHelper.NormalizePublicFailureDetailCode(result.ErrorDetail);
         return result with { Error = failureReason, ErrorDetail = failureDetail };
     }
 
