@@ -1,5 +1,7 @@
+import { ensureActiveAuthSession } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { authFetch } from '@/shared/auth/fetch';
+import { readAccessTokenServiceGrants } from '@/shared/auth/serviceGrants';
 import { ChannelApiError } from './channelsApi';
 import {
   expectArray,
@@ -27,8 +29,8 @@ function decodeService(value: unknown): ChannelServiceChoice {
   if (!id.trim() || !slug.trim()) throw new Error('Missing service identity.');
   const personal = source.type === 'personal';
   const organization = source.type === 'org';
-  // Only the documented personal variant has implicit permission. Unknown
-  // variants and organization rows without allowed=true cannot be selected.
+  // This is account-level availability only. Current bearer access is checked
+  // separately against the current access token before returning choices.
   return {
     id,
     slug,
@@ -51,14 +53,32 @@ export async function listChannelServices(
   const config = getNyxIDRuntimeConfig();
   if (config.configurationError || !config.baseUrl)
     throw new Error('NyxID is unavailable.');
+  const session = await ensureActiveAuthSession();
+  if (!session) throw new ChannelApiError(401);
+  const grants = readAccessTokenServiceGrants(
+    session.tokens.accessToken,
+    session.user.sub,
+  );
   const response = await authFetch(`${config.baseUrl}/api/v1/user-services`, {
     signal,
-    headers: { Accept: 'application/json' },
+    credentials: 'omit',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+      // Pin the inventory to the exact bearer whose grants were read above.
+      Authorization: `Bearer ${session.tokens.accessToken}`,
+    },
   });
   if (!response.ok) throw new ChannelApiError(response.status);
   const body = expectRecord(await response.json(), 'User services');
+  const authorizedIds = new Set(grants.allowedServiceIds);
   const services = expectArray(body.services, 'User services', decodeService);
   if (new Set(services.map((service) => service.id)).size !== services.length)
     throw new Error('Ambiguous user service identity.');
-  return services;
+  return services.filter(
+    (service) =>
+      service.active &&
+      service.allowed &&
+      (grants.allowAllServices || authorizedIds.has(service.id)),
+  );
 }

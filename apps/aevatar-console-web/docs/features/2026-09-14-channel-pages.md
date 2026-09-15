@@ -50,13 +50,41 @@ and the authenticated registration POST. It stays in component memory for a
 manual retry after failure and clears after successful admission. No registration
 mutation cache stores it.
 
-Services come from the current NyxID session's
-`GET /api/v1/user-services`, resolved against the existing NyxID authority.
-Its `{services: [...]}` response differs from the Aevatar runtime-config
-inventory: it uses `is_active` and `credential_source.type` (`personal` or
-`org`, with an `allowed` flag on the organization variant). Unknown variants,
-inactive services, and disallowed organization services cannot be selected.
-Only safe display fields enter the query cache.
+Services use the current NyxID session's complete `GET /api/v1/user-services`
+inventory and its exact bearer service grants. The account inventory includes
+HTTP tools and LLM services; personal ownership alone does not establish that
+the current Aevatar session can grant a service to a bot.
+
+The existing session helper refreshes an expired session before selection.
+The auth adapter reads `allow_all_services` and `allowed_service_ids` from that
+access token. Explicit `true` permits all active, account-accessible UserServices;
+explicit `false` permits only exact IDs in the list, including an empty grant.
+Inactive services, disallowed organization memberships and unknown credential
+sources remain excluded. Names, slugs, catalog IDs and credential IDs never
+substitute for `UserService.id`. No service type is excluded: an authorized LLM
+service such as Chrono Public remains selectable even without MCP operations.
+
+These claims are used only for display filtering, not as client-side signature
+verification or proof that registration will succeed. The inventory request is
+pinned to the exact bearer used for filtering; NyxID authenticates it and the
+registration backend enforces delegation limits. Unsupported/malformed claims,
+a mismatched account subject, an expired JWT or a failed inventory read leave
+the picker in a retryable error state. There is no allow-all fallback when
+claims are absent. Token/parser errors are sanitized, and token/claim payloads
+never enter the query cache. Only the filtered safe display fields are retained.
+
+Do not substitute `/api/v1/mcp/config` for this authorization list: its documented
+contract describes executable tool operations and omits LLM services and some
+services with unavailable runtime routes. `/api/v1/llm/status` is also not an
+exact current-bearer grant inventory, and account consent records may differ
+from the current token's resource restrictions. The NyxID access-token producer
+in `backend/src/crypto/jwt.rs` emits explicit service grants for OAuth clients;
+`backend/src/mw/auth.rs` consumes the same fields for service authorization.
+
+The inventory read omits browser cookies and bypasses HTTP caching. It runs on
+entry and explicit recovery only; no polling, window-focus or reconnect refresh
+is added. A bearer with only some account services authorized sees only that
+subset, across HTTP and LLM service types.
 
 Options use label, then catalog service name, then slug. Search matches label
 or slug and preserves selections outside the current search. A Select all
@@ -68,8 +96,11 @@ Each selection uses the exact `services[].id`; no default selection is made.
 The registration POST always supplies `authorization_mode: explicit_service_allowlist` and
 `service_ids`, including `[]` for no service access. It never substitutes a
 slug, endpoint ID, API key ID, or omitted field. If a selected service becomes
-unavailable, submission is blocked until it is deselected. Load failure has
-inline retry, while a genuine empty inventory can connect without service access.
+unavailable after an explicit recovery read, it is removed from the selection.
+Submission waits while access is being rechecked, preventing stale hidden IDs
+from entering a retry. Load failure has inline retry; an empty authorized list
+can connect with an explicit empty service allowlist even if the account owns
+other services.
 
 Registration uses existing `POST /api/channels/registrations` with
 `platform`, `bot_token`, `label`, `default_skill_name`, `webhook_base_url`, and
@@ -81,7 +112,7 @@ acceptance or after a failed submission. Accepted registration triggers one
 list read; if it is not visible yet, Check again performs one GET. No polling,
 window-focus refresh, or reconnect refresh runs. Registration failures, including
 504 and network errors, show a shared error toast and restore editable fields and Connect
-Telegram. Inputs and service selections are preserved for an explicit manual
+Telegram. Inputs and still-authorized selections are preserved for an explicit manual
 retry; no automatic registration retry runs. An in-flight request still blocks
 duplicate clicks, and an accepted registration stays locked during observation.
 

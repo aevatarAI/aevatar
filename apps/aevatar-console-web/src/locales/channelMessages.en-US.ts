@@ -91,12 +91,12 @@ export default {
   'channels.connect.selectAll': 'Select all',
   'channels.connect.selectAllResults': 'Select all results',
   'channels.connect.servicesHelp':
-    'Select the services this bot can use from your NyxID account.',
+    'Only services available through your current NyxID authorization are shown.',
   'channels.connect.servicesLoading': 'Loading services',
   'channels.connect.servicesError':
     'Could not load your services. Retry before connecting.',
   'channels.connect.servicesEmpty':
-    'No services are available in your NyxID account. You can connect this bot without service access.',
+    'No services are available with your current NyxID authorization. You can connect this bot without service access.',
   'channels.connect.searchServices': 'Search services by name or slug',
   'channels.connect.serviceUnavailable': 'Unavailable',
   'channels.connect.personal': 'Personal',

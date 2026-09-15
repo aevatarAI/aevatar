@@ -8,14 +8,19 @@ import {
 } from '@testing-library/react';
 import * as React from 'react';
 import { authFetch } from '@/shared/auth/fetch';
+import { persistAuthSession } from '@/shared/auth/session';
 import { history } from '@/shared/navigation/history';
+import { createNyxIDServiceSession } from '../../../../tests/fixtures/nyxidServiceSession';
 import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
 import WorkflowActivityVNextPage from '../index';
 import TelegramConnectionPage from './TelegramConnectionPage';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
 jest.mock('@/shared/auth/config', () => ({
-  getNyxIDRuntimeConfig: () => ({ baseUrl: 'https://nyx.example.test' }),
+  getNyxIDRuntimeConfig: () => ({
+    baseUrl: 'https://nyx.example.test',
+    enabled: true,
+  }),
 }));
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
@@ -54,6 +59,7 @@ function enterNames() {
 }
 beforeEach(() => {
   fetchMock.mockReset();
+  persistAuthSession(createNyxIDServiceSession());
   telegramFetch.mockReset();
   global.fetch = telegramFetch;
   jest.spyOn(history, 'push').mockImplementation(() => {});
@@ -144,6 +150,18 @@ it('searches services, enforces permissions, submits selected IDs once and waits
           service,
           {
             ...service,
+            id: 'user-service-model',
+            slug: 'chrono-llm-public',
+            label: 'Chrono Public',
+            service_type: 'llm',
+          },
+          {
+            ...service,
+            id: 'user-service-ungranted',
+            label: 'GitHub not authorized',
+          },
+          {
+            ...service,
             id: 'user-service-org',
             slug: 'slack',
             label: 'Team Slack',
@@ -180,8 +198,16 @@ it('searches services, enforces permissions, submits selected IDs once and waits
   expect(
     await screen.findByRole('checkbox', { name: /GitHub work/ }),
   ).not.toBeChecked();
-  expect(screen.getByRole('checkbox', { name: /Team Slack/ })).toBeDisabled();
-  expect(screen.getByRole('checkbox', { name: /Drive/ })).toBeDisabled();
+  expect(
+    screen.queryByRole('checkbox', { name: /Team Slack/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('checkbox', { name: /Drive/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('checkbox', { name: /GitHub not authorized/ }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole('checkbox', { name: /Chrono Public/ })).toBeEnabled();
   fireEvent.click(screen.getByRole('checkbox', { name: 'Select all' }));
   fireEvent.change(
     screen.getByRole('textbox', { name: 'Search services by name or slug' }),
@@ -190,7 +216,7 @@ it('searches services, enforces permissions, submits selected IDs once and waits
   expect(
     screen.queryByRole('checkbox', { name: /GitHub work/ }),
   ).not.toBeInTheDocument();
-  expect(screen.getByText('1 selected')).toBeInTheDocument();
+  expect(screen.getByText('2 selected')).toBeInTheDocument();
   enterNames();
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
   fireEvent.submit(screen.getByRole('form', { name: 'Connect Telegram' }));
@@ -208,7 +234,7 @@ it('searches services, enforces permissions, submits selected IDs once and waits
     label: 'My team bot',
     default_skill_name: 'review.skill',
     authorization_mode: 'explicit_service_allowlist',
-    service_ids: ['user-service-github'],
+    service_ids: ['user-service-github', 'user-service-model'],
     webhook_base_url: 'https://aevatar-console-backend-api.aevatar.ai',
   });
   await act(async () =>
@@ -257,12 +283,21 @@ it('searches services, enforces permissions, submits selected IDs once and waits
 });
 
 it('selects and clears available results while preserving selections outside the search', async () => {
-  fetchMock.mockResolvedValue(
+  fetchMock.mockImplementation(async () =>
     response({
       services: [
         service,
-        { ...service, id: 'user-service-personal', label: 'GitHub personal' },
-        { ...service, id: 'user-service-slack', label: 'Slack', slug: 'slack' },
+        {
+          ...service,
+          id: 'user-service-personal',
+          label: 'GitHub personal',
+        },
+        {
+          ...service,
+          id: 'user-service-slack',
+          label: 'Slack',
+          slug: 'slack',
+        },
         { ...service, id: 'inactive', label: 'Inactive', is_active: false },
         {
           ...service,
@@ -282,8 +317,7 @@ it('selects and clears available results while preserving selections outside the
   expect(all).toBeChecked();
   expect(screen.getByText('3 selected')).toBeInTheDocument();
   for (const name of [/Inactive/, /Denied/]) {
-    expect(screen.getByRole('checkbox', { name })).toBeDisabled();
-    expect(screen.getByRole('checkbox', { name })).not.toBeChecked();
+    expect(screen.queryByRole('checkbox', { name })).not.toBeInTheDocument();
   }
   fireEvent.click(all);
   expect(screen.getByText('0 selected')).toBeInTheDocument();
@@ -309,7 +343,8 @@ it('selects and clears available results while preserving selections outside the
   ).toBePartiallyChecked();
 });
 
-it('recovers service loading failure, requires only a token and defaults optional names with no service access', async () => {
+it('recovers inventory failure and defaults optional names with an explicitly empty service grant', async () => {
+  persistAuthSession(createNyxIDServiceSession({ allowed_service_ids: [] }));
   let serviceReads = 0;
   telegramFetch.mockResolvedValue(
     response({
@@ -325,7 +360,7 @@ it('recovers service loading failure, requires only a token and defaults optiona
     if (input === servicePath)
       return ++serviceReads === 1
         ? response({}, 503)
-        : response({ services: [] });
+        : response({ services: [service] });
     if (init?.method === 'POST')
       return response(
         { error: 'missing_bot_token', note: 'TEST_ONLY_SECRET' },
@@ -500,6 +535,61 @@ it.each([
       'Telegram added. Send your bot a message to get started.',
     ),
   ).toBeInTheDocument();
+});
+
+it('removes revoked selections after a rejected submission and allows a retry with the remaining grants', async () => {
+  let attempted = false;
+  let resolveInventory!: (value: Response) => void;
+  const updatedInventory = new Promise<Response>((resolve) => {
+    resolveInventory = resolve;
+  });
+  fetchMock.mockImplementation(async (input, init) => {
+    if (input === servicePath)
+      return attempted ? updatedInventory : response({ services: [service] });
+    if (init?.method === 'POST') {
+      attempted = true;
+      persistAuthSession(
+        createNyxIDServiceSession({ allowed_service_ids: [] }),
+      );
+      return response({ error: 'invalid_service_ids' }, 400);
+    }
+    return response([]);
+  });
+  renderWithQueryClient(<TelegramConnectionPage scopeId="scope-alpha" />);
+  fireEvent.click(await screen.findByRole('checkbox', { name: /GitHub work/ }));
+  enterNames();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+  await screen.findByText(
+    'The selected services are no longer available. Review your selection and try again.',
+  );
+  expect(
+    screen.getByRole('button', { name: 'Connect Telegram' }),
+  ).toBeDisabled();
+  // An old selection cannot be submitted while its replacement is pending.
+  fireEvent.submit(screen.getByRole('form', { name: 'Connect Telegram' }));
+  expect(
+    fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+  ).toHaveLength(1);
+  await act(async () => resolveInventory(response({ services: [service] })));
+  await screen.findByText(/No services are available/);
+  expect(
+    screen.queryByRole('checkbox', { name: /GitHub work/ }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText('0 selected')).toBeInTheDocument();
+  expect(screen.getByLabelText(/^Bot token/)).toHaveValue('TEST_ONLY_TOKEN');
+  expect(
+    screen.getByRole('button', { name: 'Connect Telegram' }),
+  ).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+  await waitFor(() =>
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST'),
+    ).toHaveLength(2),
+  );
+  const posts = fetchMock.mock.calls.filter(
+    ([, init]) => init?.method === 'POST',
+  );
+  expect(JSON.parse(String(posts[1][1]?.body)).service_ids).toEqual([]);
 });
 
 it('confirms discarding an edited setup without issuing a registration request', async () => {

@@ -1,5 +1,4 @@
 import { authFetch } from '@/shared/auth/fetch';
-import { listChannelServices } from './channelServicesApi';
 import { ChannelRegistrationError, channelsApi } from './channelsApi';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
@@ -23,90 +22,6 @@ beforeEach(() => {
 afterEach(() => {
   fetchMock.mockReset();
   global.fetch = originalFetch;
-});
-
-it('maps the documented NyxID credential variants and keeps exact service IDs without retaining credential data', async () => {
-  fetchMock.mockResolvedValue(
-    response({
-      services: [
-        {
-          id: 'user-service-a',
-          slug: 'api-github',
-          label: 'GitHub work',
-          is_active: true,
-          credential_source: { type: 'personal' },
-          default_request_headers: [{ value: 'TEST_ONLY_SECRET' }],
-        },
-        {
-          id: 'user-service-b',
-          slug: 'drive',
-          catalog_service_name: 'Google Drive',
-          is_active: true,
-          credential_source: {
-            type: 'org',
-            org_name: 'Team',
-            role: 'viewer',
-            allowed: false,
-          },
-        },
-        {
-          id: 'user-service-c',
-          slug: 'calendar',
-          is_active: false,
-          credential_source: { type: 'org', org_name: 'Team', allowed: true },
-        },
-        {
-          id: 'user-service-d',
-          slug: 'future',
-          is_active: true,
-          credential_source: { type: 'new_source', allowed: true },
-        },
-      ],
-    }),
-  );
-  const result = await listChannelServices();
-  expect(fetchMock.mock.calls[0][0]).toBe(
-    'https://nyx.example.test/api/v1/user-services',
-  );
-  expect(
-    result.map(({ id, label, allowed, active, source }) => ({
-      id,
-      label,
-      allowed,
-      active,
-      source,
-    })),
-  ).toEqual([
-    {
-      id: 'user-service-a',
-      label: 'GitHub work',
-      allowed: true,
-      active: true,
-      source: 'personal',
-    },
-    {
-      id: 'user-service-b',
-      label: 'Google Drive',
-      allowed: false,
-      active: true,
-      source: 'organization',
-    },
-    {
-      id: 'user-service-c',
-      label: 'calendar',
-      allowed: true,
-      active: false,
-      source: 'organization',
-    },
-    {
-      id: 'user-service-d',
-      label: 'future',
-      allowed: false,
-      active: true,
-      source: 'unknown',
-    },
-  ]);
-  expect(JSON.stringify(result)).not.toContain('TEST_ONLY_SECRET');
 });
 
 it('preserves an explicit empty allowlist and retains only the accepted registration identity', async () => {

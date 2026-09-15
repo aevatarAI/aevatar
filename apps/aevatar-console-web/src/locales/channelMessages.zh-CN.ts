@@ -84,12 +84,11 @@ export default {
   'channels.connect.selected': '已选 {count} 项',
   'channels.connect.selectAll': '全选',
   'channels.connect.selectAllResults': '全选搜索结果',
-  'channels.connect.servicesHelp':
-    '从你的 NyxID 账户中选择此机器人可以使用的服务。',
+  'channels.connect.servicesHelp': '仅显示当前 NyxID 授权范围内可用的服务。',
   'channels.connect.servicesLoading': '正在加载服务',
   'channels.connect.servicesError': '无法加载服务，请重试后再连接。',
   'channels.connect.servicesEmpty':
-    '你的 NyxID 账户暂无可用服务。可以连接机器人，但不授予服务访问权限。',
+    '当前 NyxID 授权范围内暂无可用服务。可以连接机器人，但不授予服务访问权限。',
   'channels.connect.searchServices': '按名称或标识搜索服务',
   'channels.connect.serviceUnavailable': '不可用',
   'channels.connect.personal': '个人',
