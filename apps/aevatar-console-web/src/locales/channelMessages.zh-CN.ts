@@ -78,7 +78,7 @@ export default {
   'channels.connect.botFather': '从 BotFather 获取令牌',
   'channels.connect.name': 'Channel 名字',
   'channels.connect.optional': '（可选）',
-  'channels.connect.botNameDefault': '默认使用 Telegram 机器人名称',
+  'channels.connect.botNameDefault': '默认使用机器人名字 + 6 位随机数字',
   'channels.connect.tokenRequired': '请输入从 BotFather 获取的机器人令牌。',
   'channels.connect.services': '服务',
   'channels.connect.selected': '已选 {count} 项',

@@ -138,7 +138,10 @@ The optional Channel name is the only naming decision. The registration adapter
 trims it and sends the same resolved value as both `label` and
 `default_skill_name`. A nonblank custom name bypasses Telegram name lookup.
 When blank or omitted, the adapter calls Telegram's official `getMe` endpoint
-once and uses the bot's `first_name`, never its `username`, for both fields.
+once and appends a hyphen plus six random digits to the bot's trimmed
+`first_name`, never its `username` (for example, `My Bot-482731`). The suffix is
+generated in the frontend once per submission, in the range 100000–999999, and
+the same generated name is sent in both fields. Custom names receive no suffix.
 The form locks during lookup/submission and preserves its input after failure;
 a manual retry resolves the current token/name again.
 

@@ -397,16 +397,15 @@ it('recovers inventory failure and defaults optional names with an explicitly em
       'Check the bot token from BotFather and try again.',
     ),
   ).toBeInTheDocument();
-  expect(
-    JSON.parse(
-      String(
-        fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')?.[1]
-          ?.body,
-      ),
+  const payload = JSON.parse(
+    String(
+      fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')?.[1]
+        ?.body,
     ),
-  ).toMatchObject({
-    label: 'My Telegram Bot',
-    default_skill_name: 'My Telegram Bot',
+  );
+  expect(payload).toMatchObject({
+    label: expect.stringMatching(/^My Telegram Bot-[1-9]\d{5}$/),
+    default_skill_name: payload.label,
     service_ids: [],
   });
   expect(screen.getByLabelText(/^Bot token/)).toHaveValue(telegramToken);
