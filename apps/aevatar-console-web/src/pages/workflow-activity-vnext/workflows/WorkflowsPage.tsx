@@ -35,12 +35,8 @@ import {
 import TableScrollRegion from '../TableScrollRegion';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import WorkflowScheduleSurface from './WorkflowScheduleSurface';
-import {
-  canArchiveWorkflow,
-  isWorkflowArchived,
-  observeWorkflowArchival,
-} from './workflowArchival';
-import { observeWorkflowRemoval } from './workflowRemoval';
+import { canArchiveWorkflow, isWorkflowArchived } from './workflowArchival';
+import WorkflowMutationDialog from './WorkflowMutationDialog';
 
 type WorkflowRow = {
   readonly activeRevisionId: string;
@@ -71,36 +67,6 @@ function toWorkflowRow(item: ScopeWorkflowCatalogueRow): WorkflowRow {
     updatedAtUtc: item.updatedAtUtc,
     workflowId: item.workflowId,
   };
-}
-
-async function readWorkflowCatalogueMatch(
-  scopeId: string,
-  view: ScopeWorkflowCatalogueView,
-  workflowId: string,
-): Promise<readonly WorkflowRow[]> {
-  let cursor: string | undefined;
-  const visitedCursors = new Set<string>();
-
-  do {
-    const response = await scopesApi.queryWorkflowCatalogue({
-      scopeId,
-      view,
-      query: workflowId,
-      cursor,
-      take: 100,
-    });
-    const target = response.items.find(
-      (item) => item.workflowId === workflowId,
-    );
-    if (target) return [toWorkflowRow(target)];
-
-    const nextCursor = response.nextPageToken ?? undefined;
-    if (!nextCursor || visitedCursors.has(nextCursor)) return [];
-    visitedCursors.add(nextCursor);
-    cursor = nextCursor;
-  } while (cursor);
-
-  return [];
 }
 
 function readWorkflowView(params: URLSearchParams): ScopeWorkflowCatalogueView {
@@ -156,25 +122,17 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
   const [view, setView] = React.useState<ScopeWorkflowCatalogueView>(
     readWorkflowView(initialParams),
   );
-  const [archiveTarget, setArchiveTarget] = React.useState<WorkflowRow | null>(
-    null,
-  );
-  const [archiving, setArchiving] = React.useState(false);
-  const [archiveSubmitted, setArchiveSubmitted] = React.useState(false);
-  const [archivePhase, setArchivePhase] = React.useState<
-    'delayed' | 'failed' | 'idle'
-  >('idle');
+  const [mutationTarget, setMutationTarget] = React.useState<{
+    readonly scopeId: string;
+    readonly kind: 'archive' | 'delete';
+    readonly row: WorkflowRow;
+  } | null>(null);
+  const [mutationOpen, setMutationOpen] = React.useState(false);
   const [renameTarget, setRenameTarget] = React.useState<WorkflowRow | null>(
     null,
   );
   const [renameName, setRenameName] = React.useState('');
   const [renaming, setRenaming] = React.useState(false);
-  const [deleteTarget, setDeleteTarget] = React.useState<WorkflowRow | null>(
-    null,
-  );
-  const [deleteFailed, setDeleteFailed] = React.useState(false);
-  const [deleteSucceeded, setDeleteSucceeded] = React.useState(false);
-  const [deleting, setDeleting] = React.useState(false);
   const [scheduleTarget, setScheduleTarget] =
     React.useState<WorkflowRow | null>(null);
   const catalogue = useInfiniteQuery({
@@ -368,133 +326,9 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
     }
   };
 
-  const openArchive = (row: WorkflowRow) => {
-    setArchiveTarget(row);
-    setArchiveSubmitted(false);
-    setArchivePhase('idle');
-  };
-
-  const closeArchive = () => {
-    if (archiving) return;
-    setArchiveTarget(null);
-    setArchiveSubmitted(false);
-    setArchivePhase('idle');
-  };
-
-  const confirmArchive = async () => {
-    if (!archiveTarget || archiving) return;
-    const target = archiveTarget;
-    let accepted = archiveSubmitted;
-    setArchiving(true);
-    setArchivePhase('idle');
-
-    try {
-      if (!accepted) {
-        await scopesApi.archiveWorkflow(scopeId, target.workflowId);
-        accepted = true;
-        setArchiveSubmitted(true);
-      }
-
-      const observation = await observeWorkflowArchival({
-        readWorkflows: () =>
-          readWorkflowCatalogueMatch(scopeId, 'archived', target.workflowId),
-        workflowId: target.workflowId,
-      });
-      if (observation.kind === 'delayed') {
-        setArchivePhase('delayed');
-        return;
-      }
-
-      await catalogue.refetch();
-      setArchiveTarget(null);
-      setArchiveSubmitted(false);
-      setArchivePhase('idle');
-      toast.success(
-        t(
-          'workflowActivityVNext.workflows.archiveSuccess',
-          'Workflow archived',
-        ),
-      );
-    } catch {
-      if (accepted) {
-        setArchivePhase('delayed');
-      } else {
-        setArchivePhase('failed');
-        toast.error(
-          t(
-            'workflowActivityVNext.workflows.archiveFailed',
-            "Workflow couldn't be archived",
-          ),
-        );
-      }
-    } finally {
-      setArchiving(false);
-    }
-  };
-
-  const closeDelete = () => {
-    if (deleting) return;
-    setDeleteTarget(null);
-    setDeleteFailed(false);
-    setDeleteSucceeded(false);
-  };
-
-  const confirmDelete = async () => {
-    if (!deleteTarget || deleting) return;
-    setDeleting(true);
-    setDeleteFailed(false);
-    let removed = deleteSucceeded;
-    try {
-      if (!removed) {
-        try {
-          await studioApi.deleteWorkflowDraft(deleteTarget.workflowId, scopeId);
-          removed = true;
-          setDeleteSucceeded(true);
-        } catch (error) {
-          if (!isStudioApiStatus(error, 404)) throw error;
-          removed = true;
-          setDeleteSucceeded(true);
-        }
-      }
-
-      const observation = await observeWorkflowRemoval({
-        readWorkflows: () =>
-          readWorkflowCatalogueMatch(scopeId, 'all', deleteTarget.workflowId),
-        workflowId: deleteTarget.workflowId,
-      });
-      if (observation.kind === 'delayed') {
-        toast.error(
-          t(
-            'workflowActivityVNext.workflows.deleteObservationDelayed',
-            'Draft was deleted, but the workflow catalogue has not confirmed its removal yet',
-          ),
-        );
-        setDeleteFailed(true);
-        setDeleteSucceeded(true);
-        return;
-      }
-
-      const refreshed = await catalogue.refetch();
-      if (refreshed.isError) throw refreshed.error;
-      setDeleteTarget(null);
-      setDeleteSucceeded(false);
-    } catch {
-      toast.error(
-        removed
-          ? t(
-              'workflowActivityVNext.workflows.deleteRefreshFailed',
-              'Draft was deleted, but the workflow list could not refresh. Please try again.',
-            )
-          : t(
-              'workflowActivityVNext.workflows.deleteFailed',
-              "Draft couldn't be deleted",
-            ),
-      );
-      setDeleteFailed(true);
-      setDeleteSucceeded(removed);
-    } finally {
-      setDeleting(false);
-    }
+  const openMutation = (kind: 'archive' | 'delete', row: WorkflowRow) => {
+    setMutationTarget({ scopeId, kind, row });
+    setMutationOpen(true);
   };
 
   return (
@@ -584,6 +418,19 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         </Space>
       </div>
 
+      {!loading && catalogue.isRefetchError ? (
+        <Space className="wa-vnext__list-feedback" role="status" wrap>
+          <span>
+            {t(
+              'workflowActivityVNext.workflows.refreshFailed',
+              "The workflow list couldn't refresh. The last loaded list is still shown.",
+            )}
+          </span>
+          <Button onClick={retry}>
+            {t('workflowActivityVNext.common.retry', 'Retry')}
+          </Button>
+        </Space>
+      ) : null}
       {loading ? (
         <AevatarContentSkeleton
           ariaLabel={t(
@@ -937,11 +784,10 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
                               if (key === 'copy-reference')
                                 void copyWorkflowReference(row);
                               if (key === 'delete') {
-                                setDeleteTarget(row);
-                                setDeleteFailed(false);
-                                setDeleteSucceeded(false);
+                                openMutation('delete', row);
                               }
-                              if (key === 'archive') openArchive(row);
+                              if (key === 'archive')
+                                openMutation('archive', row);
                             },
                           }}
                           placement="bottomRight"
@@ -985,61 +831,6 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
         </div>
       ) : null}
       <Modal
-        cancelButtonProps={{ disabled: archiving }}
-        cancelText={t('workflowActivityVNext.common.cancel', 'Cancel')}
-        closable={!archiving}
-        confirmLoading={archiving}
-        destroyOnHidden
-        keyboard={!archiving}
-        mask={{ closable: false }}
-        okButtonProps={{ danger: true }}
-        okText={
-          archivePhase === 'delayed'
-            ? t(
-                'workflowActivityVNext.workflows.archiveCheckAgain',
-                'Check again',
-              )
-            : archivePhase === 'failed'
-              ? t(
-                  'workflowActivityVNext.workflows.archiveTryAgain',
-                  'Try again',
-                )
-              : t(
-                  'workflowActivityVNext.workflows.archiveConfirm',
-                  'Archive workflow',
-                )
-        }
-        onCancel={closeArchive}
-        onOk={() => void confirmArchive()}
-        open={Boolean(archiveTarget)}
-        title={t(
-          'workflowActivityVNext.workflows.archiveTitle',
-          'Archive this workflow?',
-        )}
-      >
-        <p>
-          {t(
-            'workflowActivityVNext.workflows.archiveDescription',
-            'This stops new runs for the published workflow. Its editable draft, published revisions, and Activity history remain available. Publishing it again restores it.',
-          )}
-        </p>
-        {archivePhase === 'failed' ? (
-          <p className="wa-vnext__duplicate-warning" role="alert">
-            {t(
-              'workflowActivityVNext.workflows.archiveFailed',
-              "Workflow couldn't be archived",
-            )}
-          </p>
-        ) : archivePhase === 'delayed' ? (
-          <p className="wa-vnext__duplicate-warning" role="status">
-            {t(
-              'workflowActivityVNext.workflows.archiveDelayed',
-              "Archive was accepted, but it hasn't been confirmed yet",
-            )}
-          </p>
-        ) : null}
-      </Modal>
-      <Modal
         cancelText={t('workflowActivityVNext.common.cancel', 'Cancel')}
         closable={!renaming}
         confirmLoading={renaming}
@@ -1075,32 +866,21 @@ const WorkflowsPage: React.FC<{ readonly scopeId: string }> = ({ scopeId }) => {
           </p>
         ) : null}
       </Modal>
-      <Modal
-        cancelText={t('workflowActivityVNext.common.cancel', 'Cancel')}
-        closable={!deleting}
-        confirmLoading={deleting}
-        mask={{ closable: false }}
-        okButtonProps={{ danger: true }}
-        okText={
-          deleteFailed
-            ? t('workflowActivityVNext.workflows.deleteRetry', 'Try again')
-            : t('workflowActivityVNext.workflows.deleteDraft', 'Delete draft')
-        }
-        onCancel={closeDelete}
-        onOk={() => void confirmDelete()}
-        open={Boolean(deleteTarget)}
-        title={t(
-          'workflowActivityVNext.workflows.deleteTitle',
-          'Delete editable draft?',
-        )}
-      >
-        <p>
-          {t(
-            'workflowActivityVNext.workflows.deleteDescription',
-            'This deletes only the editable draft. Published versions and run history remain available.',
-          )}
-        </p>
-      </Modal>
+      {mutationTarget?.scopeId === scopeId ? (
+        <WorkflowMutationDialog
+          key={`${scopeId}:${mutationTarget.kind}:${mutationTarget.row.workflowId}`}
+          kind={mutationTarget.kind}
+          scopeId={scopeId}
+          workflowId={mutationTarget.row.workflowId}
+          workflowName={mutationTarget.row.name}
+          open={mutationOpen}
+          onClose={() => setMutationOpen(false)}
+          onObserved={() => {
+            setMutationTarget(null);
+            void catalogue.refetch();
+          }}
+        />
+      ) : null}
       <WorkflowScheduleSurface
         available={Boolean(scheduleTarget?.activeRevisionId)}
         initialView="list"

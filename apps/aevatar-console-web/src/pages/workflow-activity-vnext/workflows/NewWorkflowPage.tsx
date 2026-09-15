@@ -31,6 +31,8 @@ import {
   type WorkflowCreationMode,
 } from './workflowCreation';
 
+export const WORKFLOW_GENERATION_TIMEOUT_MS = 120_000;
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -93,6 +95,30 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   >([]);
   const [submitting, setSubmitting] = React.useState(false);
   const [failure, setFailure] = React.useState('');
+  const [generationPhase, setGenerationPhase] = React.useState<
+    'idle' | 'generating' | 'validating' | 'saving' | 'cancelled' | 'timedOut'
+  >('idle');
+  const [generationText, setGenerationText] = React.useState('');
+  const [generationReasoning, setGenerationReasoning] = React.useState('');
+  const generation = React.useRef<AbortController | null>(null);
+  const generationTimer = React.useRef<number | undefined>(undefined);
+  const stopGeneration = React.useCallback(() => {
+    window.clearTimeout(generationTimer.current);
+    generation.current?.abort();
+    generation.current = null;
+  }, []);
+  React.useEffect(() => {
+    setSubmitting(false);
+    setGenerationPhase('idle');
+    setGenerationText('');
+    setGenerationReasoning('');
+    return stopGeneration;
+  }, [scopeId, stopGeneration]);
+  const cancelGeneration = () => {
+    stopGeneration();
+    setGenerationPhase('cancelled');
+    setSubmitting(false);
+  };
   const toast = useConsoleToast();
   const materialization = useDraftMaterialization(scopeId);
   const workspace = useQuery({
@@ -141,18 +167,23 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   );
 
   const finishSave = React.useCallback(
-    async (result: StudioWorkflowSaveResult) => {
+    async (result: StudioWorkflowSaveResult, isCurrent = () => true) => {
+      if (!isCurrent()) return;
       if (result.kind === 'materialized') {
         navigateToWorkflow(result.workflow.workflowId);
         return;
       }
       const readable = await materialization.observe(result.receipt);
-      if (readable) navigateToWorkflow(readable.workflowId);
+      if (readable && isCurrent()) navigateToWorkflow(readable.workflowId);
     },
     [materialization.observe, navigateToWorkflow],
   );
 
-  const persistDraft = async (nextYaml: string, workflowName: string) => {
+  const persistDraft = async (
+    nextYaml: string,
+    workflowName: string,
+    isCurrent = () => true,
+  ) => {
     if (!directoryId) {
       setFailure(
         t(
@@ -176,6 +207,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
         yaml: nextYaml,
       });
     } catch (error) {
+      if (!isCurrent()) return;
       if (!isWorkflowCreateResultUnknown(error)) throw error;
       toast.warning(
         t(
@@ -186,12 +218,15 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
       void existingWorkflows.refetch();
       return;
     }
-    await finishSave(result);
+    await finishSave(result, isCurrent);
   };
 
   const createBlank = async () => {
     const workflowName = name.trim();
     if (!workflowName || submitting) return;
+    setGenerationPhase('idle');
+    setGenerationText('');
+    setGenerationReasoning('');
     setSubmitting(true);
     setFailure('');
     setFindings([]);
@@ -230,23 +265,56 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
 
   const generateAndOpen = async () => {
     const workflowName = name.trim();
-    if (!workflowName || !prompt.trim() || submitting) return;
+    if (!workflowName || !prompt.trim() || submitting || generation.current)
+      return;
+    const controller = new AbortController();
+    generation.current = controller;
+    const current = () =>
+      generation.current === controller && !controller.signal.aborted;
     setSubmitting(true);
     setFailure('');
     setFindings([]);
+    setGenerationPhase('generating');
+    setGenerationText('');
+    setGenerationReasoning('');
+    generationTimer.current = window.setTimeout(() => {
+      if (!current()) return;
+      stopGeneration();
+      setGenerationPhase('timedOut');
+      setSubmitting(false);
+    }, WORKFLOW_GENERATION_TIMEOUT_MS);
     try {
       const generated = await studioApi.authorWorkflow(
         { prompt },
-        { onText: () => undefined },
+        {
+          signal: controller.signal,
+          onText: (text) => {
+            if (current()) setGenerationText(text.slice(-12000));
+          },
+          onReasoning: (text) => {
+            if (current()) setGenerationReasoning(text.slice(-12000));
+          },
+        },
       );
+      if (!current()) return;
+      setGenerationPhase('validating');
       const parsed = await studioApi.parseYaml({ yaml: generated });
+      if (!current()) return;
       setFindings(parsed.findings);
       if (hasBlockingFindings(parsed.document, parsed.findings)) return;
-      await persistDraft(generated, workflowName);
+      // Cancellation is available until saving begins. An accepted save has its
+      // own observation/recovery flow and must not be labelled cancelled.
+      window.clearTimeout(generationTimer.current);
+      setGenerationPhase('saving');
+      await persistDraft(generated, workflowName, current);
     } catch (error) {
-      setFailure(errorMessage(error));
+      if (current()) setFailure(errorMessage(error));
     } finally {
-      setSubmitting(false);
+      if (current()) {
+        stopGeneration();
+        setGenerationPhase('idle');
+        setSubmitting(false);
+      }
     }
   };
 
@@ -276,6 +344,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
   const reviewAccess = () =>
     history.push(buildWorkflowActivitySectionHref(scopeId, 'settings'));
   const selectMode = (nextMode: WorkflowCreationMode) => {
+    setGenerationPhase('idle');
     setFailure('');
     setFindings([]);
     if (nextMode === 'template') {
@@ -392,7 +461,17 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
             <div className="wa-vnext__creation-heading">
               <Button
                 icon={<ArrowLeftOutlined />}
-                onClick={() => setMode(null)}
+                disabled={
+                  submitting &&
+                  generationPhase !== 'generating' &&
+                  generationPhase !== 'validating'
+                }
+                onClick={() => {
+                  stopGeneration();
+                  setSubmitting(false);
+                  setGenerationPhase('idle');
+                  setMode(null);
+                }}
                 type="text"
               >
                 {t('workflowActivityVNext.new.changeMethod', 'Change method')}
@@ -423,7 +502,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                     value: item.directoryId,
                   }))}
                   className="wa-vnext__field-control"
-                  disabled={saveTargetUnavailable}
+                  disabled={saveTargetUnavailable || submitting}
                   loading={workspace.isPending}
                   value={directoryId || undefined}
                 />
@@ -439,6 +518,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                     'workflowActivityVNext.new.name',
                     'Workflow name',
                   )}
+                  disabled={submitting}
                   onChange={(event) => setName(event.target.value)}
                   className="wa-vnext__field-control"
                   value={name}
@@ -468,6 +548,7 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                       'workflowActivityVNext.new.goal',
                       'What should this workflow do?',
                     )}
+                    disabled={submitting}
                     onChange={(event) => setPrompt(event.target.value)}
                     rows={5}
                     className="wa-vnext__field-control"
@@ -476,7 +557,11 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                 </div>
                 <div className="wa-vnext__creation-actions">
                   <Button
-                    disabled={!name.trim() || saveTargetUnavailable}
+                    disabled={
+                      !name.trim() ||
+                      saveTargetUnavailable ||
+                      materialization.phase !== 'idle'
+                    }
                     loading={submitting}
                     onClick={() =>
                       void (prompt.trim() ? generateAndOpen() : createBlank())
@@ -488,7 +573,77 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
                       'Generate and open',
                     )}
                   </Button>
+                  {generationPhase === 'generating' ||
+                  generationPhase === 'validating' ? (
+                    <Button onClick={cancelGeneration}>
+                      {t(
+                        'workflowActivityVNext.new.cancelGeneration',
+                        'Cancel generation',
+                      )}
+                    </Button>
+                  ) : null}
                 </div>
+                {generationPhase !== 'idle' ? (
+                  <div
+                    className="wa-vnext__notice wa-vnext__notice--progress"
+                    role="status"
+                  >
+                    <strong>
+                      {generationPhase === 'generating'
+                        ? t(
+                            'workflowActivityVNext.new.generating',
+                            'Generating workflow…',
+                          )
+                        : generationPhase === 'validating'
+                          ? t(
+                              'workflowActivityVNext.new.validating',
+                              'Checking generated workflow…',
+                            )
+                          : generationPhase === 'saving'
+                            ? t(
+                                'workflowActivityVNext.new.savingGenerated',
+                                'Saving workflow…',
+                              )
+                            : generationPhase === 'timedOut'
+                              ? t(
+                                  'workflowActivityVNext.new.generationTimedOut',
+                                  'Generation took longer than two minutes. No draft was saved. You can try again.',
+                                )
+                              : t(
+                                  'workflowActivityVNext.new.generationCancelled',
+                                  'Generation cancelled. Your name and description are kept; no draft was saved.',
+                                )}
+                    </strong>
+                    {generationPhase === 'generating' ? (
+                      <p>
+                        {generationReasoning || generationText
+                          ? t(
+                              'workflowActivityVNext.new.generationReceiving',
+                              'Generation updates received. Waiting for the completed workflow.',
+                            )
+                          : t(
+                              'workflowActivityVNext.new.generationWaiting',
+                              'Waiting for generation updates. You can cancel while you wait.',
+                            )}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {generationReasoning || generationText ? (
+                  <div className="wa-vnext__generation-details">
+                    <TechnicalDetails
+                      summary={t(
+                        'workflowActivityVNext.new.generationDetails',
+                        'Generation details',
+                      )}
+                    >
+                      {generationReasoning ? (
+                        <pre>{generationReasoning}</pre>
+                      ) : null}
+                      {generationText ? <pre>{generationText}</pre> : null}
+                    </TechnicalDetails>
+                  </div>
+                ) : null}
               </>
             ) : null}
 
@@ -525,6 +680,20 @@ const NewWorkflowPage: React.FC<{ readonly scopeId: string }> = ({
               </>
             ) : null}
 
+            {failure ? (
+              <div
+                className="wa-vnext__notice wa-vnext__notice--error"
+                role="alert"
+              >
+                <strong>
+                  {t(
+                    'workflowActivityVNext.new.createFailed',
+                    "Workflow couldn't be created",
+                  )}
+                </strong>
+                <TechnicalDetails>{failure}</TechnicalDetails>
+              </div>
+            ) : null}
             {findings.length > 0 ? (
               <div aria-live="polite">
                 {findings.map((finding) => (

@@ -1,4 +1,30 @@
 const workflowActivityVNextMessages = {
+  'workflowActivityVNext.workflows.refreshFailed':
+    "The workflow list couldn't refresh. The last loaded list is still shown.",
+  'workflowActivityVNext.new.cancelGeneration': 'Cancel generation',
+  'workflowActivityVNext.new.generating': 'Generating workflow…',
+  'workflowActivityVNext.new.validating': 'Checking generated workflow…',
+  'workflowActivityVNext.new.savingGenerated': 'Saving workflow…',
+  'workflowActivityVNext.new.generationTimedOut':
+    'Generation took longer than two minutes. No draft was saved. You can try again.',
+  'workflowActivityVNext.new.generationCancelled':
+    'Generation cancelled. Your name and description are kept; no draft was saved.',
+  'workflowActivityVNext.new.generationReceiving':
+    'Generation updates received. Waiting for the completed workflow.',
+  'workflowActivityVNext.new.generationWaiting':
+    'Waiting for generation updates. You can cancel while you wait.',
+  'workflowActivityVNext.new.generationDetails': 'Generation details',
+  'workflowActivityVNext.workflows.deleteSuccess': 'Draft deleted',
+  'workflowActivityVNext.workflows.checkFailed':
+    "Couldn't check whether the change has finished",
+  'workflowActivityVNext.workflows.changeObserving':
+    'Request accepted. Checking for completion…',
+  'workflowActivityVNext.workflows.changeDelayed':
+    'This is taking longer than expected. Completion is still unconfirmed.',
+  'workflowActivityVNext.workflows.checkingDescription':
+    'We will keep checking for up to 30 seconds. Closing this dialog does not undo the request.',
+  'workflowActivityVNext.workflows.checkAgainDescription':
+    'Check again to see the result. This only checks the status and does not submit another request.',
   'workflowActivityVNext.arguments.addItem': 'Add item',
   'workflowActivityVNext.arguments.addItemAria': 'Add item to {path}',
   'workflowActivityVNext.arguments.addProperty': 'Add property',
@@ -925,8 +951,6 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.workflows.archive': 'Archive',
   'workflowActivityVNext.workflows.archiveCheckAgain': 'Check again',
   'workflowActivityVNext.workflows.archiveConfirm': 'Archive workflow',
-  'workflowActivityVNext.workflows.archiveDelayed':
-    "Archive was accepted, but it hasn't been confirmed yet",
   'workflowActivityVNext.workflows.archiveDescription':
     'This stops new runs for the published workflow. Its editable draft, published revisions, and Activity history remain available. Publishing it again restores it.',
   'workflowActivityVNext.workflows.archiveFailed':
@@ -957,11 +981,6 @@ const workflowActivityVNextMessages = {
     'This deletes only the editable draft. Published versions and run history remain available.',
   'workflowActivityVNext.workflows.deleteDraft': 'Delete draft',
   'workflowActivityVNext.workflows.deleteFailed': "Draft couldn't be deleted",
-  'workflowActivityVNext.workflows.deleteRefreshFailed':
-    'Draft was deleted, but the workflow list could not refresh. Please try again.',
-  'workflowActivityVNext.workflows.deleteObservationDelayed':
-    'Draft was deleted, but the workflow catalogue has not confirmed its removal yet',
-  'workflowActivityVNext.workflows.deleteRetry': 'Try again',
   'workflowActivityVNext.workflows.deleteTitle': 'Delete editable draft?',
   'workflowActivityVNext.workflows.empty': 'No workflows yet',
   'workflowActivityVNext.workflows.emptyDescription':
