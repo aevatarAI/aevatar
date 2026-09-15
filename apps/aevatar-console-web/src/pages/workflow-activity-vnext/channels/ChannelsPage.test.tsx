@@ -135,7 +135,7 @@ describe('Channel pages', () => {
       within(table).getByRole('columnheader', { name: 'Channel name' }),
     ).toBeInTheDocument();
     expect(
-      within(table).getByRole('columnheader', { name: 'Channel', exact: true }),
+      within(table).getByRole('columnheader', { name: 'Channel' }),
     ).toBeInTheDocument();
     expect(within(table).getByText('Loading name…')).toBeInTheDocument();
     await act(async () =>
@@ -155,7 +155,7 @@ describe('Channel pages', () => {
     );
     expect(await within(table).findByText('Team channel')).toBeInTheDocument();
     expect(
-      within(table).getByRole('cell', { name: 'Telegram', exact: true }),
+      within(table).getByRole('cell', { name: 'Telegram' }),
     ).toBeInTheDocument();
     expect(
       within(table).queryByText(/Wrong registration|Unrelated bot/),
