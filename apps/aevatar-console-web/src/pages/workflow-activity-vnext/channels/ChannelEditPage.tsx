@@ -1,6 +1,6 @@
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Checkbox, Input, Modal } from 'antd';
+import { Button, Checkbox, Modal } from 'antd';
 import * as React from 'react';
 import {
   type ChannelConfigDetail,
@@ -158,19 +158,12 @@ function ChannelEditForm({
   const [skillName, setSkillName] = React.useState(
     baseline.runtimeConfig.defaultSkill.name,
   );
-  const [version, setVersion] = React.useState(
-    baseline.runtimeConfig.defaultSkill.version,
-  );
-  const [instructions, setInstructions] = React.useState(
-    baseline.runtimeConfig.instructions,
-  );
   const [selectedIds, setSelectedIds] = React.useState([
     ...baseline.serviceIds,
   ]);
   const [authorizationMode, setAuthorizationMode] = React.useState(
     baseline.authorizationMode,
   );
-  const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [errors, setErrors] = React.useState<readonly ChannelConfigField[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
   const [pending, setPending] = React.useState<PendingSave | null>(null);
@@ -219,8 +212,12 @@ function ChannelEditForm({
     serviceIds: usesDefaults ? [] : selectedIds,
     runtimeConfig: {
       ...baseline.runtimeConfig,
-      instructions,
-      defaultSkill: { name: skillName, version },
+      defaultSkill: {
+        name: skillName,
+        version: skillName.trim()
+          ? baseline.runtimeConfig.defaultSkill.version
+          : '',
+      },
       serviceSelectors: selectionChanged
         ? baseline.runtimeConfig.serviceSelectors.filter(
             (selector) =>
@@ -300,15 +297,8 @@ function ChannelEditForm({
       return;
     const invalid: ChannelConfigField[] = [];
     if (skillName.trim().length > 128) invalid.push('skill');
-    if (version.trim().length > 128 || (version.trim() && !skillName.trim()))
-      invalid.push('version');
-    if (instructions.trim().length > 4000) invalid.push('instructions');
     setErrors(invalid);
-    if (invalid.length) {
-      if (invalid.includes('version') || invalid.includes('instructions'))
-        setAdvancedOpen(true);
-      return;
-    }
+    if (invalid.length) return;
     inFlight.current = true;
     setSubmitting(true);
     let accepted: PendingSave;
@@ -324,11 +314,6 @@ function ChannelEditForm({
       if (!mounted.current) return;
       if (error instanceof ChannelConfigError) {
         setErrors(error.fields);
-        if (
-          error.fields.includes('version') ||
-          error.fields.includes('instructions')
-        )
-          setAdvancedOpen(true);
         if (error.fields.includes('services')) void services.refetch();
       }
       toast.error(
@@ -360,27 +345,17 @@ function ChannelEditForm({
     await observe(accepted);
   }
 
-  const errorText = (field: ChannelConfigField) =>
+  const errorText = (field: 'skill' | 'services') =>
     errors.includes(field)
       ? field === 'skill'
         ? t(
             'channels.edit.skillError',
             'Check the skill name. Use no more than 128 characters.',
           )
-        : field === 'version'
-          ? t(
-              'channels.edit.versionError',
-              'Check the skill version and name. Use no more than 128 characters.',
-            )
-          : field === 'instructions'
-            ? t(
-                'channels.edit.instructionsError',
-                'Check the bot instructions. Use no more than 4,000 characters.',
-              )
-            : t(
-                'channels.edit.selectionError',
-                'Review your selected services and try again.',
-              )
+        : t(
+            'channels.edit.selectionError',
+            'Review your selected services and try again.',
+          )
       : undefined;
 
   return (
@@ -396,10 +371,7 @@ function ChannelEditForm({
         </h2>
         <ChannelSkillField
           value={skillName}
-          onChange={(value) => {
-            setSkillName(value);
-            if (!value.trim()) setVersion('');
-          }}
+          onChange={setSkillName}
           disabled={locked}
           error={errorText('skill')}
         />
@@ -446,68 +418,6 @@ function ChannelEditForm({
             {errorText('services')}
           </p>
         ) : null}
-        <details
-          className="channels__advanced"
-          open={advancedOpen}
-          onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
-        >
-          <summary>{t('channels.edit.advanced', 'Advanced settings')}</summary>
-          <div className="channels__field">
-            <div className="channels__field-heading">
-              <label htmlFor="channel-skill-version">
-                {t('channels.edit.version', 'Skill version')}
-              </label>
-            </div>
-            <Input
-              id="channel-skill-version"
-              value={version}
-              disabled={locked || !skillName.trim()}
-              onChange={(event) => setVersion(event.target.value)}
-              aria-invalid={Boolean(errorText('version'))}
-              aria-describedby={
-                errorText('version') ? 'channel-version-error' : undefined
-              }
-            />
-            {errorText('version') ? (
-              <p
-                id="channel-version-error"
-                className="channels__form-error"
-                role="alert"
-              >
-                {errorText('version')}
-              </p>
-            ) : null}
-          </div>
-          <div className="channels__field">
-            <div className="channels__field-heading">
-              <label htmlFor="channel-instructions">
-                {t('channels.edit.instructions', 'Bot instructions')}
-              </label>
-            </div>
-            <Input.TextArea
-              id="channel-instructions"
-              rows={4}
-              value={instructions}
-              disabled={locked}
-              onChange={(event) => setInstructions(event.target.value)}
-              aria-invalid={Boolean(errorText('instructions'))}
-              aria-describedby={
-                errorText('instructions')
-                  ? 'channel-instructions-error'
-                  : undefined
-              }
-            />
-            {errorText('instructions') ? (
-              <p
-                id="channel-instructions-error"
-                className="channels__form-error"
-                role="alert"
-              >
-                {errorText('instructions')}
-              </p>
-            ) : null}
-          </div>
-        </details>
         {pending && !completed.current ? (
           <div className="channels__save-status" role="status">
             <p>

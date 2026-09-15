@@ -11,10 +11,11 @@ and the existing Telegram connection form.
   optional state, input, and field error presentation.
 - Both pages use `ChannelServicePicker`, `useChannelServiceChoices`, the existing
   connection styles, shell, loading skeleton, and toast provider.
-- The primary form contains Skill name and Services. Advanced settings is
-  collapsed initially and contains Skill version and Bot instructions.
+- The form contains only Skill name and Services, with no Advanced settings
+  section or inputs for Skill version and Bot instructions.
 - Channel names and bot tokens are not editable through this API. Tool sets,
-  extra tool names, and credential source are retained from the loaded config.
+  extra tool names, instructions, skill version, and credential source are
+  retained from the loaded config.
 
 ## API Behavior
 
@@ -40,9 +41,10 @@ The API contract was checked against `origin/feature/integrate` at
   configuration and have an authoritative state version newer than the initial
   GET. Delayed or failed confirmation preserves the request and offers Check
   again, which issues only GET. There is no background polling.
-- Backend field errors map to localized fields without retaining raw diagnostic
-  messages. Unrecognized config modes fail closed; unexpected credential fields
-  are discarded by the adapter.
+- Backend errors for editable fields map to localized field messages; errors
+  for other fields use the shared save-failure toast. Raw diagnostic messages
+  are not retained. Unrecognized config modes fail closed; unexpected credential
+  fields are discarded by the adapter.
 - Cancel and shell navigation protect unsaved changes. Reload/close uses the
   native before-unload warning. Late responses after unmount cannot navigate or
   report success.
@@ -69,8 +71,8 @@ Existing creation, channel listing/details, API, navigation, route configuration
 and locale tests protect the reused surfaces.
 
 Browser verification uses the configured remote backend: actual configuration
-prefill, service selection, collapsed/expanded advanced fields, and desktop and
-390px mobile layouts. It does not submit a configuration change to the live bot.
+prefill, service selection, the two-field form, and desktop and 390px mobile
+layouts. It does not submit a configuration change to the live bot.
 The local preview runs on port 5193 with its OAuth callback on the same origin.
 
 Local verification is restricted to affected Jest files, changed-file Biome,

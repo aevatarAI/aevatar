@@ -5,9 +5,6 @@ export default {
   'channels.edit.loading': '正在加载渠道配置',
   'channels.edit.configuration': '配置',
   'channels.edit.save': '保存更改',
-  'channels.edit.advanced': '高级设置',
-  'channels.edit.version': 'Skill 版本',
-  'channels.edit.instructions': '机器人行为指令',
   'channels.edit.defaults': 'NyxID 默认授权',
   'channels.edit.useDefaults': '使用 NyxID 默认授权',
   'channels.edit.unavailableService': '不可用的服务',
@@ -17,10 +14,6 @@ export default {
     '部分已保存的服务已不可用，请取消勾选后再保存。',
   'channels.edit.selectionError': '请检查选中的服务后重试。',
   'channels.edit.skillError': '请检查 Skill 名称，最多允许 128 个字符。',
-  'channels.edit.versionError':
-    '请检查 Skill 版本和名称，版本最多允许 128 个字符。',
-  'channels.edit.instructionsError':
-    '请检查机器人行为指令，最多允许 4,000 个字符。',
   'channels.edit.failed': '无法保存渠道更改，请检查填写内容后重试。',
   'channels.edit.saved': '渠道更改已保存。',
   'channels.edit.confirming': '更改已提交，正在等待确认。',

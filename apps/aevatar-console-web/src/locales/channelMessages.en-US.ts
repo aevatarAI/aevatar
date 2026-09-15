@@ -5,9 +5,6 @@ export default {
   'channels.edit.loading': 'Loading channel configuration',
   'channels.edit.configuration': 'Configuration',
   'channels.edit.save': 'Save changes',
-  'channels.edit.advanced': 'Advanced settings',
-  'channels.edit.version': 'Skill version',
-  'channels.edit.instructions': 'Bot instructions',
   'channels.edit.defaults': 'NyxID defaults',
   'channels.edit.useDefaults': 'Use NyxID defaults',
   'channels.edit.unavailableService': 'Unavailable service',
@@ -21,10 +18,6 @@ export default {
     'Review your selected services and try again.',
   'channels.edit.skillError':
     'Check the skill name. Use no more than 128 characters.',
-  'channels.edit.versionError':
-    'Check the skill version and name. Use no more than 128 characters.',
-  'channels.edit.instructionsError':
-    'Check the bot instructions. Use no more than 4,000 characters.',
   'channels.edit.failed':
     'Could not save channel changes. Review your choices and try again.',
   'channels.edit.saved': 'Channel changes saved.',

@@ -131,9 +131,11 @@ it('opens Edit from channel details and saves once, preserving hidden config unt
     await screen.findByRole('checkbox', { name: /GitHub work/ }),
   ).toBeChecked();
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
-  expect(screen.getByLabelText('Bot instructions')).not.toBeVisible();
+  expect(screen.queryByText('Advanced settings')).not.toBeInTheDocument();
   expect(
-    screen.queryByLabelText(/Bot token|Channel name|Introduction/),
+    screen.queryByLabelText(
+      /Skill version|Bot instructions|Bot token|Channel name|Introduction/,
+    ),
   ).not.toBeInTheDocument();
   editSkill('  changed-helper  ');
   save();
@@ -198,7 +200,7 @@ it('keeps unavailable saved services visible until explicitly deselected and han
           error: 'invalid_runtime_config',
           field_errors: [
             {
-              field: 'runtime_config.instructions',
+              field: 'runtime_config.default_skill.name',
               code: 'too_long',
               message: 'TEST_ONLY_SECRET',
             },
@@ -220,15 +222,18 @@ it('keeps unavailable saved services visible until explicitly deselected and han
   );
   save();
   await screen.findByText(
-    'Check the bot instructions. Use no more than 4,000 characters.',
+    'Check the skill name. Use no more than 128 characters.',
   );
   expect(rejected).toBe(true);
-  expect(
-    await screen.findByRole('textbox', { name: 'Bot instructions' }),
-  ).toBeVisible();
+  expect(screen.getByLabelText(/^Skill name/)).toHaveAttribute(
+    'aria-invalid',
+    'true',
+  );
   expect(screen.getByLabelText(/^Skill name/)).toHaveValue('changed-helper');
   expect(document.body).not.toHaveTextContent('TEST_ONLY_SECRET');
-  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  expect(
+    await screen.findByRole('button', { name: 'Save changes' }),
+  ).toBeEnabled();
 });
 
 it('revalidates a cached detail and retries an unavailable response without exposing a stale editable form', async () => {
