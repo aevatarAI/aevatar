@@ -952,7 +952,7 @@ public static class ChannelCallbackEndpoints
             "channel_agent_key_write_gate_closed" => StatusCodes.Status503ServiceUnavailable,
             "secret_vault_unavailable" => StatusCodes.Status503ServiceUnavailable,
             "service_owner_forbidden" => StatusCodes.Status403Forbidden,
-            "user_service_not_found" => StatusCodes.Status404NotFound,
+            "nyxid_user_service_not_accessible" => StatusCodes.Status404NotFound,
             "scope_plan_changed" => StatusCodes.Status409Conflict,
             "nyxid_scope_plan_unavailable" or "channel_service_connection_unavailable" => StatusCodes.Status502BadGateway,
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,

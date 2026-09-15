@@ -182,7 +182,7 @@ public sealed class ChannelRegistrationAuthorizationPlannerTests
 
         var result = await PlanAsync(planner, "owner-alpha", [serviceIdCandidate]);
 
-        AssertFailure(result, "user_service_not_found");
+        AssertFailure(result, "nyxid_user_service_not_accessible");
         port.ScopePlanRequests.Should().BeEmpty();
     }
 

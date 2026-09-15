@@ -918,7 +918,7 @@ public sealed class ChannelCallbackEndpointsTests
     [Theory]
     [InlineData("secret_vault_unavailable", StatusCodes.Status503ServiceUnavailable)]
     [InlineData("service_owner_forbidden", StatusCodes.Status403Forbidden)]
-    [InlineData("user_service_not_found", StatusCodes.Status404NotFound)]
+    [InlineData("nyxid_user_service_not_accessible", StatusCodes.Status404NotFound)]
     [InlineData("scope_plan_changed", StatusCodes.Status409Conflict)]
     [InlineData("nyxid_scope_plan_unavailable", StatusCodes.Status502BadGateway)]
     [InlineData("channel_service_connection_unavailable", StatusCodes.Status502BadGateway)]

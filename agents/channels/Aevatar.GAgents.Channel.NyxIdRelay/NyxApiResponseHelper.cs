@@ -478,7 +478,7 @@ internal static class NyxApiResponseHelper
         "channel_authorization_contract_invalid",
         "secret_vault_unavailable",
         "service_owner_forbidden",
-        "user_service_not_found",
+        "nyxid_user_service_not_accessible",
         "scope_plan_changed",
         "nyxid_scope_plan_unavailable",
         "channel_service_connection_unavailable",
