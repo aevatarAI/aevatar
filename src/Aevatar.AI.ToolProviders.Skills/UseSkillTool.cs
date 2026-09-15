@@ -340,13 +340,36 @@ public sealed class UseSkillTool : IAgentTool
             }
         }
 
+        var skillNotFoundError = BuildSkillNotFoundError(skillName);
         return BuildLoadResult(
             skillName: skillName,
             loaded: false,
-            error: $"Skill '{skillName}' not found.",
+            error: skillNotFoundError,
             status: "not_found",
-            text: BuildErrorWithAvailableSkills($"Skill '{skillName}' not found."));
+            text: BuildErrorWithAvailableSkills(skillNotFoundError));
     }
+
+    private static string BuildSkillNotFoundError(string skillName) =>
+        IsChannelDefaultSkillBindingRequest(skillName)
+            ? $"Channel default skill '{skillName}' was not found in Ornn. Create and publish an Ornn skill named '{skillName}', or update the channel registration default_skill_name to an existing published skill."
+            : $"Skill '{skillName}' not found.";
+
+    private static bool IsChannelDefaultSkillBindingRequest(string skillName)
+    {
+        var recovery = AgentToolRequestContext.Current?.SkillRecovery;
+        return recovery?.FromChannelDefaultSkillBinding == true &&
+               MatchesRequestedSkill(skillName, recovery.PrimarySkillName) &&
+               MatchesRequestedSkill(skillName, recovery.CommandName);
+    }
+
+    private static bool MatchesRequestedSkill(string skillName, string? expectedSkillName) =>
+        string.Equals(
+            NormalizeSkillName(skillName),
+            NormalizeSkillName(expectedSkillName),
+            StringComparison.Ordinal);
+
+    private static string NormalizeSkillName(string? value) =>
+        value?.Trim().TrimStart('/').ToLowerInvariant() ?? string.Empty;
 
     private async Task<string> BuildLoadResultAsync(
         string? skillName,

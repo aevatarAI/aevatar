@@ -120,6 +120,21 @@ public sealed class LocalSkillCatalogTests
     }
 
     [Fact]
+    public async Task UseSkillTool_WhenChannelDefaultSkillIsNotFound_ShouldExplainOrnnSetup()
+    {
+        var tool = new UseSkillTool(new LocalSkillCatalog());
+
+        using var _ = BeginDefaultSkillBindingScope("test-default-skill");
+        var result = await tool.ExecuteAsync("""{"skill":"test-default-skill"}""");
+
+        ExtractLoaded(result).Should().BeFalse();
+        ExtractStatus(result).Should().Be("not_found");
+        ExtractText(result).Should().Contain("Channel default skill 'test-default-skill' was not found in Ornn");
+        ExtractText(result).Should().Contain("Create and publish an Ornn skill named 'test-default-skill'");
+        ExtractText(result).Should().Contain("update the channel registration default_skill_name");
+    }
+
+    [Fact]
     public async Task UseSkillTool_LocalSkillDoesNotCallRemoteFetcher()
     {
         var catalog = new LocalSkillCatalog();
@@ -579,6 +594,21 @@ public sealed class LocalSkillCatalogTests
         {
             [LLMRequestMetadataKeys.NyxIdAccessToken] = token,
         });
+    }
+
+    private static IDisposable BeginDefaultSkillBindingScope(string skillName)
+    {
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = AgentToolExecutionContext.Empty with
+        {
+            SkillRecovery = AgentSkillRecoveryContext.Empty with
+            {
+                CommandName = skillName,
+                PrimarySkillName = skillName,
+                FromChannelDefaultSkillBinding = true,
+            },
+        };
+        return new RestoreContextScope(previous);
     }
 
     private static IDisposable BeginMetadataScope(
