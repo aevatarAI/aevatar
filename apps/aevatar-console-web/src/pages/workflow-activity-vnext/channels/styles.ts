@@ -77,8 +77,8 @@ export const channelsCss = `
 .channels__facts > div { align-items: baseline; display: grid; gap: 16px; grid-template-columns: 160px minmax(0, 1fr); padding: 10px 0; }
 .channels__facts dt { color: var(--wa-muted); font-size: 12px; }
 .channels__facts dd { font-size: 12px; margin: 0; overflow-wrap: anywhere; text-align: right; }
-.channels__authorized-services ul { display: grid; gap: 12px; list-style: none; margin: 0; padding: 0; }
-.channels__authorized-services li { display: flex; flex-direction: column; gap: 2px; }
+.channels__authorized-services ul { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; list-style: none; margin: 0; padding: 0; }
+.channels__authorized-services li { background: var(--wa-subtle); border: 1px solid var(--channels-border); border-radius: var(--wa-radius); max-width: 100%; min-width: 0; padding: 4px 8px; text-align: left; }
 .channels__authorized-services strong { font-weight: 500; }
 .channels__authorized-services > .ant-btn { margin-top: 12px; }
 .channels__identifier-link { align-items: baseline; color: var(--wa-blue); display: inline-flex; gap: 6px; max-width: 100%; }

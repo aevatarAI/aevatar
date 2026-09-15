@@ -193,6 +193,10 @@ their labels and slugs; the current session's selectable grants and service
 activity do not hide saved channel authorizations or add other services.
 Only safe ID, label and slug fields enter the service-name query cache.
 
+Services appear as compact labels arranged horizontally, wrapping when the
+available width is filled. Each service shows its resolved display name once;
+the slug is not repeated on a second line. Long names wrap within their label.
+
 Missing service names retain their saved IDs. A failed name lookup preserves
 other details and the saved authorization list, shows a safe toast, and offers
 a manual retry of the names alone. Explicit empty authorization shows no

@@ -25,7 +25,7 @@ const registration = {
   scope_id: 'scope-alpha',
   owned: true,
   authorization_mode: 'explicit_service_allowlist',
-  service_ids: ['us-work', 'us-model', 'us-deleted'],
+  service_ids: ['us-work', 'us-model', 'us-ornn', 'us-deleted'],
   default_skill_name: 'review-skill',
 };
 const service = {
@@ -44,6 +44,13 @@ const inventory = {
       id: 'us-model',
       label: 'Chrono Public',
       slug: 'chrono-llm-public',
+      is_active: true,
+    },
+    {
+      ...service,
+      id: 'us-ornn',
+      label: 'ornn-api',
+      slug: 'ornn-api',
       is_active: true,
     },
     {
@@ -84,7 +91,8 @@ it('shows saved authorizations by exact ID, including services outside current g
     expect(await screen.findByText('Authorized services')).toBeInTheDocument();
     expect(await screen.findByText('GitHub work')).toBeInTheDocument();
     expect(screen.getByText('Chrono Public')).toBeInTheDocument();
-    expect(screen.getByText('chrono-llm-public')).toBeInTheDocument();
+    expect(screen.queryByText('chrono-llm-public')).not.toBeInTheDocument();
+    expect(screen.getAllByText('ornn-api')).toHaveLength(1);
     expect(screen.getByText('us-deleted')).toBeInTheDocument();
     expect(
       screen.queryByText('Not authorized for this channel'),

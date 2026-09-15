@@ -80,10 +80,7 @@ export default function ChannelAuthorizedServices({
           return (
             <li key={id}>
               {service ? (
-                <>
-                  <strong>{service.label}</strong>
-                  <span className="channels__muted">{service.slug}</span>
-                </>
+                <strong>{service.label}</strong>
               ) : (
                 <span className="channels__identifier">{id}</span>
               )}
