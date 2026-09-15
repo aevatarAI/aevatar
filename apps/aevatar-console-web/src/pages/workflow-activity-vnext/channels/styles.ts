@@ -69,6 +69,8 @@ export const channelsCss = `
 .channels__main--detail .channels__content { padding-top: 40px; }
 .channels__breadcrumb { align-items: center; color: var(--wa-muted); display: flex; flex-wrap: wrap; font-size: 12px; gap: 12px; margin-bottom: 24px; }
 .channels__breadcrumb a { align-items: center; color: var(--wa-blue); display: inline-flex; gap: 8px; min-height: 28px; }
+.channels__detail-toolbar { align-items: center; display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; margin-bottom: var(--channels-space); }
+.channels__detail-toolbar .channels__breadcrumb { margin-bottom: 0; }
 .channels__detail { background: var(--wa-surface); border: 1px solid var(--channels-border); border-radius: var(--wa-radius); padding: var(--channels-space); }
 .channels__detail-heading { align-items: center; display: flex; gap: 14px; margin-bottom: 24px; }
 .channels__detail-heading h1 { font-size: 16px; font-weight: 600; line-height: 24px; margin: 0; overflow-wrap: anywhere; }
@@ -87,8 +89,8 @@ export const channelsCss = `
 .channels__identifier-link:hover { color: var(--wa-blue); text-decoration-thickness: 2px; }
 .channels__facts .channels__badge { background: none; border: none; color: var(--wa-ink); font-size: 12px; padding: 0; }
 .channels__facts .channels__dot { display: none; }
-.channels__detail-actions { margin-top: 20px; }
-.channels__detail-actions .ant-btn { background: transparent; }
+.channels__detail-actions { align-items: center; display: flex; flex: 0 0 auto; gap: 12px; margin-left: auto; }
+.channels__detail-actions .ant-btn { background: transparent; min-height: var(--channels-action-height); }
 .channels__removal { align-items: center; display: flex; flex-wrap: wrap; gap: 16px; margin-top: 20px; }
 .channels__removal p { color: var(--wa-muted); line-height: 20px; margin: 0; }
 .channels__content a:focus-visible { border-radius: 3px; outline: 2px solid var(--wa-blue); outline-offset: 4px; }

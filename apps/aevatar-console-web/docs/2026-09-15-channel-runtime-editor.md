@@ -2,6 +2,8 @@
 
 Channel details now provides an Edit action at
 `/scopes/:scopeId/workflow-activity-vnext/channels/:registrationId/edit`.
+Edit and Remove sit at the top right beside the breadcrumb, with a 12px gap.
+On narrow screens, the action group wraps below the breadcrumb and stays right aligned.
 The editor follows the approved [Figma frame](https://www.figma.com/design/FaVJx5IZeQX9jHcUi55ndB/?node-id=63-327)
 and the existing Telegram connection form.
 
