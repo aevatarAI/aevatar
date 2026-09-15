@@ -322,7 +322,7 @@ export default function TelegramConnectionPage({
             value={channelName}
             placeholder={t(
               'channels.connect.botNameDefault',
-              'Defaults to the Telegram bot name',
+              'Defaults to the bot name + 6 random digits',
             )}
             disabled={locked}
             onChange={(event) => setChannelName(event.target.value)}

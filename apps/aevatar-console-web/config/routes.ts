@@ -12,7 +12,20 @@
  */
 import { CONSOLE_HOME_ROUTE } from '../src/shared/navigation/consoleHome';
 
+const workflowCanvasBenchmarkRoutes =
+  process.env.AEVATAR_WORKFLOW_CANVAS_BENCHMARK === '1'
+    ? [
+        {
+          path: '/workflow-canvas-benchmark',
+          component: './workflow-canvas-benchmark',
+          hideInMenu: true,
+          layout: false,
+        },
+      ]
+    : [];
+
 export default [
+  ...workflowCanvasBenchmarkRoutes,
   {
     path: '/login',
     component: './login',

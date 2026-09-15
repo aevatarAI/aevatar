@@ -201,7 +201,10 @@ export const workflowActivityVNextCss = `
 .wa-vnext__state--compact { border-style: solid; justify-items: start; min-height: 0; padding: 20px; place-items: initial; text-align: left; }
 .wa-vnext__state--compact h3 { font-size: 16px; margin: 0 0 7px; text-wrap: balance; }
 .wa-vnext__state--compact p { max-width: 560px; text-wrap: pretty; }
+.wa-vnext__list-feedback { color: var(--wa-amber); margin-bottom: 12px; }
 .wa-vnext__notice { background: var(--wa-amber-bg); border: 1px solid #fdb022; border-radius: var(--wa-radius); color: #7a2e0e; margin-bottom: 12px; padding: 10px 12px; }
+.wa-vnext__notice--progress { background: var(--wa-blue-bg); border-color: var(--wa-line); color: var(--wa-ink); }
+.wa-vnext__generation-details pre { max-height: 240px; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; }
 .wa-vnext__notice--error { background: var(--wa-red-bg); border-color: #fda29b; color: var(--wa-red); }
 .wa-vnext__panel { border: 1px solid var(--wa-line); border-radius: var(--wa-radius); padding: 20px; }
 .wa-vnext__form { display: grid; gap: 16px; }
@@ -226,7 +229,7 @@ export const workflowActivityVNextCss = `
 .wa-vnext__creation-heading { align-items: center; border-bottom: 1px solid var(--wa-line); display: flex; gap: 10px; padding-bottom: 14px; }
 .wa-vnext__creation-heading .ant-btn { margin-left: -12px; }
 .wa-vnext__creation-field > span:first-child { color: var(--wa-ink); display: block; font-size: 12px; font-weight: 650; line-height: 18px; }
-.wa-vnext__creation-actions { display: flex; justify-content: flex-end; padding-top: 2px; }
+.wa-vnext__creation-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; padding-top: 2px; }
 .wa-vnext__creation-actions .ant-btn { min-width: 156px; }
 .wa-vnext__creation-template-preview { border-left: 2px solid var(--wa-blue); padding: 2px 0 2px 14px; }
 .wa-vnext__template-browser { display: grid; gap: 18px; min-width: 0; }
