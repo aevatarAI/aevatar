@@ -198,7 +198,9 @@ export const channelsApi = {
   ): Promise<{ readonly registrationId: string }> {
     const botToken = input.botToken.trim();
     const label = input.label?.trim() ?? '';
-    const channelName = label || (await readTelegramBotName(botToken));
+    const channelName =
+      label ||
+      `${await readTelegramBotName(botToken)}-${Math.floor(100_000 + Math.random() * 900_000)}`;
     // This request carries the token only in the authenticated POST body.
     // Do not use a mutation cache, navigation state, or persistent draft.
     let response: Response;

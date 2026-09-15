@@ -84,7 +84,8 @@ export default {
   'channels.connect.botFather': 'Get token from BotFather',
   'channels.connect.name': 'Channel name',
   'channels.connect.optional': '(optional)',
-  'channels.connect.botNameDefault': 'Defaults to the Telegram bot name',
+  'channels.connect.botNameDefault':
+    'Defaults to the bot name + 6 random digits',
   'channels.connect.tokenRequired': 'Enter the bot token from BotFather.',
   'channels.connect.services': 'Services',
   'channels.connect.selected': '{count} selected',
