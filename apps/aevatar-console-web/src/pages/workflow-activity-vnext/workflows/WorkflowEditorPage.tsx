@@ -205,11 +205,20 @@ const WorkflowEditorPage: React.FC<{
     const pendingFocus = pendingRunConsoleFocusRef.current;
     if (!pendingFocus) return;
     pendingRunConsoleFocusRef.current = null;
-    if (pendingFocus === 'collapse') {
-      collapseRunConsoleButtonRef.current?.focus();
-      return;
-    }
-    expandRunConsoleButtonRef.current?.focus();
+    let cancelled = false;
+    // Focusing can close an Ant Design popup via flushSync. Wait until this
+    // React commit finishes before dispatching the resulting focus events.
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const button =
+        pendingFocus === 'collapse'
+          ? collapseRunConsoleButtonRef.current
+          : expandRunConsoleButtonRef.current;
+      button?.focus();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [runConsoleExpanded]);
 
   React.useEffect(() => {
@@ -464,6 +473,58 @@ const WorkflowEditorPage: React.FC<{
       requestInspectorDiscard(() => editor.selectNode(nodeId));
     },
     [editor.selectNode, editor.selectedNodeId, requestInspectorDiscard],
+  );
+
+  const openNodeLibrary = React.useCallback(() => {
+    if (!editorWriteLocked) setNodeLibraryOpen(true);
+  }, [editorWriteLocked]);
+
+  const closeNodeLibrary = React.useCallback(() => {
+    setNodeLibraryOpen(false);
+  }, []);
+
+  const requestConnectNodes = React.useCallback(
+    (sourceNodeId: string, targetNodeId: string) => {
+      requestInspectorDiscard(() => {
+        void editor.connectNodes(sourceNodeId, targetNodeId);
+      });
+    },
+    [editor.connectNodes, requestInspectorDiscard],
+  );
+
+  const requestDeleteEdges = React.useCallback(
+    (edgeIds: string[]) => {
+      requestInspectorDiscard(() => {
+        void editor.deleteEdges(edgeIds);
+      });
+    },
+    [editor.deleteEdges, requestInspectorDiscard],
+  );
+
+  const requestDeleteNodes = React.useCallback(
+    (nodeIds: string[]) => {
+      requestInspectorDiscard(() => {
+        void editor.deleteNodes(nodeIds);
+      });
+    },
+    [editor.deleteNodes, requestInspectorDiscard],
+  );
+
+  const requestEdgeSelect = React.useCallback(
+    (edgeId: string) => {
+      requestInspectorDiscard(() => editor.selectEdge(edgeId));
+    },
+    [editor.selectEdge, requestInspectorDiscard],
+  );
+
+  const requestInsertNode = React.useCallback(
+    (stepType: string) => {
+      requestInspectorDiscard(() => {
+        void editor.addNode(stepType);
+        setNodeLibraryOpen(false);
+      });
+    },
+    [editor.addNode, requestInspectorDiscard],
   );
 
   const requestEditorMode = React.useCallback(
@@ -1298,35 +1359,14 @@ const WorkflowEditorPage: React.FC<{
             addFirstStepDisabled={editorWriteLocked}
             nodes={editor.graph.nodes}
             nodeLibraryOpen={nodeLibraryOpen && !editorWriteLocked}
-            onAddFirstStep={() => {
-              if (!editorWriteLocked) setNodeLibraryOpen(true);
-            }}
+            onAddFirstStep={openNodeLibrary}
             onCanvasSelect={requestCanvasSelect}
-            onConnectNodes={(sourceNodeId, targetNodeId) => {
-              requestInspectorDiscard(() => {
-                void editor.connectNodes(sourceNodeId, targetNodeId);
-              });
-            }}
-            onCloseNodeLibrary={() => setNodeLibraryOpen(false)}
-            onDeleteEdges={(edgeIds) => {
-              requestInspectorDiscard(() => {
-                void editor.deleteEdges(edgeIds);
-              });
-            }}
-            onDeleteNodes={(nodeIds) => {
-              requestInspectorDiscard(() => {
-                void editor.deleteNodes(nodeIds);
-              });
-            }}
-            onEdgeSelect={(edgeId) => {
-              requestInspectorDiscard(() => editor.selectEdge(edgeId));
-            }}
-            onInsertNode={(stepType) => {
-              requestInspectorDiscard(() => {
-                void editor.addNode(stepType);
-                setNodeLibraryOpen(false);
-              });
-            }}
+            onConnectNodes={requestConnectNodes}
+            onCloseNodeLibrary={closeNodeLibrary}
+            onDeleteEdges={requestDeleteEdges}
+            onDeleteNodes={requestDeleteNodes}
+            onEdgeSelect={requestEdgeSelect}
+            onInsertNode={requestInsertNode}
             onNodeLayoutChange={editor.moveNodes}
             onNodeSelect={requestNodeSelect}
             selectedEdgeId={editor.selectedEdgeId}
@@ -1343,9 +1383,7 @@ const WorkflowEditorPage: React.FC<{
               className="wa-vnext__editor-add"
               disabled={editorWriteLocked}
               icon={<PlusOutlined />}
-              onClick={() => {
-                if (!editorWriteLocked) setNodeLibraryOpen(true);
-              }}
+              onClick={openNodeLibrary}
             >
               {t('workflowActivityVNext.editor.addNode', 'Add node')}
             </Button>

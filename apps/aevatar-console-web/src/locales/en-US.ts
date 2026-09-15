@@ -5,6 +5,7 @@ import workflowActivityVNextMessages from './workflowActivityVNextMessages.en-US
 const enUSMessages = {
   ...projectMessages,
   ...channelMessages,
+  'workflowCanvasBenchmark.title': 'Workflow canvas benchmark',
   ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
   'console.home.unavailable': 'Could not open your workspace',

@@ -5,6 +5,7 @@ import workflowActivityVNextMessages from './workflowActivityVNextMessages.zh-CN
 const zhCNMessages = {
   ...projectMessages,
   ...channelMessages,
+  'workflowCanvasBenchmark.title': '工作流画布基准测试',
   ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
   'console.home.unavailable': '暂时无法打开你的工作区',
