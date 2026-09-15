@@ -13,6 +13,7 @@ import {
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { getOrnnRuntimeConfig } from '@/shared/studio/ornnConfig';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 
 export function ChannelLink({
   href,
@@ -96,9 +97,15 @@ export function ChannelIdentity({
             platform: platformName(registration.platform),
           })}
         </strong>
-        <span className="channels__identifier" title={identifier}>
-          {compactChannelIdentifier(identifier)}
-        </span>
+        <AevatarTooltip title={identifier}>
+          <button
+            type="button"
+            className="channels__identifier channels__identifier-trigger"
+            aria-label={t('channels.identifier.showFull', 'Show full ID')}
+          >
+            {compactChannelIdentifier(identifier)}
+          </button>
+        </AevatarTooltip>
       </div>
     </div>
   );

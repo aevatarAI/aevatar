@@ -43,6 +43,9 @@ export const channelsCss = `
 .channels__identity-copy strong { font-size: 13px; font-weight: 600; }
 .channels__identifier { color: var(--wa-muted); font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; font-size: 11px; overflow-wrap: anywhere; }
 .channels__identity .channels__identifier { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channels__identifier-trigger { align-self: flex-start; background: transparent; border: 0; border-radius: 3px; cursor: help; max-width: 100%; padding: 0; text-align: left; }
+.channels__identifier-trigger:hover { color: var(--wa-ink); }
+.channels__identifier-trigger:focus-visible { outline: 2px solid var(--wa-blue); outline-offset: 3px; }
 .channels__skill { display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
 .channels__skill a { color: var(--wa-blue); font-weight: 500; }
 .channels__skill .anticon { font-size: 10px; }

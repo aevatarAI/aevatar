@@ -21,6 +21,7 @@ export default {
   'channels.skill.notSet': '未设置',
   'channels.skill.version': '版本 {version}',
   'channels.skill.open': '在 Ornn 中打开 {name}',
+  'channels.identifier.showFull': '查看完整 ID',
   'channels.column.channel': '渠道',
   'channels.column.skill': '技能',
   'channels.column.inbound': '消息入站',

@@ -22,6 +22,12 @@ The Figma `/keys/xxx` placeholder refers to NyxID service details, so it is not
 used for Agent keys. Each complete source ID is encoded as one URL segment;
 missing IDs remain unlinked placeholders.
 
+The compact identifier in each connected-channel row opens the shared Tooltip
+with the exact full bot ID (or registration ID when no bot ID exists). Mouse
+hover, keyboard focus and click/tap reveal the full value, which wraps within
+the Tooltip instead of being shortened again. The control has a visible focus
+ring.
+
 ## Routes and existing setup
 
 - `/scopes/:scopeId/workflow-activity-vnext/channels`: platform directory and
