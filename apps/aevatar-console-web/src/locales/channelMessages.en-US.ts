@@ -22,6 +22,7 @@ export default {
   'channels.skill.notSet': 'Not set',
   'channels.skill.version': 'Version {version}',
   'channels.skill.open': 'Open {name} in Ornn',
+  'channels.identifier.showFull': 'Show full ID',
   'channels.column.channel': 'Channel',
   'channels.column.skill': 'Skill',
   'channels.column.inbound': 'Inbound',
