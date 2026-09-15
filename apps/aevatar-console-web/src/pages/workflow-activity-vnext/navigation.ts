@@ -87,3 +87,10 @@ export function buildChannelDetailsHref(
 export function buildTelegramConnectionHref(scopeId: string): string {
   return `${buildWorkflowActivitySectionHref(scopeId, 'channels')}/connect/telegram`;
 }
+
+export function buildChannelEditHref(
+  scopeId: string,
+  registrationId: string,
+): string {
+  return `${buildChannelDetailsHref(scopeId, registrationId)}/edit`;
+}

@@ -14,6 +14,8 @@ export default function ChannelServicePicker({
   refreshing,
   disabled,
   retry,
+  editing = false,
+  usesDefaults = false,
 }: {
   readonly services: readonly ChannelServiceChoice[];
   readonly selectedIds: readonly string[];
@@ -23,6 +25,8 @@ export default function ChannelServicePicker({
   readonly refreshing: boolean;
   readonly disabled: boolean;
   readonly retry: () => void;
+  readonly editing?: boolean;
+  readonly usesDefaults?: boolean;
 }) {
   const [search, setSearch] = React.useState('');
   const term = search.trim().toLocaleLowerCase();
@@ -47,9 +51,11 @@ export default function ChannelServicePicker({
           {t('channels.connect.services', 'Services')}
         </h2>
         <span aria-live="polite">
-          {t('channels.connect.selected', '{count} selected', {
-            count: selectedIds.length,
-          })}
+          {usesDefaults
+            ? t('channels.edit.defaults', 'NyxID defaults')
+            : t('channels.connect.selected', '{count} selected', {
+                count: selectedIds.length,
+              })}
         </span>
       </div>
       <p className="channels__form-help">
@@ -67,10 +73,15 @@ export default function ChannelServicePicker({
       ) : failed ? (
         <div className="channels__service-state" role="alert">
           <p>
-            {t(
-              'channels.connect.servicesError',
-              'Could not load your services. Retry before connecting.',
-            )}
+            {editing
+              ? t(
+                  'channels.edit.servicesError',
+                  'Could not load your services. Try again before saving.',
+                )
+              : t(
+                  'channels.connect.servicesError',
+                  'Could not load your services. Retry before connecting.',
+                )}
           </p>
           <Button loading={refreshing} onClick={retry} disabled={disabled}>
             {t('channels.retry', 'Try again')}
@@ -78,10 +89,15 @@ export default function ChannelServicePicker({
         </div>
       ) : !services.length ? (
         <div className="channels__service-state" role="status">
-          {t(
-            'channels.connect.servicesEmpty',
-            'No services are available with your current NyxID authorization. You can connect this bot without service access.',
-          )}
+          {editing
+            ? t(
+                'channels.edit.servicesEmpty',
+                'No services are available with your current authorization.',
+              )
+            : t(
+                'channels.connect.servicesEmpty',
+                'No services are available with your current NyxID authorization. You can connect this bot without service access.',
+              )}
         </div>
       ) : (
         <div className="channels__service-picker">
@@ -170,12 +186,14 @@ export default function ChannelServicePicker({
           </div>
         </div>
       )}
-      <p className="channels__form-help">
-        {t(
-          'channels.connect.selectionHelp',
-          'Only selected services will be available to this bot.',
-        )}
-      </p>
+      {!usesDefaults ? (
+        <p className="channels__form-help">
+          {t(
+            'channels.connect.selectionHelp',
+            'Only selected services will be available to this bot.',
+          )}
+        </p>
+      ) : null}
     </section>
   );
 }
