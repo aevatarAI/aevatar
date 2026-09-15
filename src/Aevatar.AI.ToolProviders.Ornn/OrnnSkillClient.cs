@@ -240,9 +240,6 @@ public sealed class OrnnSkillClient
                 if (proxyError.Status == 403)
                     throw RemoteSkillFetchException.AccessDenied(idOrName, proxyError.Detail, proxyError.Status);
 
-                if (proxyError.Status == 404)
-                    return null;
-
                 throw RemoteSkillFetchException.Unavailable(
                     idOrName,
                     proxyError.Detail,
