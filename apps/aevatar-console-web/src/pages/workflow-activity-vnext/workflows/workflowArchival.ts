@@ -1,3 +1,8 @@
+import {
+  ensureWorkflowObservationActive,
+  waitForWorkflowObservation,
+} from './workflowObservation';
+
 export type WorkflowArchivalFacts = {
   readonly activeRevisionId: string;
   readonly deploymentId: string;
@@ -42,12 +47,9 @@ export function canArchiveWorkflow(workflow: WorkflowArchivalFacts): boolean {
   );
 }
 
-function defaultWait(delayMs: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
-}
-
 export async function observeWorkflowArchival(input: {
   readonly delaysMs?: readonly number[];
+  readonly signal?: AbortSignal;
   readonly readWorkflows: () => Promise<
     readonly WorkflowArchivalObservationItem[]
   >;
@@ -55,11 +57,16 @@ export async function observeWorkflowArchival(input: {
   readonly workflowId: string;
 }): Promise<WorkflowArchivalObservationResult> {
   const delays = input.delaysMs ?? WORKFLOW_ARCHIVAL_OBSERVATION_DELAYS_MS;
-  const wait = input.wait ?? defaultWait;
+  const wait =
+    input.wait ??
+    ((delayMs: number) => waitForWorkflowObservation(delayMs, input.signal));
 
   for (const delayMs of delays) {
+    ensureWorkflowObservationActive(input.signal);
     if (delayMs > 0) await wait(delayMs);
+    ensureWorkflowObservationActive(input.signal);
     const workflows = await input.readWorkflows();
+    ensureWorkflowObservationActive(input.signal);
     const target = workflows.find(
       (workflow) => workflow.workflowId === input.workflowId,
     );

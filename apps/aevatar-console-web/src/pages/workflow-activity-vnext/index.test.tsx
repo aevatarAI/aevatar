@@ -773,7 +773,7 @@ describe('Workflow Activity vNext catalogue', () => {
     );
   });
 
-  it('reports only the specific delete refresh failure after the draft was removed', async () => {
+  it('reports a failed completion check without claiming the draft was deleted', async () => {
     mockScopesApi.queryWorkflowCatalogue
       .mockResolvedValueOnce(
         createCatalogueResponse([
@@ -801,7 +801,7 @@ describe('Workflow Activity vNext catalogue', () => {
 
     await waitFor(() =>
       expect(mockConsoleToast.error).toHaveBeenCalledWith(
-        'Draft was deleted, but the workflow list could not refresh. Please try again.',
+        "Couldn't check whether the change has finished",
       ),
     );
     expect(mockConsoleToast.error).toHaveBeenCalledTimes(1);
@@ -1477,6 +1477,43 @@ describe('Workflow Activity vNext catalogue', () => {
     expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(3);
   });
 
+  it('keeps confirmed deletion distinct from a failed list refresh and retries the list', async () => {
+    mockScopesApi.queryWorkflowCatalogue
+      .mockResolvedValueOnce(
+        createCatalogueResponse([
+          createCatalogueRow({
+            workflowId: 'wf-support',
+            name: 'Support triage',
+          }),
+        ]),
+      )
+      .mockResolvedValueOnce(createCatalogueResponse([]))
+      .mockRejectedValueOnce(new Error('list refresh unavailable'))
+      .mockResolvedValue(createCatalogueResponse([]));
+    mockStudioApi.deleteWorkflowDraft.mockResolvedValue(undefined);
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    const row = (await screen.findByText('Support triage')).closest('tr');
+    fireEvent.click(
+      within(row as HTMLElement).getByRole('button', {
+        name: 'More actions for Support triage in Workspace',
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole('menuitem', { name: 'Delete draft' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Delete draft' }));
+    expect(
+      await screen.findByText(
+        "The workflow list couldn't refresh. The last loaded list is still shown.",
+      ),
+    ).toBeInTheDocument();
+    expect(mockConsoleToast.success).toHaveBeenCalledWith('Draft deleted');
+    expect(screen.getByText('Support triage')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('No workflows yet')).toBeInTheDocument();
+    expect(mockStudioApi.deleteWorkflowDraft).toHaveBeenCalledTimes(1);
+  });
+
   it('archives by workflow identity and observes the exact row across catalogue pages', async () => {
     const activeCommitted = {
       serviceKey: 'svc-alpha',
@@ -1550,7 +1587,7 @@ describe('Workflow Activity vNext catalogue', () => {
         query: 'wf-alpha',
         cursor: undefined,
         take: 100,
-      }),
+      }, expect.any(AbortSignal)),
     );
     expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledWith({
       scopeId: 'scope-alpha',
@@ -1558,7 +1595,7 @@ describe('Workflow Activity vNext catalogue', () => {
       query: 'wf-alpha',
       cursor: 'archive-page-2',
       take: 100,
-    });
+    }, expect.any(AbortSignal));
     expect(mockScopesApi.listWorkflows).not.toHaveBeenCalled();
     expect(mockScopesApi.archiveWorkflow).toHaveBeenCalledWith(
       'scope-alpha',
@@ -6400,18 +6437,16 @@ describe('Workflow Activity vNext creation', () => {
         "Workflow couldn't be created",
       ),
     );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "Workflow couldn't be created",
+    );
     expect(
-      screen.queryByText("Workflow couldn't be created"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByText('LLM service rejected the request'),
-    ).not.toBeInTheDocument();
+      screen.getByText('LLM service rejected the request'),
+    ).not.toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Change method' }));
     fireEvent.click(screen.getByRole('button', { name: 'Describe' }));
 
-    expect(
-      screen.queryByText("Workflow couldn't be created"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Workflow name')).toHaveValue('Weekly review');
   });
 

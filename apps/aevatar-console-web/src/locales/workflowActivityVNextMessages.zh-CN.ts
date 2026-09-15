@@ -3,6 +3,24 @@ import enUSMessages from './workflowActivityVNextMessages.en-US';
 const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
   {
     ...enUSMessages,
+    'workflowActivityVNext.workflows.refreshFailed': '工作流列表刷新失败，当前仍显示上次加载的列表。',
+    'workflowActivityVNext.new.cancelGeneration': '取消生成',
+    'workflowActivityVNext.new.generating': '正在生成工作流…',
+    'workflowActivityVNext.new.validating': '正在校验生成的工作流…',
+    'workflowActivityVNext.new.savingGenerated': '正在保存工作流…',
+    'workflowActivityVNext.new.generationTimedOut': '生成已超过两分钟，未保存草稿。你可以重试。',
+    'workflowActivityVNext.new.generationCancelled': '已取消生成，名称和描述已保留，未保存草稿。',
+    'workflowActivityVNext.new.generationReceiving': '已收到生成进度，正在等待完整工作流。',
+    'workflowActivityVNext.new.generationWaiting': '正在等待生成进度，你可以随时取消。',
+    'workflowActivityVNext.new.generationDetails': '生成详情',
+    'workflowActivityVNext.workflows.deleteSuccess': '草稿已删除',
+    'workflowActivityVNext.workflows.checkFailed': '暂时无法确认操作是否完成',
+    'workflowActivityVNext.workflows.changeObserving': '请求已接受，正在确认是否完成…',
+    'workflowActivityVNext.workflows.changeDelayed': '处理时间比预期更长，暂时还无法确认是否完成。',
+    'workflowActivityVNext.workflows.checkingDescription':
+      '将持续检查最多 30 秒。关闭弹窗不会撤销已提交的请求。',
+    'workflowActivityVNext.workflows.checkAgainDescription':
+      '点击“再次检查”查看结果，只检查状态，不会重复提交请求。',
     'workflowActivityVNext.arguments.addItem': '添加一项',
     'workflowActivityVNext.arguments.addItemAria': '向 {path} 添加一项',
     'workflowActivityVNext.arguments.addProperty': '添加属性',
@@ -870,8 +888,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.workflows.archive': '归档',
     'workflowActivityVNext.workflows.archiveCheckAgain': '再次检查',
     'workflowActivityVNext.workflows.archiveConfirm': '归档工作流',
-    'workflowActivityVNext.workflows.archiveDelayed':
-      '归档请求已接受，但尚未确认完成',
     'workflowActivityVNext.workflows.archiveDescription':
       '这会停止已发布工作流的新运行。可编辑草稿、已发布修订和活动历史仍会保留。再次发布即可恢复。',
     'workflowActivityVNext.workflows.archiveFailed': '无法归档工作流',
@@ -900,11 +916,6 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
       '此操作只删除可编辑草稿，已发布版本和运行历史会继续保留。',
     'workflowActivityVNext.workflows.deleteDraft': '删除草稿',
     'workflowActivityVNext.workflows.deleteFailed': '无法删除草稿',
-    'workflowActivityVNext.workflows.deleteRefreshFailed':
-      '草稿已删除，但工作流列表无法刷新，请重试。',
-    'workflowActivityVNext.workflows.deleteObservationDelayed':
-      '草稿已删除，但工作流目录尚未确认其移除',
-    'workflowActivityVNext.workflows.deleteRetry': '重试',
     'workflowActivityVNext.workflows.deleteTitle': '删除可编辑草稿？',
     'workflowActivityVNext.workflows.empty': '暂无工作流',
     'workflowActivityVNext.workflows.emptyDescription':
