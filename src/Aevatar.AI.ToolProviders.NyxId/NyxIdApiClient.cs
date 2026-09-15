@@ -969,7 +969,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         var url = BuildProxyUrl(slug, userServiceId, path, publicApiOnly: false);
         var httpMethod = new HttpMethod(method.ToUpperInvariant());
         var request = new HttpRequestMessage(httpMethod, url);
-        request.Headers.TryAddWithoutValidation("X-API-Key", apiKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
         var callerSpecifiedUserAgent = ApplyExtraHeaders(request, extraHeaders);
         if (!callerSpecifiedUserAgent)
