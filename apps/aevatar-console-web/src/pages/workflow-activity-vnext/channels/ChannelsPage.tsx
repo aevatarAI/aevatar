@@ -240,13 +240,14 @@ export default function ChannelsPage({
             </p>
           </div>
           <Button
-            className="channels__refresh"
             icon={<ReloadOutlined />}
             loading={refreshing}
             disabled={registrations.isPending}
             onClick={() => void refresh()}
             aria-label={t('channels.refresh', 'Refresh channels')}
-          />
+          >
+            {t('workflowActivityVNext.common.refresh', 'Refresh')}
+          </Button>
         </div>
         {registrations.isPending ? (
           <AevatarContentSkeleton

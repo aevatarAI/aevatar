@@ -7,6 +7,11 @@ import {
   readString,
 } from './http/decoders';
 
+export type ChannelServiceAuthorization =
+  | { readonly kind: 'explicit'; readonly serviceIds: readonly string[] }
+  | { readonly kind: 'nyxidDefault' }
+  | { readonly kind: 'unavailable' };
+
 export interface ChannelRegistration {
   readonly id: string;
   readonly platform: string;
@@ -20,6 +25,7 @@ export interface ChannelRegistration {
   } | null;
   readonly workflowDeliveryStatus: string | null;
   readonly owned: boolean;
+  readonly serviceAuthorization: ChannelServiceAuthorization;
 }
 
 export interface ChannelStatus {
@@ -58,6 +64,7 @@ export class ChannelRegistrationError extends Error {
 export interface TelegramRegistrationInput {
   readonly botToken: string;
   readonly label?: string;
+  readonly skillName?: string;
   readonly serviceIds: readonly string[];
   readonly webhookBaseUrl: string;
 }
@@ -170,7 +177,30 @@ function decodeRegistration(value: unknown): ChannelRegistration {
         'Workflow delivery status',
       ) || null,
     owned: expectBoolean(row.owned, 'Channel ownership'),
+    serviceAuthorization: decodeServiceAuthorization(row),
   };
+}
+
+function decodeServiceAuthorization(
+  row: Record<string, unknown>,
+): ChannelServiceAuthorization {
+  if (row.authorization_mode === 'nyxid_default')
+    return { kind: 'nyxidDefault' };
+  if (
+    row.authorization_mode !== 'explicit_service_allowlist' ||
+    row.service_ids == null
+  )
+    return { kind: 'unavailable' };
+  const serviceIds = expectArray(
+    row.service_ids,
+    'Authorized services',
+    (id) => {
+      if (typeof id !== 'string' || !id.trim())
+        throw new Error('Invalid authorized service identity.');
+      return id;
+    },
+  );
+  return { kind: 'explicit', serviceIds: [...new Set(serviceIds)] };
 }
 
 async function request<T>(
@@ -198,9 +228,11 @@ export const channelsApi = {
   ): Promise<{ readonly registrationId: string }> {
     const botToken = input.botToken.trim();
     const label = input.label?.trim() ?? '';
+    const skillName = input.skillName?.trim() ?? '';
+    const botName =
+      !label || !skillName ? await readTelegramBotName(botToken) : '';
     const channelName =
-      label ||
-      `${await readTelegramBotName(botToken)}-${Math.floor(100_000 + Math.random() * 900_000)}`;
+      label || `${botName}-${Math.floor(100_000 + Math.random() * 900_000)}`;
     // This request carries the token only in the authenticated POST body.
     // Do not use a mutation cache, navigation state, or persistent draft.
     let response: Response;
@@ -215,7 +247,7 @@ export const channelsApi = {
           platform: 'telegram',
           bot_token: botToken,
           label: channelName,
-          default_skill_name: channelName,
+          default_skill_name: skillName || botName,
           webhook_base_url: input.webhookBaseUrl,
           authorization_mode: 'explicit_service_allowlist',
           service_ids: [...input.serviceIds],
