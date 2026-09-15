@@ -136,7 +136,8 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
             ("credential_source_mode", 10),
             ("exposed_tool_catalog", 11),
             ("instructions", 12),
-            ("agent_key_grant", 13));
+            ("agent_key_grant", 13),
+            ("authorization_mode", 14));
 
         var original = new ChannelAgentKeyGrantSnapshot
         {

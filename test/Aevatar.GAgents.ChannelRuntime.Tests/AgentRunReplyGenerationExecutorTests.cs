@@ -621,7 +621,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var materializer = new ChannelRuntimeToolCatalogMaterializer(registry);
 
         var catalog = await materializer.MaterializeAsync(
-            new ChannelRuntimeConfigProof { ToolSetRefs = { "channel.reply.default" } },
+            new ChannelRuntimeConfigProof
+            {
+                ToolSetRefs = { "channel.reply.default" },
+                AuthorizationMode = ChannelRegistrationAuthorizationMode.NyxidDefault,
+            },
             [],
             AgentToolExecutionContext.Empty,
             CancellationToken.None);
@@ -629,6 +633,33 @@ public sealed class AgentRunReplyGenerationExecutorTests
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool", "calendar_create_event");
         catalog.Proof.ToolDescriptors.Single(static descriptor => descriptor.Name == "calendar_create_event")
             .Origin.Should().Be(AgentTurnToolOrigin.ConnectedService);
+    }
+
+    [Fact]
+    public async Task ChannelRuntimeCatalog_WhenExplicitRegistrationHasNoRuntimeSelectors_ShouldNotExposeConnectedOperations()
+    {
+        var routeTool = new CountingTool("route_tool");
+        var connectedOperation = new ConnectedOperationTool(
+            "calendar_create_event",
+            "api-google-workspace",
+            "calendar_create_event");
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.default", new StaticToolSource([routeTool, connectedOperation]));
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(registry);
+
+        var catalog = await materializer.MaterializeAsync(
+            new ChannelRuntimeConfigProof
+            {
+                ToolSetRefs = { "channel.reply.default" },
+                AuthorizationMode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
+            },
+            [],
+            AgentToolExecutionContext.Empty,
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool");
+        catalog.Proof.ToolDescriptors.Select(static descriptor => descriptor.Name)
+            .Should().BeEquivalentTo("route_tool");
     }
 
     [Fact]

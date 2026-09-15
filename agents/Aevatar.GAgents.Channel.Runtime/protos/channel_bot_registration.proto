@@ -123,6 +123,7 @@ message ChannelRuntimeConfigProof {
   aevatar.ai.AgentTurnToolCatalogProofPayload exposed_tool_catalog = 11;
   string instructions = 12;
   ChannelAgentKeyGrantSnapshot agent_key_grant = 13;
+  ChannelRegistrationAuthorizationMode authorization_mode = 14;
 }
 
 // Domain events for ChannelBotRegistrationGAgent

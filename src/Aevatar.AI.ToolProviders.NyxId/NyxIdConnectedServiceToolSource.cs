@@ -96,44 +96,18 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
             IReadOnlyList<NyxIdServiceInstanceBinding> bindings;
             if (credentialKind == AgentToolNyxIdCredentialKind.AgentKey)
             {
-                var evidence = context.ConnectedServices.AgentKeyAuthorizationEvidence;
-                if (evidence.HasServiceAuthority)
-                {
-                    var discoveredBindings = await _client.DiscoverAgentKeyAsync(
-                            executionToken,
-                            ct)
-                        .ConfigureAwait(false);
-                    bindings = discoveredBindings
-                        .Where(binding =>
-                            NyxIdServiceInstanceClient.IsCallerExecutable(binding.Instance) &&
-                            evidence.AllowsService(binding.Instance.UserServiceId) &&
-                            MatchesCatalogService(binding.Instance, catalogServiceSlug))
-                        .ToArray();
-                    _logger.LogInformation(
-                        "NyxID Agent Key evidence bindings filtered. catalogServiceSlug={CatalogServiceSlug} allowedServiceCount={AllowedServiceCount} allowAllServices={AllowAllServices} discoveredBindingCount={DiscoveredBindingCount} filteredBindingCount={FilteredBindingCount} filteredServiceIds={FilteredServiceIds} filteredSlugs={FilteredSlugs}",
-                        catalogServiceSlug ?? string.Empty,
-                        evidence.AllowedServiceIds.Count,
-                        evidence.AllowAllServices == true,
-                        discoveredBindings.Count,
-                        bindings.Count,
-                        string.Join(',', bindings.Select(static binding => binding.Instance.UserServiceId).Order(StringComparer.Ordinal)),
-                        string.Join(',', bindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)));
-                }
-                else
-                {
-                    var selectorBindings = ReadAgentKeySelectorBindings(context, executionToken, _logger);
-                    bindings = selectorBindings
-                        .Where(binding => MatchesCatalogService(binding.Instance, catalogServiceSlug))
-                        .ToArray();
-                    _logger.LogInformation(
-                        "NyxID Agent Key legacy selector bindings filtered. catalogServiceSlug={CatalogServiceSlug} selectorBindingCount={SelectorBindingCount} filteredBindingCount={FilteredBindingCount} selectorSlugs={SelectorSlugs} filteredSlugs={FilteredSlugs}",
-                        catalogServiceSlug ?? string.Empty,
-                        selectorBindings.Count,
-                        bindings.Count,
-                        string.Join(',', selectorBindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)),
-                        string.Join(',', bindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)));
-                }
-
+                var selectorBindings = ReadAgentKeySelectorBindings(context, executionToken, _logger);
+                bindings = selectorBindings
+                    .Where(binding => MatchesCatalogService(binding.Instance, catalogServiceSlug))
+                    .ToArray();
+                _logger.LogInformation(
+                    "NyxID Agent Key selector bindings filtered. catalogServiceSlug={CatalogServiceSlug} selectorBindingCount={SelectorBindingCount} filteredBindingCount={FilteredBindingCount} selectorSlugs={SelectorSlugs} filteredSlugs={FilteredSlugs} hasAgentKeyEvidence={HasAgentKeyEvidence}",
+                    catalogServiceSlug ?? string.Empty,
+                    selectorBindings.Count,
+                    bindings.Count,
+                    string.Join(',', selectorBindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)),
+                    string.Join(',', bindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)),
+                    context.ConnectedServices.AgentKeyAuthorizationEvidence.HasServiceAuthority);
                 if (bindings.Count == 0)
                 {
                     _logger.LogInformation(
@@ -141,7 +115,7 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                         "agent_key_binding_missing",
                         credentialKind,
                         catalogServiceSlug ?? string.Empty,
-                        evidence.HasServiceAuthority);
+                        context.ConnectedServices.AgentKeyAuthorizationEvidence.HasServiceAuthority);
                     return [];
                 }
 

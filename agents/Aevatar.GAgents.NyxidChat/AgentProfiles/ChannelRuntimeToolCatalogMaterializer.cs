@@ -444,6 +444,9 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
     {
         if (runtimeConfig.NyxidServiceSelectors.Count == 0)
         {
+            if (runtimeConfig.AuthorizationMode != ChannelRegistrationAuthorizationMode.NyxidDefault)
+                yield break;
+
             foreach (var pair in availableTools)
             {
                 if (toolContext.ToolVisibility.Allows(pair.Key) &&

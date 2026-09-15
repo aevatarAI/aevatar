@@ -334,7 +334,7 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
-    public async Task DiscoverToolsAsync_AgentKeyEvidence_ShouldMaterializeOpenApiOperationsFromGrantedServiceIds()
+    public async Task DiscoverToolsAsync_AgentKeyEvidenceWithoutRuntimeSelectors_ShouldNotReadUserInventory()
     {
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["agent-key-token"] = Keys(
@@ -342,9 +342,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 "usvc-google-workspace",
                 "api-google-workspace",
                 "svc-google-workspace",
-                "api-google-workspace"),
-            InstanceWithCatalogSlug("usvc-calendar", "api-calendar", "svc-calendar", "api-calendar"));
-        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/api-google-workspace/openapi.json"] = CustomOpenApi;
+                "api-google-workspace"));
         var source = CreateSource(handler);
 
         using var scope = PushContext(
@@ -356,18 +354,10 @@ public class NyxIdConnectedServiceToolSourceTests
                 allowAllServices: false));
         var tools = await source.DiscoverToolsAsync();
 
-        var tool = tools.Should().ContainSingle().Subject;
-        var owner = tool.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
-        owner.OperationAdmission.ServiceInstanceId.Should().Be("usvc-google-workspace");
-        owner.OperationAdmission.ServiceSlug.Should().Be("api-google-workspace");
-        owner.OperationAdmission.CatalogServiceSlug.Should().Be("api-google-workspace");
-        owner.OperationAdmission.Identity.Should().Be(
-            new AgentToolOperationIdentity.PublishedEndpoint("readDiningProfileContext"));
-        handler.DiscoveryRequests.Should().Be(1);
-        handler.DiscoveryTokens.Should().Equal("agent-key-token");
+        tools.Should().BeEmpty();
+        handler.DiscoveryRequests.Should().Be(0);
         handler.McpConfigRequests.Should().Be(0);
-        handler.RawOpenApiRequests.Should().Equal(
-            "/api/v1/catalog-specs/api-google-workspace/openapi.json");
+        handler.RawOpenApiRequests.Should().BeEmpty();
     }
 
     [Theory]
