@@ -84,6 +84,8 @@ export default {
   'channels.connect.hideToken': 'Hide bot token',
   'channels.connect.botFather': 'Get token from BotFather',
   'channels.connect.name': 'Channel name',
+  'channels.connect.skillName': 'Skill name',
+  'channels.connect.skillNameDefault': 'Defaults to the Telegram bot name',
   'channels.connect.optional': '(optional)',
   'channels.connect.botNameDefault':
     'Defaults to the bot name + 6 random digits',
@@ -119,7 +121,7 @@ export default {
   'channels.connect.error.services':
     'The selected services are no longer available. Review your selection and try again.',
   'channels.connect.error.skill':
-    'Could not configure the bot skill. Check the Channel name and your access in Ornn.',
+    'Could not configure the bot skill. Check the Skill name and your access in Ornn.',
   'channels.connect.error.authorization':
     'Your session or service access needs attention. Sign in again and review your NyxID access.',
   'channels.connect.error.conflict':
@@ -127,7 +129,7 @@ export default {
   'channels.connect.error.configuration':
     'Channel setup is unavailable. Ask your administrator to check the deployment configuration.',
   'channels.connect.error.rejected':
-    'Could not connect Telegram. Check the bot token, Channel name, and selected services, then try again.',
+    'Could not connect Telegram. Check the bot token, Skill name, and selected services, then try again.',
   'channels.connect.error.uncertain':
     'Could not confirm the connection. Please try again.',
   'channels.connect.discardTitle': 'Discard this connection setup?',

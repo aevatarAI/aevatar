@@ -46,12 +46,15 @@ const service = {
 };
 const servicePath = 'https://nyx.example.test/api/v1/user-services';
 const listPath = '/api/channels/registrations';
-function enterChannelName() {
+function enterBotDetails() {
   fireEvent.change(screen.getByLabelText(/^Bot token/), {
     target: { value: 'TEST_ONLY_TOKEN' },
   });
   fireEvent.change(screen.getByLabelText(/^Channel name/), {
     target: { value: 'My team bot' },
+  });
+  fireEvent.change(screen.getByLabelText(/^Skill name/), {
+    target: { value: 'my-team-skill' },
   });
 }
 beforeEach(() => {
@@ -105,7 +108,7 @@ it('reads registrations only after acceptance or Check again, never while idle o
     await screen.findByText(/No services are available/);
     await idleAndReturn();
     expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([servicePath]);
-    enterChannelName();
+    enterBotDetails();
     fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
     await screen.findByText(
       'Could not confirm the connection. Please try again.',
@@ -214,7 +217,7 @@ it('searches services, enforces permissions, submits selected IDs once and waits
     screen.queryByRole('checkbox', { name: /GitHub work/ }),
   ).not.toBeInTheDocument();
   expect(screen.getByText('2 selected')).toBeInTheDocument();
-  enterChannelName();
+  enterBotDetails();
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
   fireEvent.submit(screen.getByRole('form', { name: 'Connect Telegram' }));
   expect(
@@ -224,12 +227,13 @@ it('searches services, enforces permissions, submits selected IDs once and waits
     ([, init]) => init?.method === 'POST',
   );
   expect(posts).toHaveLength(1);
+  expect(screen.getByLabelText(/^Skill name/)).toBeDisabled();
   expect(posts[0][0]).toBe(listPath);
   expect(JSON.parse(String(posts[0][1]?.body))).toEqual({
     platform: 'telegram',
     bot_token: 'TEST_ONLY_TOKEN',
     label: 'My team bot',
-    default_skill_name: 'My team bot',
+    default_skill_name: 'my-team-skill',
     authorization_mode: 'explicit_service_allowlist',
     service_ids: ['user-service-github', 'user-service-model'],
     webhook_base_url: 'https://aevatar-console-backend-api.aevatar.ai',
@@ -384,11 +388,14 @@ it('recovers inventory failure and defaults optional names with an explicitly em
     false,
   );
   expect(screen.getByLabelText('Channel name (optional)')).not.toBeRequired();
-  expect(screen.queryByLabelText(/^Skill name/)).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Skill name (optional)')).not.toBeRequired();
   fireEvent.change(screen.getByLabelText(/^Bot token/), {
     target: { value: telegramToken },
   });
   fireEvent.change(screen.getByLabelText('Channel name (optional)'), {
+    target: { value: '   ' },
+  });
+  fireEvent.change(screen.getByLabelText('Skill name (optional)'), {
     target: { value: '   ' },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
@@ -405,7 +412,7 @@ it('recovers inventory failure and defaults optional names with an explicitly em
   );
   expect(payload).toMatchObject({
     label: expect.stringMatching(/^My Telegram Bot-[1-9]\d{5}$/),
-    default_skill_name: payload.label,
+    default_skill_name: 'My Telegram Bot',
     service_ids: [],
   });
   expect(screen.getByLabelText(/^Bot token/)).toHaveValue(telegramToken);
@@ -415,7 +422,7 @@ it('recovers inventory failure and defaults optional names with an explicitly em
   ).toBeEnabled();
 });
 
-it('shows a name-lookup toast and retries with the current token and custom field value', async () => {
+it('shows a name-lookup toast and retries with the current token and custom field values', async () => {
   telegramFetch.mockRejectedValueOnce(
     new Error(`Failed https://api.telegram.org/bot${telegramToken}/getMe`),
   );
@@ -450,6 +457,9 @@ it('shows a name-lookup toast and retries with the current token and custom fiel
   fireEvent.change(screen.getByLabelText(/^Channel name/), {
     target: { value: 'Custom label' },
   });
+  fireEvent.change(screen.getByLabelText(/^Skill name/), {
+    target: { value: 'custom-skill' },
+  });
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
   await screen.findByText(/Telegram setup was submitted/);
   expect(telegramFetch.mock.calls.map(([url]) => url)).toEqual([
@@ -459,7 +469,7 @@ it('shows a name-lookup toast and retries with the current token and custom fiel
   expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({
     bot_token: updatedToken,
     label: 'Custom label',
-    default_skill_name: 'Custom label',
+    default_skill_name: 'custom-skill',
   });
 });
 
@@ -496,7 +506,7 @@ it.each([
   });
   renderWithQueryClient(<TelegramConnectionPage scopeId="scope-alpha" />);
   fireEvent.click(await screen.findByRole('checkbox', { name: 'Select all' }));
-  enterChannelName();
+  enterBotDetails();
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'Could not confirm the connection. Please try again.',
@@ -505,6 +515,8 @@ it.each([
   expect(within(form).queryByRole('alert')).not.toBeInTheDocument();
   expect(screen.getByLabelText(/^Bot token/)).toHaveValue('TEST_ONLY_TOKEN');
   expect(screen.getByLabelText(/^Channel name/)).toHaveValue('My team bot');
+  expect(screen.getByLabelText(/^Skill name/)).toHaveValue('my-team-skill');
+  expect(screen.getByLabelText(/^Skill name/)).toBeEnabled();
   expect(screen.getByRole('checkbox', { name: 'Select all' })).toBeChecked();
   expect(screen.getByRole('checkbox', { name: 'Select all' })).toBeEnabled();
   expect(
@@ -548,7 +560,7 @@ it('removes revoked selections after a rejected submission and allows a retry wi
   });
   renderWithQueryClient(<TelegramConnectionPage scopeId="scope-alpha" />);
   fireEvent.click(await screen.findByRole('checkbox', { name: /GitHub work/ }));
-  enterChannelName();
+  enterBotDetails();
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
   await screen.findByText(
     'The selected services are no longer available. Review your selection and try again.',
@@ -583,17 +595,19 @@ it('removes revoked selections after a rejected submission and allows a retry wi
   expect(JSON.parse(String(posts[1][1]?.body)).service_ids).toEqual([]);
 });
 
-it('confirms discarding an edited setup without issuing a registration request', async () => {
+it('confirms discarding a skill-only edit without issuing a registration request', async () => {
   renderWithQueryClient(<TelegramConnectionPage scopeId="scope-alpha" />);
   await screen.findByRole('checkbox', { name: /GitHub work/ });
-  enterChannelName();
+  fireEvent.change(screen.getByLabelText(/^Skill name/), {
+    target: { value: 'unsaved-skill' },
+  });
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   const dialog = await screen.findByRole('dialog', {
     name: 'Discard this connection setup?',
   });
   expect(history.push).not.toHaveBeenCalled();
   fireEvent.click(within(dialog).getByRole('button', { name: 'Stay' }));
-  expect(screen.getByLabelText(/^Channel name/)).toHaveValue('My team bot');
+  expect(screen.getByLabelText(/^Skill name/)).toHaveValue('unsaved-skill');
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   fireEvent.click(
     within(await screen.findByRole('dialog')).getByRole('button', {
