@@ -721,6 +721,7 @@ public class NyxLarkProvisioningServiceTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be("channel_bot_id_request_failed");
+        result.ErrorDetail.Should().BeNull();
         logger.Messages.Should().NotContain(message =>
             message.Contains("provider-echoed-secret-value", StringComparison.Ordinal));
         handler.Requests.Should().HaveCount(3);
@@ -729,6 +730,22 @@ public class NyxLarkProvisioningServiceTests
         secretVault.RevokeRequests.Should().ContainSingle();
         secretVault.RevokeRequests[0].Ref.Should().Be(secretVault.StoredReferences.Single().Ref);
         secretVault.RevokeRequests[0].SubjectId.Should().Be("key-123");
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ShouldReturnSafeErrorDetail_WhenChannelBotLimitIsReached()
+    {
+        var handler = new RecordingHandler();
+        handler.Enqueue("/api/v1/api-keys", GeneralAgentKeyResponse("key-123", "full-key"));
+        handler.Enqueue("/api/v1/channel-bots", """{"error":true,"status":429,"body":"channel bot limit reached"}""");
+        handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-123", """{"ok":true}""");
+        var service = CreateService(handler);
+
+        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("channel_bot_id_request_failed");
+        result.ErrorDetail.Should().Be("channel_bot_limit_reached");
     }
 
     [Fact]

@@ -208,10 +208,16 @@ public static class ChannelCallbackEndpoints
                 : "repair_required",
             error = result.Error ?? string.Empty,
             note = result.Note ?? string.Empty,
+            error_detail = result.ErrorDetail,
         };
 
         if (result.Succeeded)
-            return Results.Accepted(value: payload);
+        {
+            return Results.Json(
+                payload,
+                RegistrationJsonOptions,
+                statusCode: StatusCodes.Status202Accepted);
+        }
 
         var statusCode = ResolveProvisioningFailureStatusCode(result.Error);
         logger.LogWarning(
@@ -219,7 +225,7 @@ public static class ChannelCallbackEndpoints
                 result.Platform,
             statusCode,
             result.Error);
-        return Results.Json(payload, statusCode: statusCode);
+        return Results.Json(payload, RegistrationJsonOptions, statusCode: statusCode);
     }
 
     private static async Task<IResult> HandleListServicesAsync(
