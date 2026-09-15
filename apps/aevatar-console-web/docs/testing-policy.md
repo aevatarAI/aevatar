@@ -364,6 +364,13 @@ distinct user-facing risk justifies it.
 
 ## Coverage and Reporting
 
+GitHub CI runs the complete frontend test inventory in four Jest shards on
+separate runners. Each shard keeps serial execution within its own process.
+The existing `console-web` check requires every shard to succeed before running
+the full typecheck and production build; a failed, cancelled or skipped shard
+fails that check. The 35-minute job budget remains in place. Local development
+continues to use the focused commands above.
+
 - Coverage is diagnostic evidence, not a reason to create low-value tests or
   exercise generated code. Do not organize test files as generic coverage
   buckets.

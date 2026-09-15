@@ -5139,13 +5139,17 @@ describe('Workflow Activity vNext editor', () => {
 
     await renderPublishedWorkflowPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-    const input = await screen.findByRole('textbox', {
+    const runButton = await screen.findByRole('button', { name: 'Run' });
+    fireEvent.click(runButton);
+    const runPanel = await screen.findByRole('complementary', {
+      name: 'Published run panel',
+    });
+    const input = within(runPanel).getByRole('textbox', {
       name: 'Published run input',
     });
     fireEvent.change(input, { target: { value: 'Review order 42' } });
     fireEvent.click(
-      screen.getByRole('button', { name: 'Start published run' }),
+      within(runPanel).getByRole('button', { name: 'Start published run' }),
     );
 
     const logs = await screen.findByRole('complementary', {
@@ -5158,38 +5162,37 @@ describe('Workflow Activity vNext editor', () => {
     );
 
     fireEvent.click(
-      screen.getByRole('button', { name: 'Close published run panel' }),
+      within(runPanel).getByRole('button', {
+        name: 'Close published run panel',
+      }),
     );
     expect(
       screen.queryByRole('complementary', { name: 'Published run panel' }),
     ).not.toBeInTheDocument();
     expect(logs).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
-    expect(
-      await screen.findByRole('textbox', { name: 'Published run input' }),
-    ).toHaveValue('Review order 42');
+    fireEvent.click(runButton);
+    const reopenedPanel = await screen.findByRole('complementary', {
+      name: 'Published run panel',
+    });
+    const reopenedInput = within(reopenedPanel).getByRole('textbox', {
+      name: 'Published run input',
+    });
+    expect(reopenedInput).toHaveValue('Review order 42');
 
     expect(
-      await within(logs).findByText(
-        'Order 42 is ready for approval.',
-        {},
-        {
-          timeout: 2500,
-        },
-      ),
+      await within(logs).findByText('Order 42 is ready for approval.'),
     ).toBeInTheDocument();
     fireEvent.click(within(logs).getByRole('button', { name: 'Clear logs' }));
     expect(
       screen.queryByRole('complementary', { name: 'Workflow run console' }),
     ).not.toBeInTheDocument();
 
-    fireEvent.change(
-      screen.getByRole('textbox', { name: 'Published run input' }),
-      { target: { value: 'A different input' } },
-    );
+    fireEvent.change(reopenedInput, { target: { value: 'A different input' } });
     fireEvent.click(
-      screen.getByRole('button', { name: 'Start published run' }),
+      within(reopenedPanel).getByRole('button', {
+        name: 'Start published run',
+      }),
     );
     expect(
       await screen.findByRole('complementary', {

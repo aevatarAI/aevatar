@@ -233,19 +233,53 @@ jobs:
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
 
+  console-web-tests:
+    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.2.1
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/aevatar-console-web/pnpm-lock.yaml
+
+      - name: Install console-web dependencies
+        run: pnpm --dir apps/aevatar-console-web install --frozen-lockfile
+
+      - name: Test console-web shard
+        run: pnpm --dir apps/aevatar-console-web test --runInBand --shard=${{ matrix.shard }}/4
+
   console-web:
     # Refactor (iter16/cluster-ci-systemic-refactor):
     #   Old pattern: console-web skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or console_web changes
     #   New principle: gate on changes.outputs.console_web per Phase 9 #716 r3 consensus A
-    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
-    needs: changes
+    # Keep the existing required check name and fail it if any test shard fails
+    # or is cancelled. All tests run once across the four Jest partitions.
+    if: always() && needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
+    needs: [changes, console-web-tests]
     runs-on: ubuntu-latest
-    # The serial suite grew into this budget: recent runs took 19m02s, 19m35s,
-    # 19m57s, then 20m10s and 20m17s, the last two cancelled mid-test at the
-    # 20m cap. The ~18m of test work is real, so give it headroom rather than
-    # letting every run decide the build on runner jitter.
     timeout-minutes: 35
     steps:
+      - name: Require all console-web test shards
+        env:
+          TEST_SHARDS_RESULT: ${{ needs.console-web-tests.result }}
+        run: test "$TEST_SHARDS_RESULT" = success
+
       - uses: actions/checkout@v4
 
       - name: Setup pnpm
@@ -266,9 +300,6 @@ jobs:
 
       - name: Type-check console-web
         run: pnpm --dir apps/aevatar-console-web tsc
-
-      - name: Test console-web
-        run: pnpm --dir apps/aevatar-console-web test --runInBand
 
       - name: Build console-web
         run: pnpm --dir apps/aevatar-console-web build
