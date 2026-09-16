@@ -46,6 +46,7 @@ export default {
   'channels.connectedDescription': 'Channels connected to your account.',
   'channels.name.loading': 'Loading name…',
   'channels.name.unavailable': 'Name unavailable',
+  'channels.name.retry': 'Reload channel name',
   'channels.column.name': 'Channel name',
   'channels.skill.notSet': 'Not set',
   'channels.skill.version': 'Version {version}',
@@ -147,8 +148,12 @@ export default {
     'Only selected services will be available to this bot.',
   'channels.connect.selectionChanged':
     'Some selected services are no longer available. Deselect them before connecting.',
-  'channels.connect.accepted':
-    'Telegram connection request submitted. Use Refresh if the channel is not visible yet.',
+  'channels.connect.pending':
+    'Your request was submitted. Check again to open your channel when it is ready.',
+  'channels.connect.check': 'Check again',
+  'channels.connect.success': 'Telegram channel created.',
+  'channels.connect.error.confirmation':
+    'Could not check your channel. Please check again.',
   'channels.connect.submitted': 'Request submitted',
   'channels.connect.error.token':
     'Check the bot token from BotFather and try again.',

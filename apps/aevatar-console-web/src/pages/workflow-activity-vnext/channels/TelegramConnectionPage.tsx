@@ -14,13 +14,16 @@ import {
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
-import { buildWorkflowActivitySectionHref } from '../navigation';
+import {
+  buildChannelDetailsHref,
+  buildWorkflowActivitySectionHref,
+} from '../navigation';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import ChannelServicePicker from './ChannelServicePicker';
 import ChannelSkillField from './ChannelSkillField';
 import { getChannelWebhookBaseUrl } from './config';
 import { channelConnectionCss } from './connectionStyles';
-import { useChannelServiceChoices } from './queries';
+import { useChannelRegistrations, useChannelServiceChoices } from './queries';
 import { channelsCss } from './styles';
 
 function registrationErrorMessage(reason: ChannelRegistrationFailure) {
@@ -78,15 +81,19 @@ export default function TelegramConnectionPage({
   const [skillName, setSkillName] = React.useState('');
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
-  const [submissionAccepted, setSubmissionAccepted] = React.useState(false);
+  const [submittedId, setSubmittedId] = React.useState<string | null>(null);
   const [validationAttempted, setValidationAttempted] = React.useState(false);
   const [leaveTarget, setLeaveTarget] = React.useState<string | null>(null);
   const inFlight = React.useRef(false);
+  const checking = React.useRef(false);
+  const completed = React.useRef(false);
   const mounted = React.useRef(true);
   const toast = useConsoleToast();
   const webhookBaseUrl = getChannelWebhookBaseUrl();
   const listHref = buildWorkflowActivitySectionHref(scopeId, 'channels');
   const services = useChannelServiceChoices(scopeId);
+  const registrations = useChannelRegistrations(scopeId, false);
+  const submissionAccepted = submittedId !== null;
   const invalidSelection = selectedIds.some(
     (id) =>
       !services.data?.some(
@@ -129,6 +136,39 @@ export default function TelegramConnectionPage({
     else history.push(target);
   }
 
+  async function checkRegistration(registrationId: string) {
+    if (checking.current || completed.current) return;
+    checking.current = true;
+    try {
+      // Only a successful fresh read can confirm this submission, not cached data.
+      const result = await registrations.refetch();
+      if (!mounted.current) return;
+      if (result.isError) {
+        toast.error(
+          t(
+            'channels.connect.error.confirmation',
+            'Could not check your channel. Please check again.',
+          ),
+        );
+        return;
+      }
+      if (
+        !result.data?.some(
+          (row) =>
+            row.id === registrationId &&
+            row.scopeId === scopeId &&
+            row.platform === 'telegram',
+        )
+      )
+        return;
+      completed.current = true;
+      toast.success(t('channels.connect.success', 'Telegram channel created.'));
+      history.replace(buildChannelDetailsHref(scopeId, registrationId));
+    } finally {
+      checking.current = false;
+    }
+  }
+
   async function connect(event: React.FormEvent) {
     event.preventDefault();
     if (inFlight.current || locked) return;
@@ -144,13 +184,17 @@ export default function TelegramConnectionPage({
     inFlight.current = true;
     setSubmitting(true);
     try {
-      await channelsApi.registerTelegram({
+      const receipt = await channelsApi.registerTelegram({
         botToken,
         label: channelName,
         skillName,
         serviceIds: selectedIds,
         webhookBaseUrl,
       });
+      if (!mounted.current) return;
+      setBotToken('');
+      setSubmittedId(receipt.registrationId);
+      void checkRegistration(receipt.registrationId);
     } catch (failure) {
       if (!mounted.current) return;
       const reason =
@@ -164,18 +208,6 @@ export default function TelegramConnectionPage({
       inFlight.current = false;
       if (mounted.current) setSubmitting(false);
     }
-    if (!mounted.current) return;
-    setBotToken('');
-    setSubmissionAccepted(true);
-    // Admission is not completion. The list owns loading the resulting channel;
-    // do not leave the form waiting on a one-shot read or start background polls.
-    toast.info(
-      t(
-        'channels.connect.accepted',
-        'Telegram connection request submitted. Use Refresh if the channel is not visible yet.',
-      ),
-    );
-    history.replace(listHref);
   }
 
   return (
@@ -331,6 +363,22 @@ export default function TelegramConnectionPage({
           <p className="channels__form-error" role="alert">
             {registrationErrorMessage('configuration')}
           </p>
+        ) : null}
+        {submittedId ? (
+          <div className="channels__connection-status" role="status">
+            <p>
+              {t(
+                'channels.connect.pending',
+                'Your request was submitted. Check again to open your channel when it is ready.',
+              )}
+            </p>
+            <Button
+              loading={registrations.isFetching}
+              onClick={() => void checkRegistration(submittedId)}
+            >
+              {t('channels.connect.check', 'Check again')}
+            </Button>
+          </div>
         ) : null}
         <div className="channels__form-actions">
           <Button disabled={submitting} onClick={() => navigate(listHref)}>

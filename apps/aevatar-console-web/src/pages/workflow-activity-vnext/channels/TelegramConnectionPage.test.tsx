@@ -13,6 +13,7 @@ import { history } from '@/shared/navigation/history';
 import { createNyxIDServiceSession } from '../../../../tests/fixtures/nyxidServiceSession';
 import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
 import WorkflowActivityVNextPage from '../index';
+import { channelKeys } from './queries';
 import TelegramConnectionPage from './TelegramConnectionPage';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
@@ -46,6 +47,16 @@ const service = {
 };
 const servicePath = 'https://nyx.example.test/api/v1/user-services';
 const listPath = '/api/channels/registrations';
+const createdRegistration = {
+  id: 'registration-created',
+  platform: 'telegram',
+  scope_id: 'scope-alpha',
+  owned: true,
+  nyx_channel_bot_id: 'bot-created',
+  default_skill: { name: 'saved-skill', version: '1.2' },
+  authorization_mode: 'explicit_service_allowlist',
+  service_ids: ['user-service-github'],
+};
 function enterBotDetails() {
   fireEvent.change(screen.getByLabelText(/^Bot token/), {
     target: { value: 'TEST_ONLY_TOKEN' },
@@ -72,10 +83,11 @@ afterEach(() => {
   global.fetch = originalFetch;
 });
 
-it('returns to Channels after admission without waiting for a list read or adding automatic refresh', async () => {
+it('confirms the exact submitted channel with fresh reads and retries only GET without automatic refresh', async () => {
   jest.useFakeTimers();
   try {
     let attempts = 0;
+    let reads = 0;
     fetchMock.mockImplementation(async (input, init) => {
       if (init?.method === 'POST') {
         attempts += 1;
@@ -85,6 +97,25 @@ it('returns to Channels after admission without waiting for a list read or addin
               { status: 'accepted', registration_id: 'registration-new' },
               202,
             );
+      }
+      if (input === listPath) {
+        reads += 1;
+        if (reads === 1) return response({}, 503);
+        if (reads === 2)
+          return response([
+            {
+              ...createdRegistration,
+              id: 'registration-new',
+              scope_id: 'other-scope',
+            },
+            {
+              ...createdRegistration,
+              id: 'registration-new',
+              platform: 'lark',
+            },
+            createdRegistration,
+          ]);
+        return response([{ ...createdRegistration, id: 'registration-new' }]);
       }
       return input === servicePath ? response({ services: [] }) : response([]);
     });
@@ -101,6 +132,9 @@ it('returns to Channels after admission without waiting for a list read or addin
     const view = renderWithQueryClient(
       <TelegramConnectionPage scopeId="scope-alpha" />,
     );
+    view.queryClient.setQueryData(channelKeys.list('scope-alpha'), [
+      { id: 'registration-new', scopeId: 'scope-alpha', platform: 'telegram' },
+    ]);
     await screen.findByText(/No services are available/);
     await idleAndReturn();
     expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([servicePath]);
@@ -113,12 +147,12 @@ it('returns to Channels after admission without waiting for a list read or addin
     expect(history.replace).not.toHaveBeenCalled();
     expect(attempts).toBe(1);
     fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
-    await screen.findByText(/Telegram connection request submitted/);
-    expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/channels',
+    await screen.findByText(
+      'Could not check your channel. Please check again.',
     );
+    expect(history.replace).not.toHaveBeenCalled();
     expect(
-      screen.queryByRole('button', { name: 'Check again' }),
+      screen.queryByText('Telegram channel created.'),
     ).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Request submitted' }),
@@ -129,13 +163,23 @@ it('returns to Channels after admission without waiting for a list read or addin
     expect(leaving.defaultPrevented).toBe(false);
     fireEvent.submit(screen.getByRole('form', { name: 'Connect Telegram' }));
     await idleAndReturn();
-    expect(history.replace).toHaveBeenCalledTimes(1);
+    expect(history.replace).not.toHaveBeenCalled();
     expect(attempts).toBe(2);
-    expect(
-      fetchMock.mock.calls.filter(
-        ([input, init]) => input === listPath && init?.method !== 'POST',
-      ),
-    ).toHaveLength(0);
+    expect(reads).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled(),
+    );
+    await idleAndReturn();
+    expect(reads).toBe(2);
+    expect(history.replace).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await screen.findByText('Telegram channel created.');
+    expect(history.replace).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-new',
+    );
+    expect(attempts).toBe(2);
+    expect(reads).toBe(3);
     view.unmount();
   } finally {
     focusManager.setFocused(undefined);
@@ -147,13 +191,30 @@ it('returns to Channels after admission without waiting for a list read or addin
   }
 });
 
-it('searches services, enforces permissions and returns to Channels after one accepted submission', async () => {
+it('creates once and opens the new channel details with its saved name, skill and service grants', async () => {
+  jest.mocked(history.replace).mockRestore();
   let resolvePost!: (value: Response) => void;
   const post = new Promise<Response>((resolve) => {
     resolvePost = resolve;
   });
   fetchMock.mockImplementation(async (input, init) => {
     if (init?.method === 'POST') return post;
+    if (input === listPath) return response([createdRegistration]);
+    if (input === 'https://nyx.example.test/api/v1/channel-bots')
+      return response({
+        bots: [
+          {
+            id: 'bot-created',
+            platform: 'telegram',
+            label: 'Saved channel name',
+          },
+        ],
+      });
+    if (input === `${listPath}/registration-created/status`)
+      return response({
+        registration_id: 'registration-created',
+        status: 'pending_webhook',
+      });
     if (input === servicePath)
       return response({
         services: [
@@ -250,17 +311,26 @@ it('searches services, enforces permissions and returns to Channels after one ac
     ),
   );
   expect(
-    await screen.findByText(/Telegram connection request submitted/),
+    await screen.findByText('Telegram channel created.'),
   ).toBeInTheDocument();
-  expect(screen.getByLabelText(/^Bot token/)).toHaveValue('');
   expect(
-    screen.queryByText(
-      'Telegram added. Send your bot a message to get started.',
-    ),
-  ).not.toBeInTheDocument();
-  expect(history.replace).toHaveBeenCalledWith(
-    '/scopes/scope-alpha/workflow-activity-vnext/channels',
+    await screen.findByRole('heading', {
+      level: 1,
+      name: 'Saved channel name',
+    }),
+  ).toBeInTheDocument();
+  expect(window.location.pathname).toBe(
+    '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-created',
   );
+  const details = screen.getByRole('region', { name: 'Channel details' });
+  expect(
+    within(details).getByRole('link', { name: 'Open saved-skill in Ornn' }),
+  ).toBeInTheDocument();
+  expect(within(details).getByText('Version 1.2')).toBeInTheDocument();
+  expect(await within(details).findByText('GitHub work')).toBeInTheDocument();
+  expect(within(details).queryByText('Chrono Public')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText(/^Bot token/)).not.toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent('TEST_ONLY');
   expect(
     JSON.stringify(
       view.queryClient
@@ -274,7 +344,7 @@ it('searches services, enforces permissions and returns to Channels after one ac
     fetchMock.mock.calls.filter(
       ([input, init]) => input === listPath && init?.method !== 'POST',
     ),
-  ).toHaveLength(0);
+  ).toHaveLength(2);
 });
 
 it('selects and clears available results while preserving selections outside the search', async () => {
@@ -455,7 +525,7 @@ it('shows a name-lookup toast and retries with the current token and custom fiel
     target: { value: 'custom-skill' },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
-  await screen.findByText(/Telegram connection request submitted/);
+  await screen.findByText(/Your request was submitted/);
   expect(telegramFetch.mock.calls.map(([url]) => url)).toEqual([
     `https://api.telegram.org/bot${telegramToken}/getMe`,
   ]);
@@ -522,13 +592,13 @@ it.each([
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
   await waitFor(() =>
     expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/channels',
+      '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-retried',
     ),
   );
   expect(attempts).toBe(2);
   expect(screen.getByLabelText(/^Bot token/)).toHaveValue('');
   expect(
-    await screen.findByText(/Telegram connection request submitted/),
+    await screen.findByText('Telegram channel created.'),
   ).toBeInTheDocument();
 });
 
@@ -640,7 +710,7 @@ it('ignores an accepted response after leaving the connection form', async () =>
   });
   expect(history.replace).not.toHaveBeenCalled();
   expect(
-    screen.queryByText(/Telegram connection request submitted/),
+    screen.queryByText(/Your request was submitted/),
   ).not.toBeInTheDocument();
   expect(
     fetchMock.mock.calls.filter(
