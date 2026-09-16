@@ -38,6 +38,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
             IChannelRegistrationNyxIdAuthorizationPort,
             ChannelRegistrationNyxIdAuthorizationPort>();
         services.TryAddSingleton<ChannelRegistrationAuthorizationPlanner>();
+        services.TryAddSingleton<ChannelRegistrationAdoptionFacade>();
         services.TryAddSingleton<INyxIdCurrentUserResolver, NyxIdCurrentUserResolver>();
         services.TryAddSingleton<IChannelRegistrationOwnerResolver, ChannelRegistrationOwnerResolver>();
         services.TryAddSingleton(sp => new ChannelAgentKeyProvisioningService(

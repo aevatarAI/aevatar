@@ -2111,6 +2111,7 @@ public sealed class ChannelCallbackEndpointsTests
         builder.Services.AddSingleton(AuthorizationPlanner());
         builder.Services.AddSingleton(nyxClient);
         builder.Services.AddSingleton(CreateAgentKeyProvisioningService(nyxClient));
+        builder.Services.AddSingleton<ChannelRegistrationAdoptionFacade>();
         builder.Services.AddSingleton(RegistrationOptions());
         builder.Services.AddSingleton(Substitute.For<IPlatformAdminAuthorizer>());
         builder.Services.AddSingleton(Substitute.For<INyxChannelBotDeprovisioningService>());
@@ -2185,11 +2186,34 @@ public sealed class ChannelCallbackEndpointsTests
             .GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException($"Method '{methodName}' not found.");
 
-        var invocationResult = method.Invoke(null, args);
+        var adaptedArgs = methodName == "HandleRegisterAsync" && args.Length == 10
+            ? AdaptRegisterInvocationArgs(args)
+            : args;
+        var invocationResult = method.Invoke(null, adaptedArgs);
         if (invocationResult is Task<IResult> resultTask)
             return await resultTask;
 
         throw new InvalidOperationException($"Method '{methodName}' did not return Task<IResult>.");
+    }
+
+    private static object?[] AdaptRegisterInvocationArgs(object?[] args)
+    {
+        var loggerFactory = (ILoggerFactory)args[8]!;
+        return
+        [
+            args[0],
+            new ChannelRegistrationAdoptionFacade(
+                (ChannelRegistrationCommandFacade)args[1]!,
+                (IChannelBotRegistrationQueryPort)args[2]!,
+                (IChannelRegistrationOwnerResolver)args[3]!,
+                (ChannelRegistrationAuthorizationPlanner)args[4]!,
+                (ChannelAgentKeyProvisioningService)args[5]!,
+                (NyxIdApiClient)args[6]!,
+                loggerFactory.CreateLogger<ChannelRegistrationAdoptionFacade>()),
+            args[7],
+            args[8],
+            args[9],
+        ];
     }
 
     private static IEnumerable<string> RecordStrings(AuditRecord record)
