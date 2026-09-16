@@ -620,6 +620,70 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRegisterAsync_RestoresRoute_WhenLocalMirrorDispatchFails()
+    {
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                Arg.Any<string>(),
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<DispatchAdmission>>(_ => throw new InvalidOperationException("dispatch failed"));
+        var nyxHandler = new RecordingNyxHttpMessageHandler(request =>
+        {
+            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath == "/api/v1/channel-bots/bot-1")
+                return JsonResponse("""{"id":"bot-1","platform":"whatsapp","name":"Dinner Bot","status":"active","active":true,"webhook_url":"https://nyx.example.com/api/v1/webhooks/channel/whatsapp/bot-1"}""");
+
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/api/v1/api-keys")
+                return JsonResponse("""{"id":"key-new","full_key":"nyx_full_key_secret","scopes":"read write proxy","platform":"generic","purpose":"general","scheduled_write_enabled":false,"durable_grants":[],"allow_all_services":true,"allow_all_nodes":true,"allowed_service_ids":[],"allowed_node_ids":[]}""");
+
+            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath == "/api/v1/channel-conversations")
+                return JsonResponse("""{"items":[{"id":"route-1","channel_bot_id":"bot-1","agent_api_key_id":"key-old","default_agent":true}]}""");
+
+            if (request.Method == HttpMethod.Put && request.RequestUri!.AbsolutePath == "/api/v1/channel-conversations/route-1")
+                return JsonResponse("""{"id":"route-1","channel_bot_id":"bot-1","agent_api_key_id":"key-new","default_agent":true}""");
+
+            if (request.Method == HttpMethod.Delete && request.RequestUri!.AbsolutePath == "/api/v1/api-keys/key-new")
+                return JsonResponse("{}");
+
+            return NotFoundResponse(request);
+        });
+        var nyxClient = CreateNyxClient(nyxHandler);
+        var http = CreateJsonHttpContext(
+            """{"registration_id":"reg-adopt","nyx_channel_bot_id":"bot-1","webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRegisterAsync",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            QueryPortWithSnapshots(),
+            OwnerResolver("scope-1"),
+            AuthorizationPlanner(),
+            CreateAgentKeyProvisioningService(nyxClient),
+            nyxClient,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+        nyxHandler.Requests.Select(request => $"{request.Method.Method} {request.RequestUri!.AbsolutePath}")
+            .Should().ContainInOrder(
+                "GET /api/v1/channel-bots/bot-1",
+                "POST /api/v1/api-keys",
+                "GET /api/v1/channel-conversations",
+                "PUT /api/v1/channel-conversations/route-1",
+                "PUT /api/v1/channel-conversations/route-1",
+                "DELETE /api/v1/api-keys/key-new");
+        nyxHandler.Requests
+            .Where(request => request.Method == HttpMethod.Put &&
+                request.RequestUri!.AbsolutePath == "/api/v1/channel-conversations/route-1")
+            .Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task HandleRegisterAsync_ReturnsConflict_WhenNyxChannelBotAlreadyBound()
     {
         var existing = NewModelRegistration("reg-existing", "scope-1", "key-existing");
@@ -628,7 +692,10 @@ public sealed class ChannelCallbackEndpointsTests
             """{"nyx_channel_bot_id":"bot-1","webhook_base_url":"https://aevatar.example.com"}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
-        var nyxClient = CreateNyxClient();
+        var nyxClient = CreateNyxClient(new RecordingNyxHttpMessageHandler(request =>
+            request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath == "/api/v1/channel-bots/bot-1"
+                ? JsonResponse("""{"id":"bot-1","platform":"lark","name":"Dinner Bot","status":"active","active":true,"webhook_url":"https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1"}""")
+                : NotFoundResponse(request)));
         var actorRuntime = AcceptedRegistrationRuntime();
 
         var result = await InvokeAsync(
@@ -647,6 +714,37 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         response.Body.Should().Contain("channel_bot_already_bound");
         response.Body.Should().Contain("reg-existing");
+    }
+
+    [Fact]
+    public async Task HandleRegisterAsync_DoesNotRevealBinding_WhenNyxChannelBotIsNotVisible()
+    {
+        var existing = NewModelRegistration("reg-secret", "scope-2", "key-secret");
+        existing.NyxChannelBotId = "bot-secret";
+        var http = CreateJsonHttpContext(
+            """{"nyx_channel_bot_id":"bot-secret","webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+        var nyxClient = CreateNyxClient();
+        var actorRuntime = AcceptedRegistrationRuntime();
+
+        var result = await InvokeAsync(
+            "HandleRegisterAsync",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            QueryPortWithSnapshots(new ChannelBotRegistrationSnapshot(existing, 12)),
+            OwnerResolver("scope-1"),
+            AuthorizationPlanner(),
+            CreateAgentKeyProvisioningService(nyxClient),
+            nyxClient,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+        response.Body.Should().Contain("nyxid_channel_bot_unavailable");
+        response.Body.Should().NotContain("channel_bot_already_bound");
+        response.Body.Should().NotContain("reg-secret");
     }
 
     [Fact]
@@ -1436,12 +1534,13 @@ public sealed class ChannelCallbackEndpointsTests
         var http = CreateHttpContext("scope-1");
         http.Request.Headers.Authorization = "Bearer admin-token";
 
-        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(true), NyxClientWithChannelBots("bot-mine", "bot-theirs"), "all", CancellationToken.None);
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(true), NyxClientWithChannelBots("bot-mine"), "all", CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("bot-mine");
         response.Body.Should().Contain("bot-theirs");
+        response.Body.Should().Contain("nyx_unavailable");
         response.Body.Should().Contain("\"owned\":false");
     }
 

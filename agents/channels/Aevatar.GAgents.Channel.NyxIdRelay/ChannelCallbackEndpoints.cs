@@ -171,6 +171,10 @@ public static class ChannelCallbackEndpoints
             return Results.BadRequest(new { error = scopeResolution.Error });
 
         var nyxChannelBotId = request.NyxChannelBotId.Trim();
+        var bot = await ReadNyxChannelBotAsync(nyxClient, accessToken, nyxChannelBotId, logger, ct);
+        if (bot is null)
+            return Results.Json(new { error = "nyxid_channel_bot_unavailable" }, statusCode: StatusCodes.Status502BadGateway);
+
         var existing = (await queryPort.QueryAllSnapshotsAsync(ct))
             .Select(static snapshot => snapshot.Registration)
             .FirstOrDefault(registration => !registration.Tombstoned &&
@@ -181,10 +185,6 @@ public static class ChannelCallbackEndpoints
                 new { error = "channel_bot_already_bound", registration_id = existing.Id },
                 statusCode: StatusCodes.Status409Conflict);
         }
-
-        var bot = await ReadNyxChannelBotAsync(nyxClient, accessToken, nyxChannelBotId, logger, ct);
-        if (bot is null)
-            return Results.Json(new { error = "nyxid_channel_bot_unavailable" }, statusCode: StatusCodes.Status502BadGateway);
 
         var validation = ChannelBotRuntimeConfigValidation.ValidateStructure(request.RuntimeConfig);
         if (validation.Count > 0)
@@ -225,7 +225,7 @@ public static class ChannelCallbackEndpoints
             : request.RegistrationId.Trim();
         var relayCallbackUrl = NyxRelayCallbackUrl.Build(request.WebhookBaseUrl);
         ChannelAgentKeyCredential? channelAgentKey = null;
-        string? routeId = null;
+        ConversationRouteBindingResult? routeBinding = null;
         try
         {
             channelAgentKey = await agentKeyProvisioning.ProvisionAsync(
@@ -239,7 +239,7 @@ public static class ChannelCallbackEndpoints
             if (verifiedSelection.Plan is not null)
                 channelAgentKey = await UpdateAgentKeyGrantAsync(nyxClient, accessToken, channelAgentKey, verifiedSelection.Plan, ct);
 
-            routeId = await BindConversationRouteAsync(
+            routeBinding = await BindConversationRouteAsync(
                 nyxClient,
                 accessToken,
                 bot.Id,
@@ -257,7 +257,7 @@ public static class ChannelCallbackEndpoints
                 ScopeId = scopeResolution.ScopeId!,
                 NyxAgentApiKeyId = channelAgentKey.ApiKeyId,
                 NyxChannelBotId = bot.Id,
-                NyxConversationRouteId = routeId,
+                NyxConversationRouteId = routeBinding.RouteId,
                 WebhookUrl = bot.WebhookUrl,
                 WorkflowResultDeliveryCredential = channelAgentKey.SecretReference.Clone(),
                 ChannelAgentKey = channelAgentKey.Clone(),
@@ -288,10 +288,10 @@ public static class ChannelCallbackEndpoints
                     nyx_provider_slug = cmd.NyxProviderSlug,
                     nyx_channel_bot_id = bot.Id,
                     nyx_agent_api_key_id = channelAgentKey.ApiKeyId,
-                    nyx_conversation_route_id = routeId,
+                    nyx_conversation_route_id = routeBinding.RouteId,
                     relay_callback_url = relayCallbackUrl,
                     webhook_url = bot.WebhookUrl,
-                    workflow_result_delivery_status = "enabled",
+                    workflow_result_delivery_status = "registration_pending",
                 },
                 RegistrationJsonOptions,
                 statusCode: StatusCodes.Status202Accepted);
@@ -303,15 +303,15 @@ public static class ChannelCallbackEndpoints
                 "Nyx channel bot adoption failed: registration={RegistrationId}, botId={ChannelBotId}, routeId={RouteId}, apiKeyId={ApiKeyId}, failureCode={FailureCode}, failureType={FailureType}",
                 registrationId,
                 bot.Id,
-                routeId,
+                routeBinding?.RouteId,
                 channelAgentKey?.ApiKeyId,
                 failureReason,
                 ex.GetType().Name);
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            if (routeBinding is not null)
+                await RollbackConversationRouteAsync(nyxClient, accessToken, routeBinding, logger, cleanup.Token);
             if (channelAgentKey is not null)
-            {
-                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 await agentKeyProvisioning.CleanupAsync(accessToken, channelAgentKey, registrationId, cleanup.Token);
-            }
 
             return Results.Json(
                 new { status = "error", error = failureReason },
@@ -431,6 +431,32 @@ public static class ChannelCallbackEndpoints
         return updated;
     }
 
+    private static async Task RestoreAgentKeyGrantAsync(
+        NyxIdApiClient nyxClient,
+        string accessToken,
+        ChannelAgentKeyCredential credential,
+        CancellationToken ct)
+    {
+        var grant = credential.Grant ?? new ChannelAgentKeyGrantSnapshot
+        {
+            AllowAllServices = true,
+            AllowAllNodes = true,
+        };
+        var response = await nyxClient.UpdateApiKeyAsync(
+            accessToken,
+            credential.ApiKeyId,
+            JsonSerializer.Serialize(new
+            {
+                allowed_service_ids = grant.AllowedServiceIds.ToArray(),
+                allowed_node_ids = grant.AllowedNodeIds.ToArray(),
+                allow_all_services = grant.AllowAllServices,
+                allow_all_nodes = grant.AllowAllNodes,
+            }),
+            ct);
+        if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+            throw new InvalidOperationException($"api_key_grant_restore_failed {NyxApiResponseHelper.ExtractErrorDetail(response)}");
+    }
+
     private static async Task<NyxChannelBotRecord?> ReadNyxChannelBotAsync(
         NyxIdApiClient nyxClient,
         string accessToken,
@@ -453,7 +479,7 @@ public static class ChannelCallbackEndpoints
         }
     }
 
-    private static async Task<string> BindConversationRouteAsync(
+    private static async Task<ConversationRouteBindingResult> BindConversationRouteAsync(
         NyxIdApiClient nyxClient,
         string accessToken,
         string nyxChannelBotId,
@@ -500,11 +526,21 @@ public static class ChannelCallbackEndpoints
                     default_agent = true,
                 }),
                 ct);
-            return NyxApiResponseHelper.ExtractRequiredId(createResponse, "channel_route_id");
+            return new ConversationRouteBindingResult(
+                NyxApiResponseHelper.ExtractRequiredId(createResponse, "channel_route_id"),
+                Created: true,
+                PreviousAgentApiKeyId: null,
+                PreviousDefaultAgent: null);
         }
 
         if (string.Equals(route.AgentApiKeyId, apiKeyId, StringComparison.Ordinal) && route.DefaultAgent)
-            return route.Id;
+        {
+            return new ConversationRouteBindingResult(
+                route.Id,
+                Created: false,
+                PreviousAgentApiKeyId: null,
+                PreviousDefaultAgent: null);
+        }
 
         var updateResponse = await nyxClient.UpdateConversationRouteAsync(
             accessToken,
@@ -517,7 +553,49 @@ public static class ChannelCallbackEndpoints
             ct);
         if (NyxApiResponseHelper.LooksLikeErrorEnvelope(updateResponse))
             throw new InvalidOperationException($"channel_route_update_failed {NyxApiResponseHelper.ExtractErrorDetail(updateResponse)}");
-        return ParseNyxConversationRoute(updateResponse)?.Id ?? route.Id;
+        return new ConversationRouteBindingResult(
+            ParseNyxConversationRoute(updateResponse)?.Id ?? route.Id,
+            Created: false,
+            PreviousAgentApiKeyId: route.AgentApiKeyId,
+            PreviousDefaultAgent: route.DefaultAgent);
+    }
+
+    private static async Task RollbackConversationRouteAsync(
+        NyxIdApiClient nyxClient,
+        string accessToken,
+        ConversationRouteBindingResult routeBinding,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        if (routeBinding.Created)
+        {
+            await NyxApiResponseHelper.TryRollbackAsync(
+                () => nyxClient.DeleteConversationRouteAsync(accessToken, routeBinding.RouteId, ct),
+                "channel_route",
+                routeBinding.RouteId,
+                logger);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(routeBinding.PreviousAgentApiKeyId) ||
+            routeBinding.PreviousDefaultAgent is null)
+        {
+            return;
+        }
+
+        await NyxApiResponseHelper.TryRollbackAsync(
+            () => nyxClient.UpdateConversationRouteAsync(
+                accessToken,
+                routeBinding.RouteId,
+                JsonSerializer.Serialize(new
+                {
+                    agent_api_key_id = routeBinding.PreviousAgentApiKeyId,
+                    default_agent = routeBinding.PreviousDefaultAgent.Value,
+                }),
+                ct),
+            "channel_route",
+            routeBinding.RouteId,
+            logger);
     }
 
     private static async Task<IResult> HandleListServicesAsync(
@@ -604,11 +682,16 @@ public static class ChannelCallbackEndpoints
             .GroupBy(static snapshot => snapshot.Registration.NyxChannelBotId, StringComparer.Ordinal)
             .ToDictionary(static group => group.Key, static group => group.OrderByDescending(item => item.StateVersion).First(), StringComparer.Ordinal);
 
+        var botIds = bots.Select(static bot => bot.Id).ToHashSet(StringComparer.Ordinal);
         var result = bots.Select(bot =>
         {
             localByBotId.TryGetValue(bot.Id, out var snapshot);
             return MapRegistrationListRow(bot, snapshot, callerScope);
-        }).ToArray();
+        }).Concat(wantsAll
+            ? localByBotId
+                .Where(item => !botIds.Contains(item.Key))
+                .Select(item => MapUnavailableLocalRegistrationListRow(item.Value, callerScope))
+            : []).ToArray();
 
         return Results.Json(result, RegistrationJsonOptions);
     }
@@ -756,13 +839,35 @@ public static class ChannelCallbackEndpoints
                 ct);
         }
 
-        var receipt = await commandFacade.UpdateRuntimeConfigAsync(
-            registrationId,
-            runtimeConfig,
-            runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
-            effectiveServiceSelection,
-            updatedAgentKey,
-            ct);
+        ChannelRegistrationCommandAcceptedReceipt receipt;
+        try
+        {
+            receipt = await commandFacade.UpdateRuntimeConfigAsync(
+                registrationId,
+                runtimeConfig,
+                runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
+                effectiveServiceSelection,
+                updatedAgentKey,
+                ct);
+        }
+        catch (Exception ex) when (updatedAgentKey is not null)
+        {
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            try
+            {
+                await RestoreAgentKeyGrantAsync(nyxClient, accessToken!, registration.ChannelAgentKey!, cleanup.Token);
+            }
+            catch (Exception restoreEx)
+            {
+                logger.LogWarning(
+                    "Nyx agent key grant restore failed after runtime config dispatch failure: registration={RegistrationId}, apiKeyId={ApiKeyId}, failureType={FailureType}, restoreFailureType={RestoreFailureType}",
+                    registrationId,
+                    registration.ChannelAgentKey!.ApiKeyId,
+                    ex.GetType().Name,
+                    restoreEx.GetType().Name);
+            }
+            throw;
+        }
 
         return Results.Accepted(value: new
         {
@@ -1176,6 +1281,53 @@ public static class ChannelCallbackEndpoints
             scope_id = e.ScopeId,
             callback_url = string.Empty,
             webhook_url = string.IsNullOrWhiteSpace(e.WebhookUrl) ? bot.WebhookUrl : e.WebhookUrl,
+            nyx_channel_bot_id = e.NyxChannelBotId,
+            nyx_agent_api_key_id = e.NyxAgentApiKeyId,
+            nyx_conversation_route_id = e.NyxConversationRouteId,
+            default_skill_name = e.DefaultSkillName,
+            default_skill = MapDefaultSkill(e.RuntimeConfig, e.DefaultSkillName),
+            has_instructions = !string.IsNullOrWhiteSpace(e.RuntimeConfig?.Instructions),
+            has_tool_set_refs = e.RuntimeConfig?.ToolSetRefs.Count > 0,
+            has_extra_tool_names = e.RuntimeConfig?.ExtraToolNames.Count > 0,
+            nyxid_service_selectors = MapNyxIdServiceSelectors(e.RuntimeConfig),
+            agent_key = MapAgentKeyStatus(e),
+            workflow_result_delivery_status = MapCapabilityStatus(e, capabilityStatus),
+            workflow_result_delivery_failure_phase = repairFailed
+                ? MapRepairPhase(e.WorkflowResultDeliveryRepair?.FailurePhase ??
+                    ChannelWorkflowResultDeliveryRepairPhase.Unspecified)
+                : null,
+            workflow_result_delivery_failure_reason = repairFailed
+                ? MapRepairFailureReason(e.WorkflowResultDeliveryRepair?.FailureReason ??
+                    ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
+                : null,
+            owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
+        };
+    }
+
+    private static object MapUnavailableLocalRegistrationListRow(
+        ChannelBotRegistrationSnapshot snapshot,
+        string? callerScope)
+    {
+        var e = snapshot.Registration;
+        var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(e);
+        var repairFailed = capabilityStatus ==
+            ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
+        return new
+        {
+            id = e.Id,
+            platform = e.Platform,
+            label = e.Id,
+            registration_mode = "nyx_relay_webhook",
+            binding_status = "bound",
+            availability_status = "nyx_unavailable",
+            nyx_status = "unavailable",
+            authorization_mode = MapAuthorizationMode(e),
+            service_ids = MapRegistrationServiceIds(e),
+            state_version = snapshot.StateVersion,
+            nyx_provider_slug = e.NyxProviderSlug,
+            scope_id = e.ScopeId,
+            callback_url = string.Empty,
+            webhook_url = e.WebhookUrl,
             nyx_channel_bot_id = e.NyxChannelBotId,
             nyx_agent_api_key_id = e.NyxAgentApiKeyId,
             nyx_conversation_route_id = e.NyxConversationRouteId,
@@ -1852,6 +2004,12 @@ public static class ChannelCallbackEndpoints
         string ChannelBotId,
         string AgentApiKeyId,
         bool DefaultAgent);
+
+    private sealed record ConversationRouteBindingResult(
+        string RouteId,
+        bool Created,
+        string? PreviousAgentApiKeyId,
+        bool? PreviousDefaultAgent);
 
     private sealed record VerifiedRegistrationServices(
         bool Succeeded,
