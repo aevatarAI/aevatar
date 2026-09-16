@@ -23,6 +23,7 @@ public static class ChannelRuntimeConfigProofBuilder
             DefaultSkillName = config.DefaultSkill?.Name ?? string.Empty,
             DefaultSkillVersion = config.DefaultSkill?.Version ?? string.Empty,
             CredentialSourceMode = config.CredentialSourceMode,
+            AuthorizationMode = registration.AuthorizationMode,
         };
         proof.ToolSetRefs.AddRange(config.ToolSetRefs);
         proof.ExtraToolNames.AddRange(config.ExtraToolNames);

@@ -103,8 +103,7 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             }
         }
 
-        var connectedNames = runtimeConfig.NyxidServiceSelectors
-            .SelectMany(selector => SelectConnectedOperationNames(selector, availableTools, toolContext))
+        var connectedNames = SelectConnectedOperationNames(runtimeConfig, availableTools, toolContext)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         LogConnectedServiceSelection(
             runtimeConfig,
@@ -163,12 +162,11 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
         ChannelRuntimeConfigProof runtimeConfig,
         AgentToolExecutionContext toolContext)
     {
-        if (runtimeConfig.NyxidServiceSelectors.Count == 0)
-            return toolContext;
-
-        var contextJson = AddRuntimeSelectors(
-            toolContext.ConnectedServices.ContextJson,
-            runtimeConfig.NyxidServiceSelectors);
+        var contextJson = runtimeConfig.NyxidServiceSelectors.Count == 0
+            ? toolContext.ConnectedServices.ContextJson
+            : AddRuntimeSelectors(
+                toolContext.ConnectedServices.ContextJson,
+                runtimeConfig.NyxidServiceSelectors);
         if (string.Equals(
                 contextJson,
                 toolContext.ConnectedServices.ContextJson,
@@ -425,32 +423,52 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
     }
 
     private static IEnumerable<string> SelectConnectedOperationNames(
-        ChannelBotRuntimeNyxIdServiceSelector selector,
+        ChannelRuntimeConfigProof runtimeConfig,
         IReadOnlyDictionary<string, IAgentTool> availableTools,
         AgentToolExecutionContext toolContext)
     {
-        var serviceSlug = Normalize(selector.ServiceSlug);
-        if (serviceSlug is null)
-            yield break;
-        var endpoints = selector.EndpointNames
-            .Select(Normalize)
-            .Where(static endpoint => endpoint is not null)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var pair in availableTools)
+        if (runtimeConfig.NyxidServiceSelectors.Count == 0)
         {
-            if (!toolContext.ToolVisibility.Allows(pair.Key) ||
-                pair.Value is not IAgentToolOperationAdmissionOwner owner ||
-                !MatchesServiceSlug(owner.OperationAdmission, serviceSlug))
+            if (runtimeConfig.AuthorizationMode != ChannelRegistrationAuthorizationMode.NyxidDefault)
+                yield break;
+
+            foreach (var pair in availableTools)
             {
-                continue;
+                if (toolContext.ToolVisibility.Allows(pair.Key) &&
+                    pair.Value is IAgentToolOperationAdmissionOwner)
+                {
+                    yield return pair.Key;
+                }
             }
 
-            if (endpoints.Count == 0 ||
-                owner.OperationAdmission.Identity is AgentToolOperationIdentity.PublishedEndpoint published &&
-                endpoints.Contains(published.EndpointId))
+            yield break;
+        }
+
+        foreach (var selector in runtimeConfig.NyxidServiceSelectors)
+        {
+            var serviceSlug = Normalize(selector.ServiceSlug);
+            if (serviceSlug is null)
+                continue;
+            var endpoints = selector.EndpointNames
+                .Select(Normalize)
+                .Where(static endpoint => endpoint is not null)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var pair in availableTools)
             {
-                yield return pair.Key;
+                if (!toolContext.ToolVisibility.Allows(pair.Key) ||
+                    pair.Value is not IAgentToolOperationAdmissionOwner owner ||
+                    !MatchesServiceSlug(owner.OperationAdmission, serviceSlug))
+                {
+                    continue;
+                }
+
+                if (endpoints.Count == 0 ||
+                    owner.OperationAdmission.Identity is AgentToolOperationIdentity.PublishedEndpoint published &&
+                    endpoints.Contains(published.EndpointId))
+                {
+                    yield return pair.Key;
+                }
             }
         }
     }

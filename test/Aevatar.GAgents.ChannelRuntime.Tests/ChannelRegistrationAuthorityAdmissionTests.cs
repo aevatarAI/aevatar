@@ -131,6 +131,33 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
         denied.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
     }
 
+    [Fact]
+    public async Task AdmitAsync_ExplicitRuntimeSelectedAgentKeySyntheticEndpoint_ShouldAllowAnyMatchingSelector()
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig();
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "readDiningProfileContext" },
+        });
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "writeDiningProfileContext" },
+        });
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var result = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "agent-key:api-google-workspace",
+            serviceSlug: "api-google-workspace",
+            endpointId: "writeDiningProfileContext"));
+
+        result.Allowed.Should().BeTrue();
+        result.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.Allowed);
+    }
+
     [Theory]
     [InlineData("api-calendar")]
     [InlineData("api-google-workspace ")]
@@ -195,6 +222,106 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
             registration,
             serviceInstanceId: "agent-key:ornn-api",
             serviceSlug: "ornn-api"));
+
+        result.Allowed.Should().BeFalse();
+        result.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.TargetNotGranted);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_ExplicitGrantedConnectedServiceTarget_ShouldAllowWithoutRegistrationAllowlist()
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RegistrationServiceAllowlist.ServiceIds.Clear();
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var result = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "svc-business",
+            serviceSlug: "api-google-workspace",
+            endpointId: "readDiningProfileContext",
+            catalogServiceSlug: "api-google-workspace"));
+
+        result.Allowed.Should().BeTrue();
+        result.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.Allowed);
+        await fixture.Resolver.DidNotReceiveWithAnyArgs().IsAuthorizedDependencyAsync(
+            default!,
+            default!,
+            default!,
+            default);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_ExplicitConnectedServiceSelectors_ShouldNarrowGrantedTargetByEndpoint()
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RegistrationServiceAllowlist.ServiceIds.Clear();
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig();
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "readDiningProfileContext" },
+        });
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var allowed = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "svc-business",
+            serviceSlug: "api-google-workspace",
+            endpointId: "readDiningProfileContext",
+            catalogServiceSlug: "api-google-workspace"));
+        var denied = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "svc-business",
+            serviceSlug: "api-google-workspace",
+            endpointId: "writeDiningProfileContext",
+            catalogServiceSlug: "api-google-workspace"));
+
+        allowed.Allowed.Should().BeTrue();
+        denied.Allowed.Should().BeFalse();
+        denied.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_ExplicitConnectedServiceSelectors_ShouldAllowAnyMatchingSelector()
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RegistrationServiceAllowlist.ServiceIds.Clear();
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig();
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "readDiningProfileContext" },
+        });
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "writeDiningProfileContext" },
+        });
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var result = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "svc-business",
+            serviceSlug: "api-google-workspace",
+            endpointId: "writeDiningProfileContext",
+            catalogServiceSlug: "api-google-workspace"));
+
+        result.Allowed.Should().BeTrue();
+        result.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.Allowed);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_ExplicitConnectedServiceOutsideAgentKeyGrant_ShouldDenyTargetNotGranted()
+    {
+        var registration = CreateExplicitRegistration();
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var result = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "svc-not-granted",
+            serviceSlug: "api-google-workspace",
+            endpointId: "readDiningProfileContext",
+            catalogServiceSlug: "api-google-workspace"));
 
         result.Allowed.Should().BeFalse();
         result.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.TargetNotGranted);
@@ -696,10 +823,11 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
         string serviceInstanceId,
         string? callSiteId = "",
         string serviceSlug = "service-alpha",
-        string endpointId = "endpoint-alpha") =>
+        string endpointId = "endpoint-alpha",
+        string catalogServiceSlug = "") =>
         new(
             CreateCredential(registration),
-            CreateOperation(serviceInstanceId, callSiteId, serviceSlug, endpointId));
+            CreateOperation(serviceInstanceId, callSiteId, serviceSlug, endpointId, catalogServiceSlug));
 
     private static DurableCallerCredentialRef CreateCredential(
         ChannelBotRegistrationEntry registration)
@@ -722,7 +850,8 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
         string serviceInstanceId,
         string? callSiteId = "",
         string serviceSlug = "service-alpha",
-        string endpointId = "endpoint-alpha") =>
+        string endpointId = "endpoint-alpha",
+        string catalogServiceSlug = "") =>
         new(
             serviceInstanceId,
             serviceSlug,
@@ -735,6 +864,7 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
             null,
             AgentToolOperationResponsePolicy.TextOnly,
             AgentToolOperationExecutionPolicy.Unspecified,
+            CatalogServiceSlug: catalogServiceSlug,
             CallSiteId: callSiteId!);
 
     private static void MutateSecretReference(SecretReference reference, string field)

@@ -86,12 +86,18 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
             return syntheticResult;
 
         if (!IsCanonicalIdentifier(targetServiceInstanceId) ||
-            !ContainsExact(
-                registration.ChannelAgentKey.Grant.AllowedServiceIds,
-                targetServiceInstanceId))
+            !GrantAllowsService(registration.ChannelAgentKey.Grant, targetServiceInstanceId))
         {
             return ChannelRegistrationAuthorityAdmissionResult.Deny(
                 ChannelRegistrationAuthorityAdmissionReason.TargetNotGranted);
+        }
+
+        if (IsConnectedServiceOperation(request.Operation))
+        {
+            return RuntimeSelectorsAllow(registration.RuntimeConfig, request.Operation, allowWhenNoSelectors: true)
+                ? ChannelRegistrationAuthorityAdmissionResult.Allow()
+                : ChannelRegistrationAuthorityAdmissionResult.Deny(
+                    ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
         }
 
         if (ContainsExact(
@@ -135,7 +141,7 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
         if (registration.RegistrationServiceAllowlist.ServiceIds.Count == 0)
             return true;
 
-        if (!RuntimeSelectorAllows(registration.RuntimeConfig, serviceSlug, operation))
+        if (!RuntimeSelectorsAllow(registration.RuntimeConfig, operation, allowWhenNoSelectors: false))
         {
             result = ChannelRegistrationAuthorityAdmissionResult.Deny(
                 ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
@@ -146,28 +152,44 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
         return true;
     }
 
-    private static bool RuntimeSelectorAllows(
+    private static bool RuntimeSelectorsAllow(
         ChannelBotRuntimeConfig? runtimeConfig,
-        string serviceSlug,
+        AgentToolOperationAdmission operation,
+        bool allowWhenNoSelectors)
+    {
+        if (runtimeConfig?.NyxidServiceSelectors.Count is null or 0)
+            return allowWhenNoSelectors;
+
+        return runtimeConfig.NyxidServiceSelectors.Any(selector =>
+            SelectorAllowsOperation(selector, operation));
+    }
+
+    private static bool SelectorAllowsOperation(
+        ChannelBotRuntimeNyxIdServiceSelector selector,
         AgentToolOperationAdmission operation)
     {
-        if (runtimeConfig is null)
+        if (!MatchesSelector(selector, operation))
             return false;
-
-        foreach (var selector in runtimeConfig.NyxidServiceSelectors)
-        {
-            if (!string.Equals(selector.ServiceSlug, serviceSlug, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (selector.EndpointNames.Count == 0)
-                return true;
-            if (operation.Identity is not AgentToolOperationIdentity.PublishedEndpoint published)
-                return false;
-            return selector.EndpointNames.Any(endpointName =>
-                string.Equals(endpointName, published.EndpointId, StringComparison.OrdinalIgnoreCase));
-        }
-
-        return false;
+        if (selector.EndpointNames.Count == 0)
+            return true;
+        return operation.Identity is AgentToolOperationIdentity.PublishedEndpoint published &&
+               selector.EndpointNames.Any(endpointName =>
+                   string.Equals(endpointName, published.EndpointId, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static bool MatchesSelector(
+        ChannelBotRuntimeNyxIdServiceSelector selector,
+        AgentToolOperationAdmission operation) =>
+        string.Equals(selector.ServiceSlug, operation.ServiceSlug, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(selector.ServiceSlug, operation.CatalogServiceSlug, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsConnectedServiceOperation(AgentToolOperationAdmission operation) =>
+        !string.IsNullOrWhiteSpace(operation.CatalogServiceSlug);
+
+    private static bool GrantAllowsService(
+        ChannelAgentKeyGrantSnapshot grant,
+        string serviceInstanceId) =>
+        grant.AllowAllServices == true || ContainsExact(grant.AllowedServiceIds, serviceInstanceId);
 
     private static bool TryReadAgentKeySyntheticServiceSlug(
         string? serviceInstanceId,

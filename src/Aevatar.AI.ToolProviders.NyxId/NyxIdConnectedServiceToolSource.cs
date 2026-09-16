@@ -110,11 +110,10 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                 if (bindings.Count == 0)
                 {
                     _logger.LogInformation(
-                        "NyxID connected-service discovery skipped. reason={Reason} credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug} selectorBindingCount={SelectorBindingCount}",
-                        "agent_key_selector_binding_missing",
+                        "NyxID connected-service discovery skipped. reason={Reason} credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug}",
+                        "agent_key_binding_missing",
                         credentialKind,
-                        catalogServiceSlug ?? string.Empty,
-                        selectorBindings.Count);
+                        catalogServiceSlug ?? string.Empty);
                     return [];
                 }
 
