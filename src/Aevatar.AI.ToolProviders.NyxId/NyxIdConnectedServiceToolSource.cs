@@ -101,21 +101,19 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                     .Where(binding => MatchesCatalogService(binding.Instance, catalogServiceSlug))
                     .ToArray();
                 _logger.LogInformation(
-                    "NyxID Agent Key selector bindings filtered. catalogServiceSlug={CatalogServiceSlug} selectorBindingCount={SelectorBindingCount} filteredBindingCount={FilteredBindingCount} selectorSlugs={SelectorSlugs} filteredSlugs={FilteredSlugs} hasAgentKeyEvidence={HasAgentKeyEvidence}",
+                    "NyxID Agent Key selector bindings filtered. catalogServiceSlug={CatalogServiceSlug} selectorBindingCount={SelectorBindingCount} filteredBindingCount={FilteredBindingCount} selectorSlugs={SelectorSlugs} filteredSlugs={FilteredSlugs}",
                     catalogServiceSlug ?? string.Empty,
                     selectorBindings.Count,
                     bindings.Count,
                     string.Join(',', selectorBindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)),
-                    string.Join(',', bindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)),
-                    context.ConnectedServices.AgentKeyAuthorizationEvidence.HasServiceAuthority);
+                    string.Join(',', bindings.Select(static binding => binding.Instance.DisplaySlug).Order(StringComparer.OrdinalIgnoreCase)));
                 if (bindings.Count == 0)
                 {
                     _logger.LogInformation(
-                        "NyxID connected-service discovery skipped. reason={Reason} credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug} hasAgentKeyEvidence={HasAgentKeyEvidence}",
+                        "NyxID connected-service discovery skipped. reason={Reason} credentialKind={CredentialKind} catalogServiceSlug={CatalogServiceSlug}",
                         "agent_key_binding_missing",
                         credentialKind,
-                        catalogServiceSlug ?? string.Empty,
-                        context.ConnectedServices.AgentKeyAuthorizationEvidence.HasServiceAuthority);
+                        catalogServiceSlug ?? string.Empty);
                     return [];
                 }
 

@@ -399,13 +399,6 @@ message LLMRequestRoutingContextPayload {
 
 message AgentToolConnectedServicesContextPayload {
   string context_json = 1;
-  AgentKeyServiceAuthorizationEvidencePayload agent_key_authorization_evidence = 2;
-}
-
-message AgentKeyServiceAuthorizationEvidencePayload {
-  repeated string allowed_service_ids = 1;
-  string scope_plan_digest = 2;
-  optional bool allow_all_services = 3;
 }
 
 message AgentWorkflowRuntimeContextPayload {

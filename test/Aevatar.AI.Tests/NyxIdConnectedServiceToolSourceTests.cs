@@ -333,33 +333,6 @@ public class NyxIdConnectedServiceToolSourceTests
         proxyRequest.ApiKey.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task DiscoverToolsAsync_AgentKeyEvidenceWithoutRuntimeSelectors_ShouldNotReadUserInventory()
-    {
-        var handler = new FakeNyxIdHandler();
-        handler.KeysByToken["agent-key-token"] = Keys(
-            InstanceWithCatalogSlug(
-                "usvc-google-workspace",
-                "api-google-workspace",
-                "svc-google-workspace",
-                "api-google-workspace"));
-        var source = CreateSource(handler);
-
-        using var scope = PushContext(
-            "agent-key-token",
-            credentialKind: AgentToolNyxIdCredentialKind.AgentKey,
-            agentKeyEvidence: AgentKeyServiceAuthorizationEvidence.FromAllowedServices(
-                ["usvc-google-workspace"],
-                "sha256:grant-alpha",
-                allowAllServices: false));
-        var tools = await source.DiscoverToolsAsync();
-
-        tools.Should().BeEmpty();
-        handler.DiscoveryRequests.Should().Be(0);
-        handler.McpConfigRequests.Should().Be(0);
-        handler.RawOpenApiRequests.Should().BeEmpty();
-    }
-
     [Theory]
     [InlineData("expired", true, null, null)]
     [InlineData("revoked", true, null, null)]
@@ -1880,8 +1853,7 @@ public class NyxIdConnectedServiceToolSourceTests
         string? organizationToken = null,
         string? sourceReadableToken = null,
         AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified,
-        string? connectedServicesContextJson = null,
-        AgentKeyServiceAuthorizationEvidence? agentKeyEvidence = null) =>
+        string? connectedServicesContextJson = null) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials(
@@ -1890,9 +1862,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 null,
                 credentialKind,
                 sourceReadableToken),
-            ConnectedServices = new AgentToolConnectedServicesContext(
-                connectedServicesContextJson,
-                agentKeyEvidence ?? AgentKeyServiceAuthorizationEvidence.Empty),
+            ConnectedServices = new AgentToolConnectedServicesContext(connectedServicesContextJson),
             Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
         });
 

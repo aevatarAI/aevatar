@@ -94,7 +94,7 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
 
         if (IsConnectedServiceOperation(request.Operation))
         {
-            return RuntimeSelectorsAllow(registration.RuntimeConfig, request.Operation)
+            return RuntimeSelectorsAllow(registration.RuntimeConfig, request.Operation, allowWhenNoSelectors: true)
                 ? ChannelRegistrationAuthorityAdmissionResult.Allow()
                 : ChannelRegistrationAuthorityAdmissionResult.Deny(
                     ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
@@ -141,7 +141,7 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
         if (registration.RegistrationServiceAllowlist.ServiceIds.Count == 0)
             return true;
 
-        if (!RuntimeSelectorAllows(registration.RuntimeConfig, serviceSlug, operation))
+        if (!RuntimeSelectorsAllow(registration.RuntimeConfig, operation, allowWhenNoSelectors: false))
         {
             result = ChannelRegistrationAuthorityAdmissionResult.Deny(
                 ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
@@ -154,47 +154,27 @@ internal sealed class ChannelRegistrationAuthorityAdmissionPort(
 
     private static bool RuntimeSelectorsAllow(
         ChannelBotRuntimeConfig? runtimeConfig,
-        AgentToolOperationAdmission operation)
+        AgentToolOperationAdmission operation,
+        bool allowWhenNoSelectors)
     {
         if (runtimeConfig?.NyxidServiceSelectors.Count is null or 0)
-            return true;
+            return allowWhenNoSelectors;
 
-        foreach (var selector in runtimeConfig.NyxidServiceSelectors)
-        {
-            if (!MatchesSelector(selector, operation))
-                continue;
-            if (selector.EndpointNames.Count == 0)
-                return true;
-            if (operation.Identity is not AgentToolOperationIdentity.PublishedEndpoint published)
-                return false;
-            return selector.EndpointNames.Any(endpointName =>
-                string.Equals(endpointName, published.EndpointId, StringComparison.OrdinalIgnoreCase));
-        }
-
-        return false;
+        return runtimeConfig.NyxidServiceSelectors.Any(selector =>
+            SelectorAllowsOperation(selector, operation));
     }
 
-    private static bool RuntimeSelectorAllows(
-        ChannelBotRuntimeConfig? runtimeConfig,
-        string serviceSlug,
+    private static bool SelectorAllowsOperation(
+        ChannelBotRuntimeNyxIdServiceSelector selector,
         AgentToolOperationAdmission operation)
     {
-        if (runtimeConfig is null)
+        if (!MatchesSelector(selector, operation))
             return false;
-
-        foreach (var selector in runtimeConfig.NyxidServiceSelectors)
-        {
-            if (!string.Equals(selector.ServiceSlug, serviceSlug, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (selector.EndpointNames.Count == 0)
-                return true;
-            if (operation.Identity is not AgentToolOperationIdentity.PublishedEndpoint published)
-                return false;
-            return selector.EndpointNames.Any(endpointName =>
-                string.Equals(endpointName, published.EndpointId, StringComparison.OrdinalIgnoreCase));
-        }
-
-        return false;
+        if (selector.EndpointNames.Count == 0)
+            return true;
+        return operation.Identity is AgentToolOperationIdentity.PublishedEndpoint published &&
+               selector.EndpointNames.Any(endpointName =>
+                   string.Equals(endpointName, published.EndpointId, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool MatchesSelector(

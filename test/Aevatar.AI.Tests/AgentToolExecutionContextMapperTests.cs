@@ -40,30 +40,6 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
-    public void AgentKeyAuthorizationEvidence_ShouldSurviveTransportPayloadRoundTrip()
-    {
-        var context = AgentToolExecutionContext.Empty with
-        {
-            ConnectedServices = new AgentToolConnectedServicesContext(
-                "{\"existing\":true}",
-                AgentKeyServiceAuthorizationEvidence.FromAllowedServices(
-                    ["usvc-alpha", "usvc-beta"],
-                    "sha256:grant-alpha",
-                    allowAllServices: false)),
-        };
-
-        var restored = AgentToolExecutionContextMapper.FromPayload(
-            AgentToolExecutionContextPayload.Parser.ParseFrom(context.ToPayload().ToByteArray()));
-
-        restored.ConnectedServices.ContextJson.Should().Be("{\"existing\":true}");
-        restored.ConnectedServices.AgentKeyAuthorizationEvidence.AllowedServiceIds.Should()
-            .Equal("usvc-alpha", "usvc-beta");
-        restored.ConnectedServices.AgentKeyAuthorizationEvidence.ScopePlanDigest.Should()
-            .Be("sha256:grant-alpha");
-        restored.ConnectedServices.AgentKeyAuthorizationEvidence.AllowAllServices.Should().BeFalse();
-    }
-
-    [Fact]
     public void FromRequest_WhenTypedFieldsAndLegacyMetadataOverlap_ShouldUseOnlyTypedControlAndScrubMetadata()
     {
         var request = new LLMRequest

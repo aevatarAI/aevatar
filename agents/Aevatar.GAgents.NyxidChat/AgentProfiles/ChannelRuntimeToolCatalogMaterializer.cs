@@ -167,33 +167,18 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             : AddRuntimeSelectors(
                 toolContext.ConnectedServices.ContextJson,
                 runtimeConfig.NyxidServiceSelectors);
-        var evidence = BuildAgentKeyEvidence(runtimeConfig.AgentKeyGrant) ??
-                       toolContext.ConnectedServices.AgentKeyAuthorizationEvidence;
         if (string.Equals(
                 contextJson,
                 toolContext.ConnectedServices.ContextJson,
-                StringComparison.Ordinal) &&
-            Equals(evidence, toolContext.ConnectedServices.AgentKeyAuthorizationEvidence))
+                StringComparison.Ordinal))
         {
             return toolContext;
         }
 
         return toolContext with
         {
-            ConnectedServices = new AgentToolConnectedServicesContext(contextJson, evidence),
+            ConnectedServices = new AgentToolConnectedServicesContext(contextJson),
         };
-    }
-
-    private static AgentKeyServiceAuthorizationEvidence? BuildAgentKeyEvidence(
-        ChannelAgentKeyGrantSnapshot? grant)
-    {
-        if (grant is null)
-            return null;
-
-        return AgentKeyServiceAuthorizationEvidence.FromAllowedServices(
-            grant.AllowedServiceIds,
-            grant.ScopePlanDigest,
-            grant.HasAllowAllServices ? grant.AllowAllServices : null);
     }
 
     private void LogConnectedServiceSelection(
