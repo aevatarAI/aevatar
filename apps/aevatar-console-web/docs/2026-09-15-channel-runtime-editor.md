@@ -22,7 +22,7 @@ and the existing Telegram connection form.
 ## API Behavior
 
 The API contract was checked against `origin/feature/integrate` at
-`dc4862789e0f70b7dd27e7d785f63f91c308118b`, specifically
+`6c929a00db3d7636c91bc719478043a5fd331f7c`, specifically
 `ChannelCallbackEndpoints.cs` and `ChannelRegistrationServiceSelection.cs`.
 
 - GET and POST use `/api/channels/registrations/{registrationId}/runtime-config`.
@@ -39,10 +39,18 @@ The API contract was checked against `origin/feature/integrate` at
 - Existing `nyxid_default` registrations retain their mode until the user
   explicitly switches to individual selection. Zero individually selected
   services is sent as an explicit empty allowlist.
-- `202 Accepted` does not produce a saved toast. Readback must match the submitted
-  configuration and have an authoritative state version newer than the initial
-  GET. Delayed or failed confirmation preserves the request and offers Check
-  again, which issues only GET. There is no background polling.
+- After an acknowledged POST, the form makes one GET for accurate feedback and
+  returns to channel details. The Save action remains busy across both requests
+  and rejects duplicate submission. There is no separate confirmation step,
+  Check again button, background polling, or automatic resubmission.
+- A saved toast requires that GET to match the submitted configuration and have
+  an authoritative state version newer than the initial GET. Otherwise an
+  informational toast reports only that changes were submitted; a failed GET
+  produces a warning that the latest configuration could not be loaded. Details
+  reloads real data on entry and never substitutes submitted values as saved
+  facts. The user may refresh details later to see the current configuration.
+- A rejected POST keeps the edited values, reports the error through a toast,
+  and unlocks the form for correction and another explicit Save.
 - Backend errors for editable fields map to localized field messages; errors
   for other fields use the shared save-failure toast. Raw diagnostic messages
   are not retained. Unrecognized config modes fail closed; unexpected credential
@@ -65,17 +73,20 @@ The API contract was checked against `origin/feature/integrate` at
 
 ## Verification Scope
 
-Eight new integration cases cover exact identity, safe decoding, unsupported
+Focused integration cases cover exact identity, safe decoding, unsupported
 config, detail-to-edit navigation, whole-config preservation, accepted readback,
 explicit clearing, unavailable services, field errors, cached detail revalidation,
-legacy authorization, confirmation retry, unsaved navigation, and unmounts.
+legacy authorization, delayed/failed readback navigation, duplicate-submit
+protection, failed-save retry, unsaved navigation, and unmounts during POST/GET.
 Existing creation, channel listing/details, API, navigation, route configuration,
 and locale tests protect the reused surfaces.
 
-Browser verification uses the configured remote backend: actual configuration
-prefill, service selection, the two-field form, and desktop and 390px mobile
-layouts. It does not submit a configuration change to the live bot.
-The local preview runs on port 5193 with its OAuth callback on the same origin.
+The original editor was verified against the configured remote backend for
+configuration prefill, service selection, and desktop and 390px layouts.
+The save-flow revision uses the focused integration cases above; the local
+preview compiles on port 5173, its API proxy responds, and the browser shows the
+login page. Its OAuth callback uses the same origin. No live bot configuration
+was changed during verification.
 
 Local verification is restricted to affected Jest files, changed-file Biome,
 the test stability guard, baseline integrity, and diff checks. Full frontend
