@@ -139,6 +139,7 @@ jest.mock("@/shared/studio/api", () => {
     isStudioApiStatus: (error: unknown, status: number) =>
       error instanceof MockStudioApiError && error.status === status,
     studioApi: {
+      authorWorkflow: jest.fn(),
       bindMemberWorkflow: jest.fn(),
       getMember: jest.fn(),
       getTeam: jest.fn(),
@@ -4370,6 +4371,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.queryByTestId("workflow-header-node-actions")).toBeNull();
     expect(readActionButtonNames()).toEqual([
       "Run",
+      "Ask AI",
       "Add node",
       "Edit YAML",
       "Save",
@@ -4402,6 +4404,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     expect(readActionButtonNames()).toEqual([
       "Run",
+      "Ask AI",
       "Add node",
       "Edit YAML",
       "Save",
@@ -4998,6 +5001,217 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     expect(screen.getByLabelText("Workflow YAML panel")).toBeTruthy();
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
+  });
+
+  it("keeps AI workflow changes reviewable until the proposal is explicitly applied", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/member-alpha/workflow?workflowId=workflow-alpha",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "workflow-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: null,
+        lifecycleStage: "created",
+        memberId: "member-alpha",
+        publishedServiceId: "",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "workflow-alpha.yaml",
+      filePath: "scope://scope-1/workflow-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "workflow-alpha",
+      yaml: "name: Workflow Alpha\nsteps:\n  - id: triage\n    type: llm_call\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+    (studioApi.authorWorkflow as jest.Mock).mockImplementation(
+      async (_input, options) => {
+        options?.onReasoning?.("Add a guard after triage.");
+        return [
+          "name: Workflow Alpha",
+          "steps:",
+          "  - id: triage",
+          "    type: llm_call",
+          "  - id: guard",
+          "    type: guard",
+        ].join("\n");
+      },
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Ask AI" }));
+    const proposalPanel = await screen.findByLabelText("AI workflow proposal panel");
+    fireEvent.change(within(proposalPanel).getByLabelText("Change request"), {
+      target: { value: "Add a guard after triage" },
+    });
+    fireEvent.click(
+      within(proposalPanel).getByRole("button", { name: "Generate proposal" }),
+    );
+
+    await waitFor(() => {
+      expect(studioApi.authorWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentYaml: expect.stringContaining("id: triage"),
+          prompt: "Add a guard after triage",
+        }),
+        expect.objectContaining({
+          onReasoning: expect.any(Function),
+        }),
+      );
+    });
+    expect(await within(proposalPanel).findByText("Ready to review")).toBeTruthy();
+    expect(within(proposalPanel).getByText("Add a guard after triage.")).toBeTruthy();
+    expect(
+      (within(proposalPanel).getByLabelText(
+        "Proposed workflow YAML",
+      ) as HTMLTextAreaElement).value,
+    ).toContain("id: guard");
+    expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(proposalPanel).getByRole("button", { name: "Apply proposal" }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:2");
+    });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("blocks an AI proposal when the human draft changes during generation", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    let resolveProposal: ((yaml: string) => void) | null = null;
+    (studioApi.authorWorkflow as jest.Mock).mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveProposal = resolve;
+        }),
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask AI" }));
+    const proposalPanel = await screen.findByLabelText("AI workflow proposal panel");
+    fireEvent.change(within(proposalPanel).getByLabelText("Change request"), {
+      target: { value: "Add a guard after triage" },
+    });
+    fireEvent.click(
+      within(proposalPanel).getByRole("button", { name: "Generate proposal" }),
+    );
+    await waitFor(() => {
+      expect(studioApi.authorWorkflow).toHaveBeenCalled();
+    });
+
+    fireEvent.change(screen.getByLabelText("Workflow title"), {
+      target: { value: "Human edited title" },
+    });
+    await act(async () => {
+      resolveProposal?.(
+        [
+          "name: Proposed title",
+          "steps:",
+          "  - id: llm_step",
+          "    type: llm_call",
+          "  - id: guard",
+          "    type: guard",
+        ].join("\n"),
+      );
+    });
+
+    expect(await within(proposalPanel).findByText("Outdated proposal")).toBeTruthy();
+    expect(
+      within(proposalPanel).getByText(
+        "Draft changed after this proposal was generated. Generate a new proposal from the current draft.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(proposalPanel).getByRole("button", { name: "Apply proposal" }),
+    ).toBeDisabled();
+    expect(screen.getByLabelText("Workflow title")).toHaveValue("Human edited title");
+    expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.createMember).not.toHaveBeenCalled();
+  });
+
+  it("preserves the AI change request and retries after generation fails", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    (studioApi.authorWorkflow as jest.Mock)
+      .mockRejectedValueOnce(new Error("Generator unavailable"))
+      .mockResolvedValueOnce(
+        [
+          "name: Recovered workflow",
+          "steps:",
+          "  - id: triage",
+          "    type: llm_call",
+        ].join("\n"),
+      );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await screen.findByLabelText("Workflow title");
+    fireEvent.click(screen.getByRole("button", { name: "Ask AI" }));
+    const proposalPanel = await screen.findByLabelText("AI workflow proposal panel");
+    const changeRequest = within(proposalPanel).getByLabelText("Change request");
+    fireEvent.change(changeRequest, {
+      target: { value: "Create a triage workflow" },
+    });
+    fireEvent.click(
+      within(proposalPanel).getByRole("button", { name: "Generate proposal" }),
+    );
+
+    expect(await within(proposalPanel).findByText("Generator unavailable")).toBeTruthy();
+    expect(changeRequest).toHaveValue("Create a triage workflow");
+    fireEvent.click(
+      within(proposalPanel).getByRole("button", { name: "Retry proposal" }),
+    );
+
+    expect(await within(proposalPanel).findByText("Ready to review")).toBeTruthy();
+    expect(studioApi.authorWorkflow).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:0");
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
   });
 
   it("freezes YAML editing while Apply is in flight", async () => {

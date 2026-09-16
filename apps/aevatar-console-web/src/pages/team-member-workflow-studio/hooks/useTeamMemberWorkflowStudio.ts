@@ -172,7 +172,16 @@ type WorkflowSourceSignature = {
 };
 
 type TeamMemberWorkflowStudioState = {
+  readonly aiProposalError: string;
+  readonly aiProposalHasConflict: boolean;
+  readonly aiProposalOpen: boolean;
+  readonly aiProposalPending: boolean;
+  readonly aiProposalPrompt: string;
+  readonly aiProposalReasoning: string;
+  readonly aiProposalYaml: string;
+  readonly applyAiProposal: () => void;
   readonly automationsHref: string;
+  readonly canAskAi: boolean;
   readonly canOpenAutomations: boolean;
   readonly automationsPlaceholderReason: string;
   readonly canOpenInvoke: boolean;
@@ -205,6 +214,7 @@ type TeamMemberWorkflowStudioState = {
   readonly canEditYaml: boolean;
   readonly applyYamlEdit: () => Promise<void>;
   readonly closeNodeLibrary: () => void;
+  readonly closeAiProposalPanel: () => void;
   readonly closeYamlPanel: () => void;
   readonly connectNodes: (sourceNodeId: string, targetNodeId: string) => void;
   readonly deleteSelectedConnection: () => void;
@@ -236,6 +246,7 @@ type TeamMemberWorkflowStudioState = {
   readonly navigateBack: () => void;
   readonly nodeLibraryOpen: boolean;
   readonly openNodeLibrary: () => void;
+  readonly openAiProposalPanel: () => void;
   readonly openDraftRunPanel: () => void;
   readonly openYamlPanel: () => void;
   readonly save: () => void;
@@ -253,6 +264,7 @@ type TeamMemberWorkflowStudioState = {
   readonly selectExecutionLog: (index: number | null) => void;
   readonly selectNode: (nodeId: string) => void;
   readonly setExecutionRunMessage: (message: string) => void;
+  readonly setAiProposalPrompt: (prompt: string) => void;
   readonly setWorkflowTitle: (title: string) => void;
   readonly teamName: string;
   readonly workflowTitle: string;
@@ -267,6 +279,7 @@ type TeamMemberWorkflowStudioState = {
   readonly yamlEditOpening: boolean;
   readonly yamlEditPending: boolean;
   readonly yamlPanelOpen: boolean;
+  readonly generateAiProposal: () => void;
 };
 
 const AVAILABLE_STEP_TYPES = STUDIO_GRAPH_CATEGORIES.flatMap(
@@ -286,6 +299,12 @@ const YAML_EDIT_VALIDATE_DEBOUNCE_MS =
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
+}
+
+function stripWorkflowMarkdownFence(value: string): string {
+  const trimmed = value.trim();
+  const fenced = /^```(?:ya?ml)?\s*\n([\s\S]*?)\n```$/i.exec(trimmed);
+  return fenced?.[1]?.trim() || trimmed;
 }
 
 function normalizeWorkflowSaveResult(
@@ -1136,6 +1155,15 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [publishErrorVisible, setPublishErrorVisible] = React.useState(true);
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [draftRunPanelOpen, setDraftRunPanelOpen] = React.useState(false);
+  const [aiProposalOpen, setAiProposalOpen] = React.useState(false);
+  const [aiProposalPrompt, setAiProposalPrompt] = React.useState("");
+  const [aiProposalReasoning, setAiProposalReasoning] = React.useState("");
+  const [aiProposalYaml, setAiProposalYaml] = React.useState("");
+  const [aiProposalDocument, setAiProposalDocument] =
+    React.useState<StudioWorkflowDocument | null>(null);
+  const [aiProposalError, setAiProposalError] = React.useState("");
+  const [aiProposalPending, setAiProposalPending] = React.useState(false);
+  const [aiProposalBaseRevision, setAiProposalBaseRevision] = React.useState(0);
   const [yamlPanelOpen, setYamlPanelOpen] = React.useState(false);
   const [yamlEditBuffer, setYamlEditBufferState] = React.useState("");
   const [yamlEditSnapshot, setYamlEditSnapshot] = React.useState("");
@@ -1164,6 +1192,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const appliedSourceKeyRef = React.useRef("");
   const yamlEditRequestIdRef = React.useRef(0);
   const yamlEditValidationRequestIdRef = React.useRef(0);
+  const aiProposalRequestIdRef = React.useRef(0);
+  const aiProposalAbortControllerRef = React.useRef<AbortController | null>(null);
   const suppressedSourceSignatureRef =
     React.useRef<WorkflowSourceSignature | null>(null);
   const latestSourceKeyRef = React.useRef("");
@@ -1188,6 +1218,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     yamlPanelOpen && yamlEditBuffer !== yamlEditSnapshot,
   );
   const yamlEditHasBlockingFindings = hasBlockingFindings(yamlEditDiagnostics);
+  const aiProposalHasConflict = Boolean(
+    aiProposalDocument && aiProposalBaseRevision !== draftRevision,
+  );
+  const closeAiProposalPanel = React.useCallback(() => {
+    aiProposalRequestIdRef.current += 1;
+    aiProposalAbortControllerRef.current?.abort();
+    aiProposalAbortControllerRef.current = null;
+    setAiProposalPending(false);
+    setAiProposalOpen(false);
+  }, []);
   const closeYamlPanelWithConfirmation = React.useCallback(() => {
     if (yamlEditHasUnappliedChanges && !confirmDiscardYamlEdits()) {
       return false;
@@ -1987,6 +2027,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     [],
   );
   const openYamlEditor = React.useCallback(async () => {
+    closeAiProposalPanel();
     setSelectedEdgeId("");
     setSelectedNodeId("");
     setSelectedStepConfigurationError("");
@@ -2067,6 +2108,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
     }
   }, [
+    closeAiProposalPanel,
     closeDraftRunPanel,
     editableDocument,
     routeFallbackTitle,
@@ -2200,6 +2242,195 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     yamlEditDiagnostics,
     yamlEditParsedDocument,
     yamlEditValidatedBuffer,
+  ]);
+  const openAiProposalPanel = React.useCallback(() => {
+    if (!editableDocument || !closeYamlPanelWithConfirmation()) {
+      return;
+    }
+
+    closeDraftRunPanel();
+    setNodeLibraryOpen(false);
+    setSelectedEdgeId("");
+    setSelectedNodeId("");
+    setSelectedStepConfigurationError("");
+    setAiProposalError("");
+    setAiProposalOpen(true);
+  }, [closeDraftRunPanel, closeYamlPanelWithConfirmation, editableDocument]);
+  const generateAiProposal = React.useCallback(async () => {
+    const prompt = trimOptional(aiProposalPrompt);
+    if (!prompt || !editableDocument || aiProposalPending) {
+      return;
+    }
+
+    const requestId = aiProposalRequestIdRef.current + 1;
+    aiProposalRequestIdRef.current = requestId;
+    aiProposalAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    aiProposalAbortControllerRef.current = controller;
+    const baseRevision = draftRevisionRef.current;
+    const normalizedTitle =
+      trimOptional(workflowTitle) ||
+      trimOptional(editableDocument.name) ||
+      routeFallbackTitle;
+
+    setAiProposalPending(true);
+    setAiProposalError("");
+    setAiProposalReasoning("");
+    setAiProposalYaml("");
+    setAiProposalDocument(null);
+    setAiProposalBaseRevision(baseRevision);
+
+    try {
+      const serialized = await studioApi.serializeYaml({
+        document: {
+          ...editableDocument,
+          name: normalizedTitle,
+        },
+        availableStepTypes: AVAILABLE_STEP_TYPES,
+      });
+      assertNoBlockingFindings(serialized.findings);
+      if (controller.signal.aborted || aiProposalRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const generated = await studioApi.authorWorkflow(
+        {
+          currentYaml: serialized.yaml,
+          prompt,
+        },
+        {
+          signal: controller.signal,
+          onReasoning: (reasoning) => {
+            if (
+              !controller.signal.aborted &&
+              aiProposalRequestIdRef.current === requestId
+            ) {
+              setAiProposalReasoning(reasoning);
+            }
+          },
+        },
+      );
+      if (controller.signal.aborted || aiProposalRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const proposalYaml = stripWorkflowMarkdownFence(generated);
+      if (!proposalYaml) {
+        throw new Error("AI authoring returned an empty workflow proposal.");
+      }
+
+      const parsed = await studioApi.parseYaml({
+        yaml: proposalYaml,
+        availableStepTypes: AVAILABLE_STEP_TYPES,
+      });
+      const proposalDocument = cloneWorkflowDocument(parsed.document);
+      if (!proposalDocument) {
+        throw new Error(
+          formatBlockingFindingsMessage(parsed.findings) ||
+            "The AI proposal did not produce a workflow document.",
+        );
+      }
+      assertNoBlockingFindings(parsed.findings);
+      if (controller.signal.aborted || aiProposalRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setAiProposalYaml(proposalYaml);
+      setAiProposalDocument(proposalDocument);
+      setAiProposalBaseRevision(baseRevision);
+    } catch (error) {
+      if (!controller.signal.aborted && aiProposalRequestIdRef.current === requestId) {
+        setAiProposalError(
+          error instanceof Error
+            ? error.message
+            : "Failed to generate a workflow proposal.",
+        );
+      }
+    } finally {
+      if (aiProposalRequestIdRef.current === requestId) {
+        aiProposalAbortControllerRef.current = null;
+        setAiProposalPending(false);
+      }
+    }
+  }, [
+    aiProposalPending,
+    aiProposalPrompt,
+    editableDocument,
+    routeFallbackTitle,
+    workflowTitle,
+  ]);
+  const applyAiProposal = React.useCallback(async () => {
+    if (!aiProposalDocument || aiProposalPending) {
+      return;
+    }
+
+    const baseIsCurrent = () =>
+      aiProposalBaseRevision === draftRevisionRef.current;
+    if (!baseIsCurrent()) {
+      setAiProposalError(
+        "Draft changed after this proposal was generated. Generate a new proposal from the current draft.",
+      );
+      return;
+    }
+
+    try {
+      const nextTitle =
+        trimOptional(aiProposalDocument.name) ||
+        trimOptional(workflowTitle) ||
+        routeFallbackTitle;
+      const serialized = await studioApi.serializeYaml({
+        document: {
+          ...aiProposalDocument,
+          name: nextTitle,
+        },
+        availableStepTypes: AVAILABLE_STEP_TYPES,
+      });
+      assertNoBlockingFindings(serialized.findings);
+      if (!baseIsCurrent()) {
+        throw new Error(
+          "Draft changed after this proposal was generated. Generate a new proposal from the current draft.",
+        );
+      }
+
+      const nextDocument =
+        cloneWorkflowDocument(serialized.document) ?? aiProposalDocument;
+      const nextGraph = buildStudioGraphElements(nextDocument, editableLayout);
+      const nextLayout = buildStudioWorkflowLayout(
+        nextTitle,
+        nextGraph.nodes,
+        editableLayout,
+      );
+
+      markDraftDirty();
+      setEditableDocument(nextDocument);
+      setEditableLayout(nextLayout);
+      setWorkflowTitleState(nextTitle);
+      setSelectedEdgeId("");
+      setSelectedNodeId("");
+      setSelectedStepConfigurationError("");
+      setAiProposalOpen(false);
+      setAiProposalPrompt("");
+      setAiProposalReasoning("");
+      setAiProposalYaml("");
+      setAiProposalDocument(null);
+      setAiProposalError("");
+      void message.success("AI workflow proposal applied to the local draft.");
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Failed to apply the workflow proposal.";
+      setAiProposalError(errorMessage);
+      void message.error(errorMessage);
+    }
+  }, [
+    aiProposalBaseRevision,
+    aiProposalDocument,
+    aiProposalPending,
+    editableLayout,
+    markDraftDirty,
+    routeFallbackTitle,
+    workflowTitle,
   ]);
   React.useEffect(() => {
     if (!yamlPanelOpen || yamlEditOpening) {
@@ -3131,7 +3362,20 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   );
 
   return {
+    aiProposalError,
+    aiProposalHasConflict,
+    aiProposalOpen,
+    aiProposalPending,
+    aiProposalPrompt,
+    aiProposalReasoning,
+    aiProposalYaml,
+    applyAiProposal: () => {
+      void applyAiProposal();
+    },
     automationsHref,
+    canAskAi: Boolean(
+      editableDocument && !workflowLoading && !workflowDraftEditingBlocked,
+    ),
     canOpenAutomations,
     automationsPlaceholderReason,
     canOpenInvoke,
@@ -3220,6 +3464,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       editableDocument && !workflowLoading && !workflowDraftEditingBlocked,
     ),
     closeNodeLibrary: () => setNodeLibraryOpen(false),
+    closeAiProposalPanel,
     closeYamlPanel: () => {
       closeYamlPanelWithConfirmation();
     },
@@ -3319,9 +3564,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
 
       if (closeYamlPanelWithConfirmation()) {
+        closeAiProposalPanel();
         setNodeLibraryOpen(true);
       }
     },
+    openAiProposalPanel,
     openDraftRunPanel: () => {
       if (!canOpenDraftRunPanel) {
         return;
@@ -3331,6 +3578,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         return;
       }
 
+      closeAiProposalPanel();
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
@@ -3398,6 +3646,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         return;
       }
 
+      closeAiProposalPanel();
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
@@ -3433,6 +3682,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       closeDraftRunPanel();
     },
     setExecutionRunMessage,
+    setAiProposalPrompt,
     setSelectedStepConfigurationError,
     setWorkflowTitle,
     teamName,
@@ -3464,5 +3714,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     yamlEditOpening,
     yamlEditPending,
     yamlPanelOpen,
+    generateAiProposal: () => {
+      void generateAiProposal();
+    },
   };
 }

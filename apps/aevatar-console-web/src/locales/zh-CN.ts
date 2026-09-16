@@ -1069,6 +1069,22 @@ const zhCNMessages = {
   'pages.runs.memberPublishedRuns.refresh': '刷新',
   'pages.runs.memberPublishedRuns.selectPublishedRun': '选择一次发布运行',
   'pages.runs.memberPublishedRuns.timeline': '时间线',
+  'teamMemberWorkflowStudio.aiProposal.apply': '应用提案',
+  'teamMemberWorkflowStudio.aiProposal.changeRequest': '变更请求',
+  'teamMemberWorkflowStudio.aiProposal.generate': '生成提案',
+  'teamMemberWorkflowStudio.aiProposal.outdated': '提案已过期',
+  'teamMemberWorkflowStudio.aiProposal.panelAria': 'AI Workflow 提案面板',
+  'teamMemberWorkflowStudio.aiProposal.promptPlaceholder':
+    '在分流节点后添加审批步骤',
+  'teamMemberWorkflowStudio.aiProposal.proposedYaml': '提案 Workflow YAML',
+  'teamMemberWorkflowStudio.aiProposal.ready': '可供审阅',
+  'teamMemberWorkflowStudio.aiProposal.reasoning': '推理摘要',
+  'teamMemberWorkflowStudio.aiProposal.reasoningAria': '提案推理摘要',
+  'teamMemberWorkflowStudio.aiProposal.retry': '重试提案',
+  'teamMemberWorkflowStudio.aiProposal.stale':
+    '生成提案后草稿已发生更改。请基于当前草稿重新生成提案。',
+  'teamMemberWorkflowStudio.aiProposal.subtitle': '候选 Workflow 变更',
+  'teamMemberWorkflowStudio.aiProposal.title': '询问 AI',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     '你可以在这里搭建或编辑 Workflow YAML。保存时会创建可恢复的 Workflow 草稿，直到成员关联完成物化。',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription':
@@ -1173,6 +1189,10 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.activation.publishing': '发布中',
   'teamMemberWorkflowStudio.header.activation.ready': '就绪',
   'teamMemberWorkflowStudio.header.addNode': '添加节点',
+  'teamMemberWorkflowStudio.header.askAi': '询问 AI',
+  'teamMemberWorkflowStudio.header.askAiTitle': '生成可审阅的 Workflow 提案',
+  'teamMemberWorkflowStudio.header.askAiUnavailable':
+    '加载 Workflow 草稿后才能询问 AI。',
   'teamMemberWorkflowStudio.header.automations.publishFirst':
     '先发布这个成员，再添加周期任务。',
   'teamMemberWorkflowStudio.header.automations.saveFirst':

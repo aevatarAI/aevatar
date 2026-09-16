@@ -2,6 +2,7 @@ import { Alert, Spin } from "antd";
 import React from "react";
 import { t } from "@/shared/i18n/messages";
 import WorkflowStudioCanvas from "./components/WorkflowStudioCanvas";
+import WorkflowStudioAiProposalPanel from "./components/WorkflowStudioAiProposalPanel";
 import WorkflowStudioDraftRunPanel from "./components/WorkflowStudioDraftRunPanel";
 import WorkflowStudioExecutionPanel from "./components/WorkflowStudioExecutionPanel";
 import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
@@ -56,7 +57,8 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
   const [executionPanelHeight, setExecutionPanelHeight] = React.useState(
     EXECUTION_PANEL_DEFAULT_HEIGHT,
   );
-  const sidePanelOpen = studio.draftRunPanelOpen || studio.yamlPanelOpen;
+  const sidePanelOpen =
+    studio.aiProposalOpen || studio.draftRunPanelOpen || studio.yamlPanelOpen;
   const executionPanelOpen = Boolean(studio.executionDetail || studio.executionError);
 
   React.useEffect(
@@ -229,6 +231,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         automationsHref={studio.automationsHref}
         automationsPlaceholderReason={studio.automationsPlaceholderReason}
         canOpenAutomations={studio.canOpenAutomations}
+        canAskAi={studio.canAskAi}
         canOpenInvoke={studio.canOpenInvoke}
         canOpenPublishedRuns={studio.canOpenPublishedRuns}
         invokeHref={studio.invokeHref}
@@ -249,6 +252,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         dirty={studio.dirty}
         currentDraftRunPlaceholderReason={studio.currentDraftRunPlaceholderReason}
         onOpenAutomations={studio.navigateToAutomations}
+        onOpenAiProposal={studio.openAiProposalPanel}
         onOpenInvoke={studio.navigateToInvoke}
         onOpenPublishedRuns={studio.navigateToPublishedRuns}
         onPublishMember={studio.publishMember}
@@ -392,6 +396,20 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           runMessage={studio.executionRunMessage}
           width={sidePanelWidth}
         />
+        <WorkflowStudioAiProposalPanel
+          error={studio.aiProposalError}
+          hasConflict={studio.aiProposalHasConflict}
+          onApply={studio.applyAiProposal}
+          onClose={studio.closeAiProposalPanel}
+          onGenerate={studio.generateAiProposal}
+          onPromptChange={studio.setAiProposalPrompt}
+          open={studio.aiProposalOpen}
+          pending={studio.aiProposalPending}
+          prompt={studio.aiProposalPrompt}
+          proposalYaml={studio.aiProposalYaml}
+          reasoning={studio.aiProposalReasoning}
+          width={sidePanelWidth}
+        />
         <WorkflowStudioYamlPanel
           applying={studio.yamlEditApplying}
           buffer={studio.yamlEditBuffer}
@@ -408,7 +426,8 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           open={studio.yamlPanelOpen}
           width={sidePanelWidth}
         />
-        {studio.draftRunPanelOpen ||
+        {studio.aiProposalOpen ||
+        studio.draftRunPanelOpen ||
         studio.yamlPanelOpen ? null : (
           <WorkflowStudioNodeDetailPanel
             error={studio.selectedStepConfigurationError}
