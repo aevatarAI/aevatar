@@ -14,7 +14,6 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using VerifiedChannelRegistrationAuthorizationPlan = Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan;
-using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
@@ -49,18 +48,18 @@ public static class ChannelCallbackEndpoints
         group.MapGet("/registrations", HandleListRegistrationsAsync)
             .Produces<object[]>(StatusCodes.Status200OK, "application/json")
             .RequireAuthorization();
-        group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
-        group.MapGet("/registrations/{registrationId}/runtime-config", HandleGetRuntimeConfigAsync)
+        group.MapGet("/registrations/{registrationId}", HandleGetRegistrationAsync)
             .Produces<object>(StatusCodes.Status200OK, "application/json")
             .RequireAuthorization();
-        group.MapPost("/registrations/{registrationId}/runtime-config", HandleUpdateRuntimeConfigAsync)
+        group.MapPost("/registrations/{registrationId}", HandleUpdateRegistrationAsync)
             .WithEndpointAudit(
-                "channel.registration.runtime-config.update",
+                "channel.registration.update",
                 AuditSensitivityLevel.Confidential,
                 "channel-registration",
                 EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
                 EndpointAuditSanitizers.WithRouteValues("registrationId"))
             .RequireAuthorization();
+        group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
         group.MapPost(
                 "/registrations/{registrationId}/workflow-result-delivery/repair",
                 HandleRepairWorkflowResultDeliveryAsync)
@@ -683,7 +682,7 @@ public static class ChannelCallbackEndpoints
         return Results.Json(result, RegistrationJsonOptions);
     }
 
-    private static async Task<IResult> HandleGetRuntimeConfigAsync(
+    private static async Task<IResult> HandleGetRegistrationAsync(
         string registrationId,
         HttpContext http,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
@@ -697,11 +696,11 @@ public static class ChannelCallbackEndpoints
             return Results.NotFound(new { error = "Registration not found" });
 
         return Results.Json(
-            MapRuntimeConfigDetail(snapshot),
+            MapRegistrationDetail(snapshot),
             RegistrationJsonOptions);
     }
 
-    private static async Task<IResult> HandleUpdateRuntimeConfigAsync(
+    private static async Task<IResult> HandleUpdateRegistrationAsync(
         string registrationId,
         HttpContext http,
         [FromServices] ChannelRegistrationCommandFacade commandFacade,
@@ -862,7 +861,7 @@ public static class ChannelCallbackEndpoints
             registration_id = registrationId,
             command_id = receipt.CommandId,
             correlation_id = receipt.CorrelationId,
-            default_skill_name = runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
+            skill_name = runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
         });
     }
 
@@ -1129,15 +1128,10 @@ public static class ChannelCallbackEndpoints
         //   Old pattern: delete endpoint queried then dispatched unregister through raw helpers.
         //   New principle: query remains readmodel existence check; write enters typed command facade.
         // Deprovision (06-25-channel-delete-nyxid-deprovision):
-        //   Delete is the reverse of register — tear down the NyxID side (conversation route →
-        //   channel-bot → Agent Key → Vault secret) BEFORE tombstoning the local mirror, so deleting a bot
-        //   leaves no orphaned NyxID resources and the same app re-registers cleanly. A NyxID 404
-        //   is success (idempotent). A hard channel-bot delete failure returns a non-2xx and does
-        //   NOT tombstone the local mirror (row stays visible/retryable). Agent Key deletion is
-        //   also a hard gate; route and Vault cleanup failures are warnings. NyxID channel-bot
-        //   delete is owner-scoped, so an admin deleting another owner's
-        //   foreign registration cannot delete that owner's NyxID bot — that hard-fails here and
-        //   keeps the local mirror; a pure-local admin purge would be a separate explicit path.
+        //   Delete clears Aevatar-owned NyxID resources (conversation route → Agent Key → Vault
+        //   secret) before tombstoning the local mirror. NyxID channel bots are user-managed
+        //   inventory and are not deleted by local registration removal. Agent Key deletion is a
+        //   hard gate; route and Vault cleanup failures are warnings.
         var registration = await queryPort.GetAsync(registrationId, ct);
         if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
@@ -1153,13 +1147,10 @@ public static class ChannelCallbackEndpoints
 
         if (!deprovisionResult.Succeeded)
         {
-            var error = deprovisionResult.ChannelBotRemoved
-                ? "nyx_agent_key_delete_failed"
-                : "nyx_channel_bot_delete_failed";
             return Results.Json(
                 new
                 {
-                    error,
+                    error = "nyx_agent_key_delete_failed",
                     registration_id = registrationId,
                     note = "A required NyxID resource could not be deleted; the local registration was kept so you can retry.",
                 },
@@ -1228,14 +1219,12 @@ public static class ChannelCallbackEndpoints
                 service_ids = (IReadOnlyList<string>?)null,
                 state_version = (long?)null,
                 nyx_provider_slug = ResolveDefaultProviderSlug(bot.Platform),
-                scope_id = string.Empty,
                 callback_url = string.Empty,
                 webhook_url = bot.WebhookUrl,
                 nyx_channel_bot_id = bot.Id,
                 nyx_agent_api_key_id = string.Empty,
                 nyx_conversation_route_id = string.Empty,
-                default_skill_name = string.Empty,
-                default_skill = MapDefaultSkill(null, null),
+                skill_name = string.Empty,
                 has_instructions = false,
                 has_tool_set_refs = false,
                 has_extra_tool_names = false,
@@ -1270,8 +1259,7 @@ public static class ChannelCallbackEndpoints
             nyx_channel_bot_id = e.NyxChannelBotId,
             nyx_agent_api_key_id = e.NyxAgentApiKeyId,
             nyx_conversation_route_id = e.NyxConversationRouteId,
-            default_skill_name = e.DefaultSkillName,
-            default_skill = MapDefaultSkill(e.RuntimeConfig, e.DefaultSkillName),
+            skill_name = ResolveSkillName(e.RuntimeConfig, e.DefaultSkillName),
             has_instructions = !string.IsNullOrWhiteSpace(e.RuntimeConfig?.Instructions),
             has_tool_set_refs = e.RuntimeConfig?.ToolSetRefs.Count > 0,
             has_extra_tool_names = e.RuntimeConfig?.ExtraToolNames.Count > 0,
@@ -1300,7 +1288,7 @@ public static class ChannelCallbackEndpoints
             string.Equals(registration.ScopeId, callerScopeId, StringComparison.Ordinal);
     }
 
-    private static object MapRuntimeConfigDetail(ChannelBotRegistrationSnapshot snapshot)
+    private static object MapRegistrationDetail(ChannelBotRegistrationSnapshot snapshot)
     {
         var entry = snapshot.Registration;
         var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(entry);
@@ -1308,15 +1296,21 @@ public static class ChannelCallbackEndpoints
             ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
         return new
         {
-            registration_id = entry.Id,
+            id = entry.Id,
             platform = entry.Platform,
             label = entry.Id,
+            registration_mode = "nyx_relay_webhook",
+            binding_status = "bound",
             authorization_mode = MapAuthorizationMode(entry),
             service_ids = MapRegistrationServiceIds(entry),
             runtime_config = MapRuntimeConfig(entry.RuntimeConfig),
-            default_skill = MapDefaultSkill(entry.RuntimeConfig, entry.DefaultSkillName),
+            skill_name = ResolveSkillName(entry.RuntimeConfig, entry.DefaultSkillName),
             state_version = snapshot.StateVersion,
-            updated_at = (string?)null,
+            nyx_provider_slug = entry.NyxProviderSlug,
+            webhook_url = entry.WebhookUrl,
+            nyx_channel_bot_id = entry.NyxChannelBotId,
+            nyx_agent_api_key_id = entry.NyxAgentApiKeyId,
+            nyx_conversation_route_id = entry.NyxConversationRouteId,
             agent_key = MapAgentKeyStatus(entry),
             workflow_result_delivery_status = MapCapabilityStatus(entry, capabilityStatus),
             workflow_result_delivery_failure_phase = repairFailed
@@ -1327,21 +1321,13 @@ public static class ChannelCallbackEndpoints
                 ? MapRepairFailureReason(entry.WorkflowResultDeliveryRepair?.FailureReason ??
                     ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
                 : null,
-            nyxid_service_authorization = new
-            {
-                mode = MapAuthorizationMode(entry),
-                service_ids = MapRegistrationServiceIds(entry) ?? Array.Empty<string>(),
-                selector_service_slugs = MapNyxIdServiceSelectors(entry.RuntimeConfig)
-                    .Select(static selector => selector.ServiceSlug)
-                    .ToArray(),
-            },
+            owned = true,
         };
     }
 
     private static object MapRuntimeConfig(ChannelBotRuntimeConfig? config) => new
     {
         instructions = config?.Instructions ?? string.Empty,
-        default_skill = MapDefaultSkill(config, null),
         tool_set_refs = config?.ToolSetRefs.ToArray() ?? Array.Empty<string>(),
         extra_tool_names = config?.ExtraToolNames.ToArray() ?? Array.Empty<string>(),
         nyxid_service_selectors = MapNyxIdServiceSelectors(config),
@@ -1349,15 +1335,8 @@ public static class ChannelCallbackEndpoints
             ChannelBotRuntimeCredentialSourceMode.Unspecified),
     };
 
-    private static object MapDefaultSkill(ChannelBotRuntimeConfig? config, string? fallbackName)
-    {
-        var defaultSkill = config?.DefaultSkill;
-        return new
-        {
-            name = defaultSkill?.Name ?? fallbackName ?? string.Empty,
-            version = defaultSkill?.Version ?? string.Empty,
-        };
-    }
+    private static string ResolveSkillName(ChannelBotRuntimeConfig? config, string? fallbackName) =>
+        config?.DefaultSkill?.Name ?? fallbackName ?? string.Empty;
 
     private static string NormalizeDefaultSkillName(string? value) =>
         (value ?? string.Empty).Trim().TrimStart('/').ToLowerInvariant();

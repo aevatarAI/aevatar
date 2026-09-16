@@ -46,10 +46,8 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     // ─── Commands ───
 
     /// <summary>
-    /// Platforms whose registrations are allowed to land in the local mirror. Aligned with the
-    /// set of <c>INyxChannelBotProvisioningService</c> registered on the supported production
-    /// contract. Anything outside this set is treated as a retired direct-callback dispatch and
-    /// dropped without persistence so legacy producers cannot resurface old wire shapes.
+    /// Platforms whose legacy direct-callback registrations are allowed to land in the local mirror.
+    /// NyxID-backed registrations are platform-neutral when they carry a channel bot id.
     /// </summary>
     private static readonly HashSet<string> SupportedPlatforms =
         new(StringComparer.OrdinalIgnoreCase)

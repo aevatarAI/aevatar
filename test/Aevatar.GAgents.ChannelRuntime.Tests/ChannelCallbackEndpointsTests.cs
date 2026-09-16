@@ -33,7 +33,6 @@ using Xunit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
-using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -83,13 +82,14 @@ public sealed class ChannelCallbackEndpointsTests
             .Should().BeFalse();
         routePatterns.Should().Contain("/api/channels/registrations");
         routePatterns.Should().Contain("/api/channels/services");
-        routePatterns.Should().Contain("/api/channels/registrations/{registrationId}/runtime-config");
+        routePatterns.Should().Contain("/api/channels/registrations/{registrationId}");
+        routePatterns.Should().NotContain("/api/channels/registrations/{registrationId}/runtime-config");
         routePatterns.Should().Contain("/api/channels/diagnostics/errors");
         routePatterns.Should().NotContain("/api/channels/registrations/rebuild");
     }
 
     [Fact]
-    public void MapChannelCallbackEndpoints_ShouldRegisterAuditedRuntimeConfigUpdateRoute()
+    public void MapChannelCallbackEndpoints_ShouldRegisterRegistrationDetailAndUpdateRoutes()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -100,42 +100,20 @@ public sealed class ChannelCallbackEndpointsTests
         var routeBuilder = (IEndpointRouteBuilder)app;
         app.MapChannelCallbackEndpoints();
 
-        var endpoint = routeBuilder.DataSources
+        var endpoints = routeBuilder.DataSources
             .SelectMany(source => source.Endpoints)
             .OfType<RouteEndpoint>()
-            .Single(route => string.Equals(
+            .Where(route => string.Equals(
                 route.RoutePattern.RawText,
-                "/api/channels/registrations/{registrationId}/runtime-config",
-                StringComparison.Ordinal) &&
-                route.Metadata.OfType<HttpMethodMetadata>()
-                    .Single().HttpMethods.Contains("POST"));
+                "/api/channels/registrations/{registrationId}",
+                StringComparison.Ordinal))
+            .ToArray();
 
-        endpoint.Metadata.OfType<IAuthorizeData>().Should().NotBeEmpty();
-    }
-
-    [Fact]
-    public void MapChannelCallbackEndpoints_ShouldRegisterRuntimeConfigReadRoute()
-    {
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
-        {
-            EnvironmentName = "Development",
-        });
-
-        var app = builder.Build();
-        var routeBuilder = (IEndpointRouteBuilder)app;
-        app.MapChannelCallbackEndpoints();
-
-        var endpoint = routeBuilder.DataSources
-            .SelectMany(source => source.Endpoints)
-            .OfType<RouteEndpoint>()
-            .Single(route => string.Equals(
-                route.RoutePattern.RawText,
-                "/api/channels/registrations/{registrationId}/runtime-config",
-                StringComparison.Ordinal) &&
-                route.Metadata.OfType<HttpMethodMetadata>()
-                    .Single().HttpMethods.Contains("GET"));
-
-        endpoint.Metadata.OfType<IAuthorizeData>().Should().NotBeEmpty();
+        endpoints.Should().Contain(route => route.Metadata.OfType<HttpMethodMetadata>()
+            .Single().HttpMethods.Contains("GET"));
+        endpoints.Should().Contain(route => route.Metadata.OfType<HttpMethodMetadata>()
+            .Single().HttpMethods.Contains("POST"));
+        endpoints.Should().OnlyContain(route => route.Metadata.OfType<IAuthorizeData>().Any());
     }
 
     [Fact]
@@ -572,9 +550,9 @@ public sealed class ChannelCallbackEndpointsTests
             {
               "registration_id": "reg-adopt",
               "nyx_channel_bot_id": "bot-1",
+              "skill_name": "dinner-booking",
               "runtime_config": {
                 "instructions": "Book dinner only after confirmation.",
-                "default_skill": { "name": "dinner-booking" },
                 "credential_source_mode": "registration_agent_key"
               }
             }
@@ -907,7 +885,37 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleGetRuntimeConfigAsync_ReturnsReadModelRuntimeConfigWithoutSecrets()
+    public async Task HandleGetRegistrationAsync_ReturnsEditableRegistrationDetailWithoutSecrets()
+    {
+        var registration = ExplicitModelRegistration("reg-detail", "scope-1", "key-detail", "svc-calendar");
+        registration.NyxConversationRouteId = "route-detail";
+        registration.NyxProviderSlug = "api-lark-bot";
+        registration.DefaultSkillName = "calendar-booking";
+        var queryPort = QueryPortWithSnapshots(new ChannelBotRegistrationSnapshot(registration, 75));
+        var http = CreateHttpContext("scope-1");
+
+        var result = await InvokeAsync(
+            "HandleGetRegistrationAsync",
+            "reg-detail",
+            http,
+            queryPort,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("\"id\":\"reg-detail\"");
+        response.Body.Should().Contain("\"nyx_channel_bot_id\":\"bot-detail\"");
+        response.Body.Should().Contain("\"nyx_agent_api_key_id\":\"key-detail\"");
+        response.Body.Should().Contain("\"nyx_conversation_route_id\":\"route-detail\"");
+        response.Body.Should().Contain("\"skill_name\":\"calendar-booking\"");
+        response.Body.Should().Contain("\"service_ids\":[\"svc-calendar\"]");
+        response.Body.Should().Contain("\"agent_key\":");
+        response.Body.Should().NotContain("secret_reference");
+        response.Body.Should().NotContain("owner_scope_key");
+    }
+
+    [Fact]
+    public async Task HandleGetRegistrationAsync_ReturnsEditableConfigWithoutSecrets()
     {
         var registration = ExplicitModelRegistration("reg-runtime", "scope-1", "key-runtime", "svc-calendar");
         registration.RuntimeConfig = new ChannelBotRuntimeConfig
@@ -941,7 +949,7 @@ public sealed class ChannelCallbackEndpointsTests
         var http = CreateHttpContext("scope-1");
 
         var result = await InvokeAsync(
-            "HandleGetRuntimeConfigAsync",
+            "HandleGetRegistrationAsync",
             "reg-runtime",
             http,
             queryPort,
@@ -949,10 +957,10 @@ public sealed class ChannelCallbackEndpointsTests
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        response.Body.Should().Contain("\"registration_id\":\"reg-runtime\"");
+        response.Body.Should().Contain("\"id\":\"reg-runtime\"");
         response.Body.Should().Contain("\"state_version\":74");
         response.Body.Should().Contain("\"instructions\":\"Use channel-safe replies.\"");
-        response.Body.Should().Contain("\"name\":\"calendar-booking\"");
+        response.Body.Should().Contain("\"skill_name\":\"calendar-booking\"");
         response.Body.Should().Contain("\"tool_set_refs\":[\"channel.reply.default\"]");
         response.Body.Should().Contain("\"extra_tool_names\":[\"calendar_lookup\"]");
         response.Body.Should().Contain("\"service_slug\":\"api-calendar\"");
@@ -964,7 +972,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleGetRuntimeConfigAsync_ReturnsNotFound_WhenCallerDoesNotOwnRegistration()
+    public async Task HandleGetRegistrationAsync_ReturnsNotFound_WhenCallerDoesNotOwnRegistration()
     {
         var queryPort = QueryPortWithSnapshots(new ChannelBotRegistrationSnapshot(
             NewModelRegistration("reg-foreign-runtime", "scope-2", "key-foreign"),
@@ -972,7 +980,7 @@ public sealed class ChannelCallbackEndpointsTests
         var http = CreateHttpContext("scope-1");
 
         var result = await InvokeAsync(
-            "HandleGetRuntimeConfigAsync",
+            "HandleGetRegistrationAsync",
             "reg-foreign-runtime",
             http,
             queryPort,
@@ -984,7 +992,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleUpdateRuntimeConfigAsync_ReturnsAcceptedReceiptWithCommandId()
+    public async Task HandleUpdateRegistrationAsync_ReturnsAcceptedReceiptWithCommandId()
     {
         var queryPort = QueryPortWith(ExplicitModelRegistration("reg-update", "scope-1", "key-update", "svc-calendar"));
         EventEnvelope? capturedEnvelope = null;
@@ -999,9 +1007,9 @@ public sealed class ChannelCallbackEndpointsTests
         var http = CreateJsonHttpContext(
             """
             {
+              "skill_name": "booking-capacity",
               "runtime_config": {
                 "instructions": "  Trimmed instructions.  ",
-                "default_skill": { "name": "booking-capacity", "version": "1.0" },
                 "tool_set_refs": ["channel.reply.default"],
                 "extra_tool_names": ["calendar_lookup"],
                 "nyxid_service_selectors": [
@@ -1014,7 +1022,7 @@ public sealed class ChannelCallbackEndpointsTests
         http.Request.Headers.Authorization = "Bearer test-token";
 
         var result = await InvokeAsync(
-            "HandleUpdateRuntimeConfigAsync",
+            "HandleUpdateRegistrationAsync",
             "reg-update",
             http,
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
@@ -1039,7 +1047,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleUpdateRuntimeConfigAsync_ReturnsFieldError_WhenSelectorIsNotAuthorized()
+    public async Task HandleUpdateRegistrationAsync_ReturnsFieldError_WhenSelectorIsNotAuthorized()
     {
         var registration = ExplicitModelRegistration("reg-explicit-update", "scope-1", "key-explicit", "svc-calendar");
         registration.RuntimeConfig = new ChannelBotRuntimeConfig
@@ -1065,7 +1073,7 @@ public sealed class ChannelCallbackEndpointsTests
         http.Request.Headers.Authorization = "Bearer test-token";
 
         var result = await InvokeAsync(
-            "HandleUpdateRuntimeConfigAsync",
+            "HandleUpdateRegistrationAsync",
             "reg-explicit-update",
             http,
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
@@ -1086,22 +1094,20 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleUpdateRuntimeConfigAsync_ReturnsFieldError_WhenDefaultSkillVersionHasNoName()
+    public async Task HandleUpdateRegistrationAsync_ReturnsBadRequest_WhenSkillNameIsNotString()
     {
         var queryPort = QueryPortWith(NewModelRegistration("reg-invalid-skill", "scope-1", "key-invalid-skill"));
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var http = CreateJsonHttpContext(
             """
             {
-              "runtime_config": {
-                "default_skill": { "version": "1.0" }
-              }
+              "skill_name": 42
             }
             """,
             "scope-1");
 
         var result = await InvokeAsync(
-            "HandleUpdateRuntimeConfigAsync",
+            "HandleUpdateRegistrationAsync",
             "reg-invalid-skill",
             http,
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
@@ -1114,7 +1120,7 @@ public sealed class ChannelCallbackEndpointsTests
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        response.Body.Should().Contain("default_skill_name_required");
+        response.Body.Should().Contain("invalid_runtime_config");
         await ((IActorDispatchPort)actorRuntime).DidNotReceiveWithAnyArgs()
             .DispatchAsync(default!, default!, default);
     }
@@ -1694,47 +1700,6 @@ public sealed class ChannelCallbackEndpointsTests
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Is(ChannelBotUnregisterCommand.Descriptor).Should().BeTrue();
         capturedEnvelope.Payload.Unpack<ChannelBotUnregisterCommand>().RegistrationId.Should().Be("reg-1");
-    }
-
-    [Fact]
-    public async Task HandleDeleteRegistrationAsync_HardChannelBotFailure_ReturnsBadGateway_AndDoesNotTombstone()
-    {
-        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
-        queryPort.GetAsync("reg-1", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
-            {
-                Id = "reg-1",
-                Platform = "lark",
-                NyxChannelBotId = "bot-1",
-            }));
-
-        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
-        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
-
-        var deprovision = Substitute.For<INyxChannelBotDeprovisioningService>();
-        deprovision.DeprovisionAsync(
-                Arg.Any<string>(), Arg.Any<NyxChannelBotDeprovisioningRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxChannelBotDeprovisioningResult(false, false, false, Array.Empty<string>())));
-
-        var http = CreateHttpContext("scope-1");
-        http.Request.Headers.Authorization = "Bearer test-token";
-
-        var result = await InvokeAsync(
-            "HandleDeleteRegistrationAsync",
-            "reg-1",
-            http,
-            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
-            queryPort,
-            deprovision,
-            CancellationToken.None);
-        var response = await ExecuteResultAsync(result);
-
-        response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
-        response.Body.Should().Contain("nyx_channel_bot_delete_failed");
-        // Local mirror must NOT be tombstoned → no unregister command dispatched.
-        await ((IActorDispatchPort)actorRuntime).DidNotReceiveWithAnyArgs()
-            .DispatchAsync(default!, default!, default);
     }
 
     [Fact]

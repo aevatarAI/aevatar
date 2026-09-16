@@ -10,7 +10,8 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 /// Result of tearing down the NyxID side of a channel-bot registration.
 /// </summary>
 /// <param name="ChannelBotRemoved">
-/// True when the channel-bot was deleted on NyxID or was already gone (404).
+/// Always true for adoption registrations. NyxID owns the channel-bot record; local deletion only
+/// removes Aevatar-owned route/key/vault resources.
 /// </param>
 /// <param name="AgentKeyRemoved">
 /// True when the Agent Key was deleted on NyxID or was already gone (404).
@@ -77,18 +78,15 @@ public sealed record NyxChannelBotDeprovisioningRequest(
 }
 
 /// <summary>
-/// Tears down the NyxID resources provisioned for a channel-bot registration (conversation
-/// route, channel-bot, Agent Key, and Vault secret) so deleting a registration leaves no orphaned
-/// live credential or platform bot. Platform-neutral: it deletes by
-/// NyxID id with no per-platform branching, so a single implementation serves both Lark and
-/// Telegram registrations.
+/// Tears down Aevatar-owned NyxID resources for a local channel-bot registration (conversation
+/// route, Agent Key, and Vault secret). The NyxID channel-bot itself remains NyxID-owned and is
+/// not deleted by local registration removal.
 /// </summary>
 public interface INyxChannelBotDeprovisioningService
 {
     /// <summary>
-    /// Deletes the registration's NyxID resources in reverse of creation order (conversation
-    /// route → channel-bot → Agent Key → Vault secret) using the caller's bearer. The route and
-    /// Vault operations are best effort; channel-bot and Agent Key deletion are hard gates.
+    /// Deletes the registration's Aevatar-owned NyxID resources using the caller's bearer. The
+    /// route and Vault operations are best effort; Agent Key deletion is the hard gate.
     /// </summary>
     Task<NyxChannelBotDeprovisioningResult> DeprovisionAsync(
         string accessToken,
@@ -98,12 +96,9 @@ public interface INyxChannelBotDeprovisioningService
 
 public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisioningService
 {
-    // Deprovision is the reverse of the register-side provisioning saga
-    // (NyxLarkProvisioningService / NyxTelegramProvisioningService): register provisions on
-    // NyxID then writes the local mirror; delete tears down NyxID then tombstones the mirror.
-    // No NyxID call lives in the registration actor — the actor stays a pure local fact owner;
-    // the endpoint orchestrates NyxID teardown before the local unregister command, exactly as
-    // the register endpoint orchestrates provisioning before the local mirror write.
+    // Deprovision only removes resources Aevatar owns for an adopted NyxID channel bot. The
+    // registration actor remains a pure local fact owner; endpoint/tool orchestration clears
+    // route/key/vault resources before tombstoning the mirror.
     private readonly NyxIdApiClient _nyxClient;
     private readonly ISecretVault _secretVault;
     private readonly ILogger<NyxChannelBotDeprovisioningService> _logger;
@@ -141,18 +136,9 @@ public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisi
                 warnings.Add($"conversation_route_delete_failed id={request.ConversationRouteId}");
         }
 
-        // 2. Channel-bot (authoritative). NyxID enforces one active channel-bot per app_id, so a
-        //    residual bot is exactly what blocks re-registration; if this hard-fails (non-404),
-        //    the endpoint must NOT tombstone the local mirror so the row stays visible/retryable.
+        // 2. Channel-bot stays NyxID-owned. Local registration deletion must not delete the bot
+        //    record that users manage in NyxID.
         var channelBotRemoved = true;
-        if (!string.IsNullOrWhiteSpace(request.ChannelBotId))
-        {
-            channelBotRemoved = await TryDeleteAsync(
-                () => _nyxClient.DeleteChannelBotAsync(accessToken, request.ChannelBotId, ct),
-                request.Platform,
-                "channel_bot",
-                request.ChannelBotId);
-        }
 
         // 3. Agent Key (hard gate). A live orphaned credential must keep the local registration
         //    visible and retryable, just like a residual channel-bot does.

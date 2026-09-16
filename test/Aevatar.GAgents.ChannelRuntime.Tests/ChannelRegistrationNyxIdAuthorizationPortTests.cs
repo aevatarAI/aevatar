@@ -7,7 +7,6 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

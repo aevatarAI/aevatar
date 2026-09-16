@@ -7,11 +7,9 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 /// <summary>
-/// Shared parsing / rollback helpers for the Nyx-side responses consumed by per-platform
-/// provisioning services (<see cref="NyxLarkProvisioningService"/>, <see cref="NyxTelegramProvisioningService"/>,
-/// future platforms). Centralized here so the Lark and Telegram services do not drift on the
-/// JSON shape Nyx returns and the failure-string contract surfaced through the registration
-/// endpoint stays uniform.
+/// Shared parsing / rollback helpers for NyxID responses consumed by channel registration
+/// adoption, route binding, Agent Key, and cleanup flows. Centralized here so JSON response
+/// parsing and public failure normalization stay uniform.
 /// </summary>
 internal static class NyxApiResponseHelper
 {

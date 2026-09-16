@@ -83,64 +83,68 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         await registrationAgent.ActivateAsync();
         actorNetwork.RegisterActivated(ChannelBotRegistrationGAgent.WellKnownId, registrationAgent);
 
+        const string registrationId = "reg-alpha";
         var provisioningHandler = new QueueHandler();
         provisioningHandler.Enqueue(
             $$$"""{"id":"key-123","full_key":"{{{RawAgentKey}}}","purpose":"general","scheduled_write_enabled":false,"scopes":"read write proxy","allow_all_services":true,"allow_all_nodes":true,"allowed_service_ids":[],"allowed_node_ids":[]}""");
-        provisioningHandler.Enqueue("""{"id":"bot-456","status":"pending_webhook"}""");
-        provisioningHandler.Enqueue("""{"id":"route-789","default_agent":true}""");
-        provisioningHandler.Enqueue("""{"id":"svc-1"}""");
         var provisioningOptions = new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" };
         var provisioningClient = new NyxIdApiClient(
             provisioningOptions,
             new HttpClient(provisioningHandler));
-        var provisioningService = new NyxLarkProvisioningService(
-            provisioningClient,
-            provisioningOptions,
-            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorNetwork, actorNetwork),
-            new ChannelAgentKeyProvisioningService(
+        var channelAgentKey = await new ChannelAgentKeyProvisioningService(
                 provisioningClient,
                 secretVault,
                 NullLogger<ChannelAgentKeyProvisioningService>.Instance,
-                ChannelAgentKeyWriteMode.NyxIdDefault),
-            CreatePersonalRegistrationOwnerResolver("scope-1"),
-            NullLogger<NyxLarkProvisioningService>.Instance);
+                ChannelAgentKeyWriteMode.NyxIdDefault)
+            .ProvisionAsync(
+                "lark",
+                "user-token",
+                "https://aevatar.example.com/api/webhooks/nyxid-relay",
+                "scope-1",
+                registrationId,
+                new VerifiedChannelRegistrationOwner(
+                    "scope-1",
+                    new ChannelRegistrationKeyOwner(ChannelRegistrationKeyOwnerKind.Personal, "scope-1"),
+                    null),
+                CancellationToken.None);
+        await ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorNetwork, actorNetwork)
+            .RegisterLocalMirrorAsync(new ChannelBotRegisterCommand
+            {
+                Platform = "lark",
+                NyxProviderSlug = "api-lark-bot",
+                ScopeId = "scope-1",
+                WebhookUrl = "https://nyx.example/api/v1/webhooks/channel/lark/bot-456",
+                RequestedId = registrationId,
+                NyxChannelBotId = "bot-456",
+                NyxAgentApiKeyId = channelAgentKey.ApiKeyId,
+                NyxConversationRouteId = "route-789",
+                WorkflowResultDeliveryCredential = channelAgentKey.SecretReference.Clone(),
+                ChannelAgentKey = channelAgentKey.Clone(),
+                AuthorizationMode = ChannelRegistrationAuthorizationMode.NyxidDefault,
+            }, CancellationToken.None);
 
-        var provisioningResult = await provisioningService.ProvisionAsync(
-            new NyxLarkProvisioningRequest(
-                AccessToken: "user-token",
-                AppId: "cli_a1b2c3",
-                AppSecret: "secret-xyz",
-                VerificationToken: "verify-123",
-                WebhookBaseUrl: "https://aevatar.example.com",
-                ScopeId: "scope-1",
-                Label: "Ops Bot",
-                NyxProviderSlug: "api-lark-bot"),
-            CancellationToken.None);
-
-        provisioningResult.Succeeded.Should().BeTrue();
-        provisioningResult.WorkflowResultDeliveryEnabled.Should().BeTrue();
         projectionHook.Publications.Should().NotBeEmpty();
-        documentStore.Documents.Should().ContainKey(provisioningResult.RegistrationId!);
+        documentStore.Documents.Should().ContainKey(registrationId);
 
         var registrationQuery = new ChannelBotRegistrationQueryPort(documentStore);
-        var projectedRegistration = await registrationQuery.GetAsync(provisioningResult.RegistrationId!);
+        var projectedRegistration = await registrationQuery.GetAsync(registrationId);
         projectedRegistration.Should().NotBeNull();
         projectedRegistration!.WorkflowResultDeliveryCredential.Should().NotBeNull();
         projectedRegistration.NyxAgentApiKeyId.Should().Be("key-123");
-        provisioningResult.ToString().Should().NotContain(RawAgentKey);
+        channelAgentKey.ToString().Should().NotContain(RawAgentKey);
         registrationAgent.State.ToString().Should().NotContain(RawAgentKey);
         documentStore.Documents.Values.Single().ToString().Should().NotContain(RawAgentKey);
 
         var turnRunner = CreateTurnRunner(registrationQuery);
         var turn = await turnRunner.RunInboundAsync(
-            BuildInboundActivity(provisioningResult.RegistrationId!),
+            BuildInboundActivity(registrationId),
             CancellationToken.None);
 
         turn.Success.Should().BeTrue();
         turn.LlmReplyRequest.Should().NotBeNull();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(turn.LlmReplyRequest!.ToolContext);
         toolContext.Caller.ScopeId.Should().Be("scope-1");
-        toolContext.Channel.BotRegistrationId.Should().Be(provisioningResult.RegistrationId);
+        toolContext.Channel.BotRegistrationId.Should().Be(registrationId);
         toolContext.Channel.WorkflowResultDeliveryCredential.Should().NotBeNull();
         toolContext.Channel.WorkflowResultDeliveryCredential!.SecretReference
             .Should().Be(projectedRegistration.WorkflowResultDeliveryCredential);
@@ -416,22 +420,6 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         registrationLogger.Messages.Concat(invocationLogger.Messages).Should().OnlyContain(message =>
             !message.Contains(rawRepairedAgentKey, StringComparison.Ordinal) &&
             !message.Contains(stored.Reference.Ref, StringComparison.Ordinal));
-    }
-
-    private static IChannelRegistrationOwnerResolver CreatePersonalRegistrationOwnerResolver(
-        string scopeId)
-    {
-        var resolver = Substitute.For<IChannelRegistrationOwnerResolver>();
-        resolver.ResolveAsync(Arg.Any<string>(), scopeId, Arg.Any<CancellationToken>())
-            .Returns(new ChannelRegistrationOwnerResolution(
-                new VerifiedChannelRegistrationOwner(
-                    scopeId,
-                    new ChannelRegistrationKeyOwner(
-                        ChannelRegistrationKeyOwnerKind.Personal,
-                        scopeId),
-                    null),
-                string.Empty));
-        return resolver;
     }
 
     private static ServiceProvider BuildEventSourcingServices(

@@ -137,27 +137,31 @@ public static class ChannelBotRuntimeConfigJsonParser
         if (root.ValueKind != JsonValueKind.Object)
             return false;
 
-        if (!root.TryGetProperty("runtime_config", out var runtimeConfigElement))
-            return true;
+        ChannelBotRuntimeConfig? config = null;
+        if (root.TryGetProperty("runtime_config", out var runtimeConfigElement))
+        {
+            if (runtimeConfigElement.ValueKind == JsonValueKind.Null)
+                return true;
 
-        if (runtimeConfigElement.ValueKind == JsonValueKind.Null)
-            return true;
+            if (runtimeConfigElement.ValueKind != JsonValueKind.Object)
+                return false;
 
-        if (runtimeConfigElement.ValueKind != JsonValueKind.Object)
-            return false;
+            config = new ChannelBotRuntimeConfig();
+            if (!ReadString(runtimeConfigElement, "instructions", value => config.Instructions = value))
+                return false;
+            if (!ReadStringArray(runtimeConfigElement, "tool_set_refs", config.ToolSetRefs))
+                return false;
+            if (!ReadStringArray(runtimeConfigElement, "extra_tool_names", config.ExtraToolNames))
+                return false;
+            if (!ReadDefaultSkill(runtimeConfigElement, config))
+                return false;
+            if (!ReadSelectors(runtimeConfigElement, config))
+                return false;
+            if (!ReadCredentialSourceMode(runtimeConfigElement, config))
+                return false;
+        }
 
-        var config = new ChannelBotRuntimeConfig();
-        if (!ReadString(runtimeConfigElement, "instructions", value => config.Instructions = value))
-            return false;
-        if (!ReadStringArray(runtimeConfigElement, "tool_set_refs", config.ToolSetRefs))
-            return false;
-        if (!ReadStringArray(runtimeConfigElement, "extra_tool_names", config.ExtraToolNames))
-            return false;
-        if (!ReadDefaultSkill(runtimeConfigElement, config))
-            return false;
-        if (!ReadSelectors(runtimeConfigElement, config))
-            return false;
-        if (!ReadCredentialSourceMode(runtimeConfigElement, config))
+        if (!ReadSkillName(root, ref config))
             return false;
 
         runtimeConfig = config;
@@ -210,6 +214,21 @@ public static class ChannelBotRuntimeConfigJsonParser
         if (!ReadString(element, "version", value => defaultSkill.Version = value))
             return false;
         config.DefaultSkill = defaultSkill;
+        return true;
+    }
+
+    private static bool ReadSkillName(JsonElement root, ref ChannelBotRuntimeConfig? config)
+    {
+        if (!root.TryGetProperty("skill_name", out var element) || element.ValueKind == JsonValueKind.Null)
+            return true;
+        if (element.ValueKind != JsonValueKind.String)
+            return false;
+
+        config ??= new ChannelBotRuntimeConfig();
+        config.DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+        {
+            Name = element.GetString()?.Trim() ?? string.Empty,
+        };
         return true;
     }
 
