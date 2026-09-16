@@ -30,6 +30,32 @@ describe("teamRoutes", () => {
     );
   });
 
+  it("recognizes the team activity tab without collapsing runtime context", () => {
+    const memberId = "member-alpha";
+    const workflowId = "workflow-alpha";
+    const publishedServiceId = "service-alpha";
+
+    expect(
+      readTeamDetailRouteState(
+        `?memberId=${memberId}&workflowId=${workflowId}&serviceId=${publishedServiceId}&runId=run-alpha&tab=activity`,
+        "/scopes/scope-alpha/teams/team-alpha",
+      ),
+    ).toEqual({
+      memberId,
+      routeMemberId: "",
+      runId: "run-alpha",
+      scopeId: "scope-alpha",
+      serviceId: publishedServiceId,
+      tab: "activity",
+      teamId: "team-alpha",
+      testTeam: false,
+      workflowId,
+    });
+    expect(memberId).not.toBe(workflowId);
+    expect(memberId).not.toBe(publishedServiceId);
+    expect(workflowId).not.toBe(publishedServiceId);
+  });
+
   it("falls back to the scope resolver when the scope is empty", () => {
     expect(
       buildTeamDetailHref({

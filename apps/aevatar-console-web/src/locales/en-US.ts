@@ -431,6 +431,29 @@ const enUSMessages = {
   'teams.detail.runtimeStatus.retired': 'Retired',
   'teams.detail.runtimeStatus.running': 'Running',
   'teams.detail.runtimeStatus.waiting': 'Waiting',
+  'teams.detail.activity.actions.refresh': 'Refresh',
+  'teams.detail.activity.actions.refreshAria': 'Refresh recent activity',
+  'teams.detail.activity.actions.retry': 'Retry',
+  'teams.detail.activity.actions.runTeam': 'Run team',
+  'teams.detail.activity.empty.description':
+    'Run the team or a published member to create the first visible run.',
+  'teams.detail.activity.empty.title': 'No recent activity yet',
+  'teams.detail.activity.error.description':
+    'The last stable team facts remain available on Overview. Retry this read when the run list is available.',
+  'teams.detail.activity.error.title': 'Recent activity could not be loaded',
+  'teams.detail.activity.filteredEmpty.description':
+    'Choose another status to return to the visible runs.',
+  'teams.detail.activity.filteredEmpty.title':
+    'No recent runs match this filter',
+  'teams.detail.activity.filters.all': 'All',
+  'teams.detail.activity.filters.aria': 'Filter recent activity',
+  'teams.detail.activity.filters.attention': 'Needs attention',
+  'teams.detail.activity.filters.failed': 'Failed',
+  'teams.detail.activity.filters.reset': 'Show all recent runs',
+  'teams.detail.activity.filters.running': 'Running',
+  'teams.detail.activity.subtitle':
+    'Latest runs exposed by the current team entry service.',
+  'teams.detail.activity.title': 'Recent activity',
   'teams.detail.status.active': 'Active',
   'teams.detail.status.archived': 'Archived',
   'teams.detail.status.bindReady': 'Callable',
@@ -447,6 +470,7 @@ const enUSMessages = {
   'teams.detail.status.unknown': 'Unknown status',
   'teams.detail.tabList.label': 'Team detail tabs',
   'teams.detail.tabs.automations': 'Automations',
+  'teams.detail.tabs.activity': 'Activity',
   'teams.detail.tabs.members': 'Team members',
   'teams.detail.tabs.overview': 'Overview',
   'teams.detail.test.actions.retry': 'Retry',

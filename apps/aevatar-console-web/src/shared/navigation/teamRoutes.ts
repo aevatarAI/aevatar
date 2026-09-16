@@ -2,6 +2,7 @@ import { buildStudioRoute } from '@/shared/studio/navigation';
 
 type TeamDetailTab =
   | 'overview'
+  | 'activity'
   | 'automations'
   | 'members'
   | 'work-orders';
@@ -45,6 +46,7 @@ function parseTeamTab(
 ): TeamDetailTab {
   switch (trimOptional(value).toLowerCase()) {
     case 'overview':
+    case 'activity':
     case 'automations':
     case 'members':
     case 'work-orders':
