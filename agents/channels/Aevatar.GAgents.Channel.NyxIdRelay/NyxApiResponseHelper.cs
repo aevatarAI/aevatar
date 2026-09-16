@@ -490,6 +490,8 @@ internal static class NyxApiResponseHelper
         "local_mirror_accepted_remote_cleanup_skipped",
         "local_mirror_acceptance_unknown_remote_cleanup_skipped",
         "channel_agent_key_write_gate_closed",
+        "ambiguous_channel_bot_route",
+        "channel_route_not_accessible",
         "service_allowlist_not_supported",
         "provisioning_failed",
     ];

@@ -167,6 +167,7 @@ message ChannelBotUpdateRuntimeConfigCommand {
   int64 updated_at_unix_ms = 4;
   ChannelRegistrationAuthorizationMode authorization_mode = 5;
   ChannelRegistrationServiceAllowlist registration_service_allowlist = 6;
+  ChannelAgentKeyCredential channel_agent_key = 7;
 }
 
 enum ChannelWorkflowResultDeliveryCapabilityStatus {
@@ -326,6 +327,7 @@ message ChannelBotRuntimeConfigUpdatedEvent {
   int64 updated_at_unix_ms = 4;
   ChannelRegistrationAuthorizationMode authorization_mode = 5;
   ChannelRegistrationServiceAllowlist registration_service_allowlist = 6;
+  ChannelAgentKeyCredential channel_agent_key = 7;
 }
 
 message ChannelBotCompactTombstonesCommand {

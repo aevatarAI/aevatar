@@ -116,6 +116,7 @@ public sealed class ChannelRegistrationCommandFacade
         ChannelBotRuntimeConfig? runtimeConfig,
         string defaultSkillName,
         ChannelRegistrationServiceSelection serviceSelection,
+        ChannelAgentKeyCredential? channelAgentKey = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(serviceSelection);
@@ -134,6 +135,7 @@ public sealed class ChannelRegistrationCommandFacade
                             ServiceIds = { serviceSelection.ServiceIds },
                         }
                         : null,
+                ChannelAgentKey = channelAgentKey?.Clone(),
             },
             ct);
         return ResolveReceipt(result);
