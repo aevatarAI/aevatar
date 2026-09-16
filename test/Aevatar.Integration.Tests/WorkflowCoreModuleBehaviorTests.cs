@@ -24,10 +24,11 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "step-1",
                 StepType = "tool_call",
+                RunId = ctx.RunId,
                 Input = "{}",
             };
 
-            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+            await ExecuteToolCallToCompletionAsync(module, request, ctx);
 
             ctx.Published.Should().ContainSingle();
             ctx.Published[0].direction.Should().Be(TopologyAudience.Self);
@@ -46,23 +47,23 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "step-2",
                 StepType = "tool_call",
+                RunId = ctx.RunId,
                 Input = """{"x":1}""",
                 Parameters = { ["tool"] = "missing_tool" },
             };
 
             await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
-            ctx.Published.Should().HaveCount(3);
+            ctx.Published.Should().HaveCount(2);
             ctx.Published.Select(x => x.evt.GetType()).Should().ContainInOrder(
-                typeof(WorkflowToolCallStartedEvent),
                 typeof(WorkflowToolCallCompletedEvent),
                 typeof(StepCompletedEvent));
 
-            var toolResult = ctx.Published[1].evt.Should().BeOfType<WorkflowToolCallCompletedEvent>().Subject;
+            var toolResult = ctx.Published[0].evt.Should().BeOfType<WorkflowToolCallCompletedEvent>().Subject;
             toolResult.Success.Should().BeFalse();
             toolResult.Error.Should().Contain("tool 'missing_tool' execution failed");
 
-            var completed = ctx.Published[2].evt.Should().BeOfType<StepCompletedEvent>().Subject;
+            var completed = ctx.Published[1].evt.Should().BeOfType<StepCompletedEvent>().Subject;
             completed.Success.Should().BeFalse();
             completed.Error.Should().Contain("tool 'missing_tool' execution failed");
         }
@@ -85,7 +86,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
                 Parameters = { ["tool"] = "echo" },
             };
 
-            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+            await ExecuteToolCallToCompletionAsync(module, request, ctx);
 
             source.DiscoverCalls.Should().Be(1);
             var toolResult = ctx.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Single();
@@ -103,27 +104,27 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             var module = CreateToolCallModule([source]);
             var ctx = CreateContext();
 
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
+            await ExecuteToolCallToCompletionAsync(
+                module,
+                new StepRequestEvent
                 {
                     StepId = "step-4",
                     StepType = "tool_call",
                     Input = """{"n":1}""",
                     Parameters = { ["tool"] = "cached_echo" },
-                }),
-                ctx,
-                CancellationToken.None);
+                },
+                ctx);
 
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
+            await ExecuteToolCallToCompletionAsync(
+                module,
+                new StepRequestEvent
                 {
                     StepId = "step-5",
                     StepType = "tool_call",
                     Input = """{"n":2}""",
                     Parameters = { ["tool"] = "cached_echo" },
-                }),
-                ctx,
-                CancellationToken.None);
+                },
+                ctx);
 
             source.DiscoverCalls.Should().Be(1);
             ctx.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Should().OnlyContain(x => x.Success);
@@ -149,16 +150,16 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
 
                     await start.Task;
                     var ctx = CreateContext();
-                    await module.HandleAsync(
-                        Envelope(new StepRequestEvent
+                    await ExecuteToolCallToCompletionAsync(
+                        module,
+                        new StepRequestEvent
                         {
                             StepId = $"step-parallel-{i}",
                             StepType = "tool_call",
                             Input = """{"ok":true}""",
                             Parameters = { ["tool"] = "parallel_echo" },
-                        }),
-                        ctx,
-                        CancellationToken.None);
+                        },
+                        ctx);
                     return ctx;
                 }))
                 .ToArray();
@@ -194,6 +195,8 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
                 {
                     StepId = "step-cancelled",
                     StepType = "tool_call",
+                    RunId = cancelledContext.RunId,
+                    ExecutionId = "exec-step-cancelled",
                     Input = """{"msg":"cancel"}""",
                     Parameters = { ["tool"] = "delayed_echo" },
                 }),
@@ -207,16 +210,16 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledAttempt);
 
             var retryContext = CreateContext();
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
+            await ExecuteToolCallToCompletionAsync(
+                module,
+                new StepRequestEvent
                 {
                     StepId = "step-retry",
                     StepType = "tool_call",
                     Input = """{"msg":"retry"}""",
                     Parameters = { ["tool"] = "delayed_echo" },
-                }),
-                retryContext,
-                CancellationToken.None);
+                },
+                retryContext);
 
             source.DiscoverCalls.Should().Be(2);
             retryContext.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Should().ContainSingle()
@@ -233,15 +236,15 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             var module = CreateToolCallModule([source]);
             var ctx = CreateContext();
 
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
+            await ExecuteToolCallToCompletionAsync(
+                module,
+                new StepRequestEvent
                 {
                     StepId = "step-6",
                     StepType = "tool_call",
                     Parameters = { ["tool"] = "explode" },
-                }),
-                ctx,
-                CancellationToken.None);
+                },
+                ctx);
 
             var completed = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Last();
             completed.Success.Should().BeFalse();
@@ -255,16 +258,16 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             var module = new ToolCallModule([new CountingToolSource([tool])], NullLogger<ToolCallModule>.Instance);
             var ctx = CreateContext();
 
-            await module.HandleAsync(
-                Envelope(new StepRequestEvent
+            await ExecuteToolCallToCompletionAsync(
+                module,
+                new StepRequestEvent
                 {
                     StepId = "step-direct-tool",
                     StepType = "tool_call",
                     Input = """{"msg":"ok"}""",
                     Parameters = { ["tool"] = "safe_echo" },
-                }),
-                ctx,
-                CancellationToken.None);
+                },
+                ctx);
 
             tool.ExecuteCalls.Should().Be(1);
             var toolResult = ctx.Published.Select(x => x.evt).OfType<WorkflowToolCallCompletedEvent>().Single();
@@ -284,6 +287,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-1",
                 StepType = "foreach",
+                RunId = ctx.RunId,
                 Input = "",
             };
 
@@ -292,6 +296,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             ctx.Published.Should().ContainSingle();
             var completed = ctx.Published[0].evt.Should().BeOfType<StepCompletedEvent>().Subject;
             completed.StepId.Should().Be("foreach-1");
+            completed.RunId.Should().Be(ctx.RunId);
             completed.Success.Should().BeTrue();
             completed.Output.Should().BeEmpty();
         }
@@ -305,6 +310,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             {
                 StepId = "foreach-2",
                 StepType = "foreach",
+                RunId = ctx.RunId,
                 Input = "alpha\n---\nbeta",
                 Parameters =
                 {
@@ -323,17 +329,76 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             subRequests[0].TargetRole.Should().Be("worker_role");
             subRequests[0].Parameters["op"].Should().Be("uppercase");
             subRequests[1].StepId.Should().Be("foreach-2_item_1");
+            subRequests.Should().OnlyContain(child => child.RunId == ctx.RunId);
+            subRequests.Should().OnlyContain(child => !string.IsNullOrWhiteSpace(child.ExecutionId));
+            subRequests.Select(child => child.ExecutionId).Should().OnlyHaveUniqueItems();
 
             var countBeforeCompletions = ctx.Published.Count;
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_0", Success = true, Output = "A" }), ctx, CancellationToken.None);
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_0_sub_1", Success = true, Output = "IGNORED" }), ctx, CancellationToken.None);
-            await module.HandleAsync(Envelope(new StepCompletedEvent { StepId = "foreach-2_item_1", Success = false, Output = "B" }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = subRequests[0].StepId,
+                RunId = subRequests[0].RunId,
+                ExecutionId = subRequests[0].ExecutionId,
+                Success = true,
+                Output = "A",
+            }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = $"{subRequests[0].StepId}_sub_1",
+                RunId = subRequests[0].RunId,
+                ExecutionId = subRequests[0].ExecutionId,
+                Success = true,
+                Output = "IGNORED",
+            }), ctx, CancellationToken.None);
+            await module.HandleAsync(Envelope(new StepCompletedEvent
+            {
+                StepId = subRequests[1].StepId,
+                RunId = subRequests[1].RunId,
+                ExecutionId = subRequests[1].ExecutionId,
+                Success = false,
+                Output = "B",
+            }), ctx, CancellationToken.None);
 
             var delta = ctx.Published.Skip(countBeforeCompletions).Select(x => x.evt).OfType<StepCompletedEvent>().ToList();
             delta.Should().ContainSingle();
             delta[0].StepId.Should().Be("foreach-2");
+            delta[0].RunId.Should().Be(ctx.RunId);
             delta[0].Success.Should().BeFalse();
             delta[0].Output.Should().Be("A\n---\nB");
+        }
+
+        [Fact]
+        public async Task ForEachModule_ShouldEvaluateSubParameterExpressionsForEachItem()
+        {
+            var module = new ForEachModule();
+            var ctx = CreateContext();
+            var request = new StepRequestEvent
+            {
+                StepId = "foreach-arguments",
+                StepType = "foreach",
+                RunId = ctx.RunId,
+                Input = "[\"instance-alpha\",\"instance-beta\"]",
+                Parameters =
+                {
+                    ["sub_step_type"] = "tool_call",
+                    ["sub_param_tool"] = "nyxid_proxy",
+                    ["sub_param_arguments"] = "{\"path_params\":{\"instance_id\":\"${input}\"}}",
+                },
+            };
+
+            await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+            var subRequests = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
+            subRequests.Should().HaveCount(2);
+            using var firstArguments = JsonDocument.Parse(subRequests[0].Parameters["arguments"]);
+            using var secondArguments = JsonDocument.Parse(subRequests[1].Parameters["arguments"]);
+            firstArguments.RootElement.GetProperty("path_params").GetProperty("instance_id").GetString()
+                .Should().Be("instance-alpha");
+            secondArguments.RootElement.GetProperty("path_params").GetProperty("instance_id").GetString()
+                .Should().Be("instance-beta");
+            subRequests.Should().OnlyContain(child => child.RunId == ctx.RunId);
+            subRequests.Should().OnlyContain(child => !string.IsNullOrWhiteSpace(child.ExecutionId));
+            subRequests.Select(child => child.ExecutionId).Should().OnlyHaveUniqueItems();
         }
 
         [Fact]
@@ -359,11 +424,14 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
                 ctx,
                 CancellationToken.None);
 
-            var firstDispatch = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+            var firstDispatchEntry = ctx.Published.Single(x => x.evt is StepRequestEvent);
+            var firstDispatch = firstDispatchEntry.evt.Should().BeOfType<StepRequestEvent>().Subject;
             firstDispatch.StepId.Should().Be("while-1_iter_0");
             firstDispatch.StepType.Should().Be("transform");
             firstDispatch.TargetRole.Should().Be("worker");
             firstDispatch.Input.Should().Be("initial");
+            // 迭代子步骤必须回到本 run 的模块管线；投递到 Children 会让 while 永远挂起。
+            firstDispatchEntry.direction.Should().Be(TopologyAudience.Self);
 
             var countAfterStart = ctx.Published.Count;
             await module.HandleAsync(
@@ -386,7 +454,7 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             secondDispatch.StepId.Should().Be("while-1_iter_1");
             secondDispatch.StepType.Should().Be("transform");
             secondDispatch.Input.Should().Be("continue");
-            deltaEvents[0].direction.Should().Be(TopologyAudience.Children);
+            deltaEvents[0].direction.Should().Be(TopologyAudience.Self);
 
             var completed = deltaEvents[1].evt.Should().BeOfType<StepCompletedEvent>().Subject;
             completed.StepId.Should().Be("while-1");
@@ -706,6 +774,102 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             hitCompletion.Output.Should().Be("cached-output");
             hitCompletion.Annotations["cache.hit"].Should().Be("true");
             hitCompletion.Annotations.Should().ContainKey("cache.key");
+        }
+
+        [Fact]
+        public async Task CacheModule_OnMiss_ShouldForwardSynthesizedChildContract()
+        {
+            var module = new CacheModule();
+            var ctx = CreateContext();
+            var invocation = new ExternalToolInvocationSpec
+            {
+                CallSiteId = "cache-workflow/cached-tool/sub-step",
+                ToolName = "nyxid_proxy",
+            };
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "cached-tool",
+                    StepType = "cache",
+                    RunId = "run-cache-contract",
+                    ExecutionId = "exec-cache-parent",
+                    Input = "input-value",
+                    InputValueId = "value-cache-input",
+                    ExternalInvocation = invocation,
+                    Parameters =
+                    {
+                        ["cache_key"] = "cache-contract-key",
+                        ["child_step_type"] = "tool_call",
+                        ["child_target_role"] = "worker",
+                        ["sub_param_tool"] = "nyxid_proxy",
+                        ["sub_param_arguments"] = "{\"path_params\":{\"item_id\":\"input-value\"}}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var child = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+            child.StepType.Should().Be("tool_call");
+            child.TargetRole.Should().Be("worker");
+            child.ExecutionId.Should().NotBeNullOrWhiteSpace();
+            child.InputValueId.Should().Be("value-cache-input");
+            child.Parameters.Should().Contain("tool", "nyxid_proxy");
+            child.Parameters.Should().Contain(
+                "arguments",
+                "{\"path_params\":{\"item_id\":\"input-value\"}}");
+            child.Parameters.Should().NotContainKey("cache_key");
+            child.ExternalInvocation.Should().NotBeSameAs(invocation);
+            child.ExternalInvocation.Should().BeEquivalentTo(invocation);
+        }
+
+        [Fact]
+        public async Task CacheModule_ToolChild_ShouldExecuteForwardedParametersAndCompleteParent()
+        {
+            var cache = new CacheModule();
+            var tool = new CountingFakeAgentTool("cache_echo", static arguments => arguments);
+            var toolCall = CreateToolCallModule([new CountingToolSource([tool])]);
+            var ctx = CreateContext();
+
+            await cache.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "cache-tool-parent",
+                    StepType = "cache",
+                    RunId = "run-cache-tool",
+                    ExecutionId = "exec-cache-tool-parent",
+                    Input = "ignored-input",
+                    Parameters =
+                    {
+                        ["cache_key"] = "cache-tool-key",
+                        ["child_step_type"] = "tool_call",
+                        ["sub_param_tool"] = "cache_echo",
+                        ["sub_param_arguments"] = "{\"value\":\"from-cache\"}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var child = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().Single();
+            ctx.Published.Clear();
+
+            await ExecuteToolCallToCompletionAsync(toolCall, child, ctx);
+
+            tool.ExecuteCalls.Should().Be(1);
+            var childCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>()
+                .Single(x => x.StepId == child.StepId);
+            childCompletion.Success.Should().BeTrue();
+            childCompletion.Output.Should().Be("{\"value\":\"from-cache\"}");
+            ctx.Published.Clear();
+
+            await cache.HandleAsync(Envelope(childCompletion), ctx, CancellationToken.None);
+
+            var parentCompletion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            parentCompletion.StepId.Should().Be("cache-tool-parent");
+            parentCompletion.ExecutionId.Should().Be("exec-cache-tool-parent");
+            parentCompletion.Success.Should().BeTrue();
+            parentCompletion.Output.Should().Be("{\"value\":\"from-cache\"}");
+            parentCompletion.Annotations["cache.hit"].Should().Be("false");
         }
 
         [Fact]
@@ -1220,6 +1384,372 @@ public sealed class WorkflowCoreModuleBehaviorTests : WorkflowCoreModuleTestBase
             output.RootElement[1].GetProperty("id").GetString().Should().Be("node-3");
             output.RootElement[1].GetProperty("properties").GetProperty("abstract").GetString().Should().Be("middle abstract");
             output.RootElement[0].TryGetProperty("createdAt", out _).Should().BeFalse();
+        }
+
+        [Fact]
+        public async Task TransformModule_Template_ShouldRenderBoundedJsonAggregation()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "template-aggregate",
+                    StepType = "transform",
+                    Input =
+                        """
+                        {
+                          "items": [
+                            { "name": "alpha", "amount": 2 },
+                            { "name": "beta", "amount": 3 }
+                          ]
+                        }
+                        """,
+                    Parameters =
+                    {
+                        ["op"] = "template",
+                        ["template"] =
+                            "{{~ total = 0 ~}}" +
+                            "{{~ for item in data.items ~}}" +
+                            "{{ item.name }}={{ item.amount }};" +
+                            "{{~ total = total + item.amount ~}}" +
+                            "{{~ end ~}}" +
+                            "total={{ total }}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.Error.Should().BeEmpty();
+            completion.Success.Should().BeTrue();
+            completion.Output.Equals("alpha=2;beta=3;total=5", StringComparison.Ordinal).Should().BeTrue();
+        }
+
+        [Fact]
+        public async Task TransformModule_Template_ShouldParseAccountingNumber()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "template-accounting-number",
+                    StepType = "transform",
+                    Input = """{ "amount": "(1,234.50)" }""",
+                    StepParameters = new WorkflowStepParameters
+                    {
+                        TransformOperation = new TransformOperationSpec
+                        {
+                            Kind = TransformOperationKind.Template,
+                            Template = "{{ number(data.amount) }}",
+                        },
+                    },
+                    Parameters = { ["op"] = "unknown_op" },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.Success.Should().BeTrue();
+            decimal.Parse(completion.Output, CultureInfo.InvariantCulture).Should().Be(-1234.50m);
+        }
+
+        [Fact]
+        public async Task TransformModule_Template_ShouldAggregateDynamicJsonKeys()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "template-dynamic-map",
+                    StepType = "transform",
+                    Input =
+                        """
+                        {
+                          "items": [
+                            { "category": "alpha", "amount": "2" },
+                            { "category": "beta", "amount": "3" },
+                            { "category": "alpha", "amount": "4" }
+                          ]
+                        }
+                        """,
+                    Parameters =
+                    {
+                        ["op"] = "template",
+                        ["template"] =
+                            "{{~ by_category = {} ~}}" +
+                            "{{~ for item in data.items ~}}" +
+                            "{{~ by_category[item.category] = get(by_category, item.category, 0) + number(item.amount) ~}}" +
+                            "{{~ end ~}}" +
+                            "{{ json(by_category) }}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.Success.Should().BeTrue();
+            using var output = JsonDocument.Parse(completion.Output);
+            output.RootElement.GetProperty("alpha").GetDecimal().Should().Be(6m);
+            output.RootElement.GetProperty("beta").GetDecimal().Should().Be(3m);
+        }
+
+        [Fact]
+        public async Task TransformModule_Template_ShouldNormalizeExplicitDateFormat()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "template-date",
+                    StepType = "transform",
+                    Input = """{ "date": "3/8/2026" }""",
+                    Parameters =
+                    {
+                        ["op"] = "template",
+                        ["template"] = "{{ date(data.date) }}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.Success.Should().BeTrue();
+            completion.Output.Should().Be("2026-08-03");
+        }
+
+        [Fact]
+        public async Task TransformModule_Template_ShouldSortObjectKeysAndRoundDecimals()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "template-keys-round",
+                    StepType = "transform",
+                    Input = """{ "values": { "zeta": 1.25, "alpha": 2.24 } }""",
+                    Parameters =
+                    {
+                        ["op"] = "template",
+                        ["template"] =
+                            "{{~ for key in keys(data.values) ~}}" +
+                            "{{ key }}={{ round(data.values[key], 1) }};" +
+                            "{{~ end ~}}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.Success.Should().BeTrue();
+            completion.Output.Should().Be("alpha=2.2;zeta=1.3;");
+        }
+
+        [Fact]
+        public async Task TransformModule_TemplateJson_ShouldSerializeArraySizeAsNumber()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "template-json-integer",
+                    StepType = "transform",
+                    Input = """{ "items": [1, 2, 3] }""",
+                    Parameters =
+                    {
+                        ["op"] = "template",
+                        ["template"] = "{{ json({ count: data.items.size }) }}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.Success.Should().BeTrue();
+            using var output = JsonDocument.Parse(completion.Output);
+            output.RootElement.GetProperty("count").GetInt32().Should().Be(3);
+        }
+
+        [Fact]
+        public async Task TransformModule_Template_ShouldAggregateAndClassifyGroupedValues()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+            const string template =
+                "{{~ observed = {}; baseline = {}; seen = {}; rows = [] ~}}" +
+                "{{~ for item in data.observed_items ~}}" +
+                "{{~ observed[item.group] = get(observed, item.group, 0) + number(item.value) ~}}" +
+                "{{~ end ~}}" +
+                "{{~ for item in data.baseline_items ~}}" +
+                "{{~ baseline[item.group] = get(baseline, item.group, 0) + number(item.value) ~}}" +
+                "{{~ end ~}}" +
+                "{{~ for group in keys(observed) ~}}" +
+                "{{~ seen[group] = true; o = get(observed, group, 0); b = get(baseline, group, 0) ~}}" +
+                "{{~ if b > 0; ratio = round(o / b * 100, 1); else if o > 0; ratio = -1; else; ratio = 0; end ~}}" +
+                "{{~ if ratio == -1 || ratio >= 120; band = 'high'; else if ratio >= 100; band = 'elevated'; else if ratio >= 80; band = 'near'; else; band = 'within'; end ~}}" +
+                "{{~ rows = append(rows, { group: group, baseline: round(b, 2), observed: round(o, 2), ratio: ratio, band: band }) ~}}" +
+                "{{~ end ~}}" +
+                "{{~ for group in keys(baseline) ~}}" +
+                "{{~ if !get(seen, group, false) ~}}" +
+                "{{~ b = get(baseline, group, 0) ~}}" +
+                "{{~ rows = append(rows, { group: group, baseline: round(b, 2), observed: 0, ratio: 0, band: 'within' }) ~}}" +
+                "{{~ end ~}}" +
+                "{{~ end ~}}" +
+                "{{ json({ rows: rows, truncated: data.truncated }) }}";
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "template-grouped-values",
+                    StepType = "transform",
+                    Input =
+                        """
+                        {
+                          "observed_items": [
+                            { "group": "alpha", "value": "80" },
+                            { "group": "alpha", "value": "50" },
+                            { "group": "beta", "value": "20" }
+                          ],
+                          "baseline_items": [
+                            { "group": "alpha", "value": "100" },
+                            { "group": "gamma", "value": "40" }
+                          ],
+                          "truncated": false
+                        }
+                        """,
+                    Parameters =
+                    {
+                        ["op"] = "template",
+                        ["template"] = template,
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+            completion.Success.Should().BeTrue();
+            using var output = JsonDocument.Parse(completion.Output);
+            var rows = output.RootElement.GetProperty("rows");
+            rows.GetArrayLength().Should().Be(3);
+            rows[0].GetProperty("group").GetString().Should().Be("alpha");
+            rows[0].GetProperty("ratio").GetDecimal().Should().Be(130m);
+            rows[0].GetProperty("band").GetString().Should().Be("high");
+            rows[2].GetProperty("group").GetString().Should().Be("gamma");
+            output.RootElement.GetProperty("truncated").GetBoolean().Should().BeFalse();
+        }
+
+        [Fact]
+        public async Task TransformModule_TemplateUnsafeOrInvalidInputs_ShouldFailClosed()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+            var cases = new (string StepId, string Input, string Template)[]
+            {
+                ("missing-template", "{}", string.Empty),
+                ("invalid-json", "not-json", "ok"),
+                ("invalid-template", "{}", "{{ if }}"),
+                ("unknown-variable", "{}", "{{ missing_value }}"),
+                ("mutate-input", "{\"value\":1}", "{{ data.value = 2 }}"),
+                ("append-to-input", "{\"items\":[]}", "{{ append(data.items, 1) }}"),
+                ("hidden-builtin", "{}", "{{ [1] | array.insert_at 5 'x' }}"),
+            };
+
+            foreach (var (stepId, input, template) in cases)
+            {
+                await module.HandleAsync(
+                    Envelope(new StepRequestEvent
+                    {
+                        StepId = stepId,
+                        StepType = "transform",
+                        Input = input,
+                        Parameters =
+                        {
+                            ["op"] = "template",
+                            ["template"] = template,
+                        },
+                    }),
+                    ctx,
+                    CancellationToken.None);
+            }
+
+            var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId);
+            completions.Should().HaveCount(cases.Length);
+            completions.Values.Should().OnlyContain(x => !x.Success && x.Output.Length == 0 && x.Error.Contains("template"));
+        }
+
+        [Fact]
+        public async Task TransformModule_TemplateResourceLimits_ShouldFailClosed()
+        {
+            var module = new TransformModule();
+            var ctx = CreateContext();
+            var loopInput = JsonSerializer.Serialize(new { items = Enumerable.Range(0, 10_001) });
+            var outputInput = JsonSerializer.Serialize(new { items = Enumerable.Range(0, 10_000) });
+            var outputChunk = new string('x', 500);
+            var arrayLimitTemplate =
+                "{{v=[]}}" +
+                string.Concat(Enumerable.Repeat("{{v=append(v,1)}}", 10_001));
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "loop-limit",
+                    StepType = "transform",
+                    Input = loopInput,
+                    Parameters =
+                    {
+                        ["op"] = "template",
+                        ["template"] = "{{ for item in data.items }}x{{ end }}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "output-limit",
+                    StepType = "transform",
+                    Input = outputInput,
+                    Parameters =
+                    {
+                        ["op"] = "template",
+                        ["template"] = $"{{{{ for item in data.items }}}}{outputChunk}{{{{ end }}}}",
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            await module.HandleAsync(
+                Envelope(new StepRequestEvent
+                {
+                    StepId = "array-limit",
+                    StepType = "transform",
+                    Input = "{}",
+                    Parameters =
+                    {
+                        ["op"] = "template",
+                        ["template"] = arrayLimitTemplate,
+                    },
+                }),
+                ctx,
+                CancellationToken.None);
+
+            var completions = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().ToDictionary(x => x.StepId);
+            completions.Values.Should().OnlyContain(x => !x.Success && x.Output.Length == 0);
+            completions["loop-limit"].Error.Should().Contain("evaluation");
+            completions["output-limit"].Error.Should().Contain("output");
+            completions["array-limit"].Error.Should().Contain("evaluation");
         }
 
         [Fact]

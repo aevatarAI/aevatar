@@ -18,7 +18,8 @@ public sealed class VoiceRealtimeOAuthStaticAssetTests
         await using var app = await CreateAppAsync();
         var html = await app.GetTestClient().GetStringAsync("/admin");
 
-        html.Should().Contain("beginLogin(msg.resources,msg.tokenPurpose)");
+        html.Should().Contain(
+            "beginLogin(msg.resources,msg.tokenPurpose,msg.authFlow,msg.popupName,msg.authRequestId,ev.source)");
         html.Should().Contain(":voice-realtime:token",
             "global logout must clear the feature-scoped Voice token too");
     }
@@ -31,8 +32,12 @@ public sealed class VoiceRealtimeOAuthStaticAssetTests
 
         html.Should().Contain("pending.resources");
         html.Should().Contain("token.oauth_resources = requestedResources");
-        html.Should().Contain("VOICE_TOKEN_KEY : TOKEN_KEY",
+        html.Should().Contain("tokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_KEY : TOKEN_KEY",
             "feature authorization must not overwrite the baseline console token");
+        html.Should().Contain("localStorage.setItem(tokenKey, JSON.stringify(token))",
+            "feature-scoped token exchange must write through the selected storage key");
+        html.Should().Contain("localStorage.setItem(TOKEN_KEY, JSON.stringify(token))",
+            "ordinary finalized login must still update the baseline console token");
         html.Should().Contain("resourcesCover(tokenResponseResources(token), requestedResources)");
     }
 

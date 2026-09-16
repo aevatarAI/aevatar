@@ -488,9 +488,7 @@ internal sealed record ResponsesOutputTokensDetails
     public int ReasoningTokens { get; init; }
 }
 
-/// <summary>OpenAI-spec `/v1/models` list response. Extension fields (route_value, group, status)
-/// surface aevatar's multi-route topology to aevatar-aware clients without breaking OpenAI-spec
-/// consumers (Codex / Cursor read only `id` / `object` / `created` / `owned_by`).</summary>
+/// <summary>OpenAI-compatible `/v1/models` list response.</summary>
 internal sealed record ResponsesModelsListResponse
 {
     [JsonPropertyName("object")]
@@ -517,18 +515,8 @@ internal sealed record ResponsesModelEntry
     [JsonPropertyName("group")]
     public required string Group { get; init; }
 
-    [JsonPropertyName("route_value")]
-    public required string RouteValue { get; init; }
-
-    [JsonPropertyName("status")]
-    public required string Status { get; init; }
-
-    // Optional upstream-forwarded metadata. Present when the upstream `/v1/models`
-    // response carried richer fields (anthropic gives display_name + max_input_tokens
-    // + max_tokens; OpenAI-spec backends like deepseek / chrono-llm only return the
-    // minimal `{id, object, created, owned_by}` shape so these stay null and are
-    // omitted from JSON output). OpenRouter-style clients (CC Switch, Codex) read
-    // these to size requests; sparse upstreams cause a UI warning but not failure.
+    // Reserved OpenAI-compatible extension fields. The explicit policy currently
+    // carries only stable model IDs, so these remain null and are omitted from JSON.
 
     [JsonPropertyName("context_length")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

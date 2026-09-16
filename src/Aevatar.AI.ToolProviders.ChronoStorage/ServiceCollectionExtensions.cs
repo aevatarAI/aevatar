@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -23,8 +22,8 @@ public static class ServiceCollectionExtensions
         configure(options);
         services.TryAddSingleton(options);
         services.AddHttpClient<ChronoStorageApiClient>();
-        services.TryAddEnumerable(
-            ServiceDescriptor.Transient<IAgentToolSource, ChronoStorageAgentToolSource>());
+        services.TryAddTransient<ChronoStorageReadAgentToolSource>();
+        services.TryAddTransient<ChronoStorageWriteAgentToolSource>();
         return services;
     }
 }

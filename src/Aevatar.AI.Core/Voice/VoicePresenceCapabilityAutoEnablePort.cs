@@ -109,7 +109,7 @@ public sealed class VoicePresenceCapabilityAutoEnablePort : IVoicePresenceCapabi
 
             var receipt = await _commandPort.EnableAsync(normalizedActorId, command, ct);
             _logger.LogInformation(
-                "voice auto-enable: committed enable for never-enabled default agent actor {ActorId} kind {AgentKind} module {ModuleName} (command {CommandId})",
+                "voice auto-enable: accepted enable dispatch for actor {ActorId} kind {AgentKind} module {ModuleName} (command {CommandId})",
                 normalizedActorId,
                 runtimeKind,
                 receipt.ModuleName,

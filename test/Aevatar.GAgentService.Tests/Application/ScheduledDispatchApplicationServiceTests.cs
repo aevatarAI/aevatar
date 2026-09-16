@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Infrastructure.Schedules;
@@ -77,6 +78,120 @@ public sealed class ScheduledDispatchApplicationServiceTests
         actorPort.ResolvedScheduleIds.Should().BeEmpty();
         actorPort.EnsuredScheduleIds.Should().BeEmpty();
         actorPort.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRejectUnknownScheduledPromptPlaceholderBeforeActorDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var configuration = CreateServiceInvocationConfiguration(
+            "schedule-invalid-template",
+            ScheduledDispatchScheduleKind.Generic,
+            ScheduledDispatchCredentialRequirementTargetKind.StaticService,
+            Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "{\"run_date\":\"{{@schedule.unknown}}\"}",
+            }));
+
+        var act = () => service.CreateAsync(configuration);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Unsupported scheduled prompt placeholder '@schedule.unknown'.*");
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
+        actorPort.Created.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BeginTeamAutomation_ShouldRejectUnknownScheduledPromptPlaceholderBeforeCredentialOperation()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "member-alpha", "team-alpha");
+        var authorizationOwner = new ScheduledInvocationAuthorizationOwner(
+            "nyxid",
+            "personal",
+            "owner-alpha");
+        var authorizationFact = new ScheduledInvocationAuthorizationFact(
+            "digest-alpha",
+            "policy-v1",
+            authorizationOwner,
+            [],
+            "proxy",
+            DateTimeOffset.UtcNow.AddHours(1),
+            ServiceGrantsNotRequired: true,
+            new ScheduledInvocationAuthorizationDisclosure(true, true, false, true, true),
+            new ScheduledInvocationAuthorizationAuthority(
+                0,
+                0,
+                0,
+                0,
+                0,
+                DateTimeOffset.UnixEpoch,
+                DateTimeOffset.UnixEpoch,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                DateTimeOffset.UnixEpoch));
+        var decision = new TeamAutomationActivationDecision(
+            "schedule-team-invalid-template",
+            "Invalid template",
+            owner,
+            new ServiceIdentity { ServiceId = "workflow-alpha" },
+            "chat",
+            Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "{\"run_date\":\"{{@schedule.unknown}}\"}",
+            }),
+            new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                ExternalUserId = "owner-alpha",
+                Scope = "proxy",
+                BindingId = "binding-alpha",
+            },
+            authorizationFact,
+            "0 10 27 * *",
+            "Asia/Singapore",
+            true,
+            ScheduledDispatchScheduleKind.Workflow,
+            new Dictionary<string, string>(),
+            ScheduledDispatchScheduleMode.RecurringCron,
+            null,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            "rev-alpha",
+            null);
+        var operation = new TeamAutomationCredentialOperation(
+            decision.ScheduleId,
+            owner,
+            "operation-alpha",
+            "idempotency-alpha",
+            authorizationFact.PermissionDigest,
+            authorizationFact.PolicyVersion,
+            TeamAutomationOperationKind.Create,
+            new ScheduledCredentialEffectLocator(
+                "credential-alpha",
+                "secret-alpha",
+                CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                "schedule:schedule-team-invalid-template",
+                authorizationOwner),
+            decision,
+            "mutation-alpha");
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(operation);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*Unsupported scheduled prompt placeholder '@schedule.unknown'.*");
+        actorPort.EnsuredScheduleIds.Should().BeEmpty();
     }
 
     [Fact]
@@ -799,6 +914,229 @@ public sealed class ScheduledDispatchApplicationServiceTests
             actorPort.Created.Should().ContainSingle();
         else
             actorPort.Ensured.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task WorkflowExpectedTargetMutation_ShouldRejectDifferentProjectedServiceTargetBeforeDispatch()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = CreateSummaryDetail(
+                "schedule-alpha",
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ScheduledDispatchScheduleKind.Workflow,
+                ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+                ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey) with
+            {
+                Schedule = CreateSummaryDetail(
+                    "schedule-alpha",
+                    ScheduledDispatchTargetKind.ServiceInvocation,
+                    ScheduledDispatchScheduleKind.Workflow,
+                    ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+                    ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey).Schedule with
+                {
+                    ServiceId = "svc-other",
+                    ServiceEndpointId = "chat",
+                    ServiceKey = "svc-key-alpha",
+                    ServiceIdentity = new ServiceIdentity
+                    {
+                        TenantId = "scope-alpha",
+                        AppId = "default",
+                        Namespace = "workflows",
+                        ServiceId = "svc-other",
+                    },
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var context = new ScheduledDispatchMutationContext(
+            ExpectedServiceTarget: new ScheduledDispatchExpectedServiceTarget(
+                ScheduledDispatchScheduleKind.Workflow,
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                new ServiceIdentity
+                {
+                    TenantId = "scope-alpha",
+                    AppId = "default",
+                    Namespace = "workflows",
+                    ServiceId = "svc-alpha",
+                },
+                "chat"));
+
+        var act = () => service.DisableAsync("schedule-alpha", "cleanup", context);
+
+        await act.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        queryPort.GetScheduleIds.Should().ContainSingle().Which.Should().Be("schedule-alpha");
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.Disabled.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowExpectedTargetMutation_WithMatchingLegacyProjection_ShouldDispatchWithActorGuard()
+    {
+        var expectedIdentity = new ServiceIdentity
+        {
+            TenantId = "scope-alpha",
+            AppId = "default",
+            Namespace = "workflows",
+            ServiceId = "svc-alpha",
+        };
+        var detail = CreateSummaryDetail(
+            "schedule-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = detail with
+            {
+                Schedule = detail.Schedule with
+                {
+                    ServiceKey = ServiceKeys.Build(expectedIdentity),
+                    ServiceId = expectedIdentity.ServiceId,
+                    ServiceEndpointId = "chat",
+                    ServiceIdentity = new ServiceIdentity(),
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var expectedTarget = new ScheduledDispatchExpectedServiceTarget(
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            expectedIdentity,
+            "chat");
+
+        await service.DisableAsync(
+            "schedule-alpha",
+            "cleanup",
+            new ScheduledDispatchMutationContext(ExpectedServiceTarget: expectedTarget));
+
+        actorPort.Disabled.Should().ContainSingle();
+        actorPort.DisableExpectedTargets.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(expectedTarget);
+    }
+
+    [Fact]
+    public async Task WorkflowExpectedTargetMutation_WithDifferentLegacyProjection_ShouldRejectBeforeDispatch()
+    {
+        var expectedIdentity = new ServiceIdentity
+        {
+            TenantId = "scope-alpha",
+            AppId = "default",
+            Namespace = "workflows",
+            ServiceId = "svc-alpha",
+        };
+        var projectedIdentity = expectedIdentity.Clone();
+        projectedIdentity.ServiceId = "svc-other";
+        var detail = CreateSummaryDetail(
+            "schedule-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = detail with
+            {
+                Schedule = detail.Schedule with
+                {
+                    ServiceKey = ServiceKeys.Build(projectedIdentity),
+                    ServiceId = projectedIdentity.ServiceId,
+                    ServiceEndpointId = "chat",
+                    ServiceIdentity = new ServiceIdentity(),
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var context = new ScheduledDispatchMutationContext(
+            ExpectedServiceTarget: new ScheduledDispatchExpectedServiceTarget(
+                ScheduledDispatchScheduleKind.Workflow,
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                expectedIdentity,
+                "chat"));
+
+        var act = () => service.DisableAsync("schedule-alpha", "cleanup", context);
+
+        await act.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.Disabled.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExpectedServiceTargetMutations_ShouldForwardConditionalTargetToActorPort()
+    {
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant-alpha",
+            AppId = "app-alpha",
+            Namespace = "default",
+            ServiceId = "svc-alpha",
+        };
+        var expectedTarget = new ScheduledDispatchExpectedServiceTarget(
+            ScheduledDispatchScheduleKind.Generic,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            identity,
+            "run");
+        var baseDetail = CreateSummaryDetail(
+            "schedule-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Generic,
+            ScheduledDispatchCredentialRequirementTargetKind.StaticService,
+            ScheduledDispatchCredentialSourceKind.None);
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = baseDetail with
+            {
+                Schedule = baseDetail.Schedule with
+                {
+                    ServiceId = identity.ServiceId,
+                    ServiceEndpointId = "run",
+                    ServiceIdentity = identity.Clone(),
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var context = new ScheduledDispatchMutationContext(ExpectedServiceTarget: expectedTarget);
+
+        await service.UpdateAsync(
+            "schedule-alpha",
+            CreateDefaultServiceInvocationConfiguration("schedule-alpha"),
+            context);
+        await service.EnableAsync("schedule-alpha", "resume", context);
+        await service.DisableAsync("schedule-alpha", "pause", context);
+        await service.DeleteAsync("schedule-alpha", "cleanup", context);
+        await service.RunNowAsync("schedule-alpha", context);
+
+        actorPort.UpdateExpectedTargets.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(expectedTarget);
+        actorPort.EnableExpectedTargets.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(expectedTarget);
+        actorPort.DisableExpectedTargets.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(expectedTarget);
+        actorPort.DeleteExpectedTargets.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(expectedTarget);
+        actorPort.RunNowExpectedTargets.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(expectedTarget);
     }
 
     [Fact]
@@ -1743,6 +2081,26 @@ public sealed class ScheduledDispatchApplicationServiceTests
             .Be(ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService);
         begin.ActivationDecision.RevisionId.Should().Be("revision-alpha");
         begin.ActivationDecision.Caller.ServiceKey.Should().Be(decision.Caller!.ServiceKey);
+
+        dispatchPort.Envelopes.Clear();
+        await port.DispatchRetryTeamAutomationCredentialOperationAsync(
+            actorId,
+            decision.Owner,
+            "operation-stale",
+            "idempotency-stale",
+            "observation-retry");
+
+        var retry = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload
+            .Unpack<RetryTeamAutomationCredentialOperationCommand>();
+        retry.Owner.Should().BeEquivalentTo(new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+            TeamId = "team-alpha",
+        });
+        retry.OperationId.Should().Be("operation-stale");
+        retry.IdempotencyKey.Should().Be("idempotency-stale");
+        retry.ObservationRequestId.Should().Be("observation-retry");
     }
 
     [Fact]
@@ -1900,6 +2258,47 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var fire = dispatchPort.Envelopes[2].Payload.Unpack<ScheduledDispatchFireCommand>();
         fire.Manual.Should().BeTrue();
         fire.ScheduledFireAt.ToDateTimeOffset().Should().Be(new DateTimeOffset(2026, 6, 9, 8, 0, 0, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldMapExpectedTargetOntoConditionalMutationCommands()
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
+        var configuration = CreateDefaultServiceInvocationConfiguration("schedule-1");
+        var prepared = await new ScheduledDispatchTargetPreparationService()
+            .PrepareAsync(configuration, "cmd-1", "corr-1");
+        var identity = configuration.Target.ServiceInvocation!.Identity;
+        var expectedTarget = new ScheduledDispatchExpectedServiceTarget(
+            ScheduledDispatchScheduleKind.Generic,
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            identity,
+            "run");
+
+        await port.DispatchUpdateAsync("scheduled-dispatch:schedule-1", configuration, prepared, expectedTarget);
+        await port.DispatchEnableAsync("scheduled-dispatch:schedule-1", "resume", expectedTarget);
+        await port.DispatchDisableAsync("scheduled-dispatch:schedule-1", "pause", expectedTarget);
+        await port.DispatchDeleteAsync("scheduled-dispatch:schedule-1", "cleanup", expectedTarget);
+        await port.DispatchRunNowAsync(
+            "scheduled-dispatch:schedule-1",
+            new DateTimeOffset(2026, 8, 17, 8, 0, 0, TimeSpan.Zero),
+            expectedTarget);
+
+        var targets = new[]
+        {
+            dispatchPort.Envelopes[0].Payload.Unpack<ScheduledDispatchUpdateCommand>().ExpectedServiceTarget,
+            dispatchPort.Envelopes[1].Payload.Unpack<ScheduledDispatchEnableCommand>().ExpectedServiceTarget,
+            dispatchPort.Envelopes[2].Payload.Unpack<ScheduledDispatchDisableCommand>().ExpectedServiceTarget,
+            dispatchPort.Envelopes[3].Payload.Unpack<ScheduledDispatchDeleteCommand>().ExpectedServiceTarget,
+            dispatchPort.Envelopes[4].Payload.Unpack<ScheduledDispatchFireCommand>().ExpectedServiceTarget,
+        };
+        targets.Should().AllSatisfy(target =>
+        {
+            target.ScheduleKind.Should().Be(ScheduledDispatchScheduleKindState.Generic);
+            target.TargetKind.Should().Be(ScheduledDispatchTargetKindState.ServiceInvocation);
+            target.ServiceIdentity.Should().BeEquivalentTo(identity);
+            target.ServiceEndpointId.Should().Be("run");
+        });
     }
 
     [Fact]
@@ -2253,6 +2652,45 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task PendingTeamAutomation_ShouldBeVisibleToOwnerBeforeTargetActivation()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var pending = CreateSummaryDetail(
+            "schedule-team-pending",
+            ScheduledDispatchTargetKind.Envelope,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.None);
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = pending with
+            {
+                Schedule = pending.Schedule with
+                {
+                    TeamOwned = true,
+                    TeamOwnerScopeId = owner.ScopeId,
+                    TeamId = owner.TeamId,
+                    TeamOwnerMemberId = owner.MemberId,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ProvisioningPending,
+                    TeamAutomationOperationId = "operation-alpha",
+                    TeamAutomationIdempotencyKey = "idempotency-alpha",
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            new RecordingScheduledDispatchActorPort(),
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var detail = await service.GetTeamAutomationAsync("schedule-team-pending", owner);
+
+        detail.Should().NotBeNull();
+        detail!.Schedule.TeamAutomationOperationId.Should().Be("operation-alpha");
+        detail.Schedule.TargetKind.Should().Be(ScheduledDispatchTargetKind.Envelope);
+    }
+
+    [Fact]
     public async Task RunNowAsync_ShouldRejectWorkflowScheduleWithoutCredentialBeforeActorDispatch()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
@@ -2519,6 +2957,34 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 },
             },
             options => options.ComparingByMembers<ProjectionDocumentValue>());
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldMapPinnedServiceRevision()
+    {
+        var document = new ScheduledDispatchDocument
+        {
+            ScheduleId = "workflow-revision-pinned",
+            TargetKind = ScheduledDispatchTargetKind.ServiceInvocation.ToString(),
+            ServiceId = "svc-alpha",
+            ServiceEndpointId = "chat",
+        };
+        SetRequiredStringProperty(document, "ServiceRevisionId", "rev-pinned");
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items = [document],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        item.ServiceId.Should().Be("svc-alpha");
+        item.ServiceEndpointId.Should().Be("chat");
+        ReadRequiredStringProperty(item, "ServiceRevisionId").Should().Be("rev-pinned");
     }
 
     [Fact]
@@ -2825,6 +3291,21 @@ public sealed class ScheduledDispatchApplicationServiceTests
         ScheduledDispatchCalculator.NormalizeTimezone(" Asia/Shanghai ").Should().Be("Asia/Shanghai");
     }
 
+    [Fact]
+    public void Calculator_ShouldResolveLastDayCronInScheduleTimezone()
+    {
+        var occurrences = ScheduledDispatchCalculator.GetNextOccurrences(
+            "0 10 L * *",
+            "Asia/Singapore",
+            new DateTimeOffset(2026, 8, 13, 0, 0, 0, TimeSpan.Zero),
+            3);
+
+        occurrences.Should().Equal(
+            new DateTimeOffset(2026, 8, 31, 2, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 9, 30, 2, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 10, 31, 2, 0, 0, TimeSpan.Zero));
+    }
+
     private static ScheduledDispatchApplicationService CreateService() =>
         new(
             new RecordingScheduledDispatchActorPort(),
@@ -3119,12 +3600,17 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public bool ResolveUnknownAsMissing { get; init; }
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Created { get; } = [];
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Updated { get; } = [];
+        public List<ScheduledDispatchExpectedServiceTarget?> UpdateExpectedTargets { get; } = [];
         public List<(string ActorId, ScheduledDispatchConfiguration Configuration, PreparedScheduledDispatchTarget Dispatch)> Ensured { get; } = [];
         public List<(string ActorId, string Reason)> Enabled { get; } = [];
+        public List<ScheduledDispatchExpectedServiceTarget?> EnableExpectedTargets { get; } = [];
         public List<(string ActorId, string Reason)> Disabled { get; } = [];
+        public List<ScheduledDispatchExpectedServiceTarget?> DisableExpectedTargets { get; } = [];
         public List<(string ActorId, string Reason)> Deleted { get; } = [];
+        public List<ScheduledDispatchExpectedServiceTarget?> DeleteExpectedTargets { get; } = [];
         public List<(string ActorId, TeamMemberAutomationOwner Owner, string Reason)> TeamDeleted { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNow { get; } = [];
+        public List<ScheduledDispatchExpectedServiceTarget?> RunNowExpectedTargets { get; } = [];
         public List<(string ActorId, TeamMemberAutomationOwner Owner, DateTimeOffset ScheduledFireAt, string OperationId, string IdempotencyKey)> TeamRunNow { get; } = [];
         public List<(
             string ActorId,
@@ -3168,10 +3654,12 @@ public sealed class ScheduledDispatchApplicationServiceTests
             string actorId,
             ScheduledDispatchConfiguration configuration,
             PreparedScheduledDispatchTarget dispatch,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Updated.Add((actorId, configuration, dispatch));
+            UpdateExpectedTargets.Add(expectedTarget);
             return Task.FromResult(CreateAdmission(actorId));
         }
 
@@ -3189,30 +3677,36 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public Task<DispatchAdmission> DispatchEnableAsync(
             string actorId,
             string reason,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Enabled.Add((actorId, reason));
+            EnableExpectedTargets.Add(expectedTarget);
             return Task.FromResult(CreateAdmission(actorId));
         }
 
         public Task<DispatchAdmission> DispatchDisableAsync(
             string actorId,
             string reason,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Disabled.Add((actorId, reason));
+            DisableExpectedTargets.Add(expectedTarget);
             return Task.FromResult(CreateAdmission(actorId));
         }
 
         public Task<DispatchAdmission> DispatchDeleteAsync(
             string actorId,
             string reason,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Deleted.Add((actorId, reason));
+            DeleteExpectedTargets.Add(expectedTarget);
             return Task.FromResult(CreateAdmission(actorId));
         }
 
@@ -3230,10 +3724,12 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public Task<DispatchAdmission> DispatchRunNowAsync(
             string actorId,
             DateTimeOffset scheduledFireAt,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             RunNow.Add((actorId, scheduledFireAt));
+            RunNowExpectedTargets.Add(expectedTarget);
             return Task.FromResult(CreateAdmission(actorId));
         }
 

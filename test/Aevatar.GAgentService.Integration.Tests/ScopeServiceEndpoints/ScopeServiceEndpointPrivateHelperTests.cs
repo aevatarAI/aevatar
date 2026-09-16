@@ -462,6 +462,10 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
             AgentToolNyxIdCredentialKindPayload.ProxyDelegation);
         payload.CallerSourceReadableNyxIdBearerToken.Should().Be("source-alpha");
         payload.LlmControl.Should().BeNull();
+        InvokePrivateStatic<AgentToolNyxIdCredentialKindPayload>(
+                "ToAgentToolNyxIdCredentialKind",
+                Aevatar.Workflow.Abstractions.NyxIdCallerCredentialKind.AgentKey)
+            .Should().Be(AgentToolNyxIdCredentialKindPayload.AgentKey);
 
         InvokePrivateStatic<string>("ResolveDefaultScopeServiceId", options).Should().Be("default");
     }

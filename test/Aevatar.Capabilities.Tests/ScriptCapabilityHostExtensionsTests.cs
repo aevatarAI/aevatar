@@ -20,6 +20,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Capabilities.Tests;
 
@@ -109,6 +110,113 @@ public class ScriptCapabilityHostExtensionsTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Invalid boolean value*");
+    }
+
+    [Fact]
+    public void AddScriptCapability_ShouldRegisterDisabledGraphStore_WhenBothProvidersAreDisabled()
+    {
+        var services = new ServiceCollection();
+        services.AddAevatarRuntime();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddScriptCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IProjectionGraphStore>()
+            .Should().BeOfType<DisabledProjectionGraphStore>();
+        provider.GetRequiredService<IVersionedProjectionGraphStore>()
+            .Should().BeSameAs(provider.GetRequiredService<IProjectionGraphStore>());
+    }
+
+    [Fact]
+    public void AddScriptingProjectionReadModelProviders_ShouldRegisterDisabledGraph_WhenDocumentsAlreadyRegistered()
+    {
+        var services = new ServiceCollection();
+        services.AddScriptingProjectionReadModelProviders(new ConfigurationBuilder().Build());
+        services.RemoveAll<IProjectionGraphStore>();
+        services.RemoveAll<IVersionedProjectionGraphStore>();
+        services.RemoveAll<ProjectionGraphProviderStatus>();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddScriptingProjectionReadModelProviders(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IProjectionGraphStore>()
+            .Should().BeOfType<DisabledProjectionGraphStore>();
+        provider.GetRequiredService<IVersionedProjectionGraphStore>()
+            .Should().BeSameAs(provider.GetRequiredService<IProjectionGraphStore>());
+        provider.GetRequiredService<ProjectionGraphProviderStatus>().Enabled.Should().BeFalse();
+    }
+
+    [Fact]
+    public void AddScriptingProjectionReadModelProviders_ShouldRejectMultipleEnabledGraphProviders()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:InMemory:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "true",
+                ["Projection:Graph:Providers:Neo4j:Uri"] = "bolt://localhost:7687",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+            })
+            .Build();
+
+        var act = () => services.AddScriptingProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Only one graph projection provider can be enabled*");
+    }
+
+    [Fact]
+    public void AddScriptingProjectionReadModelProviders_ShouldNotInferNeo4jEnabledFromUri()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Graph:Providers:Neo4j:Uri"] = "bolt://stale-neo4j:7687",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
+            })
+            .Build();
+
+        services.AddScriptingProjectionReadModelProviders(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<ProjectionGraphProviderStatus>()
+            .Should().Be(new ProjectionGraphProviderStatus("Disabled", Enabled: false));
+    }
+
+    [Fact]
+    public void AddScriptingProjectionReadModelProviders_ShouldRejectExistingProviderThatConflictsWithConfiguration()
+    {
+        var services = new ServiceCollection();
+        services.AddInMemoryGraphProjectionStore();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
+                ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
+            })
+            .Build();
+
+        var act = () => services.AddScriptingProjectionReadModelProviders(configuration);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*existing graph projection provider registration*Disabled*");
     }
 
     [Fact]

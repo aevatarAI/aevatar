@@ -23,9 +23,12 @@ public class NyxLarkProvisioningServiceTests
         handler.Enqueue("/api/v1/channel-conversations", """{"id":"route-789","default_agent":true}""");
         handler.Enqueue("/api/v1/keys", """{"id":"svc-1"}""");
 
-        var nyxClient = new NyxIdApiClient(
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
-            new HttpClient(handler));
+        var nyxOptions = new NyxIdToolOptions
+        {
+            BaseUrl = "http://nyxid.internal:3001",
+            ApiBaseUrl = "https://nyx.example.com",
+        };
+        var nyxClient = new NyxIdApiClient(nyxOptions, new HttpClient(handler));
 
         EventEnvelope? capturedEnvelope = null;
         var actor = Substitute.For<IActor>();
@@ -42,7 +45,7 @@ public class NyxLarkProvisioningServiceTests
         var secretVault = new InMemorySecretVault();
         var service = new NyxLarkProvisioningService(
             nyxClient,
-            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            nyxOptions,
             commandFacade,
             secretVault,
             Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
@@ -69,6 +72,7 @@ public class NyxLarkProvisioningServiceTests
         result.WorkflowResultDeliveryEnabled.Should().BeTrue();
         result.RelayCallbackUrl.Should().Be("https://aevatar.example.com/api/webhooks/nyxid-relay");
         result.WebhookUrl.Should().Be("https://nyx.example.com/api/v1/webhooks/channel/lark/bot-456");
+        result.WebhookUrl.Should().NotContain("nyxid.internal");
 
         capturedEnvelope.Should().NotBeNull();
         capturedEnvelope!.Payload.Is(ChannelBotRegisterCommand.Descriptor).Should().BeTrue();
@@ -92,6 +96,7 @@ public class NyxLarkProvisioningServiceTests
         handler.Requests.Should().HaveCount(4);
         handler.Requests[0].Body.Should().Contain("\"callback_url\":\"https://aevatar.example.com/api/webhooks/nyxid-relay\"");
         handler.Requests[0].Body.Should().Contain("\"platform\":\"generic\"");
+        handler.Requests[0].Body.Should().Contain("\"scopes\":\"read write proxy\"");
         handler.Requests[1].Body.Should().Contain("\"bot_token\":\"__unused_for_lark__\"");
         handler.Requests[1].Body.Should().Contain("\"app_id\":\"cli_a1b2c3\"");
         handler.Requests[1].Body.Should().Contain("\"verification_token\":\"verify-123\"");
@@ -401,6 +406,30 @@ public class NyxLarkProvisioningServiceTests
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be("nyx_base_url_not_configured");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_ShouldReject_WhenDedicatedInternalTransportHasNoPublicApiBaseUrl()
+    {
+        var handler = new RecordingHandler();
+        var options = new NyxIdToolOptions
+        {
+            BaseUrl = "http://nyxid.internal:3001",
+            InternalApiBaseUrl = "http://nyxid.internal:3001",
+        };
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        var service = new NyxLarkProvisioningService(
+            new NyxIdApiClient(options, new HttpClient(handler)),
+            options,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            new InMemorySecretVault(),
+            Substitute.For<Microsoft.Extensions.Logging.ILogger<NyxLarkProvisioningService>>());
+
+        var result = await service.ProvisionAsync(BuildRequest(), CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be("nyx_api_base_url_not_configured");
         handler.Requests.Should().BeEmpty();
     }
 

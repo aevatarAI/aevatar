@@ -3,6 +3,9 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Core.Assemblers;
+using Aevatar.GAgentService.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -14,6 +17,8 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
     private readonly IServiceCommandPort _commandPort;
     private readonly IServiceLifecycleQueryPort _lifecycleQueryPort;
     private readonly IServiceServingQueryPort _servingQueryPort;
+    private readonly IServiceImplementationAdapter _workflowImplementationAdapter;
+    private readonly PreparedServiceRevisionArtifactAssembler _artifactAssembler;
     private readonly IOptions<GAgentServiceDemoOptions> _options;
     private readonly IHostEnvironment _hostEnvironment;
     private readonly ILogger<GAgentServiceDemoBootstrapHostedService> _logger;
@@ -22,6 +27,8 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
         IServiceCommandPort commandPort,
         IServiceLifecycleQueryPort lifecycleQueryPort,
         IServiceServingQueryPort servingQueryPort,
+        IEnumerable<IServiceImplementationAdapter> implementationAdapters,
+        PreparedServiceRevisionArtifactAssembler artifactAssembler,
         IOptions<GAgentServiceDemoOptions> options,
         IHostEnvironment hostEnvironment,
         ILogger<GAgentServiceDemoBootstrapHostedService> logger)
@@ -29,6 +36,10 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _lifecycleQueryPort = lifecycleQueryPort ?? throw new ArgumentNullException(nameof(lifecycleQueryPort));
         _servingQueryPort = servingQueryPort ?? throw new ArgumentNullException(nameof(servingQueryPort));
+        _workflowImplementationAdapter = (implementationAdapters ??
+                                          throw new ArgumentNullException(nameof(implementationAdapters)))
+            .Single(x => x.ImplementationKind == ServiceImplementationKind.Workflow);
+        _artifactAssembler = artifactAssembler ?? throw new ArgumentNullException(nameof(artifactAssembler));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _hostEnvironment = hostEnvironment ?? throw new ArgumentNullException(nameof(hostEnvironment));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -72,6 +83,8 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
         var identity = CreateIdentity(options, definition.ServiceId);
         var endpoint = GAgentServiceDemoDefinitions.CreateEndpointSpec(definition);
         var expectedTarget = CreateServingTarget(identity, definition);
+        var revisionSpec = BuildRevision(identity, definition);
+        var expectedArtifactHash = await PrepareRevisionFenceAsync(revisionSpec, ct);
 
         var service = await _lifecycleQueryPort.GetServiceAsync(identity, ct);
         if (service == null)
@@ -100,7 +113,7 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
             await _commandPort.CreateRevisionAsync(
                 new CreateServiceRevisionCommand
                 {
-                    Spec = BuildRevision(identity, definition),
+                    Spec = revisionSpec.Clone(),
                 },
                 ct);
             revision = new ServiceRevisionSnapshot(
@@ -131,6 +144,7 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
                 {
                     Identity = identity.Clone(),
                     RevisionId = definition.RevisionId,
+                    PreparationSpec = revisionSpec.Clone(),
                 },
                 ct);
         }
@@ -142,17 +156,7 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
                 {
                     Identity = identity.Clone(),
                     RevisionId = definition.RevisionId,
-                },
-                ct);
-        }
-
-        if (!string.Equals(service?.DefaultServingRevisionId, definition.RevisionId, StringComparison.Ordinal))
-        {
-            await _commandPort.SetDefaultServingRevisionAsync(
-                new SetDefaultServingRevisionCommand
-                {
-                    Identity = identity.Clone(),
-                    RevisionId = definition.RevisionId,
+                    PublicationSpec = revisionSpec.Clone(),
                 },
                 ct);
         }
@@ -165,6 +169,7 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
                 {
                     Identity = identity.Clone(),
                     RevisionId = definition.RevisionId,
+                    ExpectedArtifactHash = expectedArtifactHash,
                 },
                 ct);
         }
@@ -192,6 +197,35 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
             ServiceId = serviceId,
         };
 
+    private async Task<string> PrepareRevisionFenceAsync(
+        ServiceRevisionSpec revisionSpec,
+        CancellationToken ct)
+    {
+        var prepared = await _workflowImplementationAdapter.PrepareRevisionAsync(
+            new PrepareServiceRevisionRequest
+            {
+                ServiceKey = ServiceKeys.Build(revisionSpec.Identity),
+                Spec = revisionSpec.Clone(),
+            },
+            ct);
+        var workflowPlan = prepared.DeploymentPlan?.WorkflowPlan
+            ?? throw new InvalidOperationException("Demo workflow preparation returned no workflow deployment plan.");
+        var workflowSpec = revisionSpec.WorkflowSpec
+            ?? throw new InvalidOperationException("Demo workflow revision spec is required.");
+
+        // Carry the admitted plan into the authoring commands so actor-side revalidation
+        // produces the same canonical artifact used by this activation fence.
+        workflowSpec.WorkflowId = workflowPlan.WorkflowId;
+        workflowSpec.ExpectedExecutionMode = workflowPlan.ExecutionMode;
+        workflowSpec.CapabilityAdmissionPlan = workflowPlan.CapabilityAdmissionPlan?.Clone();
+
+        var artifactHash = _artifactAssembler.Assemble(prepared).ArtifactHash;
+        if (string.IsNullOrWhiteSpace(artifactHash))
+            throw new InvalidOperationException("Demo workflow preparation returned no artifact hash.");
+
+        return artifactHash;
+    }
+
     private static ServiceDefinitionSpec BuildServiceDefinition(
         ServiceIdentity identity,
         GAgentServiceDemoDefinition definition,
@@ -218,6 +252,7 @@ internal sealed class GAgentServiceDemoBootstrapHostedService : IHostedService
             {
                 WorkflowName = definition.WorkflowName,
                 WorkflowYaml = definition.WorkflowYaml,
+                ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             },
         };
 

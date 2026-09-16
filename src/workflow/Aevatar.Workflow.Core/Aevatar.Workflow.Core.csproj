@@ -22,6 +22,7 @@
     <PackageReference Include="YamlDotNet" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Scriban" />
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="workflow_state.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Workflow.Abstractions;..\..\Aevatar.Foundation.Abstractions" />

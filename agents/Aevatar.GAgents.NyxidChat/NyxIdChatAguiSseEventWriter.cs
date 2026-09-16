@@ -40,6 +40,18 @@ internal static class NyxIdChatAguiSseEventWriter
                     aguiEvent.Sequence,
                     ct);
                 return null;
+            case AGUIEvent.EventOneofCase.ModelCallStart:
+                await writer.WriteModelCallStartAsync(
+                    aguiEvent.ModelCallStart,
+                    aguiEvent.Sequence,
+                    ct);
+                return null;
+            case AGUIEvent.EventOneofCase.ModelCallEnd:
+                await writer.WriteModelCallEndAsync(
+                    aguiEvent.ModelCallEnd,
+                    aguiEvent.Sequence,
+                    ct);
+                return null;
             case AGUIEvent.EventOneofCase.ToolCallStart:
                 await writer.WriteToolCallStartAsync(
                     aguiEvent.ToolCallStart.ToolName,
@@ -166,7 +178,8 @@ internal static class NyxIdChatAguiSseEventWriter
                 StringComparison.Ordinal) &&
             customEvent.Payload.Is(NyxIdChatTaskState.Descriptor))
         {
-            payload = customEvent.Payload.Unpack<NyxIdChatTaskState>();
+            payload = NyxIdChatTaskPlanWireMapper.FromState(
+                customEvent.Payload.Unpack<NyxIdChatTaskState>());
             return true;
         }
 
@@ -174,9 +187,10 @@ internal static class NyxIdChatAguiSseEventWriter
                 customEvent.Name,
                 NyxIdChatConversationAguiFrameBuilder.TaskStepChangedEventName,
                 StringComparison.Ordinal) &&
-            customEvent.Payload.Is(NyxIdChatTaskStepState.Descriptor))
+            customEvent.Payload.Is(NyxIdChatTaskStepChanged.Descriptor))
         {
-            payload = customEvent.Payload.Unpack<NyxIdChatTaskStepState>();
+            payload = NyxIdChatTaskPlanWireMapper.FromState(
+                customEvent.Payload.Unpack<NyxIdChatTaskStepChanged>());
             return true;
         }
 

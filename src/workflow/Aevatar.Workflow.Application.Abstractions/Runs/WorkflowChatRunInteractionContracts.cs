@@ -26,10 +26,13 @@ public sealed record WorkflowChatRunStartFailureDetail(
             string.IsNullOrWhiteSpace(message) ? DefaultMessage(error) : message,
             externalCapabilityReadiness?.Clone());
 
-    private static string DefaultMessage(WorkflowChatRunStartError error) =>
-        error == WorkflowChatRunStartError.InvalidWorkflowYaml
-            ? "Workflow YAML is invalid."
-            : string.Empty;
+    private static string DefaultMessage(WorkflowChatRunStartError error) => error switch
+    {
+        WorkflowChatRunStartError.InvalidWorkflowYaml => "Workflow YAML is invalid.",
+        WorkflowChatRunStartError.ExternalCapabilityNotReady =>
+            "External workflow capability admission failed.",
+        _ => string.Empty,
+    };
 }
 
 public sealed record WorkflowChatRunInteractionResult

@@ -8,6 +8,21 @@ public readonly record struct WorkflowServiceBindingIdentity(
 
 public static class WorkflowServiceDeploymentPlanIntegrity
 {
+    public static bool IsCompatible(
+        PreparedServiceRevisionArtifact artifact,
+        string? resolvedRevisionId)
+    {
+        try
+        {
+            _ = ResolveBindingIdentity(artifact, resolvedRevisionId);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     public static WorkflowServiceBindingIdentity RequireExplicitBindingIdentity(
         string? workflowId,
         string? revisionId)
@@ -31,6 +46,11 @@ public static class WorkflowServiceDeploymentPlanIntegrity
 
         var plan = artifact.DeploymentPlan?.WorkflowPlan
             ?? throw new InvalidOperationException("Workflow service deployment plan is required.");
+        if (!WorkflowToolCatalogPolicies.IsCurrent(plan.ToolCatalogPolicyVersion))
+        {
+            throw new InvalidOperationException(
+                "Workflow service must be reissued under the current tool catalog policy.");
+        }
         if (plan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
             !Enum.IsDefined(plan.ExecutionMode) ||
             plan.CapabilityAdmissionPlan == null ||

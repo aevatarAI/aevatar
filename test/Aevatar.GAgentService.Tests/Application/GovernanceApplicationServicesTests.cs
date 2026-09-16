@@ -108,8 +108,11 @@ public sealed class GovernanceApplicationServicesTests
 
         await blankRevision.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*revision_id is required*");
-        await missingDefinition.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Service definition*was not found*");
+        var missingDefinitionException = await missingDefinition
+            .Should().ThrowAsync<ActivationCapabilityViewNotReadyException>();
+        missingDefinitionException.Which.ServiceKey.Should().Be(ServiceKeys.Build(identity));
+        missingDefinitionException.Which.RevisionId.Should().Be("r1");
+        missingDefinitionException.Which.Projection.Should().Be(ActivationCapabilityViewProjection.ServiceCatalog);
 
         var missingArtifactAssembler = new ActivationCapabilityViewAssembler(
             new RecordingCatalogQueryReader

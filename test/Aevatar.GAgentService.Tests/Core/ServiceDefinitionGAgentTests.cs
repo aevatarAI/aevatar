@@ -4,8 +4,11 @@ using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Core.Models;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Tests.TestSupport;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Persistence;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Core;
 
@@ -141,7 +144,7 @@ public sealed class ServiceDefinitionGAgentTests
     }
 
     [Fact]
-    public async Task HandleUpdateAndSetDefaultServingRevisionAsync_ShouldMutateExistingDefinition()
+    public async Task HandleUpdateAsync_ShouldMutateExistingDefinition()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
         var dispatchPort = new RecordingActorDispatchPort();
@@ -164,17 +167,11 @@ public sealed class ServiceDefinitionGAgentTests
         {
             Spec = updatedSpec,
         });
-        await agent.HandleSetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
-        {
-            Identity = identity.Clone(),
-            RevisionId = "r2",
-        });
-
         agent.State.Spec.DisplayName.Should().Be("Updated");
         agent.State.Spec.Endpoints.Should().ContainSingle(x => x.EndpointId == "chat");
-        agent.State.DefaultServingRevisionId.Should().Be("r2");
-        agent.State.LastAppliedEventVersion.Should().Be(3);
-        dispatchPort.Calls.Should().HaveCount(3);
+        agent.State.DefaultServingRevisionId.Should().BeEmpty();
+        agent.State.LastAppliedEventVersion.Should().Be(2);
+        dispatchPort.Calls.Should().HaveCount(2);
         dispatchPort.Calls.Should().OnlyContain(x =>
             x.ActorId == ServiceActorIds.InvocationCatalog(identity));
         var updateObservation = dispatchPort.Calls[1].Envelope.Payload.Unpack<ObserveServiceInvocationCatalogCommand>();
@@ -183,8 +180,385 @@ public sealed class ServiceDefinitionGAgentTests
         updateObservation.ServiceEndpoints.Should().ContainSingle(x => x.EndpointId == "chat");
         updateObservation.ServiceEndpoints[0].Kind.Should().Be(ServiceEndpointKind.Chat);
         updateObservation.ServiceEndpoints[0].RequestTypeUrl.Should().Be("type.googleapis.com/test.chat");
-        var defaultObservation = dispatchPort.Calls[2].Envelope.Payload.Unpack<ObserveServiceInvocationCatalogCommand>();
-        defaultObservation.SourceCatalogVersion.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task OrchestratedDefaultServingCommand_ShouldCommitOnceAndReplayStableAck()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var actorId = ServiceActorIds.Definition(identity);
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            eventStore,
+            actorId,
+            () => new ServiceDefinitionGAgent(dispatchPort));
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        var command = new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r2",
+            OperationId = "operation-default-r2",
+            CommandId = "command-default-r2",
+            ReplyActorId = ServiceActorIds.Deployment(identity),
+            ActivationAttemptId = "attempt-r2",
+            DeploymentId = "deployment-r2",
+            ServingGeneration = 7,
+        };
+
+        await agent.HandleSetDefaultServingRevisionAsync(command);
+
+        agent.State.DefaultServingRevisionId.Should().Be("r2");
+        var operation = agent.State.DefaultServingRevisionOperations
+            .Should().ContainKey(command.OperationId).WhoseValue;
+        operation.CommandId.Should().Be(command.CommandId);
+        operation.DeploymentId.Should().Be(command.DeploymentId);
+        operation.CommittedAt.Should().NotBeNull();
+        operation.Disposition.Should().Be(DefaultServingRevisionCommitDisposition.Applied);
+        var committedVersion = agent.State.LastAppliedEventVersion;
+        var firstAckEnvelope = dispatchPort.Calls
+            .Single(x => x.Envelope.Payload.Is(DefaultServingRevisionCommittedAck.Descriptor))
+            .Envelope;
+        firstAckEnvelope.Route.PublisherActorId.Should().Be(actorId);
+        firstAckEnvelope.Route.Direct.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
+
+        await agent.HandleSetDefaultServingRevisionAsync(command.Clone());
+
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        var ackEnvelopes = dispatchPort.Calls
+            .Where(x => x.Envelope.Payload.Is(DefaultServingRevisionCommittedAck.Descriptor))
+            .Select(x => x.Envelope)
+            .ToArray();
+        ackEnvelopes.Should().HaveCount(2);
+        ackEnvelopes.Select(x => x.Id).Should().OnlyContain(x => x == firstAckEnvelope.Id);
+        ackEnvelopes
+            .Select(x => x.Payload.Unpack<DefaultServingRevisionCommittedAck>())
+            .Should().OnlyContain(x =>
+                x.OperationId == command.OperationId &&
+                x.CommandId == command.CommandId &&
+                x.Disposition == DefaultServingRevisionCommitDisposition.Applied &&
+                x.CommittedAt.Equals(operation.CommittedAt));
+
+        var conflicting = command.Clone();
+        conflicting.DeploymentId = "deployment-conflict";
+        var act = () => agent.HandleSetDefaultServingRevisionAsync(conflicting);
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*conflicts with its committed request*");
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+    }
+
+    [Fact]
+    public async Task OrchestratedDefaultServingCommand_ShouldAckBeforeInvocationObservationFailure()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var dispatchPort = new SelectiveFailingActorDispatchPort();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            new InMemoryEventStore(),
+            ServiceActorIds.Definition(identity),
+            () => new ServiceDefinitionGAgent(dispatchPort));
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        dispatchPort.Calls.Clear();
+        dispatchPort.FailInvocationCatalogObservations = true;
+        var command = new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r2",
+            OperationId = "operation-default-r2",
+            CommandId = "command-default-r2",
+            ReplyActorId = ServiceActorIds.Deployment(identity),
+            ActivationAttemptId = "attempt-r2",
+            DeploymentId = "deployment-r2",
+            ServingGeneration = 7,
+        };
+
+        var act = () => agent.HandleSetDefaultServingRevisionAsync(command);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("invocation catalog observation dispatch failed");
+        agent.State.DefaultServingRevisionId.Should().Be("r2");
+        agent.State.DefaultServingRevisionOperations.Should().ContainKey(command.OperationId);
+        dispatchPort.Calls.Select(call => call.Envelope.Payload.TypeUrl).Should().Equal(
+            Any.Pack(new DefaultServingRevisionCommittedAck()).TypeUrl,
+            Any.Pack(new ObserveServiceInvocationCatalogCommand()).TypeUrl);
+
+        dispatchPort.FailInvocationCatalogObservations = false;
+        await agent.HandleSetDefaultServingRevisionAsync(command.Clone());
+
+        dispatchPort.Calls.Count(call =>
+                call.Envelope.Payload.Is(DefaultServingRevisionCommittedAck.Descriptor))
+            .Should().Be(2);
+    }
+
+    [Fact]
+    public async Task OrchestratedDefaultServingCommand_ShouldFenceStaleGenerationAcrossReplay()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var actorId = ServiceActorIds.Definition(identity);
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            eventStore,
+            actorId,
+            () => new ServiceDefinitionGAgent(dispatchPort));
+        await agent.ActivateAsync();
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        var newest = new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r-newest",
+            OperationId = "operation-generation-8",
+            CommandId = "command-generation-8",
+            ReplyActorId = ServiceActorIds.Deployment(identity),
+            ActivationAttemptId = "attempt-generation-8",
+            DeploymentId = "deployment-generation-8",
+            ServingGeneration = 8,
+        };
+        var stale = new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r-stale",
+            OperationId = "operation-generation-7",
+            CommandId = "command-generation-7",
+            ReplyActorId = ServiceActorIds.Deployment(identity),
+            ActivationAttemptId = "attempt-generation-7",
+            DeploymentId = "deployment-generation-7",
+            ServingGeneration = 7,
+        };
+
+        await agent.HandleSetDefaultServingRevisionAsync(newest);
+        var committedVersion = agent.State.LastAppliedEventVersion;
+        await agent.HandleSetDefaultServingRevisionAsync(stale);
+
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion + 1);
+        agent.State.DefaultServingRevisionId.Should().Be("r-newest");
+        agent.State.DefaultServingGeneration.Should().Be(8);
+        agent.State.DefaultServingRevisionOperations.Should().ContainKey(newest.OperationId);
+        var superseded = agent.State.DefaultServingRevisionOperations
+            .Should().ContainKey(stale.OperationId).WhoseValue;
+        superseded.Disposition.Should().Be(DefaultServingRevisionCommitDisposition.Superseded);
+        superseded.SupersededByGeneration.Should().Be(8);
+        var acks = dispatchPort.Calls
+            .Where(call => call.Envelope.Payload.Is(DefaultServingRevisionCommittedAck.Descriptor))
+            .Select(call => call.Envelope.Payload.Unpack<DefaultServingRevisionCommittedAck>())
+            .ToArray();
+        acks.Should().HaveCount(2);
+        var staleAck = acks.Single(ack => ack.OperationId == stale.OperationId);
+        staleAck.Disposition.Should().Be(DefaultServingRevisionCommitDisposition.Superseded);
+        staleAck.SupersededByGeneration.Should().Be(8);
+        await agent.DeactivateAsync();
+
+        var replayed = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            eventStore,
+            actorId,
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
+        await replayed.ActivateAsync();
+
+        replayed.State.DefaultServingRevisionId.Should().Be("r-newest");
+        replayed.State.DefaultServingGeneration.Should().Be(8);
+        replayed.State.DefaultServingRevisionOperations[stale.OperationId].Disposition.Should()
+            .Be(DefaultServingRevisionCommitDisposition.Superseded);
+        replayed.State.DefaultServingRevisionOperations[stale.OperationId].SupersededByGeneration.Should().Be(8);
+    }
+
+    [Fact]
+    public async Task OrchestratedDefaultServingCommand_ShouldBoundOperationHistoryAndFencePrunedReplay()
+    {
+        var eventStore = new InMemoryEventStore();
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var actorId = ServiceActorIds.Definition(identity);
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            eventStore,
+            actorId,
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
+        await agent.ActivateAsync();
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+
+        for (var generation = 1; generation <= 65; generation++)
+        {
+            await agent.HandleSetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+            {
+                Identity = identity.Clone(),
+                RevisionId = $"r-{generation}",
+                OperationId = $"operation-{generation}",
+                CommandId = $"command-{generation}",
+                ReplyActorId = ServiceActorIds.Deployment(identity),
+                ActivationAttemptId = $"attempt-{generation}",
+                DeploymentId = $"deployment-{generation}",
+                ServingGeneration = generation,
+            });
+        }
+
+        agent.State.DefaultServingRevisionOperations.Should().HaveCount(64);
+        agent.State.DefaultServingRevisionOperations.Should().NotContainKey("operation-1");
+        agent.State.DefaultServingRevisionId.Should().Be("r-65");
+        agent.State.DefaultServingGeneration.Should().Be(65);
+        await agent.DeactivateAsync();
+
+        var replayDispatch = new RecordingActorDispatchPort();
+        var replayed = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            eventStore,
+            actorId,
+            () => new ServiceDefinitionGAgent(replayDispatch));
+        await replayed.ActivateAsync();
+        await replayed.HandleSetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r-1",
+            OperationId = "operation-1",
+            CommandId = "command-1",
+            ReplyActorId = ServiceActorIds.Deployment(identity),
+            ActivationAttemptId = "attempt-1",
+            DeploymentId = "deployment-1",
+            ServingGeneration = 1,
+        });
+
+        replayed.State.DefaultServingRevisionOperations.Should().HaveCount(64);
+        replayed.State.DefaultServingRevisionOperations.Should().NotContainKey("operation-1");
+        replayed.State.DefaultServingRevisionId.Should().Be("r-65");
+        replayed.State.DefaultServingGeneration.Should().Be(65);
+        var ack = replayDispatch.Calls
+            .Where(call => call.Envelope.Payload.Is(DefaultServingRevisionCommittedAck.Descriptor))
+            .Should().ContainSingle().Subject.Envelope.Payload
+            .Unpack<DefaultServingRevisionCommittedAck>();
+        ack.OperationId.Should().Be("operation-1");
+        ack.Disposition.Should().Be(DefaultServingRevisionCommitDisposition.Superseded);
+        ack.SupersededByGeneration.Should().Be(65);
+    }
+
+    [Fact]
+    public async Task OrchestratedDefaultServingCommand_ShouldRejectConflictingOperationAtSameGeneration()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            new InMemoryEventStore(),
+            ServiceActorIds.Definition(identity),
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
+        await agent.ActivateAsync();
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        var committed = new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r-first",
+            OperationId = "operation-first",
+            CommandId = "command-first",
+            ReplyActorId = ServiceActorIds.Deployment(identity),
+            ActivationAttemptId = "attempt-first",
+            DeploymentId = "deployment-first",
+            ServingGeneration = 5,
+        };
+        await agent.HandleSetDefaultServingRevisionAsync(committed);
+        var committedVersion = agent.State.LastAppliedEventVersion;
+        var conflicting = committed.Clone();
+        conflicting.RevisionId = "r-conflict";
+        conflicting.OperationId = "operation-conflict";
+        conflicting.CommandId = "command-conflict";
+        conflicting.DeploymentId = "deployment-conflict";
+
+        var act = () => agent.HandleSetDefaultServingRevisionAsync(conflicting);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*generation '5' is already bound*");
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        agent.State.DefaultServingRevisionId.Should().Be("r-first");
+    }
+
+    [Fact]
+    public async Task OrchestratedDefaultServingCommand_ShouldRejectCurrentGenerationWithoutOperationRecord()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            new InMemoryEventStore(),
+            ServiceActorIds.Definition(identity),
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
+        await agent.ActivateAsync();
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        var committed = new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r-first",
+            OperationId = "operation-first",
+            CommandId = "command-first",
+            ReplyActorId = ServiceActorIds.Deployment(identity),
+            ActivationAttemptId = "attempt-first",
+            DeploymentId = "deployment-first",
+            ServingGeneration = 5,
+        };
+        await agent.HandleSetDefaultServingRevisionAsync(committed);
+        agent.State.DefaultServingRevisionOperations.Remove(committed.OperationId);
+        var inconsistentVersion = agent.State.LastAppliedEventVersion;
+        var replacement = committed.Clone();
+        replacement.RevisionId = "r-replacement";
+        replacement.OperationId = "operation-replacement";
+        replacement.CommandId = "command-replacement";
+        replacement.DeploymentId = "deployment-replacement";
+
+        var act = () => agent.HandleSetDefaultServingRevisionAsync(replacement);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*generation '5' has no committed operation record*");
+        agent.State.LastAppliedEventVersion.Should().Be(inconsistentVersion);
+        agent.State.DefaultServingRevisionId.Should().Be("r-first");
+    }
+
+    [Fact]
+    public async Task OrchestratedDefaultServingCommand_ShouldAcceptOnlyCanonicalDeploymentPublisher()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var actorId = ServiceActorIds.Definition(identity);
+        var dispatchPort = new RecordingActorDispatchPort();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            new InMemoryEventStore(),
+            actorId,
+            () => new ServiceDefinitionGAgent(dispatchPort));
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        var command = new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r2",
+            OperationId = "operation-default-r2",
+            CommandId = "command-default-r2",
+            ReplyActorId = ServiceActorIds.Deployment(identity),
+            ActivationAttemptId = "attempt-r2",
+            DeploymentId = "deployment-r2",
+            ServingGeneration = 7,
+        };
+
+        await agent.HandleEventAsync(CreateDefaultServingCommandEnvelope(
+            actorId,
+            "foreign-deployment",
+            command));
+
+        agent.State.LastAppliedEventVersion.Should().Be(1);
+        agent.State.DefaultServingRevisionId.Should().BeEmpty();
+
+        await agent.HandleEventAsync(CreateDefaultServingCommandEnvelope(
+            actorId,
+            ServiceActorIds.Deployment(identity),
+            command));
+
+        agent.State.LastAppliedEventVersion.Should().Be(2);
+        agent.State.DefaultServingRevisionId.Should().Be("r2");
     }
 
     [Fact]
@@ -809,6 +1183,32 @@ public sealed class ServiceDefinitionGAgentTests
     }
 
     [Fact]
+    public async Task HandleSetDefaultServingRevisionAsync_ShouldRejectUncoordinatedCommand()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
+            new InMemoryEventStore(),
+            ServiceActorIds.Definition(identity),
+            static () => new ServiceDefinitionGAgent(GAgentServiceTestKit.NoOpDispatchPort));
+        await agent.HandleCreateAsync(new CreateServiceDefinitionCommand
+        {
+            Spec = GAgentServiceTestKit.CreateDefinitionSpec(identity),
+        });
+        var committedVersion = agent.State.LastAppliedEventVersion;
+
+        var act = () => agent.HandleSetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r2",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("operation_id is required for default-serving coordination.");
+        agent.State.LastAppliedEventVersion.Should().Be(committedVersion);
+        agent.State.DefaultServingRevisionId.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleCreateAsync_ShouldRejectSpecWithoutIdentity()
     {
         var agent = GAgentServiceTestKit.CreateStatefulAgent<ServiceDefinitionGAgent, ServiceDefinitionState>(
@@ -852,6 +1252,41 @@ public sealed class ServiceDefinitionGAgentTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("service endpoints are required.");
+    }
+
+    private static EventEnvelope CreateDefaultServingCommandEnvelope(
+        string subscriberActorId,
+        string publisherActorId,
+        SetDefaultServingRevisionCommand command) =>
+        new()
+        {
+            Id = command.CommandId,
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(command),
+            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, subscriberActorId),
+            Propagation = new EnvelopePropagation(),
+        };
+
+    private sealed class SelectiveFailingActorDispatchPort : IActorDispatchPort
+    {
+        public bool FailInvocationCatalogObservations { get; set; }
+
+        public List<(string ActorId, EventEnvelope Envelope)> Calls { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            Calls.Add((actorId, envelope.Clone()));
+            if (FailInvocationCatalogObservations &&
+                envelope.Payload.Is(ObserveServiceInvocationCatalogCommand.Descriptor))
+            {
+                throw new InvalidOperationException("invocation catalog observation dispatch failed");
+            }
+
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
     }
 
     private sealed class StubNyxIdRegistrationTokenAccessor : INyxIdRegistrationTokenAccessor

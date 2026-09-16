@@ -240,6 +240,17 @@ message NyxIdApprovalActionPayload {
   bool approved = 2;
 }
 
+// Carries one actor-owned AgentRun tool approval decision. These fields bind a
+// card click to the exact suspended tool call without exposing its arguments.
+message AgentRunApprovalActionPayload {
+  string run_id = 1;
+  string approval_request_id = 2;
+  string tool_call_id = 3;
+  string tool_name = 4;
+  string arguments_sha256 = 5;
+  bool approved = 6;
+}
+
 // Declares one interactive card element.
 message ActionElement {
   // The element kind.
@@ -270,6 +281,8 @@ message ActionElement {
   LlmSelectionActionPayload llm_selection = 12;
   // Repository-owned NyxID approval decision payload for this action.
   NyxIdApprovalActionPayload nyx_id_approval = 13;
+  // Repository-owned AgentRun approval decision payload for this action.
+  AgentRunApprovalActionPayload agent_run_approval = 14;
 }
 
 // Declares one title-text pair rendered inside a card.
@@ -320,6 +333,8 @@ message CardActionSubmission {
   ActionElementKind action_kind = 8;
   // Repository-owned NyxID approval decision payload submitted by this action.
   NyxIdApprovalActionPayload nyx_id_approval = 9;
+  // Repository-owned AgentRun approval decision payload submitted by this action.
+  AgentRunApprovalActionPayload agent_run_approval = 10;
 }
 
 // Carries the channel-agnostic message content used for send, update, and reply operations.

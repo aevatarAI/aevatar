@@ -18,8 +18,20 @@ public sealed class StreamingAgentProfileTurnClassifierTests
             new LLMStreamChunk { DeltaContent = "\"intent_id\":\"intent-a\"}" },
         ]);
         var classifier = new StreamingAgentProfileTurnClassifier(new StubProviderFactory(provider));
+        var llmControl = new LLMControlContext(
+            "caller-token",
+            null,
+            null,
+            "model-a",
+            "/api/v1/proxy/s/route-a",
+            null,
+            null);
 
-        var result = await classifier.ClassifyAsync(NewRequest());
+        var result = await classifier.ClassifyAsync(NewRequest() with
+        {
+            LlmControl = llmControl,
+            RequestId = "turn-alpha",
+        });
 
         result.Should().Be(AgentProfileTurnClassificationResult.Matched("intent-a"));
         provider.CallCount.Should().Be(1);
@@ -28,6 +40,9 @@ public sealed class StreamingAgentProfileTurnClassifierTests
         request.ResponseFormat.Should().NotBeNull();
         request.MaxTokens.Should().Be(128);
         request.Temperature.Should().Be(0);
+        request.RequestId.Should().Be("turn-alpha");
+        request.LlmControl.Should().BeSameAs(llmControl);
+        request.RoutingContext.Should().BeEquivalentTo(llmControl.ToRoutingContext());
     }
 
     [Fact]
@@ -90,7 +105,9 @@ public sealed class StreamingAgentProfileTurnClassifierTests
         systemMessage.Should().Contain("final requested outcome")
             .And.Contain("not an intermediate prerequisite or discovery step")
             .And.Contain("external_handoff")
-            .And.Contain("read_only");
+            .And.Contain("read_only")
+            .And.Contain("unqualified request to connect an external service account")
+            .And.Contain("only when the user explicitly requests local CLI");
     }
 
     [Fact]
@@ -379,6 +396,10 @@ internal sealed class ManualDeadlineTimeProvider : TimeProvider
             return _utcNow;
         }
     }
+
+    public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+    public override long GetTimestamp() => GetUtcNow().Ticks;
 
     public int PendingTimerCount
     {

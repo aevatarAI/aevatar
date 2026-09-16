@@ -170,8 +170,14 @@ public sealed class ResponsesWebSubstituteToolExecutionService
                     query.Trim(),
                     maxResults,
                     request.NyxIdAccessToken),
-                ct).ConfigureAwait(false)).Output;
-        var typedSearchResult = ResponsesWebResultMigration.FromSearch(searchResult);
+                ct).ConfigureAwait(false)).Result;
+        var typedSearchResult = searchResult.ResultCase is
+            ResponsesWebToolResult.ResultOneofCase.Search or
+            ResponsesWebToolResult.ResultOneofCase.Error
+                ? searchResult.Clone()
+                : ResponsesWebResultMigration.FromError(
+                    "search_backend_invalid_result",
+                    "The search backend returned no typed result.");
         await RecordTraceAsync(
             request,
             canonicalToolName,
@@ -180,7 +186,15 @@ public sealed class ResponsesWebSubstituteToolExecutionService
             cacheHit: false,
             typedSearchResult,
             ct).ConfigureAwait(false);
-        return new ResponsesWebSubstituteToolExecutionResult { TypedSearch = searchResult };
+        return typedSearchResult.ResultCase == ResponsesWebToolResult.ResultOneofCase.Error
+            ? new ResponsesWebSubstituteToolExecutionResult
+            {
+                TypedError = typedSearchResult.Error.Clone(),
+            }
+            : new ResponsesWebSubstituteToolExecutionResult
+            {
+                TypedSearch = typedSearchResult.Search.Clone(),
+            };
     }
 
     private Task RecordTraceAsync(

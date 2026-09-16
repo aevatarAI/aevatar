@@ -256,11 +256,11 @@ public sealed class ChronoStorageCatalogBlobClient
         {
             var baseUrl = !string.IsNullOrWhiteSpace(_options.NyxProxyBaseUrl)
                 ? _options.NyxProxyBaseUrl.Trim()
-                : _nyxIdAppAuthOptions?.Authority?.Trim();
+                : _nyxIdAppAuthOptions?.ApiBaseUrl?.Trim();
             if (string.IsNullOrWhiteSpace(baseUrl) || !Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
             {
                 throw new InvalidOperationException(
-                    "Cli:App:Connectors:ChronoStorage:NyxProxyBaseUrl or Cli:App:NyxId:Authority must be a valid absolute URL when Nyx proxy mode is enabled.");
+                    "Cli:App:Connectors:ChronoStorage:NyxProxyBaseUrl or Cli:App:NyxId:ApiBaseUrl must be a valid absolute URL when Nyx proxy mode is enabled.");
             }
 
             var slug = _options.NyxProxyServiceSlug?.Trim();

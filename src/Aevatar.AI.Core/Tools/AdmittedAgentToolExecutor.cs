@@ -11,6 +11,8 @@ using Aevatar.AI.Core.Observability;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Ports;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.Core.Tools;
 
@@ -19,18 +21,23 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     private readonly IAgentToolAdmissionLedger _admissionLedger;
     private readonly IAuditTrailAppender _auditTrailAppender;
     private readonly ToolAuditRecordFactory _auditRecordFactory;
+    private readonly ILogger<AdmittedAgentToolExecutor> _logger;
+    private readonly TimeProvider _timeProvider;
 
     public AdmittedAgentToolExecutor(
         IAgentToolAdmissionLedger admissionLedger,
         IAuditTrailAppender auditTrailAppender,
         IAuditActorIdentityHasher identityHasher,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<AdmittedAgentToolExecutor>? logger = null)
     {
         _admissionLedger = admissionLedger ?? throw new ArgumentNullException(nameof(admissionLedger));
         _auditTrailAppender = auditTrailAppender ?? throw new ArgumentNullException(nameof(auditTrailAppender));
+        _logger = logger ?? NullLogger<AdmittedAgentToolExecutor>.Instance;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _auditRecordFactory = new ToolAuditRecordFactory(
             identityHasher ?? throw new ArgumentNullException(nameof(identityHasher)),
-            timeProvider);
+            _timeProvider);
     }
 
     public async Task<AgentToolExecutionOutcome> ExecuteAsync(
@@ -82,6 +89,23 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         {
             Request = request.ExecutionContext.Request with { OperationId = operationId },
         };
+
+        if (request.PendingOperation is not null &&
+            (request.ExecutionAttemptKind != AgentToolExecutionAttemptKind.ActorRecovery ||
+             !string.Equals(
+                 request.PendingOperation.OperationId,
+                 operationId,
+                 StringComparison.Ordinal)))
+        {
+            return CreateUnauditedFailure(
+                tool,
+                toolName,
+                toolCallId,
+                fallbackSafety,
+                "invalid_pending_tool_operation",
+                "A pending tool operation must belong to the exact actor-recovery operation.",
+                AgentToolExecutionFailureStage.RequestValidation);
+        }
 
         AgentToolCallSafety callSafety;
         AgentToolReplayPolicy replayPolicy;
@@ -179,7 +203,6 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 callSafety,
                 ct).ConfigureAwait(false);
         }
-
         var approvalRequestId = CreateApprovalRequestId(
             executionOwner,
             requestId,
@@ -187,6 +210,74 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             toolCallId,
             argumentsSha256);
         var requiresApproval = RequiresApproval(tool, callSafety);
+        if (request.ApprovalGrant is not null && request.UnattendedAuthorization is not null)
+        {
+            var denied = CreateDenied(
+                tool,
+                toolName,
+                toolCallId,
+                callSafety,
+                isMutation,
+                "conflicting_tool_authorization",
+                "A tool call cannot use human approval and unattended authorization together.",
+                AgentToolExecutionFailureStage.Approval,
+                approvalRequestId);
+            return await CompleteBeforeTerminalAsync(
+                tool,
+                denied,
+                credentialDecision.ExecutionContext,
+                credentialDecision.CredentialSource,
+                executionOwner,
+                requestId,
+                toolName,
+                toolCallId,
+                argumentsSha256,
+                callSafety,
+                ct).ConfigureAwait(false);
+        }
+
+        if (request.UnattendedAuthorization is not null)
+        {
+            if (!MatchesUnattendedAuthorization(
+                    request.UnattendedAuthorization,
+                    request.ApprovalContinuationMode,
+                    requiresApproval,
+                    isMutation,
+                    callSafety,
+                    credentialDecision.ExecutionContext,
+                    executionOwner,
+                    requestId,
+                    toolName,
+                    toolCallId,
+                    argumentsSha256))
+            {
+                var denied = CreateDenied(
+                    tool,
+                    toolName,
+                    toolCallId,
+                    callSafety,
+                    isMutation,
+                    "unattended_authorization_mismatch",
+                    "The unattended authorization does not match this exact tool call.",
+                    AgentToolExecutionFailureStage.Approval,
+                    approvalRequestId);
+                return await CompleteBeforeTerminalAsync(
+                    tool,
+                    denied,
+                    credentialDecision.ExecutionContext,
+                    credentialDecision.CredentialSource,
+                    executionOwner,
+                    requestId,
+                    toolName,
+                    toolCallId,
+                    argumentsSha256,
+                    callSafety,
+                    ct).ConfigureAwait(false);
+            }
+
+            requiresApproval = false;
+        }
+
         if (request.ApprovalGrant is not null &&
             !MatchesGrant(
                 request.ApprovalGrant,
@@ -264,6 +355,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 ct).ConfigureAwait(false);
         }
 
+        AgentToolTerminalOutcome? reconciledOutcome = null;
+        AgentToolPendingOperation? reconciledPendingOperation = null;
         var admission = await TryStartAsync(
             new AgentToolAdmissionFact
             {
@@ -278,7 +371,6 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 ReplayPolicy = replayPolicy,
             },
             ct).ConfigureAwait(false);
-        AgentToolTerminalOutcome? reconciledOutcome = null;
         if (admission.Status == AgentToolAdmissionStatus.Duplicate &&
             request.ExecutionAttemptKind == AgentToolExecutionAttemptKind.ActorRecovery)
         {
@@ -292,10 +384,12 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 toolName,
                 toolCallId,
                 credentialDecision.ExecutionContext,
+                request.PendingOperation,
                 ct).ConfigureAwait(false);
             if (recovery.Failure is not null)
                 return recovery.Failure;
             reconciledOutcome = recovery.CompletedOutcome;
+            reconciledPendingOperation = recovery.PendingOperation;
         }
         else if (admission.Status != AgentToolAdmissionStatus.Started)
         {
@@ -362,7 +456,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             runningReceipt,
             AuditOutcome.Accepted,
             isMutation,
-            ct).ConfigureAwait(false);
+            ct,
+            request.UnattendedAuthorization).ConfigureAwait(false);
         return await ExecuteTerminalAsync(
             tool,
             toolName,
@@ -375,9 +470,636 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             isMutation,
             credentialDecision,
             runningAppend,
+            runningReceipt,
+            replayPolicy,
+            operationId,
             reconciledOutcome,
+            reconciledPendingOperation,
+            request.UnattendedAuthorization,
             ct).ConfigureAwait(false);
     }
+
+    public async Task<AgentToolCancellationResult> CancelAsync(
+        AgentToolCancellationRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Tool);
+        ArgumentNullException.ThrowIfNull(request.ExecutionContext);
+        ArgumentNullException.ThrowIfNull(request.PendingOperation);
+
+        var tool = request.Tool;
+        var toolName = NormalizeIdentity(tool.Name);
+        var requestId = NormalizeIdentity(request.ExecutionContext.Request.RequestId);
+        var toolCallId = NormalizeIdentity(request.ExecutionContext.Request.CallId);
+        var operationId = NormalizeIdentity(request.ExecutionContext.Request.OperationId);
+        var executionOwner = NormalizeExecutionOwner(request.ExecutionOwner);
+        var argumentsJson = AgentToolArgumentsDigest.Freeze(request.ArgumentsJson);
+        var argumentsSha256 = NormalizeArgumentsSha256(request.TerminalIntent?.ArgumentsSha256)
+                              ?? AgentToolArgumentsDigest.ComputeSha256(argumentsJson);
+
+        if (toolName is null || requestId is null || toolCallId is null || operationId is null ||
+            executionOwner is null ||
+            !string.Equals(request.PendingOperation.OperationId, operationId, StringComparison.Ordinal))
+        {
+            return CancellationFailure(
+                "invalid_tool_cancellation_identity",
+                "Tool cancellation requires exact owner, request, call, operation, and pending identities.");
+        }
+
+        if (request.ApprovalContinuationMode != AgentToolApprovalContinuationMode.ActorOwned ||
+            request.ExecutionAttemptKind != AgentToolExecutionAttemptKind.ActorRecovery ||
+            request.Reason != AgentToolOperationCancellationReason.WorkflowStopped ||
+            request.DeadlineUnixMs <= 0)
+        {
+            return CancellationFailure(
+                "invalid_tool_cancellation_attempt",
+                "Durable tool cancellation requires an actor-owned recovery request.");
+        }
+
+        var executionContext = request.ExecutionContext with
+        {
+            Request = request.ExecutionContext.Request with { OperationId = operationId },
+        };
+        if (request.TerminalIntent is { } terminalIntent)
+        {
+            if (!IsValidCancellationTerminalIntent(terminalIntent, toolName, toolCallId))
+            {
+                return CancellationFailure(
+                    "tool_cancellation_terminal_intent_invalid",
+                    "The persisted tool cancellation terminal audit intent is invalid.");
+            }
+
+            var intentCredentialDecision = ResolveCredentials(
+                executionContext,
+                terminalIntent.IsMutation,
+                toolName);
+            return await FinalizeCancellationTerminalIntentAsync(
+                tool,
+                toolName,
+                toolCallId,
+                argumentsSha256,
+                requestId,
+                executionOwner,
+                intentCredentialDecision,
+                request.PendingOperation,
+                terminalIntent,
+                request.UnattendedAuthorization,
+                ct).ConfigureAwait(false);
+        }
+
+        AgentToolCallSafety callSafety;
+        AgentToolReplayPolicy replayPolicy;
+        try
+        {
+            using var contextScope = AgentToolContextScope.Push(executionContext);
+            callSafety = tool.GetCallSafety(argumentsJson)
+                ?? throw new InvalidOperationException("Tool safety classification is required.");
+            replayPolicy = tool.ResolveReplayPolicy(argumentsJson);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return CancellationFailure("tool_classification_failed", SafeExceptionClass(ex));
+        }
+
+        var isMutation = AgentToolCredentialPolicy.IsMutation(tool, callSafety);
+        var credentialDecision = ResolveCredentials(executionContext, isMutation, toolName);
+        if (HasCancellationDeadlineElapsed(request.DeadlineUnixMs))
+        {
+            return await FinalizeCancellationOutcomeUncertainAsync(
+                tool,
+                toolName,
+                toolCallId,
+                argumentsSha256,
+                requestId,
+                executionOwner,
+                callSafety,
+                isMutation,
+                credentialDecision,
+                request.PendingOperation,
+                request.UnattendedAuthorization,
+                ct).ConfigureAwait(false);
+        }
+
+        if (!credentialDecision.Allowed)
+            return CancellationFailure("credential_denied", credentialDecision.Message);
+
+        if (replayPolicy != AgentToolReplayPolicy.Reconcilable ||
+            tool is not IAgentToolDurableOperation durableOperation ||
+            ValidateReplayPolicy(
+                tool,
+                callSafety,
+                replayPolicy,
+                operationId,
+                executionContext.Request.IdempotencyKey) is not null)
+        {
+            return CancellationFailure(
+                "tool_operation_cancellation_unavailable",
+                "Only a reconcilable durable tool can cancel an actor-owned pending operation.");
+        }
+
+        var admission = await TryStartAsync(
+            new AgentToolAdmissionFact
+            {
+                AdmissionId = CreateAdmissionId(executionOwner, requestId, toolCallId),
+                RequestId = requestId,
+                ToolCallId = toolCallId,
+                ToolName = toolName,
+                ArgumentsSha256 = argumentsSha256,
+                ExecutionOwner = ToProto(executionOwner),
+                IssuedAtUnixMs = request.ExecutionContext.Request.IssuedAtUnixMs,
+                OperationId = operationId,
+                ReplayPolicy = replayPolicy,
+            },
+            ct).ConfigureAwait(false);
+        if (HasCancellationDeadlineElapsed(request.DeadlineUnixMs))
+        {
+            return await FinalizeCancellationOutcomeUncertainAsync(
+                tool,
+                toolName,
+                toolCallId,
+                argumentsSha256,
+                requestId,
+                executionOwner,
+                callSafety,
+                isMutation,
+                credentialDecision,
+                request.PendingOperation,
+                request.UnattendedAuthorization,
+                ct).ConfigureAwait(false);
+        }
+
+        if (admission.Status != AgentToolAdmissionStatus.Duplicate)
+        {
+            return CancellationFailure(
+                admission.Status == AgentToolAdmissionStatus.StoreUnavailable
+                    ? "tool_admission_unavailable"
+                    : "tool_cancellation_admission_not_duplicate",
+                admission.Status == AgentToolAdmissionStatus.StoreUnavailable &&
+                !string.IsNullOrWhiteSpace(admission.SafeMessage)
+                    ? admission.SafeMessage
+                    : "Tool cancellation requires the exact existing durable admission fact.");
+        }
+
+        var runningReceipt = AgentToolReceiptFactory.CreateRunning(
+            tool,
+            toolCallId,
+            toolName,
+            callSafety);
+        var runningAppend = await AppendAsync(
+            CreateRunningAuditId(executionOwner, requestId, toolCallId),
+            AuditToolExecutionPhase.Running,
+            tool,
+            toolName,
+            toolCallId,
+            argumentsSha256,
+            callSafety,
+            credentialDecision.ExecutionContext,
+            credentialDecision.CredentialSource,
+            runningReceipt,
+            AuditOutcome.Accepted,
+            isMutation,
+            ct,
+            request.UnattendedAuthorization).ConfigureAwait(false);
+        if (HasCancellationDeadlineElapsed(request.DeadlineUnixMs))
+        {
+            return await CompleteCancellationTerminalAsync(
+                tool,
+                toolName,
+                toolCallId,
+                argumentsSha256,
+                requestId,
+                executionOwner,
+                callSafety,
+                isMutation,
+                credentialDecision,
+                runningAppend,
+                CreateCancellationOutcomeUncertain(
+                    tool,
+                    toolName,
+                    toolCallId,
+                    callSafety,
+                    isMutation),
+                request.PendingOperation,
+                request.UnattendedAuthorization,
+                ct).ConfigureAwait(false);
+        }
+
+        AgentToolOperationCancellationResult cancellation;
+        try
+        {
+            using var contextScope = AgentToolContextScope.Push(credentialDecision.ExecutionContext);
+            cancellation = await durableOperation.CancelOperationAsync(
+                new AgentToolOperationCancellationRequest(
+                    operationId,
+                    argumentsJson,
+                    credentialDecision.ExecutionContext,
+                    request.PendingOperation,
+                    request.Reason,
+                    request.DeadlineUnixMs),
+                ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            if (!HasCancellationDeadlineElapsed(request.DeadlineUnixMs))
+            {
+                return AgentToolCancellationResult.Pending(
+                    request.PendingOperation,
+                    "tool_cancellation_transport_unavailable",
+                    SafeExceptionClass(ex));
+            }
+
+            return await CompleteCancellationTerminalAsync(
+                tool,
+                toolName,
+                toolCallId,
+                argumentsSha256,
+                requestId,
+                executionOwner,
+                callSafety,
+                isMutation,
+                credentialDecision,
+                runningAppend,
+                CreateCancellationOutcomeUncertain(
+                    tool,
+                    toolName,
+                    toolCallId,
+                    callSafety,
+                    isMutation),
+                request.PendingOperation,
+                request.UnattendedAuthorization,
+                ct).ConfigureAwait(false);
+        }
+
+        if (cancellation.Disposition == AgentToolOperationCancellationDisposition.Pending &&
+            cancellation.CompletedOutcome is null &&
+            cancellation.PendingOperation is { } refreshed &&
+            MatchesPendingOperationIdentity(request.PendingOperation, refreshed))
+        {
+            if (!HasCancellationDeadlineElapsed(request.DeadlineUnixMs))
+                return AgentToolCancellationResult.Pending(refreshed);
+
+            return await CompleteCancellationTerminalAsync(
+                tool,
+                toolName,
+                toolCallId,
+                argumentsSha256,
+                requestId,
+                executionOwner,
+                callSafety,
+                isMutation,
+                credentialDecision,
+                runningAppend,
+                CreateCancellationOutcomeUncertain(
+                    tool,
+                    toolName,
+                    toolCallId,
+                    callSafety,
+                    isMutation),
+                refreshed,
+                request.UnattendedAuthorization,
+                ct).ConfigureAwait(false);
+        }
+
+        if (cancellation.Disposition != AgentToolOperationCancellationDisposition.Completed ||
+            cancellation.CompletedOutcome is not { } terminalOutcome ||
+            cancellation.PendingOperation is not null)
+        {
+            if (HasCancellationDeadlineElapsed(request.DeadlineUnixMs))
+            {
+                return await CompleteCancellationTerminalAsync(
+                    tool,
+                    toolName,
+                    toolCallId,
+                    argumentsSha256,
+                    requestId,
+                    executionOwner,
+                    callSafety,
+                    isMutation,
+                    credentialDecision,
+                    runningAppend,
+                    CreateCancellationOutcomeUncertain(
+                        tool,
+                        toolName,
+                        toolCallId,
+                        callSafety,
+                        isMutation),
+                    request.PendingOperation,
+                    request.UnattendedAuthorization,
+                    ct).ConfigureAwait(false);
+            }
+
+            return AgentToolCancellationResult.Pending(
+                request.PendingOperation,
+                "tool_cancellation_outcome_invalid",
+                "The durable tool returned an invalid cancellation outcome.");
+        }
+
+        var receipt = AgentToolReceiptFactory.CreateResult(
+            tool,
+            toolCallId,
+            toolName,
+            callSafety,
+            terminalOutcome.ResultJson,
+            terminalOutcome.Receipt,
+            argumentsJson);
+        var outcome = new AgentToolExecutionOutcome(
+            AgentToolExecutionOutcomeKind.Executed,
+            receipt.ResultJson ?? string.Empty,
+            receipt,
+            isMutation,
+            string.Empty,
+            string.Empty,
+            AgentToolExecutionFailureStage.None,
+            TerminalInvoked: true,
+            Retryable: false,
+            AuditCompleted: false);
+        return await CompleteCancellationTerminalAsync(
+            tool,
+            toolName,
+            toolCallId,
+            argumentsSha256,
+            requestId,
+            executionOwner,
+            callSafety,
+            isMutation,
+            credentialDecision,
+            runningAppend,
+            outcome,
+            request.PendingOperation,
+            request.UnattendedAuthorization,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<AgentToolCancellationResult> FinalizeCancellationOutcomeUncertainAsync(
+        IAgentTool tool,
+        string toolName,
+        string toolCallId,
+        string argumentsSha256,
+        string requestId,
+        ExecutionOwnerIdentity executionOwner,
+        AgentToolCallSafety callSafety,
+        bool isMutation,
+        CredentialDecision credentialDecision,
+        AgentToolPendingOperation pendingOperation,
+        AgentToolUnattendedExecutionAuthorization? unattendedAuthorization,
+        CancellationToken ct) =>
+        await FinalizeCancellationOutcomeAsync(
+            tool,
+            toolName,
+            toolCallId,
+            argumentsSha256,
+            requestId,
+            executionOwner,
+            callSafety,
+            isMutation,
+            credentialDecision,
+            pendingOperation,
+            CreateCancellationOutcomeUncertain(
+                tool,
+                toolName,
+                toolCallId,
+                callSafety,
+                isMutation),
+            unattendedAuthorization,
+            ct).ConfigureAwait(false);
+
+    private async Task<AgentToolCancellationResult> FinalizeCancellationTerminalIntentAsync(
+        IAgentTool tool,
+        string toolName,
+        string toolCallId,
+        string argumentsSha256,
+        string requestId,
+        ExecutionOwnerIdentity executionOwner,
+        CredentialDecision credentialDecision,
+        AgentToolPendingOperation pendingOperation,
+        AgentToolCancellationTerminalIntent terminalIntent,
+        AgentToolUnattendedExecutionAuthorization? unattendedAuthorization,
+        CancellationToken ct) =>
+        await FinalizeCancellationOutcomeAsync(
+            tool,
+            toolName,
+            toolCallId,
+            argumentsSha256,
+            requestId,
+            executionOwner,
+            terminalIntent.CallSafety,
+            terminalIntent.IsMutation,
+            credentialDecision,
+            pendingOperation,
+            CreateCancellationOutcomeFromIntent(terminalIntent),
+            unattendedAuthorization,
+            ct).ConfigureAwait(false);
+
+    private async Task<AgentToolCancellationResult> FinalizeCancellationOutcomeAsync(
+        IAgentTool tool,
+        string toolName,
+        string toolCallId,
+        string argumentsSha256,
+        string requestId,
+        ExecutionOwnerIdentity executionOwner,
+        AgentToolCallSafety callSafety,
+        bool isMutation,
+        CredentialDecision credentialDecision,
+        AgentToolPendingOperation pendingOperation,
+        AgentToolExecutionOutcome outcome,
+        AgentToolUnattendedExecutionAuthorization? unattendedAuthorization,
+        CancellationToken ct)
+    {
+        var runningReceipt = AgentToolReceiptFactory.CreateRunning(
+            tool,
+            toolCallId,
+            toolName,
+            callSafety);
+        var runningAppend = await AppendAsync(
+            CreateRunningAuditId(executionOwner, requestId, toolCallId),
+            AuditToolExecutionPhase.Running,
+            tool,
+            toolName,
+            toolCallId,
+            argumentsSha256,
+            callSafety,
+            credentialDecision.ExecutionContext,
+            credentialDecision.CredentialSource,
+            runningReceipt,
+            AuditOutcome.Accepted,
+            isMutation,
+            ct,
+            unattendedAuthorization).ConfigureAwait(false);
+        return await CompleteCancellationTerminalAsync(
+            tool,
+            toolName,
+            toolCallId,
+            argumentsSha256,
+            requestId,
+            executionOwner,
+            callSafety,
+            isMutation,
+            credentialDecision,
+            runningAppend,
+            outcome,
+            pendingOperation,
+            unattendedAuthorization,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<AgentToolCancellationResult> CompleteCancellationTerminalAsync(
+        IAgentTool tool,
+        string toolName,
+        string toolCallId,
+        string argumentsSha256,
+        string requestId,
+        ExecutionOwnerIdentity executionOwner,
+        AgentToolCallSafety callSafety,
+        bool isMutation,
+        CredentialDecision credentialDecision,
+        AuditTrailAppendResult runningAppend,
+        AgentToolExecutionOutcome outcome,
+        AgentToolPendingOperation pendingOperation,
+        AgentToolUnattendedExecutionAuthorization? unattendedAuthorization,
+        CancellationToken ct)
+    {
+        if (!IsAuditRecorded(runningAppend))
+        {
+            return AgentToolCancellationResult.Pending(
+                pendingOperation,
+                runningAppend.Status == AuditTrailAppendStatus.Conflict
+                    ? "audit_intent_conflict"
+                    : "audit_unavailable",
+                "Tool cancellation reached a terminal outcome, but its running audit fact was not durably recorded.",
+                terminalIntent: ToCancellationTerminalIntent(outcome, callSafety, argumentsSha256));
+        }
+
+        var terminalAppend = await AppendAsync(
+            CreateTerminalAuditId(executionOwner, requestId, toolCallId),
+            AuditToolExecutionPhase.Terminal,
+            tool,
+            toolName,
+            toolCallId,
+            argumentsSha256,
+            callSafety,
+            credentialDecision.ExecutionContext,
+            credentialDecision.CredentialSource,
+            outcome.Receipt,
+            MapAuditOutcome(outcome),
+            isMutation,
+            ct,
+            unattendedAuthorization).ConfigureAwait(false);
+        if (IsAuditRecorded(terminalAppend))
+            return AgentToolCancellationResult.Completed(outcome with { AuditCompleted = true });
+
+        return AgentToolCancellationResult.Pending(
+            pendingOperation,
+            terminalAppend.Status == AuditTrailAppendStatus.Conflict
+                ? "audit_intent_conflict"
+                : "audit_unavailable",
+            "Tool cancellation reached a terminal outcome, but its stable audit fact was not durably recorded.",
+            terminalIntent: ToCancellationTerminalIntent(outcome, callSafety, argumentsSha256));
+    }
+
+    private static AgentToolExecutionOutcome CreateCancellationOutcomeFromIntent(
+        AgentToolCancellationTerminalIntent intent) =>
+        new(
+            intent.Kind,
+            intent.ResultJson,
+            intent.Receipt.Clone(),
+            intent.IsMutation,
+            intent.FailureCode,
+            intent.SafeMessage,
+            intent.FailureStage,
+            intent.TerminalInvoked,
+            intent.Retryable,
+            AuditCompleted: false);
+
+    private static bool IsValidCancellationTerminalIntent(
+        AgentToolCancellationTerminalIntent intent,
+        string toolName,
+        string toolCallId) =>
+        intent.Receipt != null &&
+        intent.CallSafety != null &&
+        intent.Kind is AgentToolExecutionOutcomeKind.Executed or AgentToolExecutionOutcomeKind.Failed &&
+        Enum.IsDefined(intent.FailureStage) &&
+        string.Equals(NormalizeIdentity(intent.Receipt.ToolName), toolName, StringComparison.Ordinal) &&
+        string.Equals(NormalizeIdentity(intent.Receipt.CallId), toolCallId, StringComparison.Ordinal) &&
+        string.Equals(intent.Receipt.ResultJson ?? string.Empty, intent.ResultJson, StringComparison.Ordinal) &&
+        NormalizeArgumentsSha256(intent.ArgumentsSha256) is not null;
+
+    private static AgentToolCancellationTerminalIntent ToCancellationTerminalIntent(
+        AgentToolExecutionOutcome outcome,
+        AgentToolCallSafety callSafety,
+        string argumentsSha256) =>
+        new(
+            outcome.Kind,
+            outcome.ResultJson,
+            outcome.Receipt.Clone(),
+            outcome.IsMutation,
+            outcome.FailureCode,
+            outcome.SafeMessage,
+            outcome.FailureStage,
+            outcome.TerminalInvoked,
+            outcome.Retryable,
+            callSafety,
+            argumentsSha256);
+
+    private static string? NormalizeArgumentsSha256(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var normalized = value.Trim().ToLowerInvariant();
+        return normalized.Length == 64 && normalized.All(Uri.IsHexDigit)
+            ? normalized
+            : null;
+    }
+
+    private static AgentToolExecutionOutcome CreateCancellationOutcomeUncertain(
+        IAgentTool tool,
+        string toolName,
+        string toolCallId,
+        AgentToolCallSafety callSafety,
+        bool isMutation) =>
+        CreateFailure(
+            tool,
+            toolName,
+            toolCallId,
+            callSafety,
+            isMutation,
+            "code_execution_cancel_outcome_uncertain",
+            "The provider terminal outcome could not be confirmed before the workflow stop deadline.",
+            AgentToolExecutionFailureStage.TerminalExecution,
+            terminalInvoked: true,
+            retryable: false,
+            auditCompleted: false,
+            failureOutcome: AgentToolFailureOutcome.OutcomeUncertain);
+
+    private static AgentToolCancellationResult CancellationFailure(
+        string failureCode,
+        string safeMessage) =>
+        AgentToolCancellationResult.Failed(failureCode, safeMessage, retryable: true);
+
+    private bool HasCancellationDeadlineElapsed(long deadlineUnixMs) =>
+        deadlineUnixMs > 0 &&
+        deadlineUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+
+    private static bool MatchesPendingOperationIdentity(
+        AgentToolPendingOperation expected,
+        AgentToolPendingOperation candidate) =>
+        string.Equals(expected.OperationId, candidate.OperationId, StringComparison.Ordinal) &&
+        string.Equals(expected.ProviderOperationId, candidate.ProviderOperationId, StringComparison.Ordinal) &&
+        string.Equals(expected.StatusPath, candidate.StatusPath, StringComparison.Ordinal) &&
+        string.Equals(expected.ResultPath, candidate.ResultPath, StringComparison.Ordinal) &&
+        string.Equals(expected.CancelPath, candidate.CancelPath, StringComparison.Ordinal) &&
+        string.Equals(expected.ServiceSlug, candidate.ServiceSlug, StringComparison.Ordinal) &&
+        string.Equals(expected.UserServiceId, candidate.UserServiceId, StringComparison.Ordinal) &&
+        expected.RouteIdentitySource == candidate.RouteIdentitySource;
 
     private async Task<AgentToolExecutionOutcome> ExecuteTerminalAsync(
         IAgentTool tool,
@@ -391,7 +1113,12 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         bool isMutation,
         CredentialDecision credentialDecision,
         AuditTrailAppendResult runningAppend,
+        AgentToolReceipt runningReceipt,
+        AgentToolReplayPolicy replayPolicy,
+        string operationId,
         AgentToolTerminalOutcome? reconciledOutcome,
+        AgentToolPendingOperation? reconciledPendingOperation,
+        AgentToolUnattendedExecutionAuthorization? unattendedAuthorization,
         CancellationToken ct)
     {
         using var activity = GenAIActivitySource.StartExecuteTool(toolName, toolCallId);
@@ -399,20 +1126,76 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         AgentToolExecutionOutcome outcome;
         try
         {
-            AgentToolTerminalOutcome terminalOutcome;
-            if (reconciledOutcome is null)
+            AgentToolOperationStartResult operationResult;
+            if (reconciledOutcome is not null)
+            {
+                operationResult = AgentToolOperationStartResult.Completed(reconciledOutcome);
+            }
+            else if (reconciledPendingOperation is not null)
+            {
+                operationResult = AgentToolOperationStartResult.Pending(reconciledPendingOperation);
+            }
+            else if (replayPolicy == AgentToolReplayPolicy.Reconcilable &&
+                     tool is IAgentToolDurableOperation durableOperation)
             {
                 using var contextScope = AgentToolContextScope.Push(credentialDecision.ExecutionContext);
-                terminalOutcome = await tool.ExecuteWithOutcomeAsync(
-                    toolCallId,
-                    toolName,
-                    argumentsJson,
+                operationResult = await durableOperation.StartOperationAsync(
+                    new AgentToolOperationStartRequest(
+                        operationId,
+                        toolCallId,
+                        toolName,
+                        argumentsJson,
+                        credentialDecision.ExecutionContext),
                     ct).ConfigureAwait(false);
             }
             else
             {
-                terminalOutcome = reconciledOutcome;
+                using var contextScope = AgentToolContextScope.Push(credentialDecision.ExecutionContext);
+                operationResult = AgentToolOperationStartResult.Completed(
+                    await tool.ExecuteWithOutcomeAsync(
+                        toolCallId,
+                        toolName,
+                        argumentsJson,
+                        ct).ConfigureAwait(false));
             }
+
+            if (operationResult.Disposition == AgentToolOperationStartDisposition.Pending &&
+                operationResult.PendingOperation is { } pendingOperation &&
+                operationResult.CompletedOutcome is null &&
+                string.Equals(
+                    pendingOperation.OperationId,
+                    operationId,
+                    StringComparison.Ordinal))
+            {
+                activity?.SetTag("gen_ai.tool.status", "pending");
+                return new AgentToolExecutionOutcome(
+                    AgentToolExecutionOutcomeKind.Pending,
+                    string.Empty,
+                    runningReceipt,
+                    isMutation,
+                    string.Empty,
+                    "Tool execution is pending durable provider completion.",
+                    AgentToolExecutionFailureStage.None,
+                    TerminalInvoked: reconciledPendingOperation is null,
+                    Retryable: false,
+                    AuditCompleted: IsAuditRecorded(runningAppend),
+                    PendingOperation: pendingOperation,
+                    CancellationRecoveryIntent: ToCancellationTerminalIntent(
+                        CreateCancellationOutcomeUncertain(
+                            tool,
+                            toolName,
+                            toolCallId,
+                            callSafety,
+                            isMutation),
+                        callSafety,
+                        argumentsSha256));
+            }
+
+            if (operationResult.Disposition != AgentToolOperationStartDisposition.Completed ||
+                operationResult.CompletedOutcome is not { } terminalOutcome ||
+                operationResult.PendingOperation is not null)
+                throw new InvalidOperationException("The durable tool returned an invalid typed operation outcome.");
+
             var resultJson = terminalOutcome.ResultJson;
             var receipt = AgentToolReceiptFactory.CreateResult(
                 tool,
@@ -442,18 +1225,28 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         }
         catch (Exception ex)
         {
+            LogCodexExecutionFailure(ex, credentialDecision.ExecutionContext.WorkflowRuntime);
+            var failureEvidence = ResolveExceptionFailureEvidence(ex);
             outcome = CreateFailure(
                 tool,
                 toolName,
                 toolCallId,
                 callSafety,
                 isMutation,
-                ResolveExceptionErrorCode(ex),
-                SafeExceptionClass(ex),
+                failureEvidence.Code,
+                failureEvidence.Message,
                 AgentToolExecutionFailureStage.TerminalExecution,
                 terminalInvoked: reconciledOutcome is null,
                 retryable: false,
-                auditCompleted: false);
+                auditCompleted: false,
+                diagnosticId: failureEvidence.DiagnosticId,
+                failureOutcome: ToolExecutionAuditErrorCode.IsTimeout(failureEvidence.Code) ||
+                                isMutation && string.Equals(
+                                    failureEvidence.Code,
+                                    "tool_execution_exception",
+                                    StringComparison.Ordinal)
+                    ? AgentToolFailureOutcome.OutcomeUncertain
+                    : AgentToolFailureOutcome.CalleeConfirmed);
             activity?.SetTag("gen_ai.tool.status", "error");
             activity?.SetTag("error.type", ex.GetType().FullName);
             activity?.SetStatus(ActivityStatusCode.Error, outcome.SafeMessage);
@@ -478,7 +1271,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             outcome.Receipt,
             MapAuditOutcome(outcome),
             isMutation,
-            ct).ConfigureAwait(false);
+            ct,
+            unattendedAuthorization).ConfigureAwait(false);
         var auditCompleted = IsAuditRecorded(runningAppend) && IsAuditRecorded(terminalAppend);
         if (auditCompleted)
             return outcome with { AuditCompleted = true };
@@ -619,12 +1413,13 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         string toolName,
         string toolCallId,
         AgentToolExecutionContext executionContext,
+        AgentToolPendingOperation? pendingOperation,
         CancellationToken ct)
     {
         if (replayPolicy is AgentToolReplayPolicy.ReadOnlyRetryable or
             AgentToolReplayPolicy.IdempotentRetryable)
         {
-            return new DuplicateRecoveryResolution(null, null);
+            return new DuplicateRecoveryResolution(null, null, null);
         }
 
         if (replayPolicy == AgentToolReplayPolicy.Reconcilable &&
@@ -638,7 +1433,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                     new AgentToolOperationReconciliationRequest(
                         operationId,
                         argumentsJson,
-                        executionContext),
+                        executionContext,
+                        pendingOperation),
                     ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -650,12 +1446,23 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 reconciliation = null;
             }
 
-            if (reconciliation?.Disposition == AgentToolOperationReconciliationDisposition.NotFound)
-                return new DuplicateRecoveryResolution(null, null);
+            if (reconciliation?.Disposition == AgentToolOperationReconciliationDisposition.NotFound &&
+                string.IsNullOrWhiteSpace(pendingOperation?.ProviderOperationId))
+                return new DuplicateRecoveryResolution(null, null, null);
             if (reconciliation?.Disposition == AgentToolOperationReconciliationDisposition.Completed &&
                 reconciliation.CompletedOutcome is not null)
             {
-                return new DuplicateRecoveryResolution(reconciliation.CompletedOutcome, null);
+                return new DuplicateRecoveryResolution(reconciliation.CompletedOutcome, null, null);
+            }
+            if (reconciliation?.Disposition == AgentToolOperationReconciliationDisposition.Pending &&
+                reconciliation.PendingOperation is { } reconciledPending &&
+                reconciliation.CompletedOutcome is null &&
+                string.Equals(
+                    reconciledPending.OperationId,
+                    operationId,
+                    StringComparison.Ordinal))
+            {
+                return new DuplicateRecoveryResolution(null, reconciledPending, null);
             }
         }
 
@@ -663,6 +1470,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         const string safeMessage =
             "OUTCOME_UNCERTAIN: the prior external effect cannot be proven complete or safe to replay.";
         return new DuplicateRecoveryResolution(
+            null,
             null,
             CreateFailure(
                 tool,
@@ -675,7 +1483,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 AgentToolExecutionFailureStage.Admission,
                 terminalInvoked: false,
                 retryable: false,
-                auditCompleted: false));
+                auditCompleted: false,
+                failureOutcome: AgentToolFailureOutcome.OutcomeUncertain));
     }
 
     private static ReplayPolicyFailure? ValidateReplayPolicy(
@@ -713,11 +1522,11 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         }
 
         if (replayPolicy == AgentToolReplayPolicy.Reconcilable &&
-            tool is not IAgentToolOperationReconciler)
+            tool is not IAgentToolDurableOperation)
         {
             return new ReplayPolicyFailure(
                 "missing_tool_operation_reconciler",
-                "RECONCILABLE requires a tool-owned operation reconciler.");
+                "RECONCILABLE requires a tool-owned durable operation implementation.");
         }
 
         return null;
@@ -736,7 +1545,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         AgentToolReceipt receipt,
         AuditOutcome outcome,
         bool isMutation,
-        CancellationToken ct)
+        CancellationToken ct,
+        AgentToolUnattendedExecutionAuthorization? unattendedAuthorization = null)
     {
         try
         {
@@ -752,7 +1562,9 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 credentialSource,
                 receipt,
                 outcome,
-                isMutation);
+                isMutation,
+                unattendedAuthorization is null ? null : "unattended_exact",
+                unattendedAuthorization?.AuthorizationId);
             return await _auditTrailAppender.AppendAsync(record, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -770,23 +1582,29 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         bool isMutation,
         string toolName)
     {
-        if (context.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.ProxyDelegation)
+        if (context.Credentials.NyxIdCredentialKind is
+            AgentToolNyxIdCredentialKind.ProxyDelegation or
+            AgentToolNyxIdCredentialKind.AgentKey)
         {
-            var proxyDelegationToken = NormalizeIdentity(context.Credentials.NyxIdAccessToken);
-            if (proxyDelegationToken is null)
+            var primaryCredential = NormalizeIdentity(context.Credentials.NyxIdAccessToken);
+            if (primaryCredential is null)
             {
+                var credentialLabel = context.Credentials.NyxIdCredentialKind ==
+                                      AgentToolNyxIdCredentialKind.AgentKey
+                    ? "Agent Key"
+                    : "proxy delegation credential";
                 return new CredentialDecision(
                     false,
                     context,
                     ResolveCredentialSource(context),
-                    $"Tool '{toolName}' was not executed because the typed NyxID proxy delegation credential has no valid primary token. Credential fallback was not used.");
+                    $"Tool '{toolName}' was not executed because the typed NyxID {credentialLabel} has no valid primary value. Credential fallback was not used.");
             }
 
-            var delegationContext = context with
+            var primaryContext = context with
             {
                 Credentials = context.Credentials with
                 {
-                    NyxIdAccessToken = proxyDelegationToken,
+                    NyxIdAccessToken = primaryCredential,
                     NyxIdOrgToken = null,
                     SenderNyxIdAccessToken = null,
                     SourceReadableNyxIdAccessToken =
@@ -795,8 +1613,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             };
             return new CredentialDecision(
                 true,
-                delegationContext,
-                ResolveCredentialSource(delegationContext),
+                primaryContext,
+                ResolveCredentialSource(primaryContext),
                 string.Empty);
         }
 
@@ -830,6 +1648,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                     NyxIdAccessToken = senderToken,
                     NyxIdOrgToken = senderToken,
                     SenderNyxIdAccessToken = senderToken,
+                    NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
                 },
             };
             return new CredentialDecision(
@@ -846,7 +1665,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             false,
             context,
             AgentToolCredentialSource.ChannelRegistration,
-            $"Tool '{toolName}' was not executed because sender binding '{senderBindingId}' has no valid NyxID credential.");
+            $"Tool '{toolName}' was not executed because the bound sender has no valid NyxID credential.");
     }
 
     private static bool RequiresApproval(IAgentTool tool, AgentToolCallSafety callSafety)
@@ -876,6 +1695,60 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         string.Equals(NormalizeIdentity(grant.ToolName), toolName, StringComparison.Ordinal) &&
         string.Equals(NormalizeIdentity(grant.ToolCallId), toolCallId, StringComparison.Ordinal) &&
         string.Equals(NormalizeIdentity(grant.ArgumentsSha256), argumentsSha256, StringComparison.Ordinal);
+
+    private static bool MatchesUnattendedAuthorization(
+        AgentToolUnattendedExecutionAuthorization authorization,
+        AgentToolApprovalContinuationMode continuationMode,
+        bool requiresApproval,
+        bool isMutation,
+        AgentToolCallSafety callSafety,
+        AgentToolExecutionContext executionContext,
+        ExecutionOwnerIdentity executionOwner,
+        string requestId,
+        string toolName,
+        string toolCallId,
+        string argumentsSha256)
+    {
+        var admission = executionContext.OperationAdmission;
+        return authorization.Kind == AgentToolUnattendedAuthorizationKind.WorkflowWebhookExact &&
+               continuationMode == AgentToolApprovalContinuationMode.ActorOwned &&
+               requiresApproval &&
+               isMutation &&
+               !callSafety.IsReadOnly &&
+               !callSafety.IsDestructive &&
+               executionContext.InvocationSurface == AgentToolInvocationSurface.WorkflowToolCall &&
+               (executionContext.Credentials.NyxIdCredentialKind is
+                   AgentToolNyxIdCredentialKind.ProxyDelegation or
+                   AgentToolNyxIdCredentialKind.AgentKey) &&
+               !string.IsNullOrWhiteSpace(executionContext.Credentials.NyxIdAccessToken) &&
+               !string.IsNullOrWhiteSpace(executionContext.NyxIdAuthority.Platform) &&
+               !string.IsNullOrWhiteSpace(executionContext.NyxIdAuthority.ExternalUserId) &&
+               string.Equals(toolName, "nyxid_proxy", StringComparison.Ordinal) &&
+               MatchesExecutionOwner(authorization.ExecutionOwner, executionOwner) &&
+               string.Equals(NormalizeIdentity(authorization.RequestId), requestId, StringComparison.Ordinal) &&
+               string.Equals(NormalizeIdentity(authorization.ToolName), toolName, StringComparison.Ordinal) &&
+               string.Equals(NormalizeIdentity(authorization.ToolCallId), toolCallId, StringComparison.Ordinal) &&
+               string.Equals(NormalizeIdentity(authorization.ArgumentsSha256), argumentsSha256, StringComparison.Ordinal) &&
+               !string.IsNullOrWhiteSpace(authorization.AuthorizationId) &&
+               !string.IsNullOrWhiteSpace(authorization.CallSiteId) &&
+               admission is
+               {
+                   AuthorizationBasis: AgentToolOperationAuthorizationBasis.ExplicitRequest,
+                   Identity: AgentToolOperationIdentity.AuthoredRequest,
+                   ExecutionPolicy:
+                   {
+                       Risk: AgentToolOperationRisk.Write,
+                       Approval: AgentToolOperationApproval.Required,
+                       EnforcementOwner: AgentToolOperationEnforcementOwner.Aevatar,
+                   },
+               } &&
+               admission.ExecutionPolicy.AllowedExecutionModes.Contains(
+                   AgentToolOperationExecutionMode.Durable) &&
+               string.Equals(
+                   NormalizeIdentity(authorization.OperationSelectorDigest),
+                   AgentToolOperationSelector.ComputeDigest(admission),
+                   StringComparison.Ordinal);
+    }
 
     private static AgentToolExecutionOutcome CreateDenied(
         IAgentTool tool,
@@ -922,9 +1795,11 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         AgentToolExecutionFailureStage failureStage,
         bool terminalInvoked,
         bool retryable,
-        bool auditCompleted)
+        bool auditCompleted,
+        string? diagnosticId = null,
+        AgentToolFailureOutcome failureOutcome = AgentToolFailureOutcome.CalleeConfirmed)
     {
-        var resultJson = BuildFailureJson(failureCode, safeMessage, toolName);
+        var resultJson = BuildFailureJson(failureCode, safeMessage, toolName, diagnosticId);
         var receipt = AgentToolReceiptFactory.CreateError(
             tool,
             toolCallId,
@@ -933,6 +1808,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             resultJson,
             failureCode,
             safeMessage);
+        receipt.FailureOutcome = failureOutcome;
         return new AgentToolExecutionOutcome(
             AgentToolExecutionOutcomeKind.Failed,
             resultJson,
@@ -1064,33 +1940,146 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         return Convert.ToHexStringLower(SHA256.HashData(stream.GetBuffer().AsSpan(0, checked((int)stream.Length))));
     }
 
-    private static string BuildFailureJson(string code, string message, string toolName) =>
-        JsonSerializer.Serialize(new { error = code, code, message, tool_name = toolName });
+    private static string BuildFailureJson(
+        string code,
+        string message,
+        string toolName,
+        string? diagnosticId = null) =>
+        diagnosticId is null
+            ? JsonSerializer.Serialize(new { error = code, code, message, tool_name = toolName })
+            : JsonSerializer.Serialize(new
+            {
+                error = code,
+                code,
+                message,
+                diagnostic_id = diagnosticId,
+                tool_name = toolName,
+            });
 
     private static string SafeExceptionClass(Exception ex) => ex.GetType().Name;
+
+    private void LogCodexExecutionFailure(
+        Exception exception,
+        AgentWorkflowRuntimeContext workflowRuntime)
+    {
+        if (exception is not CodexExecutionException codexException)
+            return;
+
+        var runId = NormalizeIdentity(workflowRuntime.RootRunId) ??
+                    NormalizeIdentity(workflowRuntime.ParentRunId);
+        var runHash = runId is null
+            ? "none"
+            : Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(runId)))[..12];
+        _logger.LogWarning(
+            "Codex execution failed inside admitted tool execution. " +
+            "failureKind={CodexFailureKind} failureCode={CodexFailureCode} runHash={WorkflowRunHash}",
+            codexException.Failure.Kind,
+            SafeDiagnosticCode(codexException.Failure.Code),
+            runHash);
+    }
+
+    private static string SafeDiagnosticCode(string? value)
+    {
+        var normalized = value?.Trim();
+        if (string.IsNullOrEmpty(normalized) || normalized.Length > 96 ||
+            !char.IsAsciiLetterLower(normalized[0]) ||
+            normalized.Any(character =>
+                !char.IsAsciiLetterLower(character) &&
+                !char.IsAsciiDigit(character) &&
+                character != '_'))
+        {
+            return "unclassified";
+        }
+
+        return normalized;
+    }
 
     private static bool IsAuditRecorded(AuditTrailAppendResult append) =>
         append.Status is AuditTrailAppendStatus.Appended or AuditTrailAppendStatus.Duplicate;
 
-    private static string ResolveExceptionErrorCode(Exception exception) =>
-        exception is CodexExecutionException codexException
-            ? codexException.Failure.Kind switch
-            {
-                CodexExecutionFailureKind.TargetNotConfigured => "codex_execution_target_not_configured",
-                CodexExecutionFailureKind.AdmissionDenied => "codex_execution_admission_denied",
-                CodexExecutionFailureKind.LlmProviderNotConnected => "codex_execution_llm_provider_not_connected",
-                CodexExecutionFailureKind.CapacityUnavailable => "codex_execution_capacity_unavailable",
-                CodexExecutionFailureKind.ProvisioningFailed => "codex_execution_provisioning_failed",
-                CodexExecutionFailureKind.ReadinessFailed => "codex_execution_readiness_failed",
-                CodexExecutionFailureKind.IsolationUnavailable => "codex_execution_isolation_unavailable",
-                CodexExecutionFailureKind.MalformedOutput => "codex_execution_malformed_output",
-                CodexExecutionFailureKind.TerminalFailure => "codex_execution_terminal_failure",
-                CodexExecutionFailureKind.TimedOut => "codex_execution_timed_out",
-                CodexExecutionFailureKind.Cancelled => "codex_execution_cancelled",
-                CodexExecutionFailureKind.CleanupFailed => "codex_execution_cleanup_failed",
-                _ => "tool_execution_exception",
-            }
-            : "tool_execution_exception";
+    private static string ResolveExceptionErrorCode(Exception exception)
+    {
+        if (exception is not CodexExecutionException codexException)
+            return "tool_execution_exception";
+
+        var ownedExecutionCode = ToolExecutionAuditErrorCode.Resolve(codexException.Failure.Code);
+        if (ownedExecutionCode is not null)
+            return ownedExecutionCode;
+
+        return codexException.Failure.Kind switch
+        {
+            CodexExecutionFailureKind.TargetNotConfigured => "codex_execution_target_not_configured",
+            CodexExecutionFailureKind.AdmissionDenied => "codex_execution_admission_denied",
+            CodexExecutionFailureKind.LlmProviderNotConnected => "codex_execution_llm_provider_not_connected",
+            CodexExecutionFailureKind.CapacityUnavailable => "codex_execution_capacity_unavailable",
+            CodexExecutionFailureKind.ProvisioningFailed => "codex_execution_provisioning_failed",
+            CodexExecutionFailureKind.ReadinessFailed => "codex_execution_readiness_failed",
+            CodexExecutionFailureKind.IsolationUnavailable => "codex_execution_isolation_unavailable",
+            CodexExecutionFailureKind.MalformedOutput => "codex_execution_malformed_output",
+            CodexExecutionFailureKind.TerminalFailure => "codex_execution_terminal_failure",
+            CodexExecutionFailureKind.TimedOut => "codex_execution_timed_out",
+            CodexExecutionFailureKind.Cancelled => "codex_execution_cancelled",
+            CodexExecutionFailureKind.CleanupFailed => "codex_execution_cleanup_failed",
+            _ => "tool_execution_exception",
+        };
+    }
+
+    private static (string Code, string Message, string? DiagnosticId) ResolveExceptionFailureEvidence(
+        Exception exception)
+    {
+        var code = ResolveExceptionErrorCode(exception);
+        if (exception is not CodexExecutionException codexException)
+            return (code, SafeExceptionClass(exception), null);
+
+        var ownedCode = ToolExecutionAuditErrorCode.Resolve(codexException.Failure.Code);
+        var message = ownedCode is null
+            ? CanonicalCodexFailureMessage(codexException.Failure.Kind)
+            : SafeCodexFailureMessage(codexException.Failure.Message, code);
+        return (
+            code,
+            message,
+            SafeDiagnosticId(codexException.Failure.DiagnosticId));
+    }
+
+    private static string SafeCodexFailureMessage(string? value, string fallback)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrEmpty(normalized) ||
+               normalized.Length > 512 ||
+               normalized.Any(static character => char.IsControl(character))
+            ? fallback
+            : normalized;
+    }
+
+    private static string? SafeDiagnosticId(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrEmpty(normalized) ||
+               normalized.Length > 128 ||
+               normalized.Any(static character =>
+                   !char.IsAsciiLetterOrDigit(character) &&
+                   character is not ('_' or '-' or '.' or ':'))
+            ? null
+            : normalized;
+    }
+
+    private static string CanonicalCodexFailureMessage(CodexExecutionFailureKind kind) =>
+        kind switch
+        {
+            CodexExecutionFailureKind.TargetNotConfigured => "Codex execution target is not configured.",
+            CodexExecutionFailureKind.AdmissionDenied => "Codex execution was not admitted.",
+            CodexExecutionFailureKind.LlmProviderNotConnected => "Codex LLM provider is not connected.",
+            CodexExecutionFailureKind.CapacityUnavailable => "Codex execution capacity is unavailable.",
+            CodexExecutionFailureKind.ProvisioningFailed => "Codex execution provisioning failed.",
+            CodexExecutionFailureKind.ReadinessFailed => "Codex execution target is not ready.",
+            CodexExecutionFailureKind.IsolationUnavailable => "Codex execution isolation is unavailable.",
+            CodexExecutionFailureKind.MalformedOutput => "Codex execution returned malformed output.",
+            CodexExecutionFailureKind.TerminalFailure => "Codex execution failed.",
+            CodexExecutionFailureKind.TimedOut => "Codex execution timed out.",
+            CodexExecutionFailureKind.Cancelled => "Codex execution was cancelled.",
+            CodexExecutionFailureKind.CleanupFailed => "Codex execution cleanup failed.",
+            _ => "Codex execution failed.",
+        };
 
     private static string? NormalizeIdentity(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -1130,6 +2119,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
 
     private sealed record DuplicateRecoveryResolution(
         AgentToolTerminalOutcome? CompletedOutcome,
+        AgentToolPendingOperation? PendingOperation,
         AgentToolExecutionOutcome? Failure);
 
     private sealed record ReplayPolicyFailure(

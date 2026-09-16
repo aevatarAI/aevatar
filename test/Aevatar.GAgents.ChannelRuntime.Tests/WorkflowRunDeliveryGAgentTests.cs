@@ -13,6 +13,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
+using Aevatar.GAgents.Platform.Lark;
 using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
@@ -59,6 +60,47 @@ public sealed class WorkflowRunDeliveryGAgentTests
 
         AssertDelivered(context.Agent, handler, "completed output");
         context.Scheduler.PurgedActorIds.Should().ContainSingle().Which.Should().Be(DeliveryActorId);
+    }
+
+    [Fact]
+    public async Task CompletedTerminalWithoutOutput_ShouldDeliverExplicitNoResultMessage()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+        await ReserveAndStartAsync(context);
+        var terminal = Terminal(context.TimeProvider);
+        terminal.Output = "   ";
+
+        await context.Agent.HandleEventAsync(Envelope(terminal, WorkflowActorId));
+
+        AssertDelivered(context.Agent, handler, "Workflow run completed without a result to display.");
+    }
+
+    [Fact]
+    public async Task CompletedLarkTerminalWithUnlabeledJsonFence_ShouldDeliverKeyValueText()
+    {
+        var handler = new RecordingJsonHandler();
+        var context = await CreateContextAsync(handler);
+        await ReserveAndStartAsync(context);
+        var terminal = Terminal(context.TimeProvider);
+        terminal.Output = """
+            Result:
+
+            ```
+            {"name":"Ada","role":"admin"}
+            ```
+            """;
+
+        await context.Agent.HandleEventAsync(Envelope(terminal, WorkflowActorId));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        using var document = System.Text.Json.JsonDocument.Parse(request.Body);
+        var text = document.RootElement.GetProperty("reply").GetProperty("text").GetString();
+        text.Should().Contain("name: Ada");
+        text.Should().Contain("role: admin");
+        text.Should().NotContain("{\"name\"");
+        text.Should().NotContain("|");
     }
 
     [Fact]
@@ -138,6 +180,143 @@ public sealed class WorkflowRunDeliveryGAgentTests
         context.Agent.State.TerminalOutcome.Should().Be(WorkflowRunTerminalStatus.Failed);
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].Body.Should().Contain("Workflow failed (workflow_run_error): execution failed");
+    }
+
+    [Fact]
+    public async Task ToolApprovalNotification_ShouldDeliverTypedInteractiveCardExactlyOnce()
+    {
+        var context = await CreateContextAsync(new RecordingJsonHandler());
+        await ReserveAndStartAsync(context);
+        var notification = ToolApproval(context.TimeProvider);
+
+        await context.Agent.HandleEventAsync(Envelope(notification, WorkflowActorId));
+        await context.Agent.HandleEventAsync(Envelope(notification.Clone(), WorkflowActorId));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Started);
+        context.Agent.State.PendingToolApprovalNotification.Should().BeNull();
+        context.Agent.State.DeliveredToolApprovalRequestIds.Should().ContainSingle()
+            .Which.Should().Be("approval-request-2675");
+        var dispatch = context.InteractiveDispatcher.Requests.Should().ContainSingle().Subject;
+        dispatch.Channel.Value.Should().Be("lark");
+        dispatch.MessageId.Should().Be("reply-message-2675");
+        dispatch.RelayToken.Should().Be(AgentKey);
+        var card = dispatch.Intent.Cards.Should().ContainSingle().Subject;
+        card.Title.Should().Be("Workflow Tool Approval Required");
+        card.Actions.Should().HaveCount(2);
+        card.Actions.Should().OnlyContain(action => action.Kind == ActionElementKind.FormSubmit);
+        AssertApprovalAction(card.Actions[0], approved: true);
+        AssertApprovalAction(card.Actions[1], approved: false);
+    }
+
+    [Fact]
+    public async Task ToolApprovalNotification_FromMismatchedPublisher_ShouldNotDeliver()
+    {
+        var context = await CreateContextAsync(new RecordingJsonHandler());
+        await ReserveAndStartAsync(context);
+
+        await context.Agent.HandleEventAsync(Envelope(ToolApproval(context.TimeProvider), "attacker-workflow"));
+
+        context.Agent.State.PendingToolApprovalNotification.Should().BeNull();
+        context.Agent.State.DeliveredToolApprovalRequestIds.Should().BeEmpty();
+        context.InteractiveDispatcher.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PendingToolApprovalDelivery_ShouldRecoverOnActivation()
+    {
+        var eventStore = new InMemoryEventStore();
+        var timeProvider = new FakeTimeProvider(Now);
+        var scheduler = new RecordingCallbackScheduler();
+        var failingDispatcher = new RecordingInteractiveReplyDispatcher();
+        failingDispatcher.Results.Enqueue(new InteractiveReplyDispatchResult(
+            false,
+            null,
+            null,
+            ComposeCapability.Exact,
+            false,
+            "relay unavailable"));
+        var first = await CreateContextAsync(
+            new RecordingJsonHandler(),
+            eventStore: eventStore,
+            timeProvider: timeProvider,
+            scheduler: scheduler,
+            interactiveDispatcher: failingDispatcher);
+        await ReserveAndStartAsync(first);
+
+        await first.Agent.HandleEventAsync(Envelope(ToolApproval(timeProvider), WorkflowActorId));
+
+        first.Agent.State.PendingToolApprovalNotification.Should().NotBeNull();
+        first.Agent.State.ToolApprovalDeliveryAttempt.Should().Be(1);
+        scheduler.Timeouts.Should().Contain(x =>
+            x.TriggerEnvelope.Payload.Is(WorkflowRunDeliveryToolApprovalNotificationRetryReached.Descriptor));
+
+        var recoveredDispatcher = new RecordingInteractiveReplyDispatcher();
+        var recovered = await CreateContextAsync(
+            new RecordingJsonHandler(),
+            eventStore: eventStore,
+            timeProvider: timeProvider,
+            scheduler: scheduler,
+            interactiveDispatcher: recoveredDispatcher);
+
+        recovered.Agent.State.PendingToolApprovalNotification.Should().BeNull();
+        recovered.Agent.State.DeliveredToolApprovalRequestIds.Should().Contain("approval-request-2675");
+        recoveredDispatcher.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task TerminalNotification_ShouldSupersedePendingToolApprovalRetry()
+    {
+        var handler = new RecordingJsonHandler();
+        var dispatcher = new RecordingInteractiveReplyDispatcher();
+        dispatcher.Results.Enqueue(new InteractiveReplyDispatchResult(
+            false,
+            null,
+            null,
+            ComposeCapability.Exact,
+            false,
+            "relay unavailable"));
+        var context = await CreateContextAsync(handler, interactiveDispatcher: dispatcher);
+        await ReserveAndStartAsync(context);
+        await context.Agent.HandleEventAsync(Envelope(ToolApproval(context.TimeProvider), WorkflowActorId));
+        var retry = context.Scheduler.Timeouts
+            .Single(x => x.TriggerEnvelope.Payload.Is(WorkflowRunDeliveryToolApprovalNotificationRetryReached.Descriptor))
+            .TriggerEnvelope.Clone();
+
+        await context.Agent.HandleEventAsync(Envelope(Terminal(context.TimeProvider), WorkflowActorId));
+        await context.Agent.HandleEventAsync(retry);
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        context.Agent.State.PendingToolApprovalNotification.Should().BeNull();
+        dispatcher.Requests.Should().ContainSingle();
+        handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ToolApprovalNotification_WhenChannelFallsBackToText_ShouldFailWithoutRetry()
+    {
+        var dispatcher = new RecordingInteractiveReplyDispatcher();
+        dispatcher.Results.Enqueue(new InteractiveReplyDispatchResult(
+            true,
+            "approval-reply-2675",
+            "approval-platform-2675",
+            ComposeCapability.Unsupported,
+            true,
+            "interactive composer unavailable"));
+        var context = await CreateContextAsync(
+            new RecordingJsonHandler(),
+            interactiveDispatcher: dispatcher);
+        await ReserveAndStartAsync(context);
+
+        await context.Agent.HandleEventAsync(Envelope(ToolApproval(context.TimeProvider), WorkflowActorId));
+
+        context.Agent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Failed);
+        context.Agent.State.PendingToolApprovalNotification.Should().BeNull();
+        context.Agent.State.ErrorCode.Should().Be("workflow_tool_approval_interactive_delivery_unsupported");
+        context.Agent.State.ErrorSummary.Should().Be(
+            "The channel did not accept an interactive workflow approval card.");
+        context.Scheduler.Timeouts.Should().NotContain(x =>
+            x.TriggerEnvelope.Payload.Is(WorkflowRunDeliveryToolApprovalNotificationRetryReached.Descriptor));
+        dispatcher.Requests.Should().ContainSingle();
     }
 
     [Fact]
@@ -375,11 +554,13 @@ public sealed class WorkflowRunDeliveryGAgentTests
         IWorkflowResultDeliveryCredentialResolver? credentialResolver = null,
         InMemoryEventStore? eventStore = null,
         FakeTimeProvider? timeProvider = null,
-        RecordingCallbackScheduler? scheduler = null)
+        RecordingCallbackScheduler? scheduler = null,
+        RecordingInteractiveReplyDispatcher? interactiveDispatcher = null)
     {
         eventStore ??= new InMemoryEventStore();
         timeProvider ??= new FakeTimeProvider(Now);
         scheduler ??= new RecordingCallbackScheduler();
+        interactiveDispatcher ??= new RecordingInteractiveReplyDispatcher();
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(eventStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
@@ -388,6 +569,7 @@ public sealed class WorkflowRunDeliveryGAgentTests
             .BuildServiceProvider();
         var agent = new WorkflowRunDeliveryGAgent(
             CreateOutboundPort(handler),
+            interactiveDispatcher,
             credentialResolver ?? new StaticCredentialResolver(AgentKey),
             scheduler,
             NullLogger<WorkflowRunDeliveryGAgent>.Instance,
@@ -401,7 +583,7 @@ public sealed class WorkflowRunDeliveryGAgentTests
             .GetMethod("SetId", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .Invoke(agent, [DeliveryActorId]);
         await agent.ActivateAsync();
-        return new TestContext(agent, timeProvider, scheduler);
+        return new TestContext(agent, timeProvider, scheduler, interactiveDispatcher);
     }
 
     private static WorkflowRunDeliveryReserveRequested Reserve(FakeTimeProvider timeProvider) => new()
@@ -443,6 +625,37 @@ public sealed class WorkflowRunDeliveryGAgentTests
             TerminalAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow()),
         };
 
+    private static WorkflowRunToolApprovalNotification ToolApproval(FakeTimeProvider timeProvider) =>
+        new()
+        {
+            DeliveryId = DeliveryId,
+            WorkflowActorId = WorkflowActorId,
+            WorkflowRunId = "workflow-run-2675",
+            WorkflowCommandId = WorkflowCommandId,
+            WorkflowCorrelationId = "workflow-correlation-2675",
+            StepId = "tool-step-2675",
+            ExecutionId = "execution-2675",
+            ToolName = "lark_contact_batch_resolution",
+            ToolCallId = "tool-call-2675",
+            ApprovalRequestId = "approval-request-2675",
+            Prompt = "Approve contact batch resolution?",
+            RequestedAt = Timestamp.FromDateTimeOffset(timeProvider.GetUtcNow()),
+        };
+
+    private static void AssertApprovalAction(ActionElement action, bool approved)
+    {
+        action.WorkflowResume.Should().NotBeNull();
+        action.WorkflowResume.ActorId.Should().Be(WorkflowActorId);
+        action.WorkflowResume.RunId.Should().Be("workflow-run-2675");
+        action.WorkflowResume.StepId.Should().Be("tool-step-2675");
+        action.WorkflowResume.HasApproved.Should().BeTrue();
+        action.WorkflowResume.Approved.Should().Be(approved);
+        action.WorkflowResume.ToolApproval.Should().NotBeNull();
+        action.WorkflowResume.ToolApproval.ExecutionId.Should().Be("execution-2675");
+        action.WorkflowResume.ToolApproval.ToolCallId.Should().Be("tool-call-2675");
+        action.WorkflowResume.ToolApproval.ApprovalRequestId.Should().Be("approval-request-2675");
+    }
+
     private static EventEnvelope Envelope<T>(T payload, string publisherActorId)
         where T : IMessage =>
         new()
@@ -483,13 +696,40 @@ public sealed class WorkflowRunDeliveryGAgentTests
         return new NyxIdRelayOutboundPort(
             client,
             NullLogger<NyxIdRelayOutboundPort>.Instance,
-            [new PlainTextComposer("lark")]);
+            [new LarkMessageComposer()]);
     }
 
     private sealed record TestContext(
         WorkflowRunDeliveryGAgent Agent,
         FakeTimeProvider TimeProvider,
-        RecordingCallbackScheduler Scheduler);
+        RecordingCallbackScheduler Scheduler,
+        RecordingInteractiveReplyDispatcher InteractiveDispatcher);
+
+    private sealed class RecordingInteractiveReplyDispatcher : IInteractiveReplyDispatcher
+    {
+        public List<(ChannelId Channel, string MessageId, string RelayToken, MessageContent Intent)> Requests { get; } = [];
+        public Queue<InteractiveReplyDispatchResult> Results { get; } = [];
+
+        public Task<InteractiveReplyDispatchResult> DispatchAsync(
+            ChannelId channel,
+            string messageId,
+            string relayToken,
+            MessageContent intent,
+            ComposeContext context,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add((channel, messageId, relayToken, intent.Clone()));
+            return Task.FromResult(Results.Count > 0
+                ? Results.Dequeue()
+                : new InteractiveReplyDispatchResult(
+                    true,
+                    "approval-reply-2675",
+                    "approval-platform-2675",
+                    ComposeCapability.Exact,
+                    false,
+                    null));
+        }
+    }
 
     private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
     {
@@ -577,19 +817,4 @@ public sealed class WorkflowRunDeliveryGAgentTests
         }
     }
 
-    private sealed class PlainTextComposer(string platform) : IMessageComposer<PlainTextPayload>
-    {
-        public ChannelId Channel { get; } = ChannelId.From(platform);
-
-        public PlainTextPayload Compose(MessageContent intent, ComposeContext context) =>
-            new(intent.Text ?? string.Empty);
-
-        object IMessageComposer.Compose(MessageContent intent, ComposeContext context) =>
-            Compose(intent, context);
-
-        public ComposeCapability Evaluate(MessageContent intent, ComposeContext context) =>
-            ComposeCapability.Exact;
-    }
-
-    private sealed record PlainTextPayload(string PlainText) : IPlainTextComposedMessage;
 }

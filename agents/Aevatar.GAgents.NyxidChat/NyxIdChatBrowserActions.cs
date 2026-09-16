@@ -36,6 +36,18 @@ public static class NyxIdChatBrowserActions
 
     private const string BrowserActionBlockedMessage =
         "Complete the requested action in NyxID, then continue this conversation.";
+
+    // A service-access review means the service is already connected and only
+    // this session's authorization is missing; the generic blocked message
+    // reads as "connect the service again" and hides both facts, so the
+    // review action carries its own honest instruction (issue #3532).
+    private const string ServiceAccessReviewBlockedMessage =
+        "This service is already connected to your NyxID; this chat session just " +
+        "is not authorized to use it yet. Approve the service access review to " +
+        "grant it — in NyxID, open Settings → Account → Manage service access — " +
+        "then continue this conversation.";
+    private const string ServiceAccessRequiredReasonCode =
+        "USER_SERVICE_ACCESS_REQUIRED";
     private const int HistoryLimit = 32;
 
     public static NyxIdChatBrowserActionDecision RequestAuthorization(
@@ -53,12 +65,29 @@ public static class NyxIdChatBrowserActions
         var receipt = signal.Tool?.Receipt;
         var blocker = receipt?.AuthorizationRequired;
         var sourceStep = FindStep(state, signalKey?.StepId);
+        var serviceAccessReviewRequested = string.Equals(
+            blocker?.ReasonCode,
+            ServiceAccessRequiredReasonCode,
+            StringComparison.Ordinal);
+        var hasServiceAccessReview =
+            serviceAccessReviewRequested &&
+            !string.IsNullOrWhiteSpace(blocker?.UserServiceId) &&
+            !string.IsNullOrWhiteSpace(blocker?.ServiceSlug) &&
+            !string.IsNullOrWhiteSpace(blocker?.ResourceUri);
+        var hasCatalogServiceConnect =
+            !serviceAccessReviewRequested &&
+            !string.IsNullOrWhiteSpace(blocker?.ServiceSlug);
+        var hasKeyCreate = blocker?.KeyCreate is not null;
+        var hasKeyRotate = blocker?.KeyRotate is not null;
         if (receipt?.Status != AgentToolReceiptStatus.AuthorizationRequired ||
             blocker is null ||
             signalKey is null ||
             sourceStep?.Operation?.Key is null ||
             !KeysEqual(sourceStep.Operation.Key, signalKey) ||
-            string.IsNullOrWhiteSpace(blocker.ServiceSlug) ||
+            (hasServiceAccessReview ? 1 : 0) +
+            (hasCatalogServiceConnect ? 1 : 0) +
+            (hasKeyCreate ? 1 : 0) +
+            (hasKeyRotate ? 1 : 0) != 1 ||
             state.ActiveTurn is null ||
             state.ActiveTask is null)
         {
@@ -79,7 +108,18 @@ public static class NyxIdChatBrowserActions
             sourceStep = FindStep(actionState, signalKey.StepId)!;
         }
 
-        var validated = registry.ResolveCatalogServiceConnect(blocker.ServiceSlug);
+        var validated = hasServiceAccessReview
+            ? registry.ResolveServiceAccessReview(
+                blocker.UserServiceId,
+                blocker.ServiceSlug,
+                blocker.ResourceUri)
+            : hasKeyCreate
+            ? registry.ResolveKeyCreate(blocker.KeyCreate)
+            : hasKeyRotate
+                ? registry.ResolveKeyRotate(blocker.KeyRotate)
+                : registry.ResolveCatalogServiceConnect(
+                    blocker.ServiceSlug,
+                    blocker.RequestedScopes);
         var actionRequestId = BuildStableIdentity(
             "action",
             actionState.ConversationActorId,
@@ -109,6 +149,7 @@ public static class NyxIdChatBrowserActions
             AdvisoryRisk = validated.Definition.AdvisoryRisk,
             RememberEligible = validated.Definition.RememberEligible,
             RequestedAt = now.Clone(),
+            SourceToolStepId = sourceStep.StepId,
         };
         return CommitRequest(actionState, request, now);
     }
@@ -145,6 +186,10 @@ public static class NyxIdChatBrowserActions
         var next = state.Clone();
         var task = next.ActiveTask;
         var turn = next.ActiveTurn;
+        var previousStepCount = task.Steps.Count;
+        var supersededContinuation = FindSourceToolContinuation(
+            task,
+            request.HasSourceToolStepId ? request.SourceToolStepId : string.Empty);
         var actionStep = new NyxIdChatTaskStepState
         {
             StepId = request.StepId,
@@ -163,19 +208,66 @@ public static class NyxIdChatBrowserActions
             },
             ActionRequestId = request.ActionRequestId,
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = task.Steps.Count == 0
+                ? NyxIdChatStepAddedBy.Initial
+                : NyxIdChatStepAddedBy.Replan,
             UpdatedAt = now.Clone(),
         };
+        if (request.HasSourceToolStepId)
+            actionStep.DependsOn.Add(request.SourceToolStepId);
         actionStep.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(actionStep);
+        var postconditionStep = BuildPostconditionStep(
+            next,
+            task,
+            request,
+            task.Steps.Count + 2,
+            now);
+        postconditionStep.AddedBy = actionStep.AddedBy;
+        NyxIdChatTaskStepState? actionContinuationStep = null;
+        if (supersededContinuation is not null)
+        {
+            CancelSupersededContinuation(supersededContinuation, now);
+            actionContinuationStep = BuildActionContinuationStep(
+                next,
+                task,
+                request,
+                postconditionStep,
+                task.Steps.Count + 3,
+                now);
+            actionContinuationStep.AddedBy = actionStep.AddedBy;
+        }
         task.Steps.Add(actionStep);
+        task.Steps.Add(postconditionStep);
+        if (actionContinuationStep is not null)
+            task.Steps.Add(actionContinuationStep);
+        List<NyxIdChatTaskStepState> addedSteps = [actionStep, postconditionStep];
+        if (actionContinuationStep is not null)
+            addedSteps.Add(actionContinuationStep);
+        if (previousStepCount == 0 &&
+            task.PlanRevision <= 1 &&
+            task.PlanRevisions.Count == 0)
+        {
+            NyxIdChatPlanRevisions.CommitInitial(task, now, addedSteps.ToArray());
+        }
+        else
+        {
+            NyxIdChatPlanRevisions.CommitChange(
+                task,
+                NyxIdChatPlanRevisionCause.ScopeResolution,
+                now,
+                addedSteps,
+                supersededContinuation is null ? null : [supersededContinuation]);
+        }
+        var blockedMessage = BlockedMessageForAction(request.Action);
         task.Status = NyxIdChatTaskStatus.Blocked;
         task.ActiveStepId = actionStep.StepId;
         task.ActiveOperationId = string.Empty;
         task.FailureCode = ActionRequested;
-        task.SafeMessage = BrowserActionBlockedMessage;
+        task.SafeMessage = blockedMessage;
         task.UpdatedAt = now.Clone();
         turn.Status = NyxIdChatTurnStatus.Blocked;
         turn.FailureCode = ActionRequested;
-        turn.SafeMessage = BrowserActionBlockedMessage;
+        turn.SafeMessage = blockedMessage;
         turn.TerminalAt = now.Clone();
         next.LatestTurn = turn.Clone();
         next.PendingActions.Add(request.Clone());
@@ -187,12 +279,17 @@ public static class NyxIdChatBrowserActions
             ShouldDispatch: false,
             NyxIdChatTransitionOutcome.Accepted,
             ActionRequested,
-            BrowserActionBlockedMessage,
+            blockedMessage,
             next,
             request.Clone(),
             new NyxIdChatContinuationAdmissionState(),
             NextCommand: null);
     }
+
+    private static string BlockedMessageForAction(NyxIdAssistantActionKind action) =>
+        action == NyxIdAssistantActionKind.ServiceAccessReview
+            ? ServiceAccessReviewBlockedMessage
+            : BrowserActionBlockedMessage;
 
     public static NyxIdChatBrowserActionDecision Continue(
         NyxIdChatConversationGAgentState state,
@@ -228,7 +325,10 @@ public static class NyxIdChatBrowserActions
             if (!AdmissionMatches(existingAdmission, command, sanitizedReports))
                 return RejectContinuation(state, ActionContinuationConflict);
 
-            var replay = TryBuildReplayDispatch(state, existingAdmission);
+            var replay = TryBuildReplayDispatch(
+                state,
+                existingAdmission,
+                command.ToolContext);
             return new NyxIdChatBrowserActionDecision(
                 ShouldCommit: false,
                 ShouldDispatch:
@@ -287,7 +387,8 @@ public static class NyxIdChatBrowserActions
         if (command.Actions.Any(report =>
                 !pendingById.TryGetValue(report.ActionRequestId, out var pending) ||
                 !string.Equals(pending.OriginTurnId, command.OriginTurnId, StringComparison.Ordinal) ||
-                !string.Equals(pending.ConversationActorId, command.ConversationActorId, StringComparison.Ordinal)))
+                !string.Equals(pending.ConversationActorId, command.ConversationActorId, StringComparison.Ordinal) ||
+                !ResourceMatchesAction(pending.Action, report.Disposition, report.Resource)))
         {
             return RejectContinuation(state, ActionContinuationInvalid);
         }
@@ -318,28 +419,43 @@ public static class NyxIdChatBrowserActions
         admission.ActionReports.Add(sanitizedReports.Select(static report => report.Clone()));
         next.ContinuationAdmission = admission.Clone();
 
-        var continuationTaskId = BuildStableIdentity(
-            "task",
-            next.ConversationActorId,
-            admission.ContinuationTurnId,
-            admission.ClientRequestId,
-            "action-continuation");
+        var originTurn = next.ActiveTurn?.Clone();
+        var previousTask = next.ActiveTask?.Clone();
+        var continuationTaskId = string.IsNullOrWhiteSpace(previousTask?.TaskId)
+            ? BuildStableIdentity(
+                "task",
+                next.ConversationActorId,
+                admission.OriginTurnId,
+                admission.ClientRequestId,
+                "action-continuation")
+            : previousTask.TaskId;
         var turn = new NyxIdChatTurnState
         {
             TurnId = admission.ContinuationTurnId,
             TaskId = continuationTaskId,
             ClientRequestId = admission.ClientRequestId,
             Status = NyxIdChatTurnStatus.Active,
-            CreatedAt = now.Clone(),
+            Prompt = originTurn?.Prompt ?? string.Empty,
+            CommandId = admission.RequestId,
+            Intent = originTurn?.Intent ?? NyxIdChatTurnIntent.Unspecified,
+            AgentProfileTurnAuthority = originTurn?.AgentProfileTurnAuthority?.Clone(),
+            CreatedAt = previousTask?.CreatedAt?.Clone() ?? now.Clone(),
         };
-        var task = new NyxIdChatTaskState
+        if (originTurn is not null)
+            turn.InputParts.Add(originTurn.InputParts.Select(static part => part.Clone()));
+        var task = previousTask ?? new NyxIdChatTaskState
         {
-            TurnId = turn.TurnId,
             TaskId = continuationTaskId,
-            Status = NyxIdChatTaskStatus.Active,
             CreatedAt = now.Clone(),
-            UpdatedAt = now.Clone(),
+            SchemaVersion = 5,
+            ActorId = next.ConversationActorId,
+            PlanId = continuationTaskId,
+            PlanRevision = 1,
+            Title = "Verify the requested NyxID action",
         };
+        task.TurnId = turn.TurnId;
+        task.Status = NyxIdChatTaskStatus.Active;
+        task.UpdatedAt = now.Clone();
 
         NyxIdChatOperationDispatchCommand? firstDispatch = null;
         if (isStateChangeWake)
@@ -349,20 +465,20 @@ public static class NyxIdChatBrowserActions
                 .ToArray();
             for (var index = 0; index < pending.Length; index++)
             {
-                var step = BuildPostconditionStep(next, turn, task, pending[index], index, now);
-                task.Steps.Add(step);
+                var step = FindPostconditionStep(task, pending[index].ActionRequestId);
+                if (step is null)
+                    return RejectContinuation(state, ActionContinuationInvalid);
                 if (firstDispatch is not null)
                     continue;
 
-                step.Status = NyxIdChatStepStatus.Running;
-                task.ActiveStepId = step.StepId;
-                task.ActiveOperationId = step.Operation.Key.OperationId;
+                ActivatePostcondition(task, step, now);
                 firstDispatch = BuildPostconditionCommand(
                     next.ScopeId,
                     admission.OwnerSubject,
                     pending[index],
                     report: null,
-                    step.Operation.Key);
+                    step.Operation.Key,
+                    command.ToolContext);
             }
         }
         for (var reportIndex = 0; reportIndex < sanitizedReports.Length; reportIndex++)
@@ -372,41 +488,35 @@ public static class NyxIdChatBrowserActions
                 string.Equals(action.ActionRequestId, report.ActionRequestId, StringComparison.Ordinal));
             if (report.Disposition == NyxIdChatActionDisposition.Completed)
             {
-                var step = BuildPostconditionStep(
-                    next,
-                    turn,
-                    task,
-                    request,
-                    reportIndex,
-                    now);
-                task.Steps.Add(step);
+                var step = FindPostconditionStep(task, request.ActionRequestId);
+                if (step is null)
+                    return RejectContinuation(state, ActionContinuationInvalid);
                 if (firstDispatch is null)
                 {
-                    step.Status = NyxIdChatStepStatus.Running;
-                    task.ActiveStepId = step.StepId;
-                    task.ActiveOperationId = step.Operation.Key.OperationId;
+                    ActivatePostcondition(task, step, now);
                     firstDispatch = BuildPostconditionCommand(
                         next.ScopeId,
                         admission.OwnerSubject,
                         request,
                         report,
-                        step.Operation.Key);
+                        step.Operation.Key,
+                        command.ToolContext);
                 }
                 continue;
             }
 
-            task.Steps.Add(BuildReportedTerminalStep(
-                next,
-                turn,
-                request,
-                report,
-                reportIndex,
-                now));
+            ApplyReportedActionOutcome(task, request, report, now);
+            CancelPostcondition(task, request.ActionRequestId, report, now);
             MoveActionToRecent(next, request.ActionRequestId);
         }
 
         if (firstDispatch is null)
-            CompleteContinuationTask(next, task, turn, now);
+        {
+            if (next.PendingActions.Count == 0)
+                CompleteContinuationTask(next, task, turn, now);
+            else
+                BlockForPendingAction(next, task, turn, now);
+        }
 
         next.ActiveTurn = turn;
         next.LatestTurn = turn.Clone();
@@ -447,7 +557,8 @@ public static class NyxIdChatBrowserActions
             step?.Operation?.Key is null ||
             !KeysEqual(step.Operation.Key, signal.Key) ||
             step.Kind != NyxIdChatStepKind.Postcondition ||
-            request is null)
+            request is null ||
+            !PostconditionResourceMatchesAction(request.Action, result))
         {
             return RejectContinuation(state, ActionContinuationInvalid);
         }
@@ -471,11 +582,34 @@ public static class NyxIdChatBrowserActions
             durableStep.FailureCode = string.Empty;
             durableStep.SafeMessage = string.Empty;
             durableStep.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(durableStep);
+            var actionStep = FindStep(next, durableRequest.StepId);
+            if (actionStep is not null)
+            {
+                actionStep.Status = NyxIdChatStepStatus.Done;
+                actionStep.ExternalEffect = NyxIdChatEffectEvidence.Confirmed;
+                actionStep.FailureCode = string.Empty;
+                actionStep.SafeMessage = string.Empty;
+                actionStep.AvailableActions =
+                    NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(actionStep);
+                actionStep.UpdatedAt = now.Clone();
+            }
+            CompleteSourceToolStep(next, durableRequest, now);
             MoveActionToRecent(next, result.ActionRequestId);
 
             var successor = StartNextPlannedPostcondition(next, now);
             if (successor is null)
-                CompleteContinuationTask(next, next.ActiveTask, next.ActiveTurn, now);
+            {
+                if (next.PendingActions.Count == 0)
+                {
+                    successor = StartActionContinuation(next, durableRequest, now);
+                    if (successor is null)
+                        CompleteContinuationTask(next, next.ActiveTask, next.ActiveTurn, now);
+                }
+                else
+                {
+                    BlockForPendingAction(next, next.ActiveTask, next.ActiveTurn, now);
+                }
+            }
             next.ActiveTask.UpdatedAt = now.Clone();
             next.LatestTurn = next.ActiveTurn.Clone();
             next.ProgressSequence++;
@@ -529,29 +663,28 @@ public static class NyxIdChatBrowserActions
 
     private static NyxIdChatTaskStepState BuildPostconditionStep(
         NyxIdChatConversationGAgentState state,
-        NyxIdChatTurnState turn,
         NyxIdChatTaskState task,
         NyxIdChatActionRequestState request,
-        int index,
+        int order,
         Timestamp now)
     {
         var stepId = BuildStableIdentity(
             "step",
             state.ConversationActorId,
-            turn.TurnId,
+            request.OriginTurnId,
             task.TaskId,
             request.ActionRequestId,
             "postcondition");
         var key = new NyxIdChatOperationKey
         {
             ConversationActorId = state.ConversationActorId,
-            TurnId = turn.TurnId,
+            TurnId = request.OriginTurnId,
             TaskId = task.TaskId,
             StepId = stepId,
             OperationId = BuildStableIdentity(
                 "operation",
                 state.ConversationActorId,
-                turn.TurnId,
+                request.OriginTurnId,
                 task.TaskId,
                 stepId,
                 "1"),
@@ -560,7 +693,7 @@ public static class NyxIdChatBrowserActions
         var step = new NyxIdChatTaskStepState
         {
             StepId = stepId,
-            Order = index + 1,
+            Order = order,
             Kind = NyxIdChatStepKind.Postcondition,
             Status = NyxIdChatStepStatus.Planned,
             Required = true,
@@ -570,11 +703,13 @@ public static class NyxIdChatBrowserActions
                 Postcondition = new NyxIdChatPostconditionStepSource
                 {
                     ActionRequestId = request.ActionRequestId,
-                    PostconditionKind = request.Action.ToString(),
+                    Check = request.Action.ToString(),
                 },
             },
             ActionRequestId = request.ActionRequestId,
             ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { request.StepId },
             Operation = new NyxIdChatOperationState
             {
                 Key = key,
@@ -588,49 +723,194 @@ public static class NyxIdChatBrowserActions
         return step;
     }
 
-    private static NyxIdChatTaskStepState BuildReportedTerminalStep(
+    private static NyxIdChatTaskStepState BuildActionContinuationStep(
         NyxIdChatConversationGAgentState state,
-        NyxIdChatTurnState turn,
+        NyxIdChatTaskState task,
         NyxIdChatActionRequestState request,
-        NyxIdChatActionReport report,
-        int index,
+        NyxIdChatTaskStepState postconditionStep,
+        int order,
         Timestamp now)
     {
-        var (code, message) = DispositionFailure(report.Disposition);
+        var stepId = BuildStableIdentity(
+            "step",
+            state.ConversationActorId,
+            request.OriginTurnId,
+            task.TaskId,
+            request.ActionRequestId,
+            "llm-continuation");
+        var key = new NyxIdChatOperationKey
+        {
+            ConversationActorId = state.ConversationActorId,
+            TurnId = request.OriginTurnId,
+            TaskId = task.TaskId,
+            StepId = stepId,
+            OperationId = BuildStableIdentity(
+                "operation",
+                state.ConversationActorId,
+                request.OriginTurnId,
+                task.TaskId,
+                stepId,
+                "1"),
+            OperationGeneration = 1,
+        };
         var step = new NyxIdChatTaskStepState
         {
-            StepId = BuildStableIdentity(
-                "step",
-                state.ConversationActorId,
-                turn.TurnId,
-                request.ActionRequestId,
-                "reported-terminal"),
-            Order = index + 1,
-            Kind = NyxIdChatStepKind.BrowserAction,
-            Status = report.Disposition is
-                NyxIdChatActionDisposition.Declined or
-                NyxIdChatActionDisposition.Cancelled or
-                NyxIdChatActionDisposition.Expired
-                    ? NyxIdChatStepStatus.Cancelled
-                    : NyxIdChatStepStatus.Failed,
+            StepId = stepId,
+            Order = order,
+            Kind = NyxIdChatStepKind.Llm,
+            Status = NyxIdChatStepStatus.Planned,
             Required = true,
-            Description = "Reconcile the NyxID browser-action report.",
+            Description = "Continue the original request after verified NyxID authorization.",
             Source = new NyxIdChatStepSource
             {
-                BrowserAction = new NyxIdChatBrowserActionStepSource
+                Llm = new NyxIdChatLLMStepSource
                 {
-                    Action = request.Action,
                     ActionRequestId = request.ActionRequestId,
+                    ResumeRequirement = ResolveAuthorizationResumeRequirement(
+                        state.ActiveTurn,
+                        request),
                 },
             },
-            ActionRequestId = request.ActionRequestId,
-            ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
-            FailureCode = code,
-            SafeMessage = message,
+            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            AddedBy = NyxIdChatStepAddedBy.Replan,
+            DependsOn = { postconditionStep.StepId },
+            Operation = new NyxIdChatOperationState
+            {
+                Key = key,
+                Kind = NyxIdChatStepKind.Llm,
+                Phase = NyxIdChatOperationPhase.Requested,
+                RequestedAt = now.Clone(),
+            },
             UpdatedAt = now.Clone(),
         };
         step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
         return step;
+    }
+
+    private static NyxIdChatTaskStepState? FindSourceToolContinuation(
+        NyxIdChatTaskState task,
+        string sourceToolStepId)
+    {
+        if (string.IsNullOrWhiteSpace(sourceToolStepId))
+            return null;
+
+        return task.Steps.SingleOrDefault(step =>
+            step.Kind == NyxIdChatStepKind.Llm &&
+            step.Status == NyxIdChatStepStatus.Planned &&
+            step.Source?.Llm is not null &&
+            step.Operation?.Key is not null &&
+            step.DependsOn.Count == 1 &&
+            string.Equals(step.DependsOn[0], sourceToolStepId, StringComparison.Ordinal));
+    }
+
+    private static void CancelSupersededContinuation(
+        NyxIdChatTaskStepState step,
+        Timestamp now)
+    {
+        step.Required = false;
+        step.Status = NyxIdChatStepStatus.Cancelled;
+        step.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+        step.Operation.Phase = NyxIdChatOperationPhase.Cancelled;
+        step.Operation.CompletedAt = now.Clone();
+        step.UpdatedAt = now.Clone();
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+    }
+
+    private static void CompleteSourceToolStep(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatActionRequestState request,
+        Timestamp now)
+    {
+        if (!request.HasSourceToolStepId)
+            return;
+
+        var source = FindStep(state, request.SourceToolStepId);
+        if (source?.Kind != NyxIdChatStepKind.Tool)
+            return;
+
+        source.Status = NyxIdChatStepStatus.Done;
+        source.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+        source.FailureCode = string.Empty;
+        source.SafeMessage = string.Empty;
+        if (source.Operation is not null)
+        {
+            source.Operation.Phase = NyxIdChatOperationPhase.Succeeded;
+            source.Operation.TerminalCode = string.Empty;
+            source.Operation.SafeMessage = string.Empty;
+            source.Operation.CompletedAt ??= now.Clone();
+        }
+        source.UpdatedAt = now.Clone();
+        source.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(source);
+    }
+
+    private static NyxIdChatTaskStepState? FindPostconditionStep(
+        NyxIdChatTaskState task,
+        string actionRequestId) =>
+        task.Steps.FirstOrDefault(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition &&
+            string.Equals(step.ActionRequestId, actionRequestId, StringComparison.Ordinal));
+
+    private static void ActivatePostcondition(
+        NyxIdChatTaskState task,
+        NyxIdChatTaskStepState step,
+        Timestamp now)
+    {
+        step.Status = NyxIdChatStepStatus.Running;
+        step.Operation.Phase = NyxIdChatOperationPhase.Requested;
+        step.Operation.RequestedAt = now.Clone();
+        step.UpdatedAt = now.Clone();
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+        task.ActiveStepId = step.StepId;
+        task.ActiveOperationId = step.Operation.Key.OperationId;
+    }
+
+    private static void CancelPostcondition(
+        NyxIdChatTaskState task,
+        string actionRequestId,
+        NyxIdChatActionReport report,
+        Timestamp now)
+    {
+        var step = FindPostconditionStep(task, actionRequestId);
+        if (step is null)
+            return;
+
+        var (code, message) = DispositionFailure(report.Disposition);
+        step.Status = report.Disposition == NyxIdChatActionDisposition.Failed
+            ? NyxIdChatStepStatus.Failed
+            : NyxIdChatStepStatus.Cancelled;
+        step.Operation.Phase = report.Disposition == NyxIdChatActionDisposition.Failed
+            ? NyxIdChatOperationPhase.Failed
+            : NyxIdChatOperationPhase.Cancelled;
+        step.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+        step.FailureCode = code;
+        step.SafeMessage = message;
+        step.UpdatedAt = now.Clone();
+        step.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+    }
+
+    private static void ApplyReportedActionOutcome(
+        NyxIdChatTaskState task,
+        NyxIdChatActionRequestState request,
+        NyxIdChatActionReport report,
+        Timestamp now)
+    {
+        var actionStep = task.Steps.FirstOrDefault(step =>
+            string.Equals(step.StepId, request.StepId, StringComparison.Ordinal));
+        if (actionStep is null)
+            return;
+
+        var (code, message) = DispositionFailure(report.Disposition);
+        actionStep.Status = report.Disposition is
+            NyxIdChatActionDisposition.Declined or
+            NyxIdChatActionDisposition.Cancelled or
+            NyxIdChatActionDisposition.Expired
+                ? NyxIdChatStepStatus.Cancelled
+                : NyxIdChatStepStatus.Failed;
+        actionStep.ExternalEffect = NyxIdChatEffectEvidence.NotApplied;
+        actionStep.FailureCode = code;
+        actionStep.SafeMessage = message;
+        actionStep.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(actionStep);
+        actionStep.UpdatedAt = now.Clone();
     }
 
     private static void CompleteContinuationTask(
@@ -671,12 +951,37 @@ public static class NyxIdChatBrowserActions
         AddTerminalSummary(state, turn);
     }
 
+    private static void BlockForPendingAction(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskState task,
+        NyxIdChatTurnState turn,
+        Timestamp now)
+    {
+        var pending = state.PendingActions
+            .OrderBy(static request => request.ActionRequestId, StringComparer.Ordinal)
+            .First();
+        var pendingBlockedMessage = BlockedMessageForAction(pending.Action);
+        task.Status = NyxIdChatTaskStatus.Blocked;
+        task.ActiveStepId = pending.StepId;
+        task.ActiveOperationId = string.Empty;
+        task.FailureCode = ActionRequested;
+        task.SafeMessage = pendingBlockedMessage;
+        task.UpdatedAt = now.Clone();
+        turn.Status = NyxIdChatTurnStatus.Blocked;
+        turn.FailureCode = ActionRequested;
+        turn.SafeMessage = pendingBlockedMessage;
+        turn.TerminalAt = now.Clone();
+        state.LatestTurn = turn.Clone();
+        AddTerminalSummary(state, turn);
+    }
+
     private static NyxIdChatOperationDispatchCommand BuildPostconditionCommand(
         string scopeId,
         string ownerSubject,
         NyxIdChatActionRequestState request,
         NyxIdChatActionReport? report,
-        NyxIdChatOperationKey key) =>
+        NyxIdChatOperationKey key,
+        AgentToolExecutionContextPayload? toolContext = null) =>
         new()
         {
             Key = key.Clone(),
@@ -690,6 +995,8 @@ public static class NyxIdChatBrowserActions
                 ReportedDisposition = report?.Disposition ?? NyxIdChatActionDisposition.Unspecified,
                 ResourceHint = report?.Resource?.Clone(),
                 Params = request.Params?.Clone(),
+                RequestedAt = request.RequestedAt?.Clone(),
+                ToolContext = toolContext?.Clone(),
             },
         };
 
@@ -699,7 +1006,10 @@ public static class NyxIdChatBrowserActions
     {
         var step = state.ActiveTask.Steps.FirstOrDefault(candidate =>
             candidate.Kind == NyxIdChatStepKind.Postcondition &&
-            candidate.Status == NyxIdChatStepStatus.Planned);
+            candidate.Status == NyxIdChatStepStatus.Planned &&
+            FindAdmissionReport(
+                state.ContinuationAdmission,
+                candidate.ActionRequestId) is not null);
         if (step is null)
             return null;
 
@@ -725,9 +1035,77 @@ public static class NyxIdChatBrowserActions
             step.Operation.Key);
     }
 
+    private static NyxIdChatOperationDispatchCommand? StartActionContinuation(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatActionRequestState request,
+        Timestamp now)
+    {
+        var step = state.ActiveTask.Steps.SingleOrDefault(candidate =>
+            candidate.Kind == NyxIdChatStepKind.Llm &&
+            candidate.Status == NyxIdChatStepStatus.Planned &&
+            string.Equals(
+                candidate.Source?.Llm?.ActionRequestId,
+                request.ActionRequestId,
+                StringComparison.Ordinal));
+        if (step?.Operation?.Key is null ||
+            !NyxIdChatActionContinuationCorrelation.TryMatch(
+                state,
+                state.ActiveTask,
+                state.ActiveTurn,
+                step.Operation.Key,
+                out var correlation))
+            return null;
+
+        var verifiedAuthorization =
+            NyxIdChatActionContinuationCorrelation.BuildVerifiedAuthorizationContinuation(
+                correlation,
+                now);
+
+        step.Status = NyxIdChatStepStatus.Running;
+        step.Operation.Phase = NyxIdChatOperationPhase.Requested;
+        step.Operation.RequestedAt = now.Clone();
+        step.UpdatedAt = now.Clone();
+        state.ActiveTask.Status = NyxIdChatTaskStatus.Active;
+        state.ActiveTask.ActiveStepId = step.StepId;
+        state.ActiveTask.ActiveOperationId = step.Operation.Key.OperationId;
+        state.ActiveTask.FailureCode = string.Empty;
+        state.ActiveTask.SafeMessage = string.Empty;
+        state.ActiveTurn.Status = NyxIdChatTurnStatus.Active;
+        state.ActiveTurn.FailureCode = string.Empty;
+        state.ActiveTurn.SafeMessage = string.Empty;
+        state.ActiveTurn.TerminalAt = null;
+        return new NyxIdChatOperationDispatchCommand
+        {
+            Key = step.Operation.Key.Clone(),
+            Llm = new NyxIdChatLLMOperationInput
+            {
+                ContinueSession = true,
+                RematerializeTurnCatalog = true,
+                AgentProfile = state.AgentProfile?.Clone(),
+                AgentProfileTurnAuthority = state.ActiveTurn.AgentProfileTurnAuthority?.Clone(),
+                Intent = state.ActiveTurn.Intent,
+                VerifiedAuthorizationContinuation = verifiedAuthorization,
+            },
+        };
+    }
+
+    private static NyxIdChatAuthorizationResumeRequirement ResolveAuthorizationResumeRequirement(
+        NyxIdChatTurnState? originTurn,
+        NyxIdChatActionRequestState request)
+    {
+        var isConnectedServiceAuthorization = request.Action is
+            NyxIdAssistantActionKind.ServiceConnect or
+            NyxIdAssistantActionKind.ServiceAccessReview;
+        return isConnectedServiceAuthorization &&
+               originTurn?.Intent != NyxIdChatTurnIntent.ServiceConnect
+            ? NyxIdChatAuthorizationResumeRequirement.CompleteOriginalServiceRequest
+            : NyxIdChatAuthorizationResumeRequirement.CommunicateAuthorizationCompletion;
+    }
+
     private static NyxIdChatOperationDispatchCommand? TryBuildReplayDispatch(
         NyxIdChatConversationGAgentState state,
-        NyxIdChatContinuationAdmissionState admission)
+        NyxIdChatContinuationAdmissionState admission,
+        AgentToolExecutionContextPayload? toolContext = null)
     {
         var step = state.ActiveTask?.Steps.FirstOrDefault(candidate =>
             candidate.Kind == NyxIdChatStepKind.Postcondition &&
@@ -749,7 +1127,8 @@ public static class NyxIdChatBrowserActions
                 admission.OwnerSubject,
                 request,
                 report,
-                step.Operation.Key);
+                step.Operation.Key,
+                toolContext);
     }
 
     internal static NyxIdChatOperationDispatchCommand? TryBuildRecoveryDispatch(
@@ -777,9 +1156,11 @@ public static class NyxIdChatBrowserActions
             candidate.Operation?.Phase == NyxIdChatOperationPhase.Requested &&
             KeysEqual(candidate.Operation.Key, key));
         if (step is null ||
-            !string.Equals(state.ActiveTurn.TurnId, key.TurnId, StringComparison.Ordinal) ||
             !string.Equals(state.ActiveTask.TaskId, key.TaskId, StringComparison.Ordinal) ||
-            !string.Equals(admission.ContinuationTurnId, key.TurnId, StringComparison.Ordinal))
+            !string.Equals(
+                admission.ContinuationTurnId,
+                state.ActiveTurn.TurnId,
+                StringComparison.Ordinal))
         {
             return null;
         }
@@ -788,6 +1169,11 @@ public static class NyxIdChatBrowserActions
             candidate.ActionRequestId,
             step.ActionRequestId,
             StringComparison.Ordinal));
+        if (request is null ||
+            !string.Equals(request.OriginTurnId, key.TurnId, StringComparison.Ordinal))
+        {
+            return null;
+        }
         var report = request is null
             ? null
             : FindAdmissionReport(admission, request.ActionRequestId);
@@ -807,19 +1193,105 @@ public static class NyxIdChatBrowserActions
         state.ActiveTurn is not null &&
         state.ActiveTask is not null &&
         request.SchemaVersion == NyxIdAssistantActionRegistry.SupportedSchemaVersion &&
-        string.Equals(
+        NyxIdAssistantActionRegistry.IsActionExecutable(
             request.RegistryRevision,
-            NyxIdAssistantActionRegistry.SupportedRegistryRevision,
-            StringComparison.Ordinal) &&
-        request.Action == NyxIdAssistantActionKind.ServiceConnect &&
-        request.Params?.ParamsCase is
-            NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect or
-            NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect &&
+            request.Action) &&
+        RequestParamsMatchAction(request) &&
         !string.IsNullOrWhiteSpace(request.ActionRequestId) &&
         !string.IsNullOrWhiteSpace(request.StepId) &&
+        (!request.HasSourceToolStepId ||
+         !string.IsNullOrWhiteSpace(request.SourceToolStepId)) &&
         string.Equals(state.ConversationActorId, request.ConversationActorId, StringComparison.Ordinal) &&
         string.Equals(state.ActiveTurn.TurnId, request.OriginTurnId, StringComparison.Ordinal) &&
-        string.Equals(state.ActiveTask.TaskId, request.TaskId, StringComparison.Ordinal);
+        string.Equals(state.ActiveTask.TaskId, request.TaskId, StringComparison.Ordinal) &&
+        SourceToolMatchesState(state, request);
+
+    private static bool SourceToolMatchesState(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatActionRequestState request)
+    {
+        if (!request.HasSourceToolStepId)
+            return true;
+
+        var source = FindStep(state, request.SourceToolStepId);
+        return source is
+               {
+                   Kind: NyxIdChatStepKind.Tool,
+                   Status: NyxIdChatStepStatus.Waiting,
+                   Operation.Key: not null,
+               } &&
+               string.Equals(
+                   source.Operation.Key.ConversationActorId,
+                   request.ConversationActorId,
+                   StringComparison.Ordinal) &&
+               string.Equals(source.Operation.Key.TurnId, request.OriginTurnId, StringComparison.Ordinal) &&
+               string.Equals(source.Operation.Key.TaskId, request.TaskId, StringComparison.Ordinal);
+    }
+
+    private static bool RequestParamsMatchAction(NyxIdChatActionRequestState request) =>
+        request.Action switch
+        {
+            NyxIdAssistantActionKind.ServiceConnect => request.Params?.ParamsCase is
+                NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect or
+                NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect,
+            NyxIdAssistantActionKind.ServiceAccessReview =>
+                IsValidServiceAccessReviewParams(request.Params?.ServiceAccessReview),
+            NyxIdAssistantActionKind.KeyCreate => IsValidKeyCreateParams(request.Params?.KeyCreate),
+            NyxIdAssistantActionKind.KeyRotate => IsValidKeyRotateParams(request.Params?.KeyRotate),
+            _ => false,
+        };
+
+    private static bool IsValidKeyCreateParams(NyxIdKeyCreateParams? value)
+    {
+        if (value is null ||
+            !IsNormalizedActionValue(value.Name, 256) ||
+            !IsNormalizedActionValue(value.Platform, 128) ||
+            value.AllowedServiceIds.Count is < 1 or > 64)
+        {
+            return false;
+        }
+
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        return value.AllowedServiceIds.All(id =>
+            IsNormalizedActionValue(id, 256) && ids.Add(id));
+    }
+
+    private static bool IsValidServiceAccessReviewParams(
+        NyxIdServiceAccessReviewParams? value)
+    {
+        if (value is null ||
+            !IsNormalizedActionValue(value.UserServiceId, 256) ||
+            value.UserServiceId.Any(char.IsWhiteSpace) ||
+            !IsNormalizedActionValue(value.ServiceSlug, 128) ||
+            !value.ServiceSlug.All(static character =>
+                char.IsAsciiLetterOrDigit(character) ||
+                character is '-' or '_' or '.') ||
+            !IsNormalizedActionValue(value.ResourceUri, 512) ||
+            !Uri.TryCreate(value.ResourceUri, UriKind.Absolute, out var resourceUri) ||
+            !string.Equals(resourceUri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal) ||
+            !string.IsNullOrEmpty(resourceUri.UserInfo) ||
+            !string.IsNullOrEmpty(resourceUri.Query) ||
+            !string.IsNullOrEmpty(resourceUri.Fragment))
+        {
+            return false;
+        }
+
+        return resourceUri.AbsolutePath.EndsWith(
+            $"/api/v1/proxy/s/{Uri.EscapeDataString(value.ServiceSlug)}",
+            StringComparison.Ordinal);
+    }
+
+    private static bool IsValidKeyRotateParams(NyxIdKeyRotateParams? value) =>
+        value is not null &&
+        IsNormalizedActionValue(value.KeyId, 256) &&
+        !value.KeyId.Any(char.IsWhiteSpace) &&
+        !value.KeyId.Any(static character => character is '/' or '\\' or '?' or '#');
+
+    private static bool IsNormalizedActionValue(string? value, int maxLength) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= maxLength &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+        !value.Any(char.IsControl);
 
     private static NyxIdChatActionReport? FindAdmissionReport(
         NyxIdChatContinuationAdmissionState admission,
@@ -875,6 +1347,38 @@ public static class NyxIdChatBrowserActions
             NyxIdChatSafeResourceRef.ResourceOneofCase.Device => ValidId(resource.Device.DeviceId),
             _ => false,
         };
+
+    internal static bool ResourceMatchesAction(
+        NyxIdAssistantActionKind action,
+        NyxIdChatActionDisposition disposition,
+        NyxIdChatSafeResourceRef? resource)
+    {
+        if (resource is null ||
+            resource.ResourceCase == NyxIdChatSafeResourceRef.ResourceOneofCase.None)
+        {
+            return disposition != NyxIdChatActionDisposition.Completed;
+        }
+
+        return action switch
+        {
+            NyxIdAssistantActionKind.ServiceConnect or
+            NyxIdAssistantActionKind.ServiceReauthorize or
+            NyxIdAssistantActionKind.ServiceAccessReview =>
+                resource.ResourceCase == NyxIdChatSafeResourceRef.ResourceOneofCase.UserService,
+            NyxIdAssistantActionKind.KeyCreate or
+            NyxIdAssistantActionKind.KeyRotate =>
+                resource.ResourceCase == NyxIdChatSafeResourceRef.ResourceOneofCase.Key,
+            _ => false,
+        };
+    }
+
+    private static bool PostconditionResourceMatchesAction(
+        NyxIdAssistantActionKind action,
+        NyxIdChatActionPostconditionResult result) =>
+        (!result.Verified &&
+         (result.Resource is null ||
+          result.Resource.ResourceCase == NyxIdChatSafeResourceRef.ResourceOneofCase.None)) ||
+        ResourceMatchesAction(action, result.Disposition, result.Resource);
 
     private static bool ValidId(string value) =>
         !string.IsNullOrWhiteSpace(value) &&
@@ -967,7 +1471,9 @@ public static class NyxIdChatBrowserActions
         left.Action == right.Action &&
         EqualsBytes(left.Params, right.Params) &&
         left.AdvisoryRisk == right.AdvisoryRisk &&
-        left.RememberEligible == right.RememberEligible;
+        left.RememberEligible == right.RememberEligible &&
+        left.HasSourceToolStepId == right.HasSourceToolStepId &&
+        string.Equals(left.SourceToolStepId, right.SourceToolStepId, StringComparison.Ordinal);
 
     private static bool EqualsBytes(IMessage? left, IMessage? right) =>
         left is null && right is null ||

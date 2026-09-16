@@ -1163,8 +1163,92 @@ public class RoleGAgentReplayContractTests
             RoleChatSessionProgressedEvent.PayloadOneofCase.Usage,
             RoleChatSessionProgressedEvent.PayloadOneofCase.TextEnded,
             RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal);
-        progress.Select(evt => evt.Sequence).Should().Equal(3, 4, 5);
-        agent.State.Sessions[completion.SessionId].LastProgressSequence.Should().Be(5);
+        var terminalSequences = progress.Select(evt => evt.Sequence).ToArray();
+        terminalSequences.Should().Equal(
+            Enumerable.Range(0, terminalSequences.Length)
+                .Select(offset => terminalSequences[0] + offset));
+        agent.State.Sessions[completion.SessionId].LastProgressSequence.Should().Be(terminalSequences[^1]);
+    }
+
+    [Fact]
+    public async Task StreamingChat_ShouldBoundCommittedProgressForProviderTokenFragments()
+    {
+        const string actorId = "role-bounded-stream-progress";
+        const string sessionId = "turn-bounded-stream-progress";
+        const int textChunkCount = 4_097;
+        const int reasoningChunkCount = 2_049;
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var provider = new FragmentedLlmProviderFactory(textChunkCount, reasoningChunkCount);
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(services, actorId, provider);
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "stream many token fragments",
+            SessionId = sessionId,
+        });
+
+        var progress = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+            .ToArray();
+        var textDeltas = progress
+            .Where(evt => evt.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+            .Select(evt => evt.TextDelta.Delta)
+            .ToArray();
+        var reasoningDeltas = progress
+            .Where(evt => evt.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ReasoningDelta)
+            .Select(evt => evt.ReasoningDelta.Delta)
+            .ToArray();
+
+        textDeltas.Should().HaveCount(5);
+        reasoningDeltas.Should().HaveCount(3);
+        string.Concat(textDeltas).Should().Be(new string('t', textChunkCount));
+        string.Concat(reasoningDeltas).Should().Be(new string('r', reasoningChunkCount));
+        publisher.Published.OfType<TextMessageContentEvent>()
+            .Select(evt => evt.Delta)
+            .Should().Equal(textDeltas);
+        publisher.Published.OfType<TextMessageReasoningEvent>()
+            .Select(evt => evt.Delta)
+            .Should().Equal(reasoningDeltas);
+        agent.State.Sessions[sessionId].FinalContent.Should().Be(new string('t', textChunkCount));
+        agent.State.Sessions[sessionId].FinalReasoningContent.Should().Be(new string('r', reasoningChunkCount));
+    }
+
+    [Fact]
+    public async Task StreamingChat_ShouldFlushSmallDeltasAtInteractionCadence()
+    {
+        const string actorId = "role-paced-stream-progress";
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var timeProvider = new ManualDeadlineTimeProvider();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(
+            services,
+            actorId,
+            new PacedLlmProviderFactory(timeProvider),
+            timeProvider);
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "stream paced fragments",
+            SessionId = "turn-paced-stream-progress",
+        });
+
+        publisher.Published.OfType<TextMessageContentEvent>()
+            .Select(evt => evt.Delta)
+            .Should().Equal("a", "b", "c");
+        (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+            .Where(progress => progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+            .Select(progress => progress.TextDelta.Delta)
+            .Should().Equal("a", "b", "c");
     }
 
     [Fact]
@@ -1304,10 +1388,15 @@ public class RoleGAgentReplayContractTests
     {
         var store = new InMemoryEventStoreForTests();
         var provider = new AuthorizationThenSuccessLlmProviderFactory();
+        var tool = new AuthorizationRequiredTool();
         var services = BuildServices(store, collection =>
             collection.AddSingleton<IAgentToolSource>(
-                new StaticToolSource([new AuthorizationRequiredTool()])));
-        var agent = CreateAgent(services, "role-authorization-blocker", provider);
+                new StaticToolSource([tool])));
+        var agent = CreateExplicitToolAgent(
+            services,
+            "role-authorization-blocker",
+            provider,
+            [tool]);
         await agent.ActivateAsync();
         await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
@@ -1328,7 +1417,11 @@ public class RoleGAgentReplayContractTests
         });
 
         provider.StreamCallCount.Should().Be(2);
-        agent.State.Sessions["turn-blocked"].Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+        var blockedDiagnostics = agent.State.Sessions["turn-blocked"].ToString();
+        agent.State.Sessions["turn-blocked"].Outcome.Should().Be(
+            RoleChatSessionOutcome.Blocked,
+            "blocked session was {0}",
+            blockedDiagnostics);
         agent.State.Sessions["turn-next"].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
         var completions = (await store.GetEventsAsync("role-authorization-blocker"))
             .Where(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
@@ -2496,6 +2589,26 @@ public class RoleGAgentReplayContractTests
         return agent;
     }
 
+    private static RoleGAgent CreateExplicitToolAgent(
+        IServiceProvider services,
+        string actorId,
+        ILLMProviderFactory providerFactory,
+        IReadOnlyList<IAgentTool> exactTools)
+    {
+        var agent = new ExplicitToolRoleGAgent(
+            services.GetRequiredService<IAgentToolExecutionPort>(),
+            providerFactory,
+            exactTools,
+            services.GetRequiredService<ISecretVault>())
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+        };
+        AssignActorId(agent, actorId);
+        return agent;
+    }
+
     private static ProfiledRoleGAgent CreateProfiledAgent(
         IServiceProvider services,
         string actorId,
@@ -3023,6 +3136,72 @@ public class RoleGAgentReplayContractTests
         }
     }
 
+    private sealed class FragmentedLlmProviderFactory(
+        int textChunkCount,
+        int reasoningChunkCount) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "fragmented";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            for (var i = 0; i < textChunkCount; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk { DeltaContent = "t" };
+            }
+
+            for (var i = 0; i < reasoningChunkCount; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk { DeltaReasoningContent = "r" };
+            }
+
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk
+            {
+                IsLast = true,
+                Usage = new TokenUsage(1, 1, 2),
+            };
+        }
+    }
+
+    private sealed class PacedLlmProviderFactory(
+        ManualDeadlineTimeProvider timeProvider) : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "paced";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk { DeltaContent = "a" };
+            timeProvider.Advance(TimeSpan.FromMilliseconds(250));
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk { DeltaContent = "b" };
+            timeProvider.Advance(TimeSpan.FromMilliseconds(250));
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk { DeltaContent = "c" };
+            await Task.CompletedTask;
+        }
+    }
+
     private sealed class CancellationAwareHangingProviderFactory : ILLMProviderFactory, ILLMProvider
     {
         private readonly TaskCompletionSource _firstStreamStarted =
@@ -3190,7 +3369,7 @@ public class RoleGAgentReplayContractTests
                         initialAuthorityMutation)));
         }
 
-        protected override Task<AgentProfileTurnCatalogMaterialization?> MaterializeCommittedAgentProfileTurnCatalogAsync(
+        protected override Task<AgentTurnToolCatalogMaterialization?> MaterializeCommittedAgentTurnToolCatalogAsync(
             ChatRequestEvent request,
             AgentToolExecutionContext toolContext,
             AgentProfileTurnAuthorityState committedAuthority,
@@ -3201,14 +3380,71 @@ public class RoleGAgentReplayContractTests
             MaterializeCallCount++;
             MaterializedAuthorities.Add(committedAuthority.Clone());
             var reconcileProposal = MutateReconcileProposal(committedAuthority, reconcileProposalMutation);
-            var catalog = new AgentProfileTurnCatalog(
+            var catalog = new AgentTurnToolCatalog(
                 reconcileProposal.AuthorityCeilingToolNames,
                 profilePromptLayer: null,
                 selectedSkillPromptLayer: null,
                 selectedIntentId: committedAuthority.CandidateRoute?.IntentId,
                 candidateIntentId: committedAuthority.CandidateRoute?.IntentId);
-            return Task.FromResult<AgentProfileTurnCatalogMaterialization?>(
-                AgentProfileTurnCatalogMaterialization.Create(catalog, reconcileProposal));
+            return Task.FromResult<AgentTurnToolCatalogMaterialization?>(
+                AgentTurnToolCatalogMaterialization.Create(catalog, reconcileProposal));
+        }
+    }
+
+    private sealed class ExplicitToolRoleGAgent(
+        IAgentToolExecutionPort toolExecutionPort,
+        ILLMProviderFactory providerFactory,
+        IReadOnlyList<IAgentTool> exactTools,
+        ISecretVault secretVault)
+        : RoleGAgent(
+            toolExecutionPort,
+            providerFactory,
+            toolSources: [new StaticToolSource(exactTools)],
+            chatToolRecoverySecretVault: secretVault)
+    {
+        protected override Task<AgentProfileTurnAuthorityPreparation?> PrepareAgentProfileTurnAuthorityAsync(
+            ChatRequestEvent request,
+            AgentToolExecutionContext toolContext,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var authority = new AgentProfileTurnAuthorityState
+            {
+                ReconciliationKey = new AgentProfileTurnReconciliationKey
+                {
+                    SessionId = request.SessionId,
+                    Attempt = 1,
+                },
+                CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+                {
+                    ProfileId = "profile-explicit-tools",
+                    ProfileVersion = "v1",
+                    PolicyRevision = "policy-v1",
+                    IntentId = "explicit-tools",
+                },
+                AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            };
+            authority.AuthorityCeilingToolNames.Add(exactTools.Select(static tool => tool.Name));
+            return Task.FromResult<AgentProfileTurnAuthorityPreparation?>(
+                AgentProfileTurnAuthorityPreparation.Create(authority));
+        }
+
+        protected override Task<AgentTurnToolCatalogMaterialization?> MaterializeCommittedAgentTurnToolCatalogAsync(
+            ChatRequestEvent request,
+            AgentToolExecutionContext toolContext,
+            AgentProfileTurnAuthorityState committedAuthority,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var catalog = new AgentTurnToolCatalog(
+                committedAuthority.AuthorityCeilingToolNames,
+                profilePromptLayer: null,
+                selectedSkillPromptLayer: null,
+                selectedIntentId: committedAuthority.CandidateRoute?.IntentId,
+                candidateIntentId: committedAuthority.CandidateRoute?.IntentId,
+                exactTools: exactTools);
+            return Task.FromResult<AgentTurnToolCatalogMaterialization?>(
+                AgentTurnToolCatalogMaterialization.Create(catalog, committedAuthority.Clone()));
         }
     }
 

@@ -6,4 +6,5 @@ public sealed record ServiceRuntimeDeactivationRequest(
     ServiceIdentity Identity,
     string DeploymentId,
     string RevisionId,
-    string PrimaryActorId);
+    string PrimaryActorId,
+    string DeactivationOperationId = "");

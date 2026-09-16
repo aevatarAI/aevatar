@@ -44,7 +44,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         CancellationToken ct = default)
     {
         await EnsureWorkflowScheduleAsync(scheduleId, ct);
-        var receipt = await _scheduledDispatches.EnableAsync(scheduleId, reason, ct);
+        var receipt = await _scheduledDispatches.EnableAsync(scheduleId, reason, ct: ct);
         return ToWorkflowMutationReceipt(receipt);
     }
 
@@ -54,7 +54,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         CancellationToken ct = default)
     {
         await EnsureWorkflowScheduleAsync(scheduleId, ct);
-        var receipt = await _scheduledDispatches.DisableAsync(scheduleId, reason, ct);
+        var receipt = await _scheduledDispatches.DisableAsync(scheduleId, reason, ct: ct);
         return ToWorkflowMutationReceipt(receipt);
     }
 
@@ -64,7 +64,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         CancellationToken ct = default)
     {
         await EnsureWorkflowScheduleAsync(scheduleId, ct);
-        var receipt = await _scheduledDispatches.DeleteAsync(scheduleId, reason, ct);
+        var receipt = await _scheduledDispatches.DeleteAsync(scheduleId, reason, ct: ct);
         return ToWorkflowMutationReceipt(receipt);
     }
 
@@ -111,7 +111,7 @@ public sealed class WorkflowScheduleApplicationService : IWorkflowScheduleApplic
         CancellationToken ct = default)
     {
         await EnsureWorkflowScheduleAsync(scheduleId, ct);
-        var receipt = await _scheduledDispatches.RunNowAsync(scheduleId, ct);
+        var receipt = await _scheduledDispatches.RunNowAsync(scheduleId, ct: ct);
         return new WorkflowScheduleRunNowReceipt(
             receipt.ScheduleId,
             receipt.ScheduleActorId,

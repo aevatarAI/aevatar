@@ -1,4 +1,6 @@
+using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Capabilities;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
@@ -6,10 +8,10 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
-using Aevatar.Capabilities;
-using Aevatar.AGUI.Contracts;
 using Aevatar.GAgentService.Hosting.Sse;
+using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -37,16 +39,30 @@ public static class ScopeWorkflowEndpoints
         group.MapPost("/{scopeId}/workflows:save-and-bind", HandleSaveAndBindWorkflowAsync)
             .Produces<ScopeWorkflowSaveAndBindResult>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status400BadRequest);
+        group.MapPost("/{scopeId}/workflows/{workflowId}:archive", HandleArchiveWorkflowAsync)
+            .Produces<ScopeWorkflowArchiveAcceptedResult>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
         group.MapPost("/{scopeId}/workflows:explicit-request-preview", HandleExplicitRequestPreviewAsync)
             .Produces<ExplicitRequestPreviewHttpResult>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/workflows", HandleListWorkflowsAsync)
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
+        if (app.ServiceProvider.GetService<IAppScopedWorkflowCatalogueService>() != null)
+        {
+            group.MapGet("/{scopeId}/workflow-catalogue", HandleQueryWorkflowCatalogueAsync)
+                .Produces<ScopeWorkflowCatalogueResponse>(StatusCodes.Status200OK)
+                .Produces(StatusCodes.Status400BadRequest);
+        }
+
         group.MapGet("/{scopeId}/workflows/{workflowId}", HandleGetWorkflowDetailAsync)
             .Produces<ScopeWorkflowDetail>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
+        group.MapScopeWorkflowScheduleEndpoints();
         return app;
     }
 
@@ -67,6 +83,14 @@ public static class ScopeWorkflowEndpoints
         CancellationToken ct)
         => await HandleSaveAndBindWorkflowAsyncCore(http, scopeId, request, saveAndBindPort, ct);
 
+    internal static async Task<IResult> HandleArchiveWorkflowAsync(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        [FromServices] IScopeWorkflowArchiveCommandPort archiveCommandPort,
+        CancellationToken ct)
+        => await HandleArchiveWorkflowAsyncCore(http, scopeId, workflowId, archiveCommandPort, ct);
+
     internal static async Task<IResult> HandleExplicitRequestPreviewAsync(
         HttpContext http,
         string scopeId,
@@ -85,6 +109,17 @@ public static class ScopeWorkflowEndpoints
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
         => await HandleListWorkflowsAsyncCore(http, scopeId, includeSource, workflowQueryPort, workflowActorBindingReader, revisionCatalogReader, options, ct);
+
+    internal static async Task<IResult> HandleQueryWorkflowCatalogueAsync(
+        HttpContext http,
+        string scopeId,
+        string? view,
+        string? query,
+        string? cursor,
+        int? take,
+        [FromServices] IAppScopedWorkflowCatalogueService catalogueService,
+        CancellationToken ct)
+        => await HandleQueryWorkflowCatalogueAsyncCore(http, scopeId, view, query, cursor, take, catalogueService, ct);
 
     internal static async Task<IResult> HandleGetWorkflowDetailAsync(
         HttpContext http,
@@ -138,9 +173,11 @@ public static class ScopeWorkflowEndpoints
                 request.InlineWorkflowYamls,
                 request.RevisionId)
             {
-                CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(
+                CapabilityAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
                     http,
-                    explicitRequestConfirmations: request.ExplicitRequestConfirmations),
+                    ParseSaveAndBindExecutionMode(request.ExecutionMode),
+                    explicitRequestConfirmations: request.ExplicitRequestConfirmations,
+                    ct: ct),
             }, ct);
             return Results.Accepted(result.ReadModelUrl, result);
         }
@@ -187,9 +224,11 @@ public static class ScopeWorkflowEndpoints
                     request.ExposureDesired,
                     request.RevisionId)
                 {
-                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(
+                    CapabilityAdmission = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
                         http,
-                        explicitRequestConfirmations: request.ExplicitRequestConfirmations),
+                        ParseSaveAndBindExecutionMode(request.ExecutionMode),
+                        explicitRequestConfirmations: request.ExplicitRequestConfirmations,
+                        ct: ct),
                 },
                 ct);
             return Results.Accepted(result.Workflow.ReadModelUrl, result);
@@ -209,6 +248,69 @@ public static class ScopeWorkflowEndpoints
                 code = "INVALID_USER_WORKFLOW_REQUEST",
                 message = ex.Message,
             });
+        }
+    }
+
+    private static async Task<IResult> HandleArchiveWorkflowAsyncCore(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        IScopeWorkflowArchiveCommandPort archiveCommandPort,
+        CancellationToken ct)
+    {
+        if (TryCreateArchiveRequestBadRequest(scopeId, workflowId, out var badRequest, out var normalizedScopeId, out var normalizedWorkflowId))
+            return badRequest;
+
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, normalizedScopeId, out var denied))
+                return denied;
+
+            var result = await archiveCommandPort.ArchiveAsync(
+                new ScopeWorkflowArchiveRequest(normalizedScopeId, normalizedWorkflowId),
+                ct);
+            return Results.Accepted(result.ReadModelUrl, result);
+        }
+        catch (ScopeWorkflowArchiveRejectedException ex)
+        {
+            var statusCode = ex.Kind == ScopeWorkflowArchiveRejectionKind.NotFound
+                ? StatusCodes.Status404NotFound
+                : StatusCodes.Status409Conflict;
+            return Results.Json(new
+            {
+                code = ex.Code,
+                message = ex.Message,
+            }, statusCode: statusCode);
+        }
+    }
+
+    private static bool TryCreateArchiveRequestBadRequest(
+        string scopeId,
+        string workflowId,
+        out IResult badRequest,
+        out string normalizedScopeId,
+        out string normalizedWorkflowId)
+    {
+        try
+        {
+            normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
+            normalizedWorkflowId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflowId, nameof(workflowId));
+            if (normalizedWorkflowId.Contains(':', StringComparison.Ordinal))
+                throw new InvalidOperationException("workflowId must not contain ':'.");
+
+            badRequest = Results.Empty;
+            return false;
+        }
+        catch (InvalidOperationException ex)
+        {
+            normalizedScopeId = string.Empty;
+            normalizedWorkflowId = string.Empty;
+            badRequest = Results.BadRequest(new
+            {
+                code = "INVALID_USER_WORKFLOW_ARCHIVE_REQUEST",
+                message = ex.Message,
+            });
+            return true;
         }
     }
 
@@ -240,7 +342,10 @@ public static class ScopeWorkflowEndpoints
                 return denied;
 
             var executionMode = ParseExplicitRequestPreviewExecutionMode(request.ExecutionMode);
-            var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(http, executionMode);
+            var admissionContext = await WorkflowCapabilityAdmissionHttpContext.CreateAsync(
+                http,
+                executionMode,
+                ct: ct);
             var result = await previewService.PreviewAsync(
                 new WorkflowExplicitRequestPreviewRequest(
                     new ExternalWorkflowCapabilityAccessContext(
@@ -283,6 +388,11 @@ public static class ScopeWorkflowEndpoints
                 "ExecutionMode must be either 'interactive' or 'durable'."),
         };
 
+    private static ExternalCapabilityExecutionMode ParseSaveAndBindExecutionMode(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? ExternalCapabilityExecutionMode.Interactive
+            : ParseExplicitRequestPreviewExecutionMode(value);
+
     private static ExplicitRequestPreviewHttpItem ToExplicitRequestPreviewHttpItem(
         WorkflowExplicitRequestPreviewItem item) =>
         new(
@@ -296,7 +406,18 @@ public static class ScopeWorkflowEndpoints
             ToWireValue(item.ResponseMode),
             ToWireValue(item.EffectiveRisk),
             item.ApprovalRequired,
+            ToWireValue(item.ApprovalEnforcement),
             item.AllowedExecutionModes.Select(ToWireValue).ToArray());
+
+    private static string ToWireValue(WorkflowExplicitRequestApprovalEnforcement value) =>
+        value switch
+        {
+            WorkflowExplicitRequestApprovalEnforcement.BindTimeConfirmationAndRunTimeToolApproval =>
+                "bind_time_confirmation_and_run_time_tool_approval",
+            WorkflowExplicitRequestApprovalEnforcement.None => "none",
+            _ => throw new InvalidOperationException(
+                "Explicit request approval enforcement is invalid."),
+        };
 
     private static string ToWireValue(NyxIdRequestMethod value) => value switch
     {
@@ -360,7 +481,7 @@ public static class ScopeWorkflowEndpoints
 
             var details = new List<ScopeWorkflowDetail>(workflows.Count);
             foreach (var workflow in workflows)
-                details.Add(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
+                details.Add(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, revisionCatalogReader, ct));
 
             return Results.Ok(details);
         }
@@ -369,6 +490,44 @@ public static class ScopeWorkflowEndpoints
             return Results.BadRequest(new
             {
                 code = "INVALID_USER_WORKFLOW_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleQueryWorkflowCatalogueAsyncCore(
+        HttpContext http,
+        string scopeId,
+        string? view,
+        string? query,
+        string? cursor,
+        int? take,
+        IAppScopedWorkflowCatalogueService catalogueService,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            if (!TryParseCatalogueView(view, out var catalogueView))
+            {
+                return Results.BadRequest(new
+                {
+                    code = "INVALID_WORKFLOW_CATALOGUE_REQUEST",
+                    message = "view must be either 'all', 'drafts', or 'archived'.",
+                });
+            }
+
+            return Results.Ok(await catalogueService.QueryAsync(
+                new ScopeWorkflowCatalogueQuery(scopeId, catalogueView, query, cursor, take ?? 0),
+                ct));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_WORKFLOW_CATALOGUE_REQUEST",
                 message = ex.Message,
             });
         }
@@ -402,7 +561,7 @@ public static class ScopeWorkflowEndpoints
                     statusCode: statusCode);
             }
 
-            return Results.Json(await BuildWorkflowDetailAsync(lookup.Workflow!, workflowActorBindingReader, revisionCatalogReader, options.Value, ct));
+            return Results.Json(await BuildWorkflowDetailAsync(lookup.Workflow!, workflowActorBindingReader, revisionCatalogReader, ct));
         }
         catch (InvalidOperationException ex)
         {
@@ -580,22 +739,6 @@ public static class ScopeWorkflowEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(request);
 
-        var started = false;
-
-        async Task StartAsync(CancellationToken token)
-        {
-            if (started)
-                return;
-
-            started = true;
-            http.Response.StatusCode = StatusCodes.Status200OK;
-            http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
-            http.Response.Headers.CacheControl = "no-store";
-            http.Response.Headers.Pragma = "no-cache";
-            http.Response.Headers["X-Accel-Buffering"] = "no";
-            await http.Response.StartAsync(token);
-        }
-
         await using var writer = new AGUISseWriter(http.Response, ScopeWorkflowAguiEventMapper.TypeRegistry);
 
         try
@@ -607,7 +750,7 @@ public static class ScopeWorkflowEndpoints
                     if (!ScopeWorkflowAguiEventMapper.TryMap(frame, out var aguiEvent) || aguiEvent == null)
                         return;
 
-                    await StartAsync(token);
+                    await writer.StartAsync(token);
                     await writer.WriteAsync(aguiEvent, token);
                 },
                 async (receipt, token) =>
@@ -615,14 +758,14 @@ public static class ScopeWorkflowEndpoints
                     if (!string.IsNullOrWhiteSpace(receipt.Run.CorrelationId))
                         http.Response.Headers["X-Correlation-Id"] = receipt.Run.CorrelationId;
 
-                    await StartAsync(token);
+                    await writer.StartAsync(token);
                     await writer.WriteAsync(ScopeWorkflowAguiEventMapper.BuildRunContextEvent(receipt.Run), token);
                 },
                 ct);
 
-            if (!result.Succeeded && !started)
+            if (!result.Succeeded && !writer.ResponseStarted)
             {
-                if (result.FailureDetail?.Error == WorkflowChatRunStartError.InvalidWorkflowYaml)
+                if (result.FailureDetail?.ExternalCapabilityReadiness is not null)
                 {
                     await WriteJsonErrorResponseAsync(
                         http,
@@ -641,7 +784,7 @@ public static class ScopeWorkflowEndpoints
         }
         catch (Exception ex)
         {
-            if (!started)
+            if (!writer.ResponseStarted)
             {
                 await WriteJsonErrorResponseAsync(
                     http,
@@ -668,7 +811,7 @@ public static class ScopeWorkflowEndpoints
         CancellationToken ct)
     {
         prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
-        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(http, ct);
         if (!callerCredential.Succeeded)
         {
             var (statusCode, code, message) = MapRunStartError(callerCredential.Error);
@@ -696,7 +839,6 @@ public static class ScopeWorkflowEndpoints
         ScopeWorkflowSummary workflow,
         IWorkflowActorBindingReader workflowActorBindingReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
-        ScopeWorkflowCapabilityOptions options,
         CancellationToken ct)
     {
         PreparedServiceRevisionArtifact? artifact = null;
@@ -707,7 +849,7 @@ public static class ScopeWorkflowEndpoints
         if (!string.IsNullOrWhiteSpace(workflow.ServiceKey) &&
             !string.IsNullOrWhiteSpace(workflow.ActiveRevisionId))
         {
-            var revisionCatalog = await revisionCatalogReader.GetAsync(BuildWorkflowServiceIdentity(workflow, options), ct);
+            var revisionCatalog = await revisionCatalogReader.GetAsync(BuildWorkflowServiceIdentity(workflow), ct);
             artifact = revisionCatalog?.Revisions
                 .FirstOrDefault(x => string.Equals(x.RevisionId, workflow.ActiveRevisionId, StringComparison.Ordinal))
                 ?.PreparedArtifact
@@ -717,15 +859,13 @@ public static class ScopeWorkflowEndpoints
         return BuildWorkflowDetailPayload(workflow, binding, artifact);
     }
 
-    private static ServiceIdentity BuildWorkflowServiceIdentity(
-        ScopeWorkflowSummary workflow,
-        ScopeWorkflowCapabilityOptions options) =>
+    private static ServiceIdentity BuildWorkflowServiceIdentity(ScopeWorkflowSummary workflow) =>
         new()
         {
             TenantId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.ScopeId, nameof(workflow.ScopeId)),
-            AppId = options.ServiceAppId,
-            Namespace = options.ServiceNamespace,
-            ServiceId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.WorkflowId, nameof(workflow.WorkflowId)),
+            AppId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.ServiceAppId, nameof(workflow.ServiceAppId)),
+            Namespace = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.ServiceNamespace, nameof(workflow.ServiceNamespace)),
+            ServiceId = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflow.PublishedServiceId, nameof(workflow.PublishedServiceId)),
         };
 
     private static ScopeWorkflowDetail BuildWorkflowDetailPayload(
@@ -761,7 +901,7 @@ public static class ScopeWorkflowEndpoints
     private static string BuildWorkflowActorNotFoundMessage(string scopeId) =>
         $"Workflow actor was not found for scope '{scopeId}'.";
 
-    private static (int StatusCode, string Code, string Message) MapWorkflowLookupError(
+    internal static (int StatusCode, string Code, string Message) MapWorkflowLookupError(
         string scopeId,
         string workflowId,
         ScopeWorkflowLookupResult lookup) =>
@@ -780,6 +920,32 @@ public static class ScopeWorkflowEndpoints
                 "USER_WORKFLOW_NOT_READY",
                 $"Workflow '{workflowId}' is not ready to run for scope '{scopeId}'."),
         };
+
+    internal static bool TryParseCatalogueView(
+        string? rawValue,
+        out ScopeWorkflowCatalogueView view)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue) || string.Equals(rawValue, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            view = ScopeWorkflowCatalogueView.All;
+            return true;
+        }
+
+        if (string.Equals(rawValue, "drafts", StringComparison.OrdinalIgnoreCase))
+        {
+            view = ScopeWorkflowCatalogueView.Drafts;
+            return true;
+        }
+
+        if (string.Equals(rawValue, "archived", StringComparison.OrdinalIgnoreCase))
+        {
+            view = ScopeWorkflowCatalogueView.Archived;
+            return true;
+        }
+
+        view = ScopeWorkflowCatalogueView.All;
+        return false;
+    }
 
     internal static bool TryParseEventFormat(
         string? rawValue,
@@ -917,6 +1083,7 @@ public static class ScopeWorkflowEndpoints
             WorkflowChatRunStartError.WorkflowBindingMismatch => (StatusCodes.Status409Conflict, "WORKFLOW_BINDING_MISMATCH", "Actor is bound to a different workflow."),
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => (StatusCodes.Status409Conflict, "AGENT_WORKFLOW_NOT_CONFIGURED", "Actor has no bound workflow."),
             WorkflowChatRunStartError.InvalidWorkflowYaml => (StatusCodes.Status400BadRequest, "INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
+            WorkflowChatRunStartError.ExternalCapabilityNotReady => (StatusCodes.Status409Conflict, "EXTERNAL_WORKFLOW_CAPABILITY_NOT_READY", "External workflow capability admission failed."),
             WorkflowChatRunStartError.WorkflowNameMismatch => (StatusCodes.Status400BadRequest, "WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             WorkflowChatRunStartError.PromptRequired => (StatusCodes.Status400BadRequest, "PROMPT_REQUIRED", "Prompt is required."),
             WorkflowChatRunStartError.InvalidCallerCredential => (StatusCodes.Status400BadRequest, "INVALID_CALLER_CREDENTIAL", "Caller credential is invalid."),
@@ -962,7 +1129,8 @@ public static class ScopeWorkflowEndpoints
         string? DisplayName = null,
         Dictionary<string, string>? InlineWorkflowYamls = null,
         string? RevisionId = null,
-        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
+        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null,
+        string? ExecutionMode = null);
 
     public sealed record SaveAndBindScopeWorkflowHttpRequest(
         string? WorkflowId,
@@ -974,7 +1142,8 @@ public static class ScopeWorkflowEndpoints
         string? ServiceId = null,
         bool? ExposureDesired = null,
         string? RevisionId = null,
-        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null);
+        IReadOnlyList<NyxIdExplicitRequestConfirmationInput>? ExplicitRequestConfirmations = null,
+        string? ExecutionMode = null);
 
     public sealed record ExplicitRequestPreviewHttpRequest(
         string WorkflowYaml,
@@ -999,6 +1168,7 @@ public static class ScopeWorkflowEndpoints
         string ResponseMode,
         string EffectiveRisk,
         bool ApprovalRequired,
+        string ApprovalEnforcement,
         IReadOnlyList<string> AllowedExecutionModes);
 
     public sealed record RunScopeWorkflowByIdStreamHttpRequest(

@@ -211,6 +211,19 @@ including HTTP/authentication failures, DNS or TLS failures, and timeouts. Only
 an explicit `Success` receipt confirms completed execution; approval-required
 receipts remain waiting and `Unspecified` receipts remain unknown.
 
+Receipt mutation semantics are also typed. The admitted executor derives
+`AgentToolReceipt.effect` for the concrete invocation from
+`GetCallSafety(argumentsJson)` together with the tool's `SideEffectKind`, and
+freezes it as `ReadOnly` or `Mutating`. `Unspecified` is compatibility-only and
+must never be treated as positive mutation evidence. A user-visible claim that
+an external mutation succeeded additionally requires the same turn's receipt
+to match the exact `call_id`, tool, side effect, and typed subject; a probe,
+workflow run, read, or unrelated successful receipt is not evidence for that
+action. Approval policy is a separate axis: requiring approval does not by
+itself turn a read-only call into a mutation. A receipt written to the recovery
+checkpoint and the receipt yielded to the conversation must be the same
+canonical result; normalization after checkpoint commit is forbidden.
+
 Provider receipts must use the same stable resource target for successful and
 failed calls. Invocation ids are correlation identifiers only and must not
 stand in for the downstream resource. NyxID proxy receipts identify an admitted

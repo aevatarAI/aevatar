@@ -28,6 +28,7 @@ public sealed class ConfigurationCoverageTests
         AevatarPaths.ConnectorsJson.Should().Be(Path.Combine(expectedRoot, "connectors.json"));
         AevatarPaths.AgentYaml("writer").Should().Be(Path.Combine(expectedRoot, "agents", "writer.yaml"));
         AevatarPaths.WorkflowYaml("pipeline").Should().Be(Path.Combine(expectedRoot, "workflows", "pipeline.yaml"));
+        AevatarPaths.WorkflowTemplates.Should().Be(Path.Combine(expectedRoot, AevatarPaths.WorkflowTemplatesDirectoryName));
     }
 
     [Fact]
@@ -40,7 +41,7 @@ public sealed class ConfigurationCoverageTests
 
         Directory.Exists(AevatarPaths.Root).Should().BeTrue();
         Directory.Exists(AevatarPaths.Agents).Should().BeTrue();
-        Directory.Exists(AevatarPaths.Workflows).Should().BeTrue();
+        new[] { AevatarPaths.Workflows, AevatarPaths.WorkflowTemplates }.Should().OnlyContain(path => Directory.Exists(path));
         Directory.Exists(AevatarPaths.Skills).Should().BeTrue();
         Directory.Exists(AevatarPaths.Tools).Should().BeTrue();
         Directory.Exists(AevatarPaths.Sessions).Should().BeTrue();
@@ -57,7 +58,7 @@ public sealed class ConfigurationCoverageTests
         var repoRoot = AevatarPaths.RepoRoot;
 
         File.Exists(Path.Combine(repoRoot, "aevatar.slnx")).Should().BeTrue();
-        AevatarPaths.RepoRootWorkflows.Should().Be(Path.Combine(repoRoot, "workflows"));
+        AevatarPaths.RepoRootWorkflowTemplates.Should().Be(Path.Combine(repoRoot, AevatarPaths.WorkflowTemplatesDirectoryName));
     }
 
     [Fact]
@@ -243,6 +244,39 @@ public sealed class ConfigurationCoverageTests
         var resolved = NyxIdLlmEndpointResolver.ResolveEndpoint(config);
 
         resolved.Should().Be("https://auth.local/gateway/alt");
+    }
+
+    [Fact]
+    public void NyxIdLlmEndpointResolver_ResolveEndpoint_ShouldUsePublicApiBaseWhenEndpointRolesDiffer()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.test/",
+                ["Aevatar:NyxId:Authority"] = "https://nyx-issuer.example.test",
+            })
+            .Build();
+
+        NyxIdLlmEndpointResolver.ResolveEndpoint(config)
+            .Should().Be("https://nyx-api.example.test/api/v1/llm/gateway/v1");
+        NyxIdEndpointResolver.ResolvePublicApiBaseUrl(config)
+            .Should().Be("https://nyx-api.example.test");
+    }
+
+    [Fact]
+    public void NyxIdEndpointResolver_WithInternalTransportButNoPublicApi_ShouldFailClosed()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:Authority"] = "https://nyx-issuer.example.test",
+            })
+            .Build();
+
+        NyxIdEndpointResolver.ResolvePublicApiBaseUrl(config).Should().BeNull();
+        NyxIdLlmEndpointResolver.ResolveEndpoint(config).Should().BeNull();
     }
 
     [Fact]

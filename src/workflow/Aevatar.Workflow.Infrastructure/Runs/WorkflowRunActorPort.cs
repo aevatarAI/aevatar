@@ -20,7 +20,8 @@ internal sealed class WorkflowRunActorPort :
     IWorkflowDefinitionProvisioningPort,
     IWorkflowRunProvisioningPort,
     IWorkflowRunIdentityProvisioningPort,
-    IWorkflowRunIdentityExecutionPort
+    IWorkflowRunIdentityExecutionPort,
+    IWorkflowRunLineageRecordingPort
 {
     private const string WorkflowRunActorPortPublisherId = "workflow.run.actor.port";
     private readonly IActorRuntime _runtime;
@@ -114,6 +115,10 @@ internal sealed class WorkflowRunActorPort :
                     definition.ScopeId,
                     definition.RunOrigin,
                     definition.ScheduleId,
+                    definition.WorkflowId,
+                    definition.RevisionId,
+                    definition.DefinitionVersion,
+                    definition.ToolCatalogPolicyVersion,
                     definition.ExpectedExecutionMode,
                     definitionResolution.CapabilityAdmissionPlan),
                 ct);
@@ -121,7 +126,11 @@ internal sealed class WorkflowRunActorPort :
             return new WorkflowRunCreationReceipt(
                 runActor.Id,
                 definitionResolution.ActorId,
-                createdActorIds);
+                createdActorIds,
+                // Fix (review round 1, F2):
+                //   CreateRunAsync previously copied the technical actor id into RunId.
+                //   No authoritative routable run id exists here, so leave RunId empty for honest fallback.
+                RunId: string.Empty);
         }
         catch
         {
@@ -206,6 +215,10 @@ internal sealed class WorkflowRunActorPort :
                     definition.ScopeId,
                     definition.RunOrigin,
                     definition.ScheduleId,
+                    definition.WorkflowId,
+                    definition.RevisionId,
+                    definition.DefinitionVersion,
+                    definition.ToolCatalogPolicyVersion,
                     definition.ExpectedExecutionMode,
                     definitionResolution.CapabilityAdmissionPlan,
                     executionRequest,
@@ -221,7 +234,11 @@ internal sealed class WorkflowRunActorPort :
             return new WorkflowRunCreationReceipt(
                 runActor.Id,
                 definitionResolution.ActorId,
-                createdActorIds);
+                createdActorIds,
+                // Fix (review round 1, F2):
+                //   EnsureRunAsync has a caller-supplied routable run identity.
+                //   Populate RunId from the normalized request, not by reading the actor address back.
+                RunId: normalizedRunId);
         }
         catch
         {
@@ -230,6 +247,36 @@ internal sealed class WorkflowRunActorPort :
             await TryDestroyActorsAsync(createdActorIds);
             throw;
         }
+    }
+
+    public async Task RecordForkChildAsync(
+        string sourceRunId,
+        string childRunId,
+        string childActorId,
+        string originalRunId,
+        string startAtStepId,
+        int attempt,
+        CancellationToken ct = default)
+    {
+        var normalizedSourceRunId = NormalizeActorId(sourceRunId)
+            ?? throw new ArgumentException("Source Run id is required.", nameof(sourceRunId));
+        var normalizedChildRunId = NormalizeActorId(childRunId)
+            ?? throw new ArgumentException("Child Run id is required.", nameof(childRunId));
+
+        var sourceActor = await _runtime.CreateAsync<WorkflowRunGAgent>(
+            normalizedSourceRunId,
+            ct).ConfigureAwait(false);
+
+        await _dispatchPort.DispatchAsync(
+            sourceActor.Id,
+            CreateWorkflowRunLineageRecordedEnvelope(
+                normalizedSourceRunId,
+                normalizedChildRunId,
+                childActorId,
+                string.IsNullOrWhiteSpace(originalRunId) ? normalizedSourceRunId : originalRunId,
+                startAtStepId,
+                Math.Max(0, attempt)),
+            ct).ConfigureAwait(false);
     }
 
     public Task DestroyAsync(string actorId, CancellationToken ct = default)
@@ -264,6 +311,11 @@ internal sealed class WorkflowRunActorPort :
             workflowId,
             revisionId,
             ct);
+        await ValidateCurrentToolCatalogPolicyAsync(
+            workflowYaml,
+            inlineWorkflowYamls,
+            WorkflowToolCatalogPolicies.CurrentVersion,
+            ct);
         await DispatchWorkflowDefinitionBindAsync(
             actorId,
             workflowYaml,
@@ -274,6 +326,7 @@ internal sealed class WorkflowRunActorPort :
             capabilityAdmissionPlan,
             workflowId,
             revisionId,
+            WorkflowToolCatalogPolicies.CurrentVersion,
             expectedExecutionMode,
             ct);
     }
@@ -288,6 +341,7 @@ internal sealed class WorkflowRunActorPort :
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         string? workflowId,
         string? revisionId,
+        string? toolCatalogPolicyVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         CancellationToken ct)
     {
@@ -300,6 +354,7 @@ internal sealed class WorkflowRunActorPort :
             capabilityAdmissionPlan,
             workflowId,
             revisionId,
+            toolCatalogPolicyVersion,
             expectedExecutionMode);
         await _dispatchPort.DispatchAsync(actorId, envelope, ct);
     }
@@ -352,6 +407,7 @@ internal sealed class WorkflowRunActorPort :
                             binding.WorkflowId,
                             binding.RevisionId,
                             ct);
+                        EnsureToolCatalogPolicyCompatibility(existingActor.Id, binding, definition);
                         return;
                     }
                 }
@@ -365,6 +421,11 @@ internal sealed class WorkflowRunActorPort :
             definition.ExpectedExecutionMode,
             definition.WorkflowId,
             definition.RevisionId,
+            ct);
+        await ValidateCurrentToolCatalogPolicyAsync(
+            definition.WorkflowYaml,
+            definition.InlineWorkflowYamls,
+            definition.ToolCatalogPolicyVersion,
             ct);
     }
 
@@ -385,6 +446,35 @@ internal sealed class WorkflowRunActorPort :
                 workflowId ?? string.Empty,
                 revisionId ?? string.Empty),
             ct);
+
+    private async Task ValidateCurrentToolCatalogPolicyAsync(
+        string workflowYaml,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string? toolCatalogPolicyVersion,
+        CancellationToken ct)
+    {
+        if (!WorkflowToolCatalogPolicies.IsCurrent(toolCatalogPolicyVersion))
+        {
+            throw new InvalidOperationException(
+                "Workflow definition must be reissued under the current tool catalog policy before a new run can be created.");
+        }
+
+        var root = await _definitionParser
+            .ParseWorkflowYamlForPublicationAsync(workflowYaml, ct)
+            .ConfigureAwait(false);
+        if (!root.Succeeded)
+            throw new InvalidOperationException(root.Error);
+
+        foreach (var (inlineName, inlineYaml) in inlineWorkflowYamls ??
+                 new Dictionary<string, string>(StringComparer.Ordinal))
+        {
+            var inline = await _definitionParser
+                .ParseWorkflowYamlForPublicationAsync(inlineYaml, ct)
+                .ConfigureAwait(false);
+            if (!inline.Succeeded)
+                throw new InvalidOperationException($"Inline workflow '{inlineName}' is invalid: {inline.Error}");
+        }
+    }
 
     private async Task<DefinitionActorResolutionResult> ResolveDefinitionActorForRunAsync(
         WorkflowDefinitionBinding definition,
@@ -417,6 +507,7 @@ internal sealed class WorkflowRunActorPort :
         EnsureExpectedExecutionModeCompatibility(existingActor.Id, binding, definition);
         EnsureScopeCompatibility(existingActor.Id, binding, definition);
         EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
+        EnsureToolCatalogPolicyCompatibility(existingActor.Id, binding, definition);
         EnsureDefinitionIdentityCompatibility(
             existingActor.Id,
             binding,
@@ -428,7 +519,19 @@ internal sealed class WorkflowRunActorPort :
                 $"Workflow definition actor '{existingActor.Id}' does not have a materialized definition payload.");
         }
 
-        if (!IsSameDefinitionPayload(binding, definition))
+        var pinsAdmissionSnapshot = definition.CapabilityAdmissionPlan != null ||
+                                    definition.DefinitionVersion > 0 ||
+                                    string.Equals(
+                                        definition.RunOrigin,
+                                        WorkflowRunOrigins.Webhook,
+                                        StringComparison.Ordinal);
+        if (!IsSameDefinitionPayload(binding, definition) ||
+            (pinsAdmissionSnapshot &&
+             !string.Equals(
+                 binding.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+                 definition.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+                 StringComparison.Ordinal)) ||
+            (definition.DefinitionVersion > 0 && binding.SourceVersion != definition.DefinitionVersion))
         {
             throw new InvalidOperationException(
                 $"Workflow definition actor '{existingActor.Id}' payload does not match the requested Run definition.");
@@ -471,6 +574,7 @@ internal sealed class WorkflowRunActorPort :
                         definition.CapabilityAdmissionPlan,
                         definition.WorkflowId,
                         definition.RevisionId,
+                        definition.ToolCatalogPolicyVersion,
                         definition.ExpectedExecutionMode,
                         ct);
                     return new DefinitionActorResolutionResult(
@@ -486,6 +590,7 @@ internal sealed class WorkflowRunActorPort :
             EnsureScopeCompatibility(existingActor.Id, binding, definition);
             EnsureExpectedExecutionModeCompatibility(existingActor.Id, binding, definition);
             EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
+            EnsureToolCatalogPolicyCompatibility(existingActor.Id, binding, definition);
             EnsureDefinitionIdentityCompatibility(
                 existingActor.Id,
                 binding,
@@ -504,6 +609,7 @@ internal sealed class WorkflowRunActorPort :
                     definition.CapabilityAdmissionPlan,
                     definition.WorkflowId,
                     definition.RevisionId,
+                    definition.ToolCatalogPolicyVersion,
                     definition.ExpectedExecutionMode,
                     ct);
             }
@@ -553,6 +659,7 @@ internal sealed class WorkflowRunActorPort :
                 definition.CapabilityAdmissionPlan,
                 definition.WorkflowId,
                 definition.RevisionId,
+                definition.ToolCatalogPolicyVersion,
                 definition.ExpectedExecutionMode,
                 ct);
             return new DefinitionActorResolutionResult(
@@ -583,6 +690,7 @@ internal sealed class WorkflowRunActorPort :
         EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
         EnsureExpectedExecutionModeCompatibility(existingActor.Id, binding, definition);
         EnsureScopeCompatibility(existingActor.Id, binding, definition);
+        EnsureToolCatalogPolicyCompatibility(existingActor.Id, binding, definition);
         EnsureDefinitionIdentityCompatibility(
             existingActor.Id,
             binding,
@@ -600,6 +708,7 @@ internal sealed class WorkflowRunActorPort :
                 definition.CapabilityAdmissionPlan,
                 definition.WorkflowId,
                 definition.RevisionId,
+                definition.ToolCatalogPolicyVersion,
                 definition.ExpectedExecutionMode,
                 ct);
         }
@@ -656,7 +765,7 @@ internal sealed class WorkflowRunActorPort :
             if (!boundHasRevisionId)
                 throw new WorkflowCapabilityAdmissionRebindRequiredException();
 
-            if (!requestedRequiresIdentity ||
+            if ((boundRequiresIdentity && !requestedRequiresIdentity) ||
                 !string.Equals(binding.WorkflowId, definition.WorkflowId, StringComparison.Ordinal) ||
                 !string.Equals(binding.RevisionId, definition.RevisionId, StringComparison.Ordinal))
             {
@@ -689,7 +798,11 @@ internal sealed class WorkflowRunActorPort :
         WorkflowDefinitionBinding definition)
     {
         if (!IsSameDefinitionPayload(binding, definition) ||
-            binding.ExpectedExecutionMode != definition.ExpectedExecutionMode)
+            binding.ExpectedExecutionMode != definition.ExpectedExecutionMode ||
+            !string.Equals(
+                binding.ToolCatalogPolicyVersion?.Trim(),
+                definition.ToolCatalogPolicyVersion?.Trim(),
+                StringComparison.Ordinal))
             return false;
 
         return string.Equals(
@@ -762,8 +875,28 @@ internal sealed class WorkflowRunActorPort :
             return;
         }
 
+        throw new WorkflowExpectedExecutionModeCompatibilityException(
+            actorId,
+            binding.ExpectedExecutionMode,
+            definition.ExpectedExecutionMode);
+    }
+
+    private static void EnsureToolCatalogPolicyCompatibility(
+        string actorId,
+        WorkflowActorBinding binding,
+        WorkflowDefinitionBinding definition)
+    {
+        if (WorkflowToolCatalogPolicies.IsCurrent(binding.ToolCatalogPolicyVersion) &&
+            string.Equals(
+                binding.ToolCatalogPolicyVersion?.Trim(),
+                definition.ToolCatalogPolicyVersion?.Trim(),
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
         throw new InvalidOperationException(
-            $"Workflow definition actor '{actorId}' expected execution mode does not match the requested definition.");
+            $"Workflow definition actor '{actorId}' must be reissued under the current tool catalog policy.");
     }
 
     private static void EnsureScopeCompatibility(
@@ -793,6 +926,7 @@ internal sealed class WorkflowRunActorPort :
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         string? workflowId,
         string? revisionId,
+        string? toolCatalogPolicyVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode) =>
         new()
         {
@@ -807,6 +941,7 @@ internal sealed class WorkflowRunActorPort :
                 capabilityAdmissionPlan,
                 workflowId,
                 revisionId,
+                toolCatalogPolicyVersion,
                 expectedExecutionMode)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
@@ -824,6 +959,10 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        string? workflowId,
+        string? revisionId,
+        long definitionVersion,
+        string? toolCatalogPolicyVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan) =>
         new()
@@ -839,6 +978,10 @@ internal sealed class WorkflowRunActorPort :
                 scopeId,
                 runOrigin,
                 scheduleId,
+                workflowId,
+                revisionId,
+                definitionVersion,
+                toolCatalogPolicyVersion,
                 expectedExecutionMode,
                 capabilityAdmissionPlan)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
@@ -857,6 +1000,10 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        string? workflowId,
+        string? revisionId,
+        long definitionVersion,
+        string? toolCatalogPolicyVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         WorkflowChatRequestEvent? executionRequest = null,
@@ -877,6 +1024,10 @@ internal sealed class WorkflowRunActorPort :
                 scopeId,
                 runOrigin,
                 scheduleId,
+                workflowId,
+                revisionId,
+                definitionVersion,
+                toolCatalogPolicyVersion,
                 expectedExecutionMode,
                 capabilityAdmissionPlan),
         };
@@ -921,6 +1072,35 @@ internal sealed class WorkflowRunActorPort :
             },
         };
 
+    private static EventEnvelope CreateWorkflowRunLineageRecordedEnvelope(
+        string sourceRunId,
+        string childRunId,
+        string childActorId,
+        string originalRunId,
+        string startAtStepId,
+        int attempt) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new WorkflowRunLineageRecordedEvent
+            {
+                SourceRunId = sourceRunId,
+                ChildRunId = childRunId,
+                ChildActorId = childActorId?.Trim() ?? string.Empty,
+                OriginalRunId = string.IsNullOrWhiteSpace(originalRunId) ? sourceRunId : originalRunId.Trim(),
+                StartAtStepId = startAtStepId?.Trim() ?? string.Empty,
+                Attempt = Math.Max(0, attempt),
+                RelationKind = WorkflowRunLineageRelationKind.RetryFork,
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = Guid.NewGuid().ToString("N"),
+                CausationEventId = "workflow_run_lineage_recorded",
+            },
+        };
+
     private static BindWorkflowDefinitionEvent BuildBindWorkflowDefinitionEvent(
         string workflowYaml,
         string workflowName,
@@ -930,6 +1110,7 @@ internal sealed class WorkflowRunActorPort :
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
         string? workflowId,
         string? revisionId,
+        string? toolCatalogPolicyVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode)
     {
         var bind = new BindWorkflowDefinitionEvent
@@ -941,6 +1122,7 @@ internal sealed class WorkflowRunActorPort :
             WorkflowId = workflowId ?? string.Empty,
             RevisionId = revisionId ?? string.Empty,
             ExpectedExecutionMode = expectedExecutionMode,
+            ToolCatalogPolicyVersion = toolCatalogPolicyVersion?.Trim() ?? string.Empty,
         };
         if (scopeId is not null)
             bind.ScopeId = scopeId.Trim();
@@ -963,6 +1145,10 @@ internal sealed class WorkflowRunActorPort :
         string? scopeId,
         string? runOrigin,
         string? scheduleId,
+        string? workflowId,
+        string? revisionId,
+        long definitionVersion,
+        string? toolCatalogPolicyVersion,
         ExternalCapabilityExecutionMode expectedExecutionMode,
         WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
     {
@@ -975,8 +1161,12 @@ internal sealed class WorkflowRunActorPort :
             ScopeId = scopeId?.Trim() ?? string.Empty,
             RunOrigin = runOrigin?.Trim() ?? string.Empty,
             ScheduleId = scheduleId?.Trim() ?? string.Empty,
+            WorkflowId = workflowId?.Trim() ?? string.Empty,
+            RevisionId = revisionId?.Trim() ?? string.Empty,
+            DefinitionVersion = Math.Max(0, definitionVersion),
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
             ExpectedExecutionMode = expectedExecutionMode,
+            ToolCatalogPolicyVersion = toolCatalogPolicyVersion?.Trim() ?? string.Empty,
         };
 
         foreach (var (key, value) in inlineWorkflowYamls)

@@ -23,9 +23,9 @@ namespace Aevatar.Studio.Tests;
 /// <list type="bullet">
 ///   <item>the scope-access guard short-circuits with 403 before the service is
 ///   touched (cross-scope / unauthenticated);</item>
-///   <item>a successful provision always returns 202 Accepted (the bind + run are
-///   asynchronous) carrying the schedule id + Observatory link, with the
-///   Location pointing at the created schedule;</item>
+///   <item>a successful provision always returns 202 Accepted (the bind, schedule,
+///   and run are asynchronous), with Location pointing at the member read model
+///   until the schedule identity becomes visible;</item>
 ///   <item>the caller NyxID subject reference is required and threaded into the
 ///   service as an input parameter; a missing subject maps to a stable 400;</item>
 ///   <item>domain validation failures map to a stable 400 code.</item>
@@ -63,6 +63,36 @@ public sealed class StudioProvisioningEndpointsTests
         accepted.Location.Should().Be($"/api/schedules/{ScheduleId}");
         service.ProvisionInvoked.Should().BeTrue();
         service.ProvisionScopeId.Should().Be(ScopeId);
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_WhenScheduleProvisioningIsPending_ShouldReturnMemberLocation()
+    {
+        var response = NewResponse() with
+        {
+            ScheduleId = null,
+            ScheduleProvisioningId = "schedule-provisioning-1",
+            ScheduleProvisioningStatus = StudioWorkflowScheduleProvisioningStatusNames.PendingBinding,
+        };
+        var service = new RecordingProvisioningService { Response = response };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        var accepted = result.Should().BeOfType<Accepted<ProvisionWorkflowResponse>>().Subject;
+        accepted.Location.Should().Be($"/api/scopes/{ScopeId}/members/member-1");
+        accepted.Value!.ScheduleId.Should().BeNull();
+        accepted.Value.ScheduleProvisioningId.Should().Be("schedule-provisioning-1");
+        accepted.Value.ScheduleProvisioningStatus.Should().Be(
+            StudioWorkflowScheduleProvisioningStatusNames.PendingBinding);
     }
 
     [Fact]
@@ -356,6 +386,33 @@ public sealed class StudioProvisioningEndpointsTests
     }
 
     [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnTypedNotFound_WhenTeamDoesNotExist()
+    {
+        const string missingTeamId = "team-missing";
+        var service = new RecordingProvisioningService
+        {
+            ProvisionException = new StudioTeamNotFoundException(ScopeId, missingTeamId),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = missingTeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        AssertIsJsonStatus(result, StatusCodes.Status404NotFound);
+        var value = result.GetType().GetProperty("Value")?.GetValue(result);
+        value.Should().NotBeNull();
+        value!.GetType().GetProperty("code")?.GetValue(value)
+            .Should().Be("STUDIO_TEAM_NOT_FOUND");
+        service.ProvisionInvoked.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleProvisionWorkflowAsync_ShouldReturnRetryableProjectionPending()
     {
         var service = new RecordingProvisioningService
@@ -380,6 +437,37 @@ public sealed class StudioProvisioningEndpointsTests
             .Should().Be("PROVISION_WORKFLOW_AUTHORIZATION_PROJECTION_PENDING");
         value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(true);
         value.GetType().GetProperty("requiredStateVersion")?.GetValue(value).Should().Be(23L);
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnNonRetryableRouteRepairTarget()
+    {
+        var service = new RecordingProvisioningService
+        {
+            ProvisionException = new StudioMemberAutomationCatalogRouteUnresolvedException(
+                ["service-z", "service-a", "service-a"]),
+        };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        AssertIsJsonStatus(result, StatusCodes.Status409Conflict);
+        var value = result.GetType().GetProperty("Value")?.GetValue(result);
+        value.Should().NotBeNull();
+        value!.GetType().GetProperty("code")?.GetValue(value).Should()
+            .Be("PROVISION_WORKFLOW_AUTHORIZATION_ROUTE_UNRESOLVED");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(false);
+        value.GetType().GetProperty("refreshFailureCode")?.GetValue(value).Should()
+            .Be(StudioMemberAutomationCatalogRouteUnresolvedException.NyxIdFailureCode);
+        value.GetType().GetProperty("requiredUserServiceIds")?.GetValue(value)
+            .Should().BeEquivalentTo(new[] { "service-a", "service-z" }, options => options.WithStrictOrdering());
     }
 
     [Fact]
@@ -426,7 +514,7 @@ public sealed class StudioProvisioningEndpointsTests
         ScopeId: ScopeId,
         TeamId: TeamId,
         BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
-        ObservatoryUrl: "/workflow/observatory")
+        ObservatoryUrl: "/admin#/observatory")
     {
         BindingRunId = "bind-run-1",
         ScheduleId = ScheduleId,
@@ -542,6 +630,13 @@ public sealed class StudioProvisioningEndpointsTests
         public string? ProvisionScopeId { get; private set; }
         public ProvisionWorkflowCallerCredential? ProvisionCaller { get; private set; }
         public ProvisionWorkflowRequest? ProvisionRequest { get; private set; }
+
+        public Task<ProvisionWorkflowPreparation> PrepareAsync(
+            string scopeId,
+            ProvisionWorkflowCallerCredential callerCredential,
+            ProvisionWorkflowRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
 
         public Task<ProvisionWorkflowResponse> ProvisionAsync(
             string scopeId,

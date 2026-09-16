@@ -1,9 +1,9 @@
-import { EditOutlined, HistoryOutlined } from "@ant-design/icons";
+import { EditOutlined, HistoryOutlined, ReloadOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Space, Spin } from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { getScopeServiceCurrentRevision } from "@/shared/models/runtime/scopeServices";
+import { t } from "@/shared/i18n/messages";
 import {
   getLocationSnapshot,
   history,
@@ -15,8 +15,8 @@ import {
   buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
 import {
-  buildScopeConsoleServiceOptions,
-  scopeServiceAppId,
+  type ScopeConsoleServiceOption,
+  scopeServiceNamespace,
 } from "@/shared/runs/scopeConsole";
 import { studioApi } from "@/shared/studio/api";
 import {
@@ -33,7 +33,6 @@ import {
 } from "@/shared/ui/aevatarPageShells";
 import { describeError } from "@/shared/ui/errorText";
 import StudioMemberInvokePanel from "../studio/components/StudioMemberInvokePanel";
-import { t } from "@/shared/i18n/messages";
 
 type TeamMemberInvokeRouteState = {
   readonly memberId: string;
@@ -114,19 +113,15 @@ const TeamMemberInvokePage: React.FC = () => {
     queryKey: ["team-member-invoke", "member", route.scopeId, route.memberId],
     enabled: Boolean(route.scopeId && route.memberId),
     queryFn: () => studioApi.getMember(route.scopeId, route.memberId),
+    refetchOnMount: "always",
+    staleTime: 0,
   });
   const bindingQuery = useQuery({
     queryKey: ["team-member-invoke", "binding", route.scopeId, route.memberId],
     enabled: Boolean(route.scopeId && route.memberId),
     queryFn: () => studioApi.getMemberBinding(route.scopeId, route.memberId),
-  });
-  const servicesQuery = useQuery({
-    queryKey: ["team-member-invoke", "services", route.scopeId],
-    enabled: Boolean(route.scopeId),
-    queryFn: () =>
-      scopeRuntimeApi.listServices(route.scopeId, {
-        appId: scopeServiceAppId,
-      }),
+    refetchOnMount: "always",
+    staleTime: 0,
   });
   const memberBreadcrumbLabel =
     trimOptional(memberQuery.data?.summary.displayName) ||
@@ -174,16 +169,88 @@ const TeamMemberInvokePage: React.FC = () => {
   );
   const memberBindingCompleted =
     memberLifecycleStage === "bind_ready" && Boolean(completedBindingRevisionId);
-  const boundPublishedServiceId = memberBindingCompleted
+  const bindingPublishedServiceId = memberBindingCompleted
     ? trimOptional(lastBinding?.publishedServiceId) ||
       trimOptional(memberSummary?.publishedServiceId)
+    : "";
+  const memberLabel =
+    trimOptional(memberSummary?.displayName) ||
+    t("pages.teammemberinvoke.member", "Member");
+  const endpointContractQuery = useQuery({
+    queryKey: [
+      "team-member-invoke",
+      "endpoint-contract",
+      route.scopeId,
+      route.memberId,
+      "chat",
+    ],
+    enabled: Boolean(route.scopeId && route.memberId && memberBindingCompleted),
+    queryFn: () =>
+      scopeRuntimeApi.getMemberEndpointContract(route.scopeId, route.memberId, "chat"),
+    refetchOnMount: "always",
+    staleTime: 0,
+  });
+  const endpointContract = endpointContractQuery.data ?? null;
+  const endpointPublishedServiceId = trimOptional(endpointContract?.publishedServiceId);
+  const endpointRevisionId = trimOptional(endpointContract?.revisionId);
+  const readinessRevisionId = trimOptional(
+    endpointContract?.invocationReadiness.revisionId,
+  );
+  const identityQueriesFetching =
+    memberQuery.isFetching ||
+    bindingQuery.isFetching ||
+    endpointContractQuery.isFetching;
+  const endpointContractFresh = Boolean(
+    memberBindingCompleted &&
+      endpointContractQuery.isSuccess &&
+      !identityQueriesFetching,
+  );
+  const endpointContractIdentityMismatch = Boolean(
+    endpointContract &&
+      (trimOptional(endpointContract.scopeId) !== route.scopeId ||
+        trimOptional(endpointContract.memberId) !== route.memberId ||
+        !endpointPublishedServiceId ||
+        (bindingPublishedServiceId &&
+          endpointPublishedServiceId !== bindingPublishedServiceId) ||
+        trimOptional(endpointContract.endpointId) !== "chat"),
+  );
+  const endpointContractProtocolMismatch = Boolean(
+    endpointContract &&
+      (!endpointContract.supportsSse ||
+        !endpointRevisionId ||
+        (readinessRevisionId && readinessRevisionId !== endpointRevisionId)),
+  );
+  const endpointContractSourceVersionPending = Boolean(
+    endpointContract &&
+      (endpointContract.publishedServiceStateVersion <= 0 ||
+        endpointContract.boundRevisionStateVersion <= 0),
+  );
+  const endpointInvocationUnavailable = Boolean(
+    endpointContract &&
+      !endpointContractIdentityMismatch &&
+      !endpointContractProtocolMismatch &&
+      (endpointContractSourceVersionPending ||
+        !endpointContract.invocationReadiness.canInvoke ||
+        trimOptional(endpointContract.invocationReadiness.status) !== "ready"),
+  );
+  const endpointContractUsable = Boolean(
+    endpointContractFresh &&
+      endpointContract &&
+      !endpointContractIdentityMismatch &&
+      !endpointContractProtocolMismatch &&
+      !endpointInvocationUnavailable,
+  );
+  const verifiedPublishedServiceId = endpointContractUsable
+    ? endpointPublishedServiceId
     : "";
   const canOpenPublishedRuns = Boolean(
     route.scopeId &&
       route.teamId &&
       route.memberId &&
       memberBindingCompleted &&
-      boundPublishedServiceId,
+      endpointContractFresh &&
+      !endpointContractIdentityMismatch &&
+      (bindingPublishedServiceId || verifiedPublishedServiceId),
   );
   const publishedRunsPlaceholderReason = canOpenPublishedRuns
     ? t(
@@ -194,37 +261,59 @@ const TeamMemberInvokePage: React.FC = () => {
         "pages.teammemberinvoke.publishedRuns.publishFirst",
         "Publish this member to start recording published runs.",
       );
-  const selectedService = React.useMemo(
-    () =>
-      boundPublishedServiceId
-        ? (servicesQuery.data ?? []).find(
-            (service) => trimOptional(service.serviceId) === boundPublishedServiceId,
-          ) ?? null
-        : null,
-    [boundPublishedServiceId, servicesQuery.data],
-  );
-  const invokeServices = React.useMemo(
-    () =>
-      selectedService
-        ? buildScopeConsoleServiceOptions([selectedService], selectedService.serviceId, {
-            sortBy: "serviceId",
-          }).filter((service) => service.serviceId === selectedService.serviceId)
-        : [],
-    [selectedService],
-  );
+  const invokeServices = React.useMemo<ScopeConsoleServiceOption[]>(() => {
+    if (
+      !endpointContract ||
+      !endpointContractUsable ||
+      !verifiedPublishedServiceId
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        deploymentStatus: endpointContract.deploymentStatus,
+        displayName: memberLabel,
+        endpoints: [
+          {
+            description: "",
+            displayName: "Chat",
+            endpointId: endpointContract.endpointId,
+            kind: "chat",
+            requestTypeUrl: endpointContract.requestTypeUrl,
+            responseTypeUrl: endpointContract.responseTypeUrl,
+          },
+        ],
+        kind: "service",
+        namespace: scopeServiceNamespace,
+        serviceId: verifiedPublishedServiceId,
+      },
+    ];
+  }, [
+    endpointContract,
+    endpointContractUsable,
+    memberLabel,
+    verifiedPublishedServiceId,
+  ]);
   const serviceRevisionQuery = useQuery({
     queryKey: [
       "team-member-invoke",
       "service-revisions",
       route.scopeId,
-      boundPublishedServiceId,
+      verifiedPublishedServiceId,
+      endpointRevisionId,
     ],
-    enabled: Boolean(route.scopeId && boundPublishedServiceId),
-    queryFn: () => scopeRuntimeApi.getServiceRevisions(route.scopeId, boundPublishedServiceId),
+    enabled: Boolean(route.scopeId && verifiedPublishedServiceId),
+    queryFn: () =>
+      scopeRuntimeApi.getServiceRevisions(route.scopeId, verifiedPublishedServiceId),
+    refetchOnMount: "always",
+    staleTime: 0,
   });
   const memberRevision =
-    getScopeServiceCurrentRevision(serviceRevisionQuery.data) ??
-    (lastBinding
+    serviceRevisionQuery.data?.revisions.find(
+      (revision) => revision.revisionId === endpointRevisionId,
+    ) ??
+    (lastBinding && trimOptional(lastBinding.revisionId) === endpointRevisionId
       ? {
           allocationWeight: 100,
           artifactHash: "",
@@ -252,13 +341,16 @@ const TeamMemberInvokePage: React.FC = () => {
           workflowName: "",
         }
       : null);
-  const memberLabel =
-    trimOptional(memberSummary?.displayName) ||
-    t("pages.teammemberinvoke.member", "Member");
   const isLoading =
-    memberQuery.isLoading || bindingQuery.isLoading || servicesQuery.isLoading;
+    memberQuery.isFetching ||
+    bindingQuery.isFetching ||
+    (memberBindingCompleted && endpointContractQuery.isFetching) ||
+    serviceRevisionQuery.isFetching;
   const loadError =
-    memberQuery.error || bindingQuery.error || servicesQuery.error || null;
+    memberQuery.error ||
+    bindingQuery.error ||
+    (memberBindingCompleted ? endpointContractQuery.error : null) ||
+    null;
   const blockedState = React.useMemo(() => {
     if (!route.scopeId || !route.teamId || !route.memberId) {
       return {
@@ -301,7 +393,27 @@ const TeamMemberInvokePage: React.FC = () => {
       };
     }
 
-    if (memberSummary && memberBindingCompleted && !selectedService && !servicesQuery.isLoading) {
+    if (
+      memberSummary &&
+      memberBindingCompleted &&
+      (endpointContractIdentityMismatch || endpointContractProtocolMismatch)
+    ) {
+      return {
+        description: t(
+          "pages.teammemberinvoke.endpoint.missing.description",
+          "The published service has no callable endpoints available to this page.",
+        ),
+        message: t("pages.teammemberinvoke.endpoint.missing", "No callable endpoint is available."),
+        type: "error" as const,
+      };
+    }
+
+    if (
+      memberSummary &&
+      memberBindingCompleted &&
+      !endpointContract &&
+      !endpointContractQuery.isFetching
+    ) {
       return {
         description: t(
           "pages.teammemberinvoke.service.pending.description",
@@ -312,7 +424,33 @@ const TeamMemberInvokePage: React.FC = () => {
       };
     }
 
-    if (selectedService && invokeServices.length === 0) {
+    if (
+      memberSummary &&
+      memberBindingCompleted &&
+      endpointContract &&
+      endpointInvocationUnavailable
+    ) {
+      return {
+        description:
+          (endpointContractSourceVersionPending
+            ? t(
+                "pages.teammemberinvoke.endpoint.versionPending.description",
+                "Committed service and revision source versions are not visible yet.",
+              )
+            : trimOptional(endpointContract.invocationReadiness.message)) ||
+          t(
+            "pages.teammemberinvoke.endpoint.notReady.description",
+            "The endpoint contract is valid, but its runtime is not ready to accept invocations.",
+          ),
+        message: t(
+          "pages.teammemberinvoke.endpoint.notReady",
+          "Member endpoint is not ready.",
+        ),
+        type: "warning" as const,
+      };
+    }
+
+    if (endpointContract && invokeServices.length === 0) {
       return {
         description: t(
           "pages.teammemberinvoke.endpoint.missing.description",
@@ -330,11 +468,15 @@ const TeamMemberInvokePage: React.FC = () => {
     memberBindingCompleted,
     memberKind,
     memberSummary,
+    endpointContract,
+    endpointContractIdentityMismatch,
+    endpointContractProtocolMismatch,
+    endpointContractQuery.isFetching,
+    endpointContractSourceVersionPending,
+    endpointInvocationUnavailable,
     route.memberId,
     route.scopeId,
     route.teamId,
-    selectedService,
-    servicesQuery.isLoading,
   ]);
 
   return (
@@ -390,13 +532,32 @@ const TeamMemberInvokePage: React.FC = () => {
           <AevatarPanel
             description={blockedState.description}
             extra={
-              <Button
-                icon={<EditOutlined />}
-                onClick={() => history.push(workflowStudioHref)}
-                type="primary"
-              >
-                {t("pages.teammemberinvoke.open.studio", "Workflow Studio")}
-              </Button>
+              <Space size={8} wrap>
+                {memberBindingCompleted ? (
+                  <Button
+                    icon={<ReloadOutlined />}
+                    onClick={() => {
+                      void Promise.all([
+                        memberQuery.refetch(),
+                        bindingQuery.refetch(),
+                        endpointContractQuery.refetch(),
+                      ]);
+                    }}
+                  >
+                    {t(
+                      "pages.teammemberinvoke.refresh",
+                      "Refresh status",
+                    )}
+                  </Button>
+                ) : null}
+                <Button
+                  icon={<EditOutlined />}
+                  onClick={() => history.push(workflowStudioHref)}
+                  type="primary"
+                >
+                  {t("pages.teammemberinvoke.open.studio", "Workflow Studio")}
+                </Button>
+              </Space>
             }
             title={blockedState.message}
           >
@@ -408,8 +569,9 @@ const TeamMemberInvokePage: React.FC = () => {
           </AevatarPanel>
         ) : (
           <StudioMemberInvokePanel
+            authoritativeEndpointContract={endpointContract}
             enableFileAttachments
-            initialServiceId={boundPublishedServiceId}
+            initialServiceId={verifiedPublishedServiceId}
             memberId={route.memberId}
             memberRevision={memberRevision}
             presentation="member-run"

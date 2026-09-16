@@ -146,7 +146,35 @@ describe('NyxIDAuthClient', () => {
     );
   });
 
-  it('forces consent while preserving a canonical workflow return URL', async () => {
+  it("starts service access review with exact resources and a caller return", async () => {
+    const assign = installLocationAssignSpy();
+
+    await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
+      flow: "serviceAccessReview",
+      resources: ["https://nyx.example/api/v1/proxy/s/api-github"],
+      returnTo: "/chat?conversationId=chatc-alpha&accessReview=action-alpha",
+    });
+
+    const authorizeUrl = new URL(assign.mock.calls[0][0]);
+    expect(authorizeUrl.searchParams.get("prompt")).toBe("consent");
+    expect(authorizeUrl.searchParams.getAll("resource")).toEqual([
+      "https://nyx.example/api/v1/proxy/s/api-github",
+    ]);
+
+    const pending = JSON.parse(
+      window.localStorage.getItem(
+        "aevatar-console:nyxid:pending:console-client-1",
+      ) ?? "{}",
+    );
+    expect(pending).toEqual(
+      expect.objectContaining({
+        flow: "serviceAccessReview",
+        returnTo: "/chat?conversationId=chatc-alpha&accessReview=action-alpha",
+      }),
+    );
+  });
+
+  it("forces consent while preserving a canonical workflow return URL", async () => {
     const assign = installLocationAssignSpy();
 
     await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({

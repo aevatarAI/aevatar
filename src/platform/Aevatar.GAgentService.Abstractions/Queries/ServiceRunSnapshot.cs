@@ -27,6 +27,8 @@ public sealed record ServiceRunSnapshot(
     string LastOutput,
     string LastError)
 {
+    public string ScheduleOperationId { get; init; } = string.Empty;
+
     public IReadOnlyList<ContentArtifactReference> ResultArtifacts { get; init; } = [];
 }
 

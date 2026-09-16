@@ -8,6 +8,13 @@ internal static class ProjectionProcessingMetrics
     internal const string MeterName = "Aevatar.CQRS.Projection";
     internal const string ProjectionKindTag = "projection.kind";
     internal const string EventKindTag = "event.kind";
+    internal const string MaterializerKindTag = "materializer.kind";
+    internal const string ResultTag = "result";
+    internal const string MaterializerDurationMetricName = "aevatar.projection.materializer.duration";
+    internal const string MaterializerTotalMetricName = "aevatar.projection.materializer.total";
+    internal const string ResultCompleted = "completed";
+    internal const string ResultFailed = "failed";
+    internal const string ResultCancelled = "cancelled";
 
     private static readonly Meter Meter = new(MeterName, "1.0.0");
     private static readonly Counter<long> ReceivedEnvelopes = Meter.CreateCounter<long>(
@@ -36,6 +43,13 @@ internal static class ProjectionProcessingMetrics
         "aevatar.projection.materialization.latency",
         unit: "ms",
         description: "Elapsed time for a successful projection materialization attempt.");
+    private static readonly Histogram<double> MaterializerDuration = Meter.CreateHistogram<double>(
+        MaterializerDurationMetricName,
+        unit: "ms",
+        description: "Elapsed time for one concrete projection materializer invocation.");
+    private static readonly Counter<long> MaterializerTotal = Meter.CreateCounter<long>(
+        MaterializerTotalMetricName,
+        description: "Concrete projection materializer terminal outcomes.");
     private static readonly Counter<long> DiagnosticFailuresDropped = Meter.CreateCounter<long>(
         "aevatar.projection.failure_diagnostic.dropped",
         description: "Payload-free failure diagnostics dropped from the bounded retention ring.");
@@ -83,6 +97,20 @@ internal static class ProjectionProcessingMetrics
             Math.Max(0, count),
             new KeyValuePair<string, object?>(ProjectionKindTag, Normalize(projectionKind))));
 
+    internal static void RecordMaterializerTerminal(
+        string projectionKind,
+        string materializerKind,
+        string result,
+        TimeSpan elapsed)
+    {
+        Record(() => MaterializerTotal.Add(
+            1,
+            MaterializerTags(projectionKind, materializerKind, result)));
+        Record(() => MaterializerDuration.Record(
+            Math.Max(0, elapsed.TotalMilliseconds),
+            MaterializerTags(projectionKind, materializerKind, result)));
+    }
+
     private static void RecordBacklogSample(
         string projectionKind,
         int unresolvedCount,
@@ -108,8 +136,27 @@ internal static class ProjectionProcessingMetrics
             { EventKindTag, Normalize(eventKind) },
         };
 
+    private static TagList MaterializerTags(
+        string projectionKind,
+        string materializerKind,
+        string result) =>
+        new()
+        {
+            { ProjectionKindTag, Normalize(projectionKind) },
+            { MaterializerKindTag, Normalize(materializerKind) },
+            { ResultTag, NormalizeResult(result) },
+        };
+
     private static string Normalize(string value) =>
         string.IsNullOrWhiteSpace(value) ? "unknown" : value;
+
+    private static string NormalizeResult(string result) =>
+        result switch
+        {
+            ResultCompleted => ResultCompleted,
+            ResultCancelled => ResultCancelled,
+            _ => ResultFailed,
+        };
 
     private static void Record(Action action)
     {
@@ -124,6 +171,17 @@ internal static class ProjectionProcessingMetrics
         }
     }
 
-    private static void LogWarning(Exception exception) =>
-        Trace.TraceWarning("Projection metric emission failed: {0}", exception);
+    private static void LogWarning(Exception exception)
+    {
+        try
+        {
+            Trace.TraceWarning(
+                "Projection metric emission failed. errorType={0}",
+                exception.GetType().Name);
+        }
+        catch (Exception)
+        {
+            return;
+        }
+    }
 }

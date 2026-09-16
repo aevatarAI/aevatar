@@ -1,5 +1,5 @@
-using Aevatar.GAgentService.Abstractions.Commands;
 using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions.Commands;
 
 namespace Aevatar.GAgentService.Abstractions;
 
@@ -32,6 +32,10 @@ public sealed record ScopeWorkflowSaveAndBindRequest(
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 }
 
+public sealed record ScopeWorkflowArchiveRequest(
+    string ScopeId,
+    string WorkflowId);
+
 public enum ScopeWorkflowLookupStatus
 {
     NotFound = 0,
@@ -50,6 +54,22 @@ public sealed record ScopeWorkflowSummary(
     string ActiveRevisionId,
     string DeploymentId,
     string DeploymentStatus,
+    DateTimeOffset UpdatedAt)
+{
+    public string ServiceAppId { get; init; } = string.Empty;
+
+    public string ServiceNamespace { get; init; } = string.Empty;
+
+    public string PublishedServiceId { get; init; } = string.Empty;
+}
+
+public sealed record ScopeWorkflowPublishedServiceDescriptor(
+    string ScopeId,
+    string WorkflowId,
+    string ServiceAppId,
+    string ServiceNamespace,
+    string PublishedServiceId,
+    string DisplayName,
     DateTimeOffset UpdatedAt);
 
 public sealed record ScopeWorkflowLookupResult(
@@ -58,6 +78,20 @@ public sealed record ScopeWorkflowLookupResult(
     string Reason)
 {
     public bool IsRunnable => Status == ScopeWorkflowLookupStatus.Runnable && Workflow != null;
+}
+
+public enum ScopeWorkflowCatalogueLookupStatus
+{
+    NotFound = 0,
+    Ambiguous = 1,
+    Found = 2,
+}
+
+public sealed record ScopeWorkflowCatalogueLookupResult(
+    ScopeWorkflowCatalogueLookupStatus Status,
+    ScopeWorkflowSummary? Workflow)
+{
+    public bool IsFound => Status == ScopeWorkflowCatalogueLookupStatus.Found && Workflow != null;
 }
 
 public sealed record ScopeWorkflowSource(
@@ -105,5 +139,14 @@ public sealed record ScopeWorkflowSaveAndBindResult(
     string RevisionId,
     ScopeWorkflowUpsertResult Workflow,
     ScopeBindingUpsertResult Binding,
+    string AcceptanceStage = "accepted",
+    string PropagationStage = "readmodel_propagating");
+
+public sealed record ScopeWorkflowArchiveAcceptedResult(
+    string ScopeId,
+    string WorkflowId,
+    string DeploymentId,
+    ScopeWorkflowCommandAcceptedHandle CommandHandle,
+    string ReadModelUrl,
     string AcceptanceStage = "accepted",
     string PropagationStage = "readmodel_propagating");

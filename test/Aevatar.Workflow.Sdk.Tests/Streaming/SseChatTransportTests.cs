@@ -19,6 +19,10 @@ data: {"custom":{"name":"aevatar.run.context","payload":{"@type":"type.googleapi
 
 data: {"runStarted":{"threadId":"actor-1","runId":"run-1"}}
 
+data: {"modelCallStart":{"operationId":"model-1","round":0,"model":"gpt-test"}}
+
+data: {"modelCallEnd":{"operationId":"model-1","round":0,"content":"done","success":true}}
+
 data: {"runFinished":{"threadId":"actor-1","result":{"@type":"type.googleapis.com/aevatar.workflow.runs.WorkflowRunResultPayload","output":"done"}}}
 
 data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflow.runs.WorkflowProjectionStateSnapshotPayload","actorId":"actor-1","projectionCompleted":true}}}
@@ -46,6 +50,8 @@ data: {"stateSnapshot":{"snapshot":{"@type":"type.googleapis.com/aevatar.workflo
         events.Select(x => x.Type).Should().ContainInOrder(
             WorkflowEventTypes.Custom,
             WorkflowEventTypes.RunStarted,
+            WorkflowEventTypes.ModelCallStart,
+            WorkflowEventTypes.ModelCallEnd,
             WorkflowEventTypes.RunFinished,
             WorkflowEventTypes.StateSnapshot);
 

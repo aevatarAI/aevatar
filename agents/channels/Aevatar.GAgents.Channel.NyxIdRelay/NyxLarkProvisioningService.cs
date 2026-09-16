@@ -129,11 +129,14 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             return Failure("insecure_webhook_base_url");
         if (string.IsNullOrWhiteSpace(request.ScopeId))
             return Failure("missing_scope_id");
-        if (string.IsNullOrWhiteSpace(_nyxOptions.BaseUrl))
+        if (string.IsNullOrWhiteSpace(_nyxOptions.EffectiveTransportBaseUrl))
             return Failure("nyx_base_url_not_configured");
+        var publicApiBaseUrl = _nyxOptions.EffectiveApiBaseUrl;
+        if (string.IsNullOrWhiteSpace(publicApiBaseUrl))
+            return Failure("nyx_api_base_url_not_configured");
 
         var registrationId = Guid.NewGuid().ToString("N");
-        var nyxBaseUrl = _nyxOptions.BaseUrl.TrimEnd('/');
+        var nyxBaseUrl = publicApiBaseUrl.TrimEnd('/');
         var relayCallbackUrl = NyxRelayCallbackUrl.Build(request.WebhookBaseUrl);
         var label = string.IsNullOrWhiteSpace(request.Label)
             ? $"Aevatar Lark Bot {registrationId[..8]}"
@@ -297,7 +300,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
         {
             var stored = await _secretVault.PutAsync(
                 new StoreSecretRequest(
-                    CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                    CredentialSecretPurposes.ChannelNyxIdAgentKey,
                     scopeId,
                     apiKeyId,
                     fullKey,
@@ -385,7 +388,7 @@ public sealed class NyxLarkProvisioningService : INyxLarkProvisioningService, IN
             JsonSerializer.Serialize(new
             {
                 name = $"aevatar-lark-relay-{registrationId[..12]}",
-                scopes = "read write",
+                scopes = ChannelNyxIdAgentKeyScopePolicy.ProvisionedScopes,
                 platform = NyxRelayApiKeyPlatform,
                 callback_url = relayCallbackUrl,
             }),

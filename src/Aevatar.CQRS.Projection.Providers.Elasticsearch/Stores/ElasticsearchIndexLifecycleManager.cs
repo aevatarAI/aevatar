@@ -9,8 +9,8 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 /// <summary>
 /// Owns the physical-index lifecycle behind a stable read/write alias name.
 ///
-/// Write-path reconciliation state machine, applied once per <see cref="EnsureIndexAsync"/>
-/// invocation per alias name in a process:
+/// Index reconciliation state machine, applied once per alias name in a process across
+/// <see cref="EnsureIndexAsync"/> and explicit startup reconciliation:
 ///
 /// 1. Alias exists and points at <c>{alias}-v{fingerprint}</c> matching the
 ///    augmented metadata fingerprint → no-op.
@@ -38,16 +38,41 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 public sealed class ElasticsearchIndexLifecycleManager : IDisposable
 {
     private static readonly TimeSpan ReindexCompletionBudget = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// A synchronous <c>_reindex</c> is bounded by <see cref="ReindexCompletionBudget"/>; the
+    /// HTTP client that carries it must therefore outlive that budget instead of the store's
+    /// short per-request timeout, otherwise the client cancels a still-running server-side
+    /// copy and the alias is left drifted while the destination fills in the background.
+    /// </summary>
+    public static readonly TimeSpan ReindexRequestTimeout = ReindexCompletionBudget + TimeSpan.FromSeconds(30);
+
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private readonly Lock _stateGate = new();
     private readonly HashSet<string> _initializedAliases = new(StringComparer.Ordinal);
     private readonly HttpClient _httpClient;
+    private readonly HttpClient _reindexHttpClient;
     private readonly bool _autoCreate;
     private readonly ILogger _logger;
 
     public ElasticsearchIndexLifecycleManager(HttpClient httpClient, bool autoCreate, ILogger? logger = null)
+        : this(httpClient, autoCreate, logger, reindexHttpClient: null)
+    {
+    }
+
+    /// <param name="reindexHttpClient">
+    /// Optional client dedicated to long-running <c>_reindex</c> calls; it must share the base
+    /// address and credentials of <paramref name="httpClient"/> and allow at least
+    /// <see cref="ReindexRequestTimeout"/>. When omitted, <paramref name="httpClient"/> is used.
+    /// </param>
+    public ElasticsearchIndexLifecycleManager(
+        HttpClient httpClient,
+        bool autoCreate,
+        ILogger? logger,
+        HttpClient? reindexHttpClient)
     {
         _httpClient = httpClient;
+        _reindexHttpClient = reindexHttpClient ?? httpClient;
         _autoCreate = autoCreate;
         _logger = logger ?? NullLogger.Instance;
     }
@@ -208,6 +233,35 @@ public sealed class ElasticsearchIndexLifecycleManager : IDisposable
         if (!_autoCreate)
             return;
 
+        lock (_stateGate)
+        {
+            if (_initializedAliases.Contains(aliasName))
+                return;
+        }
+
+        await _initLock.WaitAsync(ct);
+        try
+        {
+            lock (_stateGate)
+            {
+                if (_initializedAliases.Contains(aliasName))
+                    return;
+            }
+
+            await ReconcileWithReindexCoreAsync(aliasName, metadata, ct);
+            MarkInitialized(aliasName);
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    private async Task ReconcileWithReindexCoreAsync(
+        string aliasName,
+        DocumentIndexMetadata metadata,
+        CancellationToken ct)
+    {
         var fingerprint = ElasticsearchProjectionSchemaFingerprint.Compute(metadata);
         var expectedPhysical = $"{aliasName}-v{fingerprint}";
 
@@ -219,13 +273,25 @@ public sealed class ElasticsearchIndexLifecycleManager : IDisposable
                 return;
 
             // Drift: the alias points to an older physical. Copy data forward, then atomic swap.
-            // If the expected physical already exists (a prior pod/deploy created+filled it),
-            // skip the reindex and only repoint.
+            // If the expected physical already exists, a prior pod/deploy created it but may not
+            // have finished filling it (an interrupted copy leaves a partial destination while
+            // Elasticsearch keeps copying in the background), so top it up from the source
+            // before repointing: nothing writes to the destination until the alias moves, and
+            // nothing writes to the drifted source because writers fail closed on drift, so an
+            // overwrite copy is exactly source == destination.
             var expectedExists = await IndexExistsAsync(expectedPhysical, ct);
             if (!expectedExists)
             {
                 await CreatePhysicalAsync(expectedPhysical, metadata, ct);
                 await ReindexAsync(sourceIndex: currentAliasTarget, destIndex: expectedPhysical, ct);
+            }
+            else
+            {
+                await ReindexAsync(
+                    sourceIndex: currentAliasTarget,
+                    destIndex: expectedPhysical,
+                    ct,
+                    ReindexMode.OverwriteDestination);
             }
 
             await ExecuteAliasActionsAsync(
@@ -238,8 +304,8 @@ public sealed class ElasticsearchIndexLifecycleManager : IDisposable
                 ct);
 
             _logger.LogInformation(
-                "Projection index lifecycle: reindex-healed schema drift alias={Alias} old={OldPhysical} new={NewPhysical} reindexed={Reindexed}",
-                aliasName, currentAliasTarget, expectedPhysical, !expectedExists);
+                "Projection index lifecycle: reindex-healed schema drift alias={Alias} old={OldPhysical} new={NewPhysical} reindexMode={ReindexMode}",
+                aliasName, currentAliasTarget, expectedPhysical, expectedExists ? "top-up" : "initial");
             return;
         }
 
@@ -521,16 +587,43 @@ public sealed class ElasticsearchIndexLifecycleManager : IDisposable
             $"Elasticsearch physical index creation failed for '{physical}': {(int)response.StatusCode} {response.ReasonPhrase}. body={body}");
     }
 
+    private enum ReindexMode
+    {
+        /// <summary>Every source document must be created in an empty destination.</summary>
+        CreateAll = 0,
+
+        /// <summary>Documents already present in the destination are kept; the rest are created.</summary>
+        KeepExistingDocuments = 1,
+
+        /// <summary>The destination is made equal to the source, overwriting stale copies.</summary>
+        OverwriteDestination = 2,
+    }
+
+    private Task ReindexAsync(
+        string sourceIndex,
+        string destIndex,
+        CancellationToken ct,
+        bool allowExistingDocuments = false) =>
+        ReindexAsync(
+            sourceIndex,
+            destIndex,
+            ct,
+            allowExistingDocuments ? ReindexMode.KeepExistingDocuments : ReindexMode.CreateAll);
+
     private async Task ReindexAsync(
         string sourceIndex,
         string destIndex,
         CancellationToken ct,
-        bool allowExistingDocuments = false)
+        ReindexMode mode)
     {
+        var allowExistingDocuments = mode == ReindexMode.KeepExistingDocuments;
+        var destination = new Dictionary<string, object?> { ["index"] = destIndex };
+        if (mode != ReindexMode.OverwriteDestination)
+            destination["op_type"] = "create";
         var payloadProperties = new Dictionary<string, object?>
         {
             ["source"] = new Dictionary<string, object?> { ["index"] = sourceIndex },
-            ["dest"] = new Dictionary<string, object?> { ["index"] = destIndex, ["op_type"] = "create" },
+            ["dest"] = destination,
         };
         if (allowExistingDocuments)
             payloadProperties["conflicts"] = "proceed";
@@ -544,7 +637,7 @@ public sealed class ElasticsearchIndexLifecycleManager : IDisposable
             Content = new StringContent(payload, Encoding.UTF8, "application/json"),
         };
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await _reindexHttpClient.SendAsync(request, ct);
         await EnsureSuccessAsync(response, $"reindex '{sourceIndex}' to '{destIndex}'", ct);
 
         var body = await response.Content.ReadAsStringAsync(ct);
@@ -572,6 +665,19 @@ public sealed class ElasticsearchIndexLifecycleManager : IDisposable
         {
             throw new InvalidOperationException(
                 $"Elasticsearch reindex from '{sourceIndex}' to '{destIndex}' did not account for every source document.");
+        }
+
+        if (mode == ReindexMode.OverwriteDestination &&
+            doc.RootElement.TryGetProperty("total", out var overwriteTotalNode) &&
+            overwriteTotalNode.TryGetInt64(out var overwriteTotal) &&
+            doc.RootElement.TryGetProperty("created", out var overwriteCreatedNode) &&
+            overwriteCreatedNode.TryGetInt64(out var overwriteCreated) &&
+            doc.RootElement.TryGetProperty("updated", out var overwriteUpdatedNode) &&
+            overwriteUpdatedNode.TryGetInt64(out var overwriteUpdated) &&
+            overwriteCreated + overwriteUpdated != overwriteTotal)
+        {
+            throw new InvalidOperationException(
+                $"Elasticsearch top-up reindex from '{sourceIndex}' to '{destIndex}' did not account for every source document.");
         }
     }
 

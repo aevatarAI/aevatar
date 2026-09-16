@@ -1,6 +1,6 @@
 # Managed codex_exec rollout runbook
 
-This runbook enables Aevatar's NyxID-to-chrono-sandbox managed Codex path. The feature is disabled by default and must remain restricted to trusted internal users during P0.
+This runbook enables Aevatar's NyxID-to-chrono managed Codex path. The feature is disabled by default and must remain restricted to trusted internal users during P0. The chrono-sandbox deployment name is not the managed NyxID policy identity.
 
 ## Ownership
 
@@ -8,7 +8,15 @@ Aevatar owns the typed tool contract, Application readiness coordinator,
 per-user credential actor/projection, `ISecretVault` storage, diagnostic
 lifecycle API, fixed NyxID proxy request, and sanitized failure mapping.
 
-NyxID owns agent-key scope enforcement and the temporary five-minute `proxy:*` delegation token injected into internal-canary calls to `chrono-sandbox`.
+NyxID owns one exact shared `chrono-sandbox` UserService policy for both execution
+paths. The route has `forward_access_token=true`, `inject_delegation_token=true`,
+and scope membership `proxy:* sandbox:execute`. `code_execute` sends an Agent Key
+as `Authorization`; NyxID forwards it and injects the short delegation token.
+Chrono uses the delegation token to authenticate exact execution and exposes the
+Agent Key only to the isolated program as `NYXID_API_KEY`. Managed `codex_exec`
+uses the same exact route and `/codex/execute`, but sends its Vault agent key only
+as `X-API-Key`; because that request has no `Authorization`, the key still
+terminates at NyxID on the managed path.
 
 Chrono-sandbox owns the deployed OpenSandbox control plane, immutable runner image, fixed Codex command, request-local delegation-token environment mapping, resource limits, output bounds, cancellation, cleanup, and live execution proof. Operations owns the gVisor tenant and its IP-level egress NetworkPolicy (ADR-0044), deploys and configures NyxID and chrono-sandbox, and does not receive or store users' agent keys.
 
@@ -16,43 +24,43 @@ Chrono-sandbox owns the deployed OpenSandbox control plane, immutable runner ima
 
 Before enabling Aevatar, operations must confirm:
 
-- the NyxID UserService that fronts Aevatar temporarily uses
-  `forward_access_token=true` for the internal P0 so authenticated users can
-  call the explicit credential lifecycle API; normal `codex_exec` does not use
-  that bearer to provision or repair a credential
-- the `chrono-sandbox` service is deployed from commit `1e8134d` or a
-  descendant and exposes `POST /codex/execute`
-- its NyxID service definition is active with `forward_access_token=false`
-- `inject_delegation_token=true` and `delegation_token_scope=proxy:*`
-- each canary user directly owns an active `chrono-sandbox` UserService
+- one chrono-sandbox deployment exposes both `POST /execute` and
+  `POST /codex/execute`
+- each canary user directly owns one active, catalog-backed `chrono-sandbox`
+  UserService selected by one exact ID for both paths
+- the shared UserService has `forward_access_token=true`,
+  `inject_delegation_token=true`, and delegation scopes containing exactly the
+  required capabilities `proxy:*` and `sandbox:execute` (other preserved scopes
+  do not invalidate the route)
+- the code path is exactly `/execute`, the managed path is exactly
+  `/codex/execute`, and neither path has a slug, ID, credential, or path fallback
 - each canary user has a usable `chrono-llm-public` route
 - chrono-sandbox sets `NYXID_LLM_PROXY_URL=https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public`; it does not use `/api/v1/llm/gateway/v1` or `/api/v1/llm/chrono-llm-public/v1`
 - chrono-sandbox can pull the approved `containers/codex-runner` image digest
 - runner pods are scheduled under the `gvisor` RuntimeClass with Codex's inner sandbox disabled per ADR-0044; there is no Landlock preflight, and the sandbox create call requests no `networkPolicy` and no `credentialProxy`
-- chrono-sandbox validates the injected token before sandbox creation and passes it only as request-local `NYXID_LLM_TOKEN` through execd's native environment map
+- chrono-sandbox validates the injected token before sandbox creation; managed
+  Codex receives it only as request-local `NYXID_LLM_TOKEN`, while generic code
+  execution receives only the forwarded Agent Key as `NYXID_API_KEY` plus the
+  configured `NYXID_BASE_URL`, all through execd's native environment map
 - its OpenSandbox runtime has the required quota, PID, timeout, and cleanup controls, and operations has applied the IP-level egress NetworkPolicy for the codex tenant (coarser than an FQDN allow-list; the NyxID gateway sits behind a shared CDN range)
 - a chrono-owned end-to-end smoke returns exact `CODEX_EXEC_READY` and proves sandbox cleanup
 
 The runner image itself must contain no provider, NyxID, OpenSandbox control-plane, or user credential. The P0 delegation token must not be written to a shell wrapper, profile, workspace, persisted session, logs, or result. Aevatar no longer needs an OpenSandbox endpoint or API key.
 
-The internal P0 uses two distinct NyxID UserService policies. The UserService
-fronting Aevatar temporarily forwards the interactive access token so the same
-authenticated user can call the explicit lifecycle API, which confirms
-`/users/me` before creating or repairing that user's Agent Key. The user's
-`chrono-sandbox` UserService must instead keep
-`forward_access_token=false`, `inject_delegation_token=true`, and exact
-`proxy:*` delegation; Aevatar validates that chrono policy during explicit
-provisioning, reconciliation, and rotation, but cannot prevent the service owner
-from changing it later.
+The internal P0 uses one shared NyxID UserService policy. For unattended
+`code_execute`, Aevatar late-resolves a Vault-backed Agent Key, NyxID forwards it,
+and Chrono carries it into the isolated program; the five-minute delegation token
+authenticates only the Chrono request. Managed `codex_exec` keeps its separate
+credential-delivery boundary: its `X-API-Key` terminates at NyxID and only the
+short `proxy:*` token reaches Codex. Aevatar validates the shared route policy
+during explicit admission and managed credential lifecycle operations, but
+cannot prevent the service owner from changing it later.
 
 The five-minute runner token can access other NyxID REST proxy services
-available to the same user, and Aevatar ingress temporarily handles the
-forwarded interactive bearer, so keep the rollout restricted to trusted
-internal users and operators. Do not use `All` beyond that internal population
-until #2899 adds immutable/version-bound caller-credential non-forwarding,
-NyxID replaces `proxy:*` with authorization limited to `chrono-llm-public`,
-and the explicit lifecycle boundary no longer depends on forwarding the
-interactive bearer.
+available to the same user, so keep the rollout restricted to trusted internal
+users and operators. Do not use `All` beyond that internal population until
+#2899 adds immutable/version-bound policy and NyxID replaces `proxy:*` with
+authorization limited to `chrono-llm-public`.
 
 ## Configure Aevatar
 
@@ -78,8 +86,9 @@ Aevatar__CodexExecution__ManagedSandbox__Eligibility__Mode=All
 ```
 
 Do not set any `AllowedNyxIdUserIds` entry in `All` mode. `All` does not create
-NyxID UserServices: each user must already have a personal active
-`chrono-sandbox` UserService and a usable `chrono-llm-public` route.
+NyxID UserServices: each user must already have the shared personal active
+`chrono-sandbox` UserService and a usable `chrono-llm-public` route. The same
+exact `chrono-sandbox` UserService ID is used by both execution paths.
 Keep `RolloutBoundary=InternalOnly`; startup rejects any enabled configuration
 without that explicit boundary, and no public boundary is supported while
 delegation scope remains `proxy:*`.
@@ -154,6 +163,13 @@ curl -i -X DELETE \
   https://<aevatar-host>/api/managed-codex/credential
 ```
 
+When a credential mutation returns a typed lifecycle failure, the Host writes
+one bounded warning containing only the fixed operation (`provision`, `rotate`,
+or `revoke`), the stable lifecycle code, and its mapped HTTP status. Use those
+fields to correlate a failed request. The warning must not include the exception
+message, bearer, NyxID subject, API-key ID, actor ID, command ID, or Vault
+reference.
+
 ## Workflow canaries
 
 Invoke the public Ornn skill `aevatar-codex-exec-workflow-sample` and its
@@ -187,11 +203,13 @@ The public skill invoke endpoint uses the same trusted caller-credential extract
 - `managed_credential_not_provisioned`: call the explicit credential POST endpoint as that user; normal `codex_exec` will not repair it.
 - `managed_credential_inactive` / `managed_credential_expired`: reconcile through POST or force replacement through `/rotate`.
 - `managed_credential_owner_invalid` / `managed_credential_reference_invalid` / `managed_credential_service_binding_invalid`: stop execution and run explicit reconciliation; do not patch the read model.
+- `managed_user_authentication_failed`: NyxID returned HTTP 401 for the current lifecycle bearer; refresh the user's NyxID authentication and retry. The lifecycle endpoint preserves this boundary as HTTP 401.
+- `managed_user_authorization_denied`: NyxID returned HTTP 403 for the current lifecycle bearer; inspect the user's NyxID API-key lifecycle authority rather than rotating the managed key manually. The lifecycle endpoint preserves this boundary as HTTP 403.
 - `managed_user_authorization_unavailable`: an explicit lifecycle action needs the current user's bearer; do not substitute an operator credential.
 - `managed_credential_commit_timeout`: Actor commit or Projection Session observation did not finish inside the bounded mutation window; inspect dispatch/projection health rather than polling in the workflow.
-- `managed_user_services_unavailable`: the user's required `chrono-sandbox` or `chrono-llm-public` UserService is absent, ambiguous, inactive, or has invalid delegation configuration.
+- `managed_user_services_unavailable`: the user's required shared `chrono-sandbox` or `chrono-llm-public` UserService is absent, ambiguous, inactive, or has invalid delegation configuration.
 - `nyxid_identity_mismatch`: the authenticated claim and `/users/me` owner differ; do not override it.
-- `chrono_sandbox_service_*`: repair the user's exact NyxID UserService or delegation settings.
+- `managed_codex_service_*`: repair the user's exact shared `chrono-sandbox` UserService or delegation settings.
 - `chrono_llm_route_unavailable`: repair the user's `chrono-llm-public` readiness.
 - `managed_credential_untracked_key_exists`: reconcile and revoke the old named key before retrying.
 - `managed_credential_mutation_in_progress`: another mutation holds the user's distributed lease; retry after it completes.
@@ -200,8 +218,9 @@ The public skill invoke endpoint uses the same trusted caller-credential extract
 - `managed_credential_vault_unavailable`: Vault reconciliation could not determine whether the deterministic reference exists. Restore Vault health and retry; do not revoke the active NyxID key manually.
 - `managed_credential_unavailable` / `managed_credential_invalid`: inspect projection and Vault health without exposing the secret.
 - `managed_proxy_authorization_denied`: inspect the exact agent-key service grant and NyxID proxy policy.
-- `managed_proxy_target_unavailable`: verify the user's `chrono-sandbox` UserService and deployed route.
+- `managed_proxy_target_unavailable`: verify the user's exact shared `chrono-sandbox` UserService and `/codex/execute` path.
 - `managed_proxy_timeout` / `managed_proxy_unavailable`: inspect NyxID and chrono-sandbox capacity.
+- `managed_upstream_codex_*`: Aevatar received an explicitly allowlisted stable chrono error code inside a response that passed the configured byte bound. Use the suffix to select the producer-owned sandbox creation, readiness, workspace, command, output, timeout, capacity, or cleanup diagnostic path. Aevatar intentionally discards the upstream message and raw body; this code does not authorize an automatic retry or ordinary `/execute` fallback.
 - `managed_response_invalid` / `managed_response_too_large`: correlate with the sanitized chrono diagnostic ID and treat the contract drift as a rollout blocker.
 
 ### Incident 3d836d6c causal record
@@ -254,4 +273,9 @@ revocation remain available so each provisioned canary can revoke its key.
 
 If chrono-sandbox itself is unhealthy, operations rolls back or disables that service independently. Private SSH `codex_exec` remains controlled by its existing NyxID settings.
 
-If the NyxID UserService forwarding policy drifts, disable managed execution immediately, restore the required policy, inspect downstream logs for exposure, rotate affected invocation keys, and keep the feature disabled until the incident is resolved.
+If the shared NyxID execution policy drifts, disable both affected execution
+features immediately, restore the exact dual-credential policy, inspect
+downstream logs for exposure, rotate affected invocation keys, and keep the
+features disabled until the incident is resolved. Generic code execution is
+expected to forward only an exact Agent Key alongside a valid delegation token;
+an ordinary bearer reaching sandbox environment is an incident.

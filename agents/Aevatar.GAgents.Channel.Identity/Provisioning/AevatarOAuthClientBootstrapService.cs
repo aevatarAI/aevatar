@@ -19,17 +19,20 @@ namespace Aevatar.GAgents.Channel.Identity;
 public sealed class AevatarOAuthClientBootstrapService : IHostedService
 {
     private readonly ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> _provisioningDispatch;
+    private readonly ICommandDispatchService<RebuildAevatarOAuthClientProjectionCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> _projectionRebuildDispatch;
     private readonly AevatarOAuthClientOptions _clientOptions;
     private readonly AevatarOAuthClientBootstrapOptions _options;
     private readonly ILogger<AevatarOAuthClientBootstrapService> _logger;
 
     public AevatarOAuthClientBootstrapService(
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> provisioningDispatch,
+        ICommandDispatchService<RebuildAevatarOAuthClientProjectionCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> projectionRebuildDispatch,
         IOptions<AevatarOAuthClientOptions> clientOptions,
         IOptions<AevatarOAuthClientBootstrapOptions> options,
         ILogger<AevatarOAuthClientBootstrapService> logger)
     {
         _provisioningDispatch = provisioningDispatch ?? throw new ArgumentNullException(nameof(provisioningDispatch));
+        _projectionRebuildDispatch = projectionRebuildDispatch ?? throw new ArgumentNullException(nameof(projectionRebuildDispatch));
         _clientOptions = clientOptions?.Value ?? throw new ArgumentNullException(nameof(clientOptions));
         _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -87,13 +90,20 @@ public sealed class AevatarOAuthClientBootstrapService : IHostedService
         if (!accepted.Succeeded || accepted.Receipt is null)
             throw new InvalidOperationException($"Aevatar OAuth client bootstrap dispatch rejected: {accepted.Error}.");
 
+        var rebuildAccepted = await _projectionRebuildDispatch
+            .DispatchAsync(new RebuildAevatarOAuthClientProjectionCommand(), ct)
+            .ConfigureAwait(false);
+        if (!rebuildAccepted.Succeeded || rebuildAccepted.Receipt is null)
+            throw new InvalidOperationException($"Aevatar OAuth client projection rebuild dispatch rejected: {rebuildAccepted.Error}.");
+
         _logger.LogInformation(
-            "Configured Aevatar OAuth client provisioning accepted for {ActorId} (client_id={ClientId}, authority={Authority}, command_id={CommandId}). " +
+            "Configured Aevatar OAuth client provisioning accepted for {ActorId} (client_id={ClientId}, authority={Authority}, command_id={CommandId}, rebuild_command_id={RebuildCommandId}). " +
             "Production deployments must enable broker_capability_enabled on this client at NyxID admin (one-time per cluster).",
             AevatarOAuthClientGAgent.WellKnownId,
             command.ClientId,
             authority,
-            accepted.Receipt.CommandId);
+            accepted.Receipt.CommandId,
+            rebuildAccepted.Receipt.CommandId);
     }
 
     private void ValidateStartupProvisioningBoundary(string authority, string redirectUri)

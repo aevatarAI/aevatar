@@ -1,3 +1,4 @@
+using Aevatar.Configuration;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using Aevatar.Workflow.Core;
@@ -6,33 +7,51 @@ using FluentAssertions;
 namespace Aevatar.Workflow.Host.Api.Tests;
 
 /// <summary>
-/// Every YAML under the repository's workflows/ directory must round-trip through
+/// Every YAML under the repository's startup workflow directories must round-trip through
 /// <see cref="WorkflowParser"/> and pass <see cref="WorkflowValidator"/>: the catalog file
-/// loader only stores raw strings, so without this test a malformed template would surface
+/// loader only stores raw strings, so without this test a malformed definition would surface
 /// only at first run time.
 /// </summary>
 public class WorkflowTemplateParseTests
 {
-    public static TheoryData<string> TemplateFiles()
+    public static TheoryData<string, string> WorkflowFiles()
     {
-        var data = new TheoryData<string>();
-        var directory = Path.Combine(FindRepositoryRoot(), "workflows");
-        foreach (var file in Directory.EnumerateFiles(directory, "*.yaml", SearchOption.TopDirectoryOnly).OrderBy(f => f))
-            data.Add(Path.GetFileName(file));
+        var data = new TheoryData<string, string>();
+        foreach (var directoryName in new[] { "workflows", AevatarPaths.WorkflowTemplatesDirectoryName })
+        {
+            var directory = Path.Combine(FindRepositoryRoot(), directoryName);
+            foreach (var file in Directory.EnumerateFiles(directory, "*.*", SearchOption.TopDirectoryOnly)
+                         .Where(static file =>
+                             file.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
+                             file.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
+                         .OrderBy(static file => file, StringComparer.Ordinal))
+            {
+                data.Add(directoryName, Path.GetFileName(file));
+            }
+        }
         return data;
     }
 
     [Theory]
-    [MemberData(nameof(TemplateFiles))]
-    public void Template_ShouldParse(string fileName)
+    [MemberData(nameof(WorkflowFiles))]
+    public void StartupWorkflow_ShouldParse(string directoryName, string fileName)
     {
-        var yaml = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "workflows", fileName));
+        var yaml = File.ReadAllText(Path.Combine(FindRepositoryRoot(), directoryName, fileName));
 
         var definition = new WorkflowParser().Parse(yaml);
 
         definition.Name.Should().NotBeNullOrWhiteSpace();
         definition.Steps.Should().NotBeEmpty();
         WorkflowValidator.Validate(definition).Should().BeEmpty();
+        WorkflowValidator.Validate(
+                definition,
+                new WorkflowValidator.WorkflowValidationOptions
+                {
+                    RequireExplicitLlmAgentToolScopes = true,
+                },
+                availableWorkflowNames: null)
+            .Should()
+            .BeEmpty("repository workflows are rebound under the current tool-catalog policy at startup");
         definition.Steps
             .Where(step => step.Type == "await_job" || step.Type == "async_job")
             .Should()

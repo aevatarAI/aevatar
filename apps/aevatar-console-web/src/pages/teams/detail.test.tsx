@@ -16,6 +16,7 @@ import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { teamAutomationApi } from '@/shared/api/teamAutomationApi';
 import { studioApi } from '@/shared/studio/api';
+import { workOrdersApi } from '@/shared/api/workOrdersApi';
 import {
   createTestQueryClient,
   renderWithQueryClient,
@@ -727,7 +728,17 @@ jest.mock('@/shared/api/runtimeRunsApi', () => ({
   },
 }));
 
-jest.mock('@/shared/studio/api', () => ({
+jest.mock("@/shared/api/workOrdersApi", () => ({
+  workOrdersApi: {
+    list: jest.fn(async () => ({
+      scopeId: "scope-1",
+      workOrders: [],
+      nextPageToken: null,
+    })),
+  },
+}));
+
+jest.mock("@/shared/studio/api", () => ({
   isStudioApiErrorCode: (error: unknown, status: number, code: string) =>
     typeof error === 'object' &&
     error !== null &&
@@ -1017,6 +1028,12 @@ describe('TeamDetailPage', () => {
       items: [],
       nextCursor: null,
       totalCount: 0,
+    });
+    (workOrdersApi.list as jest.Mock).mockReset();
+    (workOrdersApi.list as jest.Mock).mockResolvedValue({
+      scopeId: "scope-1",
+      workOrders: [],
+      nextPageToken: null,
     });
     (scheduledDispatchApi.list as jest.Mock).mockReset();
     (scheduledDispatchApi.list as jest.Mock).mockImplementation(async () => ({
@@ -1443,9 +1460,18 @@ describe('TeamDetailPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '团队成员' }));
 
-    expect(await screen.findByText('Team Alpha Operator')).toBeTruthy();
-    expect(window.location.search).toContain('tab=members');
-    expect(window.location.search).not.toContain('step=bind');
+    expect(await screen.findByText("Team Alpha Operator")).toBeTruthy();
+    expect(window.location.search).toContain("tab=members");
+    expect(window.location.search).not.toContain("step=bind");
+
+    fireEvent.click(screen.getByRole("button", { name: "请求" }));
+
+    expect(await screen.findByText("此团队暂无请求。")).toBeTruthy();
+    expect(window.location.search).toBe("?tab=work-orders");
+    expect(workOrdersApi.list).toHaveBeenCalledWith({
+      scopeId: "scope-1",
+      teamId: "t-alpha",
+    });
   });
 
   it('falls legacy event deep links back to the overview tab', async () => {

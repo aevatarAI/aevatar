@@ -341,9 +341,6 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             publisher.Published.Select(x => x.evt).OfType<WorkflowLlmInvocationStartedEvent>()
                 .Should()
                 .ContainSingle(x => x.RunId == "run-1" && x.StepId == "step-1" && x.SessionId == "session-1");
-            var chunks = publisher.Published.Select(x => x.evt).OfType<WorkflowLlmStreamChunkEvent>().ToList();
-            chunks.Should().Contain(x => x.DeltaContent == "workflow ");
-            chunks.Should().Contain(x => x.DeltaReasoningContent == "reasoning");
             publisher.Published.Select(x => x.evt).OfType<WorkflowLlmInvocationCompletedEvent>()
                 .Should()
                 .ContainSingle(x =>
@@ -353,6 +350,19 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                     x.RoleActorId == "workflow-role-agent");
 
             var persisted = await eventStore.GetEventsAsync(agent.Id);
+            var progress = persisted
+                .Where(x => x.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(x => x.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .ToArray();
+            progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextStarted);
+            progress.Where(item =>
+                    item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+                .Select(item => item.TextDelta.Delta)
+                .Should().Equal("workflow ", "answer");
+            progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ReasoningDelta &&
+                item.ReasoningDelta.Delta == "reasoning");
             var completion = persisted
                 .Where(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
                 .Select(x => x.EventData.Unpack<RoleChatSessionCompletedEvent>())
@@ -364,6 +374,60 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             completion.Content.Should().Be("workflow answer");
             completion.ReasoningContent.Should().Be("reasoning");
             completion.ToolCalls.Should().BeEmpty();
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenProviderStreamsTokenFragments_ShouldBoundCommittedProgress()
+        {
+            const int textChunkCount = 4_097;
+            const int reasoningChunkCount = 2_049;
+            var eventStore = new InMemoryEventStore();
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new FragmentedWorkflowIntentLlmProvider(textChunkCount, reasoningChunkCount),
+                "workflow-role-agent-bounded-progress");
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-bounded-progress",
+                StepId = "step-bounded-progress",
+                SessionId = "session-bounded-progress",
+                Prompt = "stream many token fragments",
+            });
+
+            var persisted = await eventStore.GetEventsAsync(agent.Id);
+            var progress = persisted
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .ToArray();
+            var textDeltas = progress
+                .Where(item => item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+                .Select(item => item.TextDelta.Delta)
+                .ToArray();
+            var reasoningDeltas = progress
+                .Where(item => item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ReasoningDelta)
+                .Select(item => item.ReasoningDelta.Delta)
+                .ToArray();
+
+            textDeltas.Should().HaveCount(5);
+            reasoningDeltas.Should().HaveCount(3);
+            textDeltas.Should().OnlyContain(delta => delta.Length <= 1_024);
+            reasoningDeltas.Should().OnlyContain(delta => delta.Length <= 1_024);
+            string.Concat(textDeltas).Should().Be(new string('t', textChunkCount));
+            string.Concat(reasoningDeltas).Should().Be(new string('r', reasoningChunkCount));
+            publisher.Published
+                .Select(item => item.evt)
+                .Where(item => item is TextMessageContentEvent or TextMessageReasoningEvent)
+                .Should().BeEmpty();
+
+            var completion = persisted
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+                .Should()
+                .ContainSingle()
+                .Subject;
+            completion.Content.Should().Be(new string('t', textChunkCount));
+            completion.ReasoningContent.Should().Be(new string('r', reasoningChunkCount));
         }
 
         [Fact]
@@ -558,33 +622,144 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             terminal.SafeMessage.Should().Be("Connect Calendar to continue.");
             terminal.AuthorizationRequired.Should().NotBeNull();
             terminal.AuthorizationRequired!.ServiceSlug.Should().Be("calendar");
+            terminal.AuthorizationRequired.RequestedScopes.Should().Equal("calendar.read");
             terminal.ToolReceipts.Should().ContainSingle(receipt =>
                 receipt.Status == AgentToolReceiptStatus.AuthorizationRequired);
-            publisher.Published.Select(static item => item.evt)
+            var workflowCompletion = publisher.Published.Select(static item => item.evt)
                 .OfType<WorkflowLlmInvocationCompletedEvent>()
                 .Should().ContainSingle(completed =>
                     !completed.Success &&
                     completed.Error ==
-                    "authorization_required: Connect Calendar to continue.");
+                    "authorization_required: Connect Calendar to continue.")
+                .Which;
+            workflowCompletion.AuthorizationRequirement.Should().NotBeNull();
+            workflowCompletion.AuthorizationRequirement.ServiceSlug.Should().Be("calendar");
+            workflowCompletion.AuthorizationRequirement.RequestedScopes.Should().Equal("calendar.read");
+            workflowCompletion.AuthorizationRequirement.ReasonCode.Should().Be("service_not_connected");
+            workflowCompletion.AuthorizationRequirement.SafeMessage.Should().Be("Connect Calendar to continue.");
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenKeyCreateIsRequired_ShouldMapTypedRequirement()
+        {
+            var eventStore = new InMemoryEventStore();
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new KeyCreateAuthorizationRequiredWorkflowIntentLlmProvider(),
+                "workflow-role-agent-key-create");
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-key-create",
+                StepId = "reply",
+                SessionId = "session-key-create",
+                Prompt = "create a least-scope key",
+            });
+
+            var terminal = agent.State.Sessions["session-key-create"];
+            terminal.Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+            terminal.AuthorizationRequired.Should().NotBeNull();
+            terminal.AuthorizationRequired!.ServiceSlug.Should().BeEmpty();
+            terminal.AuthorizationRequired.KeyCreate.AllowedServiceIds
+                .Should().Equal("m-github", "m-lark");
+            var completion = publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle().Which;
+            completion.AuthorizationRequirement.ServiceSlug.Should().BeEmpty();
+            completion.AuthorizationRequirement.KeyCreate.Name.Should().Be("agent-alpha");
+            completion.AuthorizationRequirement.KeyCreate.Platform.Should().Be("codex");
+            completion.AuthorizationRequirement.KeyCreate.AllowedServiceIds
+                .Should().Equal("m-github", "m-lark");
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenProxyDelegationRequiresGitHub_ShouldCommitConnectRequirement()
+        {
+            const string arguments =
+                """{"service_slug":"api-github","requested_scopes":["repo"]}""";
+            var eventStore = new InMemoryEventStore();
+            var handler = new RecordingNyxIdHandler(
+                """{"slug":"api-github","scope_catalog":[{"scope":"repo"}]}""");
+            var requireServiceTool = new NyxIdRequireServiceTool(new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+                new HttpClient(handler)));
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new RequireServiceWorkflowIntentLlmProvider(requireServiceTool.Name, arguments),
+                "workflow-role-agent-github-connect",
+                [requireServiceTool]);
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-github-connect",
+                StepId = "reply",
+                SessionId = "session-github-connect",
+                Prompt = "can we connect github oauth?",
+                ScopeId = "scope-alpha",
+                CallerCredential = new WorkflowCallerCredential
+                {
+                    BearerToken = "delegation-alpha",
+                    Kind = NyxIdCallerCredentialKind.ProxyDelegation,
+                    NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+                    {
+                        Platform = "nyxid",
+                        Tenant = "tenant-alpha",
+                        ExternalUserId = "user-alpha",
+                        Scope = "scope-alpha",
+                    },
+                },
+            });
+
+            handler.Requests.Should().Equal(
+                "/api/v1/catalog/api-github",
+                "/api/v1/keys");
+            handler.BearerTokens.Should().OnlyContain(token => token == "delegation-alpha");
+            var terminal = agent.State.Sessions["session-github-connect"];
+            terminal.Completed.Should().BeTrue();
+            terminal.Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+            terminal.FailureCode.Should().Be("AUTHORIZATION_REQUIRED");
+            terminal.AuthorizationRequired.Should().NotBeNull();
+            terminal.AuthorizationRequired!.ServiceSlug.Should().Be("api-github");
+            terminal.AuthorizationRequired.RequestedScopes.Should().Equal("repo");
+            terminal.ToolReceipts.Should().ContainSingle(receipt =>
+                receipt.Status == AgentToolReceiptStatus.AuthorizationRequired &&
+                receipt.ResultJson.Contains("USER_SERVICE_NOT_VISIBLE", StringComparison.Ordinal));
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed =>
+                    !completed.Success &&
+                    completed.AuthorizationRequirement != null &&
+                    completed.AuthorizationRequirement.ServiceSlug == "api-github" &&
+                    completed.AuthorizationRequirement.RequestedScopes.SequenceEqual(new[] { "repo" }));
         }
 
         [Fact]
         public async Task WorkflowRoleGAgent_WhenWorkflowLlmProviderCancelsAfterTimeout_ShouldPublishTimeoutCompletion()
         {
+            const int timeoutMs = 1_000;
             var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var llmProvider = new CancellationWorkflowIntentLlmProvider();
             var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
                 eventStore,
-                new CancellationWorkflowIntentLlmProvider(),
-                "workflow-role-agent-timeout");
+                llmProvider,
+                "workflow-role-agent-timeout",
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
 
-            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            var execution = agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
             {
                 RunId = "run-timeout",
                 StepId = "step-timeout",
                 SessionId = "session-timeout",
                 Prompt = "hello",
-                TimeoutMs = 1,
+                TimeoutMs = timeoutMs,
             });
+            await llmProvider.StreamStarted;
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await llmProvider.CancellationObserved;
+            await execution;
 
             agent.State.Sessions["session-timeout"].WorkflowLlmCompletionDeliveryStatus.Should()
                 .Be(WorkflowLlmCompletionDeliveryStatus.Dispatched);
@@ -648,6 +823,87 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             toolCall.CallId.Should().Be("call-1");
             toolCall.ToolName.Should().Be("lookup");
             Assert.Equal("""{"query":"aevatar"}""", toolCall.ArgumentsJson);
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenToolCallIsParsedFromText_ShouldPersistScrubbedArguments()
+        {
+            var eventStore = new InMemoryEventStore();
+            var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new TextParsedSecretToolWorkflowIntentLlmProvider(),
+                "workflow-role-agent-text-tool",
+                [new SuccessfulWorkflowTool("lookup")]);
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-text-tool",
+                StepId = "step-text-tool",
+                SessionId = "session-text-tool",
+                Prompt = "look up the record",
+            });
+
+            var progress = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .ToArray();
+            var started = progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ToolStarted).Which;
+            var completed = progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ToolCompleted).Which;
+
+            completed.ToolCompleted.OperationId.Should().Be(started.ToolStarted.OperationId);
+            completed.ToolCompleted.Result.Success.Should().BeTrue();
+            completed.ToolCompleted.SafeArgumentsJson.Should()
+                .Be("""{"query":"aevatar","token":"***REDACTED***"}""");
+            completed.ToolCompleted.SafeArgumentsJson.Should().NotContain("raw-secret");
+        }
+
+        [Fact]
+        public async Task WorkflowRoleGAgent_WhenToolExecutionTimesOut_ShouldPersistCancelledToolTerminal()
+        {
+            const int timeoutMs = 1_000;
+            var eventStore = new InMemoryEventStore();
+            var timeProvider = new FakeTimeProvider();
+            var tool = new BlockingWorkflowTool("lookup");
+            var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
+                eventStore,
+                new SingleToolCallWorkflowIntentLlmProvider(
+                    tool.Name,
+                    """{"query":"aevatar"}"""),
+                "workflow-role-agent-cancelled-tool",
+                [tool],
+                timeProvider: timeProvider,
+                chatExecutionOptions: new RoleChatExecutionOptions(timeoutMs));
+
+            var execution = agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = "run-cancelled-tool",
+                StepId = "step-cancelled-tool",
+                SessionId = "session-cancelled-tool",
+                Prompt = "look up the record",
+                TimeoutMs = timeoutMs,
+            });
+            await tool.Started;
+
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await execution;
+            await tool.CancellationObserved;
+
+            var progress = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .ToArray();
+            var started = progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ToolStarted).Which;
+            var completed = progress.Should().ContainSingle(item =>
+                item.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.ToolCompleted).Which;
+
+            completed.ToolCompleted.OperationId.Should().Be(started.ToolStarted.OperationId);
+            completed.ToolCompleted.Result.CallId.Should().Be(started.ToolStarted.CallId);
+            completed.ToolCompleted.Result.Success.Should().BeFalse();
+            completed.ToolCompleted.Result.Error.Should().Be("Tool execution was cancelled.");
+            completed.ToolCompleted.SafeArgumentsJson.Should().Be("""{"query":"aevatar"}""");
         }
 
         [Fact]
@@ -1103,6 +1359,74 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRoleGAgent_WhenParentReconcilesDispatchedCompletion_ShouldRedeliverCommittedOutcome()
+        {
+            const string runId = "run-parent-reconcile";
+            const string stepId = "step-parent-reconcile";
+            const string sessionId = "session-parent-reconcile";
+            var (agent, publisher) = await CreateActivatedWorkflowRoleAgentAsync(
+                new InMemoryEventStore(),
+                new RecordingWorkflowIntentLlmProvider(),
+                "workflow-role-agent-parent-reconcile",
+                callbackScheduler: new RecordingWorkflowCompletionCallbackScheduler());
+
+            await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+            {
+                RunId = runId,
+                StepId = stepId,
+                SessionId = sessionId,
+                Prompt = "commit and acknowledge the first delivery",
+            });
+
+            agent.State.Sessions[sessionId].WorkflowLlmCompletionDeliveryStatus.Should()
+                .Be(WorkflowLlmCompletionDeliveryStatus.Dispatched);
+            publisher.Published.Select(static item => item.evt)
+                .OfType<WorkflowLlmInvocationCompletedEvent>()
+                .Should().ContainSingle(completed => completed.SessionId == sessionId);
+
+            await agent.HandleEventAsync(Envelope(
+                new ReconcileWorkflowLlmCompletionCommand
+                {
+                    RunId = runId,
+                    StepId = "step-other",
+                    SessionId = sessionId,
+                    ExecutionId = "execution-parent-reconcile",
+                    ObservedParentStateVersion = 1469,
+                },
+                "workflow-run-parent-reconcile",
+                TopologyAudience.Children));
+
+            publisher.PublicationsWithOptions
+                .Where(static publication =>
+                    publication.Event is WorkflowLlmInvocationCompletedEvent completed &&
+                    completed.SessionId == sessionId)
+                .Should().ContainSingle();
+
+            await agent.HandleEventAsync(Envelope(
+                new ReconcileWorkflowLlmCompletionCommand
+                {
+                    RunId = runId,
+                    StepId = stepId,
+                    SessionId = sessionId,
+                    ExecutionId = "execution-parent-reconcile",
+                    ObservedParentStateVersion = 1470,
+                },
+                "workflow-run-parent-reconcile",
+                TopologyAudience.Children));
+
+            publisher.PublicationsWithOptions
+                .Where(static publication =>
+                    publication.Event is WorkflowLlmInvocationCompletedEvent completed &&
+                    completed.SessionId == sessionId)
+                .Should().HaveCount(2)
+                .And.OnlyContain(publication =>
+                    publication.Options != null &&
+                    publication.Options.Delivery != null &&
+                    publication.Options.Delivery.OperationId ==
+                    $"workflow-llm-terminal:{runId}:{stepId}:{sessionId}:outcome:1");
+        }
+
+        [Fact]
         public async Task WorkflowRoleGAgent_WhenApprovalTimeoutCancellationBlocks_ShouldApplyHostDeadline()
         {
             const int timeoutMs = 1_000;
@@ -1262,16 +1586,19 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             llmProvider.ReleaseAfterCancellation();
             await execution;
 
-            var completion = (await eventStore.GetEventsAsync(agent.Id))
+            var persisted = await eventStore.GetEventsAsync(agent.Id);
+            var completion = persisted
                 .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
                 .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
                 .Should().ContainSingle(completed => completed.SessionId == sessionId).Which;
             completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
             completion.FailureCode.Should().Be("LLM_TIMEOUT");
             completion.Content.Should().NotContain(LateAfterCancellationWorkflowIntentLlmProvider.LateContent);
-            publisher.Published.Select(static item => item.evt)
-                .OfType<WorkflowLlmStreamChunkEvent>()
-                .Should().NotContain(chunk => chunk.DeltaContent.Contains(
+            persisted
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .Where(progress => progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+                .Should().NotContain(progress => progress.TextDelta.Delta.Contains(
                     LateAfterCancellationWorkflowIntentLlmProvider.LateContent,
                     StringComparison.Ordinal));
             publisher.Published.Select(static item => item.evt)
@@ -1412,16 +1739,19 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             sourceReconciliations.Should().HaveCount(2);
             await agent.HandleChatRecoveryContinuationRequestedAsync(sourceReconciliations[^1]);
 
-            var completion = (await eventStore.GetEventsAsync(agent.Id))
+            var persisted = await eventStore.GetEventsAsync(agent.Id);
+            var completion = persisted
                 .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
                 .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
                 .Should().ContainSingle(completed => completed.SessionId == continuationTurnId).Which;
             completion.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
             completion.FailureCode.Should().Be("APPROVAL_TOOL_TIMEOUT");
             completion.Content.Should().NotContain(LateAfterCancellationWorkflowIntentLlmProvider.LateContent);
-            publisher.Published.Select(static item => item.evt)
-                .OfType<WorkflowLlmStreamChunkEvent>()
-                .Should().NotContain(chunk => chunk.DeltaContent.Contains(
+            persisted
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .Where(progress => progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta)
+                .Should().NotContain(progress => progress.TextDelta.Delta.Contains(
                     LateAfterCancellationWorkflowIntentLlmProvider.LateContent,
                     StringComparison.Ordinal));
             publisher.Published.Select(static item => item.evt)
@@ -1755,10 +2085,13 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             using (AgentToolContextScope.Push(tool.ExecutionContext))
             {
                 var result = await requireServiceTool.ExecuteAsync(
-                    """{"service_slug":"api-github"}""");
-                result.Should().Contain("NYXID_SOURCE_UNAVAILABLE");
+                    """{"service_slug":"api-github","requested_scopes":[]}""");
+                result.Should().Contain("USER_SERVICE_NOT_VISIBLE");
             }
-            handler.Requests.Should().Be(0);
+            handler.Requests.Should().Equal(
+                "/api/v1/catalog/api-github",
+                "/api/v1/keys");
+            handler.BearerTokens.Should().OnlyContain(token => token == "fresh-token-1");
             tokenProvider.Authorities.Should().HaveCount(2);
             tokenProvider.Authorities.Should().OnlyContain(authority =>
                 authority.Platform == "lark" &&
@@ -1792,6 +2125,24 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             sourceTerminal.Model.Should().Be("workflow-approval-model");
             sourceTerminal.FailureCode.Should().BeEmpty();
             sourceTerminal.AuthorizationRequired.Should().BeNull();
+            var continuationProgress = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .Where(progress => progress.SessionId == "approval-continuation")
+                .ToArray();
+            continuationProgress.Select(progress => progress.PayloadCase).Should().Equal(
+                RoleChatSessionProgressedEvent.PayloadOneofCase.TextStarted,
+                RoleChatSessionProgressedEvent.PayloadOneofCase.ModelStarted,
+                RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta,
+                RoleChatSessionProgressedEvent.PayloadOneofCase.ModelCompleted);
+            continuationProgress.Select(progress => progress.Sequence).Should().Equal(1, 2, 3, 4);
+            var modelStarted = continuationProgress[1].ModelStarted;
+            var modelCompleted = continuationProgress[3].ModelCompleted;
+            modelStarted.Round.Should().Be(0);
+            modelCompleted.Round.Should().Be(0);
+            modelCompleted.OperationId.Should().Be(modelStarted.OperationId);
+            modelCompleted.Content.Should().Be("approved completion");
+            modelCompleted.Success.Should().BeTrue();
         }
 
         [Fact]
@@ -1873,6 +2224,15 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                 .OfType<WorkflowLlmInvocationCompletedEvent>()
                 .Should().ContainSingle(completed =>
                     completed.Success && completed.SessionId == "session-approval");
+            var targetProgress = (await eventStore.GetEventsAsync(agent.Id))
+                .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+                .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionProgressedEvent>())
+                .Where(progress => progress.SessionId == continuationSessionId)
+                .ToArray();
+            targetProgress.Should().ContainSingle(progress =>
+                progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.TextStarted);
+            targetProgress[0].PayloadCase.Should()
+                .Be(RoleChatSessionProgressedEvent.PayloadOneofCase.TextStarted);
         }
 
         [Fact]
@@ -2467,6 +2827,40 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             }
         }
 
+        private sealed class BlockingWorkflowTool(string name) : IAgentTool
+        {
+            private readonly TaskCompletionSource _started =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _cancellationObserved =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _neverCompletes =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public string Name => name;
+            public string Description => "Blocks until its execution is cancelled.";
+            public string ParametersSchema => "{}";
+            public bool IsReadOnly => true;
+            public Task Started => _started.Task;
+            public Task CancellationObserved => _cancellationObserved.Task;
+
+            public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+            {
+                _ = argumentsJson;
+                _started.TrySetResult();
+                try
+                {
+                    await _neverCompletes.Task.WaitAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _cancellationObserved.TrySetResult();
+                    throw;
+                }
+
+                return "{}";
+            }
+        }
+
         private sealed class ApprovalResumeDeadlineProbe
         {
             private readonly TaskCompletionSource _started =
@@ -3003,19 +3397,28 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             }
         }
 
-        private sealed class RecordingNyxIdHandler : HttpMessageHandler
+        private sealed class RecordingNyxIdHandler(
+            string catalogJson = """{ "slug": "api-github" }""",
+            string keysJson = """{ "keys": [] }""") : HttpMessageHandler
         {
-            public int Requests { get; private set; }
+            public List<string> Requests { get; } = [];
+
+            public List<string?> BearerTokens { get; } = [];
 
             protected override Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request,
                 CancellationToken cancellationToken)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                Requests++;
+                var path = request.RequestUri!.AbsolutePath;
+                Requests.Add(path);
+                BearerTokens.Add(request.Headers.Authorization?.Parameter);
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                 {
-                    Content = new StringContent("""{ "keys": [] }"""),
+                    Content = new StringContent(
+                        path.StartsWith("/api/v1/catalog/", StringComparison.Ordinal)
+                            ? catalogJson
+                            : keysJson),
                 });
             }
         }
@@ -3066,7 +3469,152 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
                             ServiceSlug = "calendar",
                             ReasonCode = "service_not_connected",
                             SafeMessage = "Connect Calendar to continue.",
+                            RequestedScopes = { "calendar.read" },
                         },
+                    },
+                };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+                await Task.CompletedTask;
+            }
+        }
+
+        private sealed class KeyCreateAuthorizationRequiredWorkflowIntentLlmProvider
+            : WorkflowIntentLlmProviderBase
+        {
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk
+                {
+                    ToolReceipt = new AgentToolReceipt
+                    {
+                        CallId = "call-key-create",
+                        ToolName = "nyxid_request_key_create",
+                        Status = AgentToolReceiptStatus.AuthorizationRequired,
+                        ErrorCode = "NYXID_KEY_CREATION_REQUIRED",
+                        ErrorMessage = "Create the least-scope key.",
+                        AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
+                        {
+                            ReasonCode = "NYXID_KEY_CREATION_REQUIRED",
+                            SafeMessage = "Create the least-scope key.",
+                            KeyCreate = new NyxIdKeyCreateActionRequirement
+                            {
+                                Name = "agent-alpha",
+                                Platform = "codex",
+                                AllowedServiceIds = { "m-github", "m-lark" },
+                            },
+                        },
+                    },
+                };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+                await Task.CompletedTask;
+            }
+        }
+
+        private sealed class FragmentedWorkflowIntentLlmProvider(
+            int textChunkCount,
+            int reasoningChunkCount) : WorkflowIntentLlmProviderBase
+        {
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                for (var i = 0; i < textChunkCount; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    yield return new LLMStreamChunk { DeltaContent = "t" };
+                }
+
+                for (var i = 0; i < reasoningChunkCount; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    yield return new LLMStreamChunk { DeltaReasoningContent = "r" };
+                }
+
+                await Task.CompletedTask;
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+            }
+        }
+
+        private sealed class TextParsedSecretToolWorkflowIntentLlmProvider
+            : WorkflowIntentLlmProviderBase
+        {
+            private int _calls;
+
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                if (Interlocked.Increment(ref _calls) == 1)
+                {
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaContent = """
+                            <function_calls>
+                            <invoke name="lookup">
+                            <parameter name="query">aevatar</parameter>
+                            <parameter name="token">raw-secret</parameter>
+                            </invoke>
+                            </function_calls>
+                            """,
+                    };
+                    yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                    yield break;
+                }
+
+                yield return new LLMStreamChunk { DeltaContent = "done" };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                await Task.CompletedTask;
+            }
+        }
+
+        private sealed class SingleToolCallWorkflowIntentLlmProvider(
+            string toolName,
+            string argumentsJson) : WorkflowIntentLlmProviderBase
+        {
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call-cancelled-tool",
+                        Name = toolName,
+                        ArgumentsJson = argumentsJson,
+                    },
+                };
+                yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };
+                await Task.CompletedTask;
+            }
+        }
+
+        private sealed class RequireServiceWorkflowIntentLlmProvider(
+            string toolName,
+            string argumentsJson) : WorkflowIntentLlmProviderBase
+        {
+            public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+                LLMRequest request,
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+            {
+                _ = request;
+                ct.ThrowIfCancellationRequested();
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call-require-github",
+                        Name = toolName,
+                        ArgumentsJson = argumentsJson,
                     },
                 };
                 yield return new LLMStreamChunk { IsLast = true, FinishReason = "tool_calls" };

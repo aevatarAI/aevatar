@@ -1,3 +1,6 @@
+using System.Reflection;
+using Google.Protobuf.Reflection;
+
 namespace Aevatar.CQRS.Projection.Stores.Abstractions;
 
 public sealed class ProjectionDocumentValue
@@ -21,6 +24,27 @@ public sealed class ProjectionDocumentValue
         new(
             ProjectionDocumentValueKind.StringList,
             values?.Select(x => x ?? string.Empty).ToArray() ?? []);
+
+    /// <summary>
+    /// Builds the exact-match value for a protobuf enum field. Document stores persist proto
+    /// enums in their protobuf-JSON form (the proto value name, e.g.
+    /// <c>WORKFLOW_SAGA_STATUS_COMPENSATING</c>), not the C# member name, so filters must
+    /// carry the same form for every store to agree.
+    /// </summary>
+    public static ProjectionDocumentValue FromProtoEnum<TEnum>(TEnum value)
+        where TEnum : struct, Enum =>
+        FromString(ResolveProtoEnumName(value));
+
+    /// <summary>
+    /// Resolves the protobuf-JSON name of an enum value: the proto value name declared through
+    /// <see cref="OriginalNameAttribute"/>, or the C# member name for non-proto enums.
+    /// </summary>
+    public static string ResolveProtoEnumName(Enum value)
+    {
+        var memberName = value.ToString();
+        return value.GetType().GetField(memberName)?.GetCustomAttribute<OriginalNameAttribute>()?.Name
+               ?? memberName;
+    }
 
     public static ProjectionDocumentValue FromInt64(long value) =>
         new(ProjectionDocumentValueKind.Int64, value);

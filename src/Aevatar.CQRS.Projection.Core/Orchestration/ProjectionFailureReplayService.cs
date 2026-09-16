@@ -18,6 +18,35 @@ public sealed class ProjectionFailureReplayService : IProjectionFailureReplaySer
         int maxItems = 100,
         CancellationToken ct = default)
     {
+        return await DispatchAsync(
+            scopeKey,
+            maxItems,
+            automaticRecovery: false,
+            observedScopeStateVersion: 0,
+            ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> ReplayAutomaticallyAsync(
+        ProjectionRuntimeScopeKey scopeKey,
+        long observedScopeStateVersion,
+        int maxItems = 100,
+        CancellationToken ct = default)
+    {
+        return await DispatchAsync(
+            scopeKey,
+            maxItems,
+            automaticRecovery: true,
+            Math.Max(1, observedScopeStateVersion),
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> DispatchAsync(
+        ProjectionRuntimeScopeKey scopeKey,
+        int maxItems,
+        bool automaticRecovery,
+        long observedScopeStateVersion,
+        CancellationToken ct)
+    {
         ct.ThrowIfCancellationRequested();
 
         var actorId = ProjectionScopeActorId.Build(scopeKey);
@@ -28,9 +57,13 @@ public sealed class ProjectionFailureReplayService : IProjectionFailureReplaySer
             new ReplayProjectionFailuresCommand
             {
                 MaxItems = Math.Max(1, maxItems),
+                AutomaticRecovery = automaticRecovery,
+                ObservedScopeStateVersion = observedScopeStateVersion,
             },
             actorId);
-        envelope.Route = EnvelopeRouteSemantics.CreateDirect("projection.scope.admin.replay", actorId);
+        envelope.Route = EnvelopeRouteSemantics.CreateDirect(
+            automaticRecovery ? "projection.scope.automatic-recovery" : "projection.scope.admin.replay",
+            actorId);
         await _dispatchPort.DispatchAsync(actorId, envelope, ct).ConfigureAwait(false);
         return true;
     }

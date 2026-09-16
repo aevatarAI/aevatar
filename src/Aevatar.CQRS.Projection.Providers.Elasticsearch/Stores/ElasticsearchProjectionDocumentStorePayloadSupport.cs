@@ -207,6 +207,17 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
                     [exactMatchFieldPath] = ConvertCollectionValue(filter.Value),
                 },
             },
+            ProjectionDocumentFilterOperator.ContainsText => new Dictionary<string, object?>
+            {
+                ["wildcard"] = new Dictionary<string, object?>
+                {
+                    [exactMatchFieldPath] = new Dictionary<string, object?>
+                    {
+                        ["value"] = $"*{EscapeWildcardValue(ConvertScalarValue(filter.Value)?.ToString() ?? string.Empty)}*",
+                        ["case_insensitive"] = true,
+                    },
+                },
+            },
             ProjectionDocumentFilterOperator.Gt or
             ProjectionDocumentFilterOperator.Gte or
             ProjectionDocumentFilterOperator.Lt or
@@ -318,6 +329,19 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         };
     }
 
+    private static string EscapeWildcardValue(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (ch is '*' or '?' or '\\')
+                builder.Append('\\');
+            builder.Append(ch);
+        }
+
+        return builder.ToString();
+    }
+
     private static object? ConvertScalarValue(ProjectionDocumentValue value)
     {
         return value.Kind switch
@@ -372,7 +396,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         }
         catch (Exception ex) when (ex is FormatException or JsonException or InvalidOperationException)
         {
-            throw new InvalidOperationException("Invalid Elasticsearch projection document query cursor.", ex);
+            throw new ProjectionDocumentQueryCursorException("Invalid Elasticsearch projection document query cursor.", ex);
         }
     }
 

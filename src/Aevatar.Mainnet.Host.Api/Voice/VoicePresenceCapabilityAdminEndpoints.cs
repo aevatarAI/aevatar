@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.Voice;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.Capabilities;
 using Google.Protobuf;
@@ -25,6 +26,10 @@ internal static class VoicePresenceCapabilityAdminEndpoints
         app.MapPost(
                 "/api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence/enable",
                 HandleEnableAsync)
+            .WithTags("VoicePresence");
+        app.MapGet(
+                "/api/scopes/{scopeId}/gagent-actors/{actorId}/voice-presence",
+                HandleGetAsync)
             .WithTags("VoicePresence");
 
         return app;
@@ -156,6 +161,78 @@ internal static class VoicePresenceCapabilityAdminEndpoints
             correlation_id = receipt.CorrelationId,
             stage = receipt.Stage,
             note = "Voice presence enable command accepted for dispatch. Re-attach after the capability read model observes the committed state.",
+        });
+    }
+
+    private static async Task<IResult> HandleGetAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        [FromQuery(Name = "agentKind")] string? agentKind,
+        [FromQuery(Name = "moduleName")] string? moduleName,
+        [FromServices] IVoicePresenceCapabilityQueryPort queryPort,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
+        [FromServices] IAgentKindRegistry agentKindRegistry,
+        CancellationToken ct)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        var normalizedScopeId = NormalizeOptional(scopeId);
+        var normalizedActorId = NormalizeOptional(actorId);
+        var normalizedAgentKind = NormalizeOptional(agentKind);
+        var normalizedModuleName = NormalizeOptional(moduleName);
+        if (normalizedScopeId is null || normalizedActorId is null || normalizedAgentKind is null ||
+            normalizedModuleName is null)
+        {
+            return JsonError(
+                StatusCodes.Status400BadRequest,
+                "invalid_input",
+                "scopeId, actorId, agentKind, and moduleName are required.");
+        }
+
+        if (!agentKindRegistry.TryResolve(normalizedAgentKind, out _))
+            return JsonError(StatusCodes.Status400BadRequest, "invalid_input", $"Unknown agentKind '{normalizedAgentKind}'.");
+
+        ScopeResourceAdmissionResult admission;
+        try
+        {
+            admission = await admissionPort.AuthorizeTargetAsync(
+                new ScopeResourceTarget(
+                    normalizedScopeId,
+                    ScopeResourceKind.GAgentActor,
+                    normalizedAgentKind,
+                    normalizedActorId,
+                    ScopeResourceOperation.Use),
+                ct);
+        }
+        catch (Exception ex)
+        {
+            return JsonError(StatusCodes.Status503ServiceUnavailable, "admission_unavailable", ex.Message);
+        }
+
+        var admissionError = MapAdmissionError(admission.Status);
+        if (admissionError is not null)
+            return admissionError;
+
+        var capability = await queryPort.GetAsync(normalizedActorId, normalizedModuleName, ct);
+        if (capability is null)
+        {
+            return JsonError(
+                StatusCodes.Status404NotFound,
+                "voice_capability_not_materialized",
+                "The voice capability read model has not materialized.");
+        }
+
+        return Results.Ok(new
+        {
+            actorId = capability.ActorId,
+            agentKind = normalizedAgentKind,
+            moduleName = capability.ModuleName,
+            stateVersion = capability.StateVersion,
+            updatedAt = capability.UpdatedAt,
+            initialized = capability.Initialized,
+            remoteAudioSupport = capability.RemoteAudioSupport.ToString(),
         });
     }
 

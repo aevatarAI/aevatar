@@ -3,6 +3,7 @@ using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.BackendConsole.Hosting;
 using Aevatar.Capabilities;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -26,14 +27,13 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 //     lives here in the endpoint layer, never in the query service.
 public static class WorkflowRunObservatoryEndpoints
 {
-    private const string PageRoute = "/workflow/observatory";
-    private const string CallbackRoute = "/workflow/observatory/callback";
+    private const string AdminFrameRoute = "/admin/workflow-observatory";
     private const string DataRoutePrefix = "/api/workflow/observatory";
 
     private static readonly BackendConsoleAsset PageAsset = new(
-        LogicalName: "workflow-observatory",
+        LogicalName: "admin-workflow-observatory",
         Assembly: typeof(WorkflowRunObservatoryEndpoints).Assembly,
-        ResourceSuffix: "CapabilityApi.workflow-observatory.html",
+        ResourceSuffix: "CapabilityApi.admin-workflow-observatory.html",
         ContentType: "text/html",
         InjectHostConfiguration: true);
 
@@ -44,16 +44,10 @@ public static class WorkflowRunObservatoryEndpoints
     {
         ArgumentNullException.ThrowIfNull(app);
 
-        app.MapGet(PageRoute, GetObservatoryPage)
+        app.MapGet(AdminFrameRoute, GetAdminObservatoryFrame)
             .WithTags("WorkflowObservatory")
-            .WithName("GetWorkflowObservatoryPage")
-            .WithSummary("Read-only workflow run observatory served from an embedded static asset.")
-            .AllowAnonymous();
-
-        app.MapGet(CallbackRoute, GetObservatoryPage)
-            .WithTags("WorkflowObservatory")
-            .WithName("GetWorkflowObservatoryCallback")
-            .WithSummary("OIDC PKCE redirect target consumed by the observatory page JS.")
+            .WithName("GetAdminWorkflowObservatoryFrame")
+            .WithSummary("Admin-console workflow observatory renderer served for the same-origin embedded frame.")
             .AllowAnonymous();
 
         var data = app.MapGroup(DataRoutePrefix).WithTags("WorkflowObservatory");
@@ -76,6 +70,17 @@ public static class WorkflowRunObservatoryEndpoints
                 AuditSensitivityLevel.Confidential,
                 "workflow-observatory-runs",
                 ResolveWorkflowObservatoryTarget("workflow-observatory-runs"),
+                WorkflowObservatoryRequestSummary)
+            .RequireAuthorization();
+
+        data.MapGet("/activity-runs", ListActivityRuns)
+            .WithName("ListWorkflowObservatoryActivityRuns")
+            .WithSummary("Page Activity run rows. Default = caller scope; admins may pass scope=<id> or scope=__all__.")
+            .WithEndpointAudit(
+                "workflow.observatory.list-activity-runs",
+                AuditSensitivityLevel.Confidential,
+                "workflow-observatory-activity-runs",
+                ResolveWorkflowObservatoryTarget("workflow-observatory-activity-runs"),
                 WorkflowObservatoryRequestSummary)
             .RequireAuthorization();
 
@@ -137,7 +142,7 @@ public static class WorkflowRunObservatoryEndpoints
         return app;
     }
 
-    internal static IResult GetObservatoryPage(
+    internal static IResult GetAdminObservatoryFrame(
         HttpContext http,
         [FromServices] IBackendConsoleAssetService assets)
     {
@@ -211,6 +216,68 @@ public static class WorkflowRunObservatoryEndpoints
             ? await adminQuery.ListAllRunsAsync(filter, ct)
             : await observatory.ListRunsForScopeAsync(scope!, filter, ct);
         return Results.Json(runs);
+    }
+
+    internal static async Task<IResult> ListActivityRuns(
+        HttpContext http,
+        [FromServices] IWorkflowRunObservatoryQueryService observatory,
+        [FromServices] IWorkflowRunAdminQueryService adminQuery,
+        [FromServices] IPlatformAdminAuthorizer authorizer,
+        [FromServices] ILoggerFactory loggerFactory,
+        string? scope = null,
+        string? status = null,
+        string? origin = null,
+        string? definition = null,
+        string? schedule = null,
+        string? workflowId = null,
+        string? q = null,
+        string? from = null,
+        string? to = null,
+        int take = 100,
+        string? cursor = null,
+        bool includeTotalCount = false,
+        CancellationToken ct = default)
+    {
+        if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var ownScopeId))
+            return Results.Unauthorized();
+
+        // Implement (issue #3250):
+        //   Behavior: Activity feed is a separate paged endpoint, not a shape-changing mode of /runs.
+        //   Why this shape: Authorization follows the existing scope/admin matrix while the response is a new envelope.
+        var filter = new WorkflowActivityRunFeedFilter
+        {
+            Status = status,
+            Origins = SplitCsv(origin),
+            DefinitionActorIds = SplitCsv(definition),
+            ScheduleIds = SplitCsv(schedule),
+            WorkflowId = workflowId,
+            SearchText = q,
+            FromUtc = ParseTimestamp(from),
+            ToUtc = ParseTimestamp(to),
+            Take = take,
+            Cursor = cursor,
+            IncludeTotalCount = includeTotalCount,
+        };
+
+        try
+        {
+            if (!IsCrossScope(scope, ownScopeId))
+                return Results.Json(await observatory.ListActivityRunsForScopeAsync(ownScopeId, filter, ct));
+
+            var (denied, _, _) = await AuthorizeCrossScopeAsync(
+                http, ownScopeId, scope!, runId: null, action: "activity-list", authorizer, loggerFactory, ct);
+            if (denied is not null)
+                return denied;
+
+            var page = string.Equals(scope, AllScopesToken, StringComparison.Ordinal)
+                ? await adminQuery.ListAllActivityRunsAsync(filter, ct)
+                : await observatory.ListActivityRunsForScopeAsync(scope!, filter, ct);
+            return Results.Json(page);
+        }
+        catch (ProjectionDocumentQueryCursorException) when (!string.IsNullOrWhiteSpace(cursor))
+        {
+            return Results.BadRequest(new { error = "malformed_cursor" });
+        }
     }
 
     internal static async Task<IResult> GetRun(

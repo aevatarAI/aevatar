@@ -1,11 +1,14 @@
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Callbacks;
 
 public sealed class OrleansActorRuntimeDurableCallbackScheduler
-    : IActorRuntimeCallbackScheduler
+    : IActorRuntimeCallbackScheduler,
+      IRuntimeFleetReconcileScheduleOwner,
+      IRuntimeFleetReconcileDeliveryVerifier
 {
     private readonly IGrainFactory _grainFactory;
 
@@ -19,6 +22,7 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ThrowIfGenericMutationTargetsReservedSlot(request.ActorId, request.CallbackId);
         ValidateRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
         ct.ThrowIfCancellationRequested();
 
@@ -44,6 +48,7 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ThrowIfGenericMutationTargetsReservedSlot(request.ActorId, request.CallbackId);
         ValidateRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(request.Period, TimeSpan.Zero);
         ct.ThrowIfCancellationRequested();
@@ -79,6 +84,8 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
                 $"Durable Orleans callback scheduler cannot cancel backend '{lease.Backend}'.");
         }
 
+        ThrowIfGenericMutationTargetsReservedSlot(lease.ActorId, lease.CallbackId);
+
         return CancelDedicatedCallbackAsync(lease.ActorId, lease.CallbackId, lease.Generation, lease.SlotEpoch);
     }
 
@@ -88,7 +95,52 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
+        if (string.Equals(
+                actorId,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet capability authority callback scheduler is runtime-reserved and cannot be purged.");
+        }
         return _grainFactory.GetGrain<IRuntimeCallbackSchedulerGrain>(actorId).PurgeAsync();
+    }
+
+    public async Task EnsureScheduledAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        await _grainFactory
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId)
+            .EnsureRuntimeFleetReconcileTimerAsync();
+    }
+
+    public async Task<RuntimeFleetReconcileDeliveryAttestation?> VerifyAsync(
+        EventEnvelope envelope,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        ct.ThrowIfCancellationRequested();
+        var callback = envelope.Runtime?.Callback;
+        if (callback == null ||
+            string.IsNullOrWhiteSpace(envelope.Id) ||
+            !string.Equals(
+                callback.CallbackId,
+                RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+                StringComparison.Ordinal) ||
+            !await _grainFactory
+                .GetGrain<IRuntimeCallbackSchedulerGrain>(
+                    RuntimeFleetCapabilityAuthorityIdentity.ActorId)
+                .VerifyRuntimeFleetReconcileDeliveryAsync(envelope))
+        {
+            return null;
+        }
+
+        return new RuntimeFleetReconcileDeliveryAttestation(
+            envelope.Id,
+            callback.Generation,
+            callback.FireIndex,
+            callback.SlotEpoch);
     }
 
     private async Task<long> ScheduleViaDedicatedGrainTimeoutAsync(
@@ -153,5 +205,16 @@ public sealed class OrleansActorRuntimeDurableCallbackScheduler
         ArgumentNullException.ThrowIfNull(triggerEnvelope);
         ArgumentNullException.ThrowIfNull(triggerEnvelope.Payload);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTime, TimeSpan.Zero);
+    }
+
+    private static void ThrowIfGenericMutationTargetsReservedSlot(
+        string actorId,
+        string callbackId)
+    {
+        if (RuntimeFleetCapabilityAuthorityIdentity.IsReservedCallback(actorId, callbackId))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet reconcile callback is runtime-reserved and cannot be mutated through the generic callback API.");
+        }
     }
 }

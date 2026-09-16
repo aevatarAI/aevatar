@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Workflow Run Observatory read-only + embedded-asset guard.
+# Workflow Run Observatory read-query + embedded-asset guard.
 #
 # Enforces the C2 (06-19-workflow-run-observatory) invariants from the design spec:
 #
-#   1. Read-only surface: the observatory endpoints are GET-only. No MapPost/MapPut/MapDelete/MapPatch
-#      may appear in the endpoint file — there are no edit/run/stop controls anywhere.
+#   1. Read-only data surface: the observatory endpoints are GET-only. No MapPost/MapPut/MapDelete/MapPatch
+#      may appear in the endpoint file. Owner controls must reuse separately authorized canonical scope APIs.
 #   2. Query-ports-only seam: the scope-enforcement query service must depend on query ports only
 #      (IWorkflowExecution*QueryPort). It must NOT depend on IActorDispatchPort / IActorRuntime /
 #      IEventStore — a read viewer never dispatches commands or side-reads write-model state.
@@ -27,14 +27,14 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 ENDPOINTS_FILE="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowRunObservatoryEndpoints.cs"
-PAGE_FILE="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/workflow-observatory.html"
+PAGE_FILE="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/admin-workflow-observatory.html"
 OLD_PAGE_FILE="src/workflow/Aevatar.Workflow.Infrastructure/CapabilityApi/WorkflowRunObservatoryPage.cs"
 SERVICE_FILE="src/workflow/Aevatar.Workflow.Application/Observatory/WorkflowRunObservatoryQueryService.cs"
 CSPROJ_FILE="src/workflow/Aevatar.Workflow.Infrastructure/Aevatar.Workflow.Infrastructure.csproj"
 
 if [[ "${1:-}" == "--scan" ]] && [[ -n "${2:-}" ]]; then
   ENDPOINTS_FILE="$2/WorkflowRunObservatoryEndpoints.cs"
-  PAGE_FILE="$2/workflow-observatory.html"
+  PAGE_FILE="$2/admin-workflow-observatory.html"
   OLD_PAGE_FILE="$2/WorkflowRunObservatoryPage.cs"
   SERVICE_FILE="$2/WorkflowRunObservatoryQueryService.cs"
   CSPROJ_FILE="$2/Aevatar.Workflow.Infrastructure.csproj"
@@ -47,7 +47,8 @@ fi
 
 violations=0
 
-# 1. GET-only endpoints.
+# 1. GET-only observatory data endpoints. This does not prohibit owner controls from calling canonical
+#    scope command APIs such as /api/scopes/{scopeId}/runs/{runId}:stop.
 if [[ -f "${ENDPOINTS_FILE}" ]]; then
   mutating_hits="$(rg -n -P '\.Map(Post|Put|Delete|Patch)\s*\(' "${ENDPOINTS_FILE}" || true)"
   if [[ -n "${mutating_hits}" ]]; then
@@ -70,7 +71,7 @@ fi
 
 # 3. Embedded zero-build page (no wwwroot / no build step); ignore comment lines.
 if [[ -f "${OLD_PAGE_FILE}" ]]; then
-  echo "${OLD_PAGE_FILE}: old C# raw-string page carrier must not exist; use workflow-observatory.html embedded asset."
+  echo "${OLD_PAGE_FILE}: old C# raw-string page carrier must not exist; use admin-workflow-observatory.html embedded asset."
   violations=$((violations + 1))
 fi
 
@@ -97,8 +98,8 @@ else
 fi
 
 if [[ -f "${CSPROJ_FILE}" ]]; then
-  if ! rg -q -F 'workflow-observatory.html' "${CSPROJ_FILE}"; then
-    echo "${CSPROJ_FILE}: expected workflow-observatory.html to be declared as an EmbeddedResource."
+  if ! rg -q -F 'admin-workflow-observatory.html' "${CSPROJ_FILE}"; then
+    echo "${CSPROJ_FILE}: expected admin-workflow-observatory.html to be declared as an EmbeddedResource."
     violations=$((violations + 1))
   fi
 else

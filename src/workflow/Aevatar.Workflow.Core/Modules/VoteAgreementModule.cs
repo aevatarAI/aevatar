@@ -68,8 +68,10 @@ public sealed class VoteAgreementModule : IEventModule<IWorkflowExecutionContext
         {
             StepId = evt.StepId,
             RunId = evt.RunId,
+            ExecutionId = evt.ExecutionId,
             Success = true,
             Output = decision.Output,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
             BranchKey = decision.BranchKey,
             VoteAgreementDecision = decision,
         };
@@ -115,8 +117,10 @@ public sealed class VoteAgreementModule : IEventModule<IWorkflowExecutionContext
             {
                 StepId = evt.StepId,
                 RunId = evt.RunId,
+                ExecutionId = evt.ExecutionId,
                 Success = false,
                 Error = error,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             },
             TopologyAudience.Self,
             ct);

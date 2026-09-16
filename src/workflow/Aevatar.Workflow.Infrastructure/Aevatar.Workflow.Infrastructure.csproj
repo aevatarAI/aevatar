@@ -11,6 +11,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+    <ProjectReference Include="..\..\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Application\Aevatar.Workflow.Application.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
@@ -34,7 +35,18 @@
     <PackageReference Include="UglyToad.PdfPig" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="CapabilityApi\workflow-observatory.html" />
+    <EmbeddedResource Include="CapabilityApi\admin-workflow-observatory.html" />
     <EmbeddedResource Include="CapabilityApi\workflow-studio.html" />
+    <EmbeddedResource Include="CapabilityApi\studio-assistant.html" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\actor-state.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\app.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\blocks.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\protocol.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\readiness.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\styles.css" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\transport.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\Vendor\lucide.min.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\Vendor\marked.min.js" />
+    <EmbeddedResource Include="CapabilityApi\StudioAssistant\Vendor\purify.min.js" />
   </ItemGroup>
 </Project>

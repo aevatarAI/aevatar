@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using FluentAssertions;
 
@@ -16,7 +17,7 @@ public sealed class DistributedClusterConsistencyIntegrationTests
     [DistributedClusterIntegrationFact]
     public async Task WorkflowsEndpoint_ShouldReturnConsistentWorkflowSetAcrossAllNodes()
     {
-        using var client = new HttpClient();
+        using var client = CreateAuthenticatedClient();
         var nodes = GetClusterNodeBaseUrls();
 
         IReadOnlyList<string>[]? snapshots = null;
@@ -35,7 +36,7 @@ public sealed class DistributedClusterConsistencyIntegrationTests
     [DistributedClusterIntegrationFact]
     public async Task AgentsEndpoint_ShouldReturnConsistentAgentSetAcrossAllNodes()
     {
-        using var client = new HttpClient();
+        using var client = CreateAuthenticatedClient();
         var nodes = GetClusterNodeBaseUrls();
 
         IReadOnlyList<string>[]? snapshots = null;
@@ -114,6 +115,15 @@ public sealed class DistributedClusterConsistencyIntegrationTests
             GetRequiredEnvironmentVariable("AEVATAR_TEST_CLUSTER_NODE3_BASE_URL"),
         ];
         return values;
+    }
+
+    private static HttpClient CreateAuthenticatedClient()
+    {
+        var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            GetRequiredEnvironmentVariable("AEVATAR_TEST_CLUSTER_BEARER_TOKEN"));
+        return client;
     }
 
     private static string GetRequiredEnvironmentVariable(string variableName)

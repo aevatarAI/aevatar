@@ -19,8 +19,8 @@ public interface IConversationCardTurnRunner
 {
     /// <summary>
     /// Allocates a new CardKit card entity (<c>POST /open-apis/cardkit/v1/cards</c>), binds it
-    /// to the chat via an interactive <c>im/v1/messages</c> send referencing the new
-    /// <c>card_id</c>, and writes the initial accumulated text into
+    /// through the inbound turn's channel-reply authority when present (or through an explicit
+    /// proactive Lark send otherwise), and writes the initial accumulated text into
     /// <paramref name="streamingElementId"/>. Implicit sequence = 1.
     /// </summary>
     Task<ConversationCardCreateResult> RunCardCreateAsync(
@@ -61,6 +61,18 @@ public interface IConversationCardTurnRunner
         long sequence,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct);
+
+    /// <summary>
+    /// Compensates a timed-out turn by closing the existing card's streaming mode without
+    /// changing its last visible content. The operation is idempotent and uses an actor-owned
+    /// monotonic sequence.
+    /// </summary>
+    Task<ConversationCardAbortResult> RunCardAbortAsync(
+        ChatActivity referenceActivity,
+        string cardId,
+        long sequence,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct);
 }
 
 /// <summary>
@@ -72,7 +84,7 @@ public interface IConversationCardTurnRunner
 ///   so the user still sees a reply. <see cref="IsRateLimited"/> /
 ///   <see cref="IsTableLimitExceeded"/> imply this path.</item>
 /// <item>Post-send failures (create + send succeeded but the first stream-content write
-///   failed — see <see cref="IsPostSendFailure"/>): an empty card is already visible in the
+///   failed): an empty card is already visible in the
 ///   chat. Falling back to text-edit would produce a duplicate reply. The actor terminates
 ///   the turn at <c>Terminated</c> using the surfaced <see cref="CardId"/> /
 ///   <see cref="CardMessageId"/> and persists the partial-card terminal record. The runner
@@ -88,12 +100,21 @@ public sealed record ConversationCardCreateResult(
     bool IsRateLimited,
     bool IsTableLimitExceeded,
     bool IsCardUnavailable,
-    bool IsPostSendFailure,
+    LarkCardCreateDeliveryDisposition DeliveryDisposition,
     string ErrorCode,
     string ErrorSummary)
 {
     public static ConversationCardCreateResult Succeeded(string cardId, string cardMessageId) =>
-        new(true, cardId, cardMessageId, false, false, false, false, string.Empty, string.Empty);
+        new(
+            true,
+            cardId,
+            cardMessageId,
+            false,
+            false,
+            false,
+            LarkCardCreateDeliveryDisposition.Sent,
+            string.Empty,
+            string.Empty);
 
     public static ConversationCardCreateResult Failed(
         string errorCode,
@@ -101,7 +122,16 @@ public sealed record ConversationCardCreateResult(
         bool isRateLimited = false,
         bool isTableLimitExceeded = false,
         bool isCardUnavailable = false) =>
-        new(false, null, null, isRateLimited, isTableLimitExceeded, isCardUnavailable, false, errorCode, errorSummary);
+        new(
+            false,
+            null,
+            null,
+            isRateLimited,
+            isTableLimitExceeded,
+            isCardUnavailable,
+            LarkCardCreateDeliveryDisposition.DefinitelyNotSent,
+            errorCode,
+            errorSummary);
 
     /// <summary>
     /// Failure factory for the "card was already sent to the chat but the first
@@ -118,7 +148,37 @@ public sealed record ConversationCardCreateResult(
         bool isRateLimited = false,
         bool isTableLimitExceeded = false,
         bool isCardUnavailable = false) =>
-        new(false, cardId, cardMessageId, isRateLimited, isTableLimitExceeded, isCardUnavailable, true, errorCode, errorSummary);
+        new(
+            false,
+            cardId,
+            cardMessageId,
+            isRateLimited,
+            isTableLimitExceeded,
+            isCardUnavailable,
+            LarkCardCreateDeliveryDisposition.Sent,
+            errorCode,
+            errorSummary);
+
+    /// <summary>
+    /// The single-use reply authority was consumed before a definitive platform receipt was
+    /// observed. Retrying through the same authority is forbidden, and the actor records a failed
+    /// delivery instead of claiming either success or a definitely-not-sent result.
+    /// </summary>
+    public static ConversationCardCreateResult ReplyAuthoritySpentDeliveryUnknown(
+        string cardId,
+        string cardMessageId,
+        string errorCode,
+        string errorSummary) =>
+        new(
+            false,
+            cardId,
+            cardMessageId,
+            false,
+            false,
+            false,
+            LarkCardCreateDeliveryDisposition.ReplyAuthoritySpentDeliveryUnknown,
+            errorCode,
+            errorSummary);
 }
 
 /// <summary>
@@ -174,6 +234,18 @@ public sealed record ConversationCardFinalizeResult(
         new(false, finalTextWritten, errorCode, errorSummary);
 }
 
+public sealed record ConversationCardAbortResult(
+    bool Success,
+    string ErrorCode,
+    string ErrorSummary)
+{
+    public static ConversationCardAbortResult Succeeded() =>
+        new(true, string.Empty, string.Empty);
+
+    public static ConversationCardAbortResult Failed(string errorCode, string errorSummary) =>
+        new(false, errorCode, errorSummary);
+}
+
 /// <summary>
 /// No-op default. Every CardKit operation reports a transient failure that disables the
 /// card path so the grain can fall back to the legacy text-edit sink. Production DI registers
@@ -211,6 +283,16 @@ public sealed class NullConversationCardTurnRunner : IConversationCardTurnRunner
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct) =>
         Task.FromResult(ConversationCardFinalizeResult.Failed(
+            "no_card_runner",
+            "no IConversationCardTurnRunner registered"));
+
+    public Task<ConversationCardAbortResult> RunCardAbortAsync(
+        ChatActivity referenceActivity,
+        string cardId,
+        long sequence,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct) =>
+        Task.FromResult(ConversationCardAbortResult.Failed(
             "no_card_runner",
             "no IConversationCardTurnRunner registered"));
 }

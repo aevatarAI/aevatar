@@ -19,6 +19,12 @@ D5/D6 describe the later session-owned execution topology. `ChatRunActor` is
 not implemented in the current v1 slice; `/v1/responses` `wait=complete`
 therefore returns the accepted/streaming invocation receipt and clients observe
 terminal completion through typed `aevatar_observe_run` targets.
+`aevatar_invoke_member` does not advertise or accept `wait=complete`: one
+successful dispatch retires that tool for the rest of the current chat turn,
+while `aevatar_observe_run` remains available for the returned
+`service_id + run_id`. This turn-local execution policy prevents a new model
+call ID from creating a duplicate member run while preserving readmodel-based
+completion observation.
 `VoiceSessionActor` is also not implemented by this ADR slice. Until that topology
 exists, ordinary `/ws/voice` supports only typed
 `tool_choice_hint.voice_attach_target` attachment; pure model forwarding
@@ -138,6 +144,12 @@ stream_topic}` immediately; the session actor (D5) subscribes to the
 stream and folds events back into the LLM context for the next turn. The
 LLM can then continue with `aevatar_observe_run`, cancel, or proceed on
 the partial.
+
+Until D5 exists, `aevatar_invoke_member` treats its accepted receipt as the
+single successful dispatch for one chat turn. Later model rounds cannot invoke
+the member tool again and must use the returned typed service-run observation
+identity. `wait=complete` is rejected for this tool because no terminal result
+is observed in its call stack.
 
 This applies CLAUDE.md §"Actor 执行模型 — self continuation 事件化" and
 §"跨 actor 等待 continuation 化" at the chat-session layer: there is no

@@ -6,13 +6,37 @@ owner: eanzhao
 
 # ADR-0018: Per-User NyxID Binding via OAuth Broker
 
+## Update 2026-08-05 - channel `/init` 收敛到 Studio authorize 契约
+
+生产 Lark sender 在 NyxID Consent 页确认 `allow_all_services=true` 之后，binding 仍然只持有 Aevatar 显式请求的 core resources；workflow 通过 `nyxid_proxy` 访问用户已批准的 Lark UserService 稳定返回 `NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN`。三次生产复测（含更新 Developer App defaults 后的 fresh `/init`）复现同一终态，同一 workflow 经 direct run 与 `/api/chat` 则 committed `completed`。
+
+根因是 authorize-time narrowing 被固化进 durable binding：NyxID `issue_authorization_code` 按 RFC 8707 把 authorization code 收窄到显式 `resource` 集合（allow-all consent 被降级为 restricted，restricted consent 取交集），随后 binding 的专用 refresh token 直接继承 code 的 grant 快照。后续 exchange 省略 `resource` 只能继承，无法恢复被丢弃的 optional services。该 narrowing 由 NyxID 自身测试断言为预期行为，因此不构成上游契约违例，本仓库不得以修改 NyxID 为修复前提。
+
+channel contract 因此调整为：
+
+- channel `/init` 的 `/oauth/authorize` 不再发送配置化必需 `resource`，与 Studio 登录/service access review 收敛到同一 authorize 契约。authorize URL 仍精确携带 canonical scope、`prompt=consent`、exact external subject、`state` 与 PKCE，且不发送 raw binding id 或浏览器可恢复的 binding credential。
+- 授权上限由用户在 NyxID Consent 页最终确认的集合决定；Aevatar 不再复制第二份 service allowlist。authorization-code exchange 与 binding token-exchange 继续省略 `resource`，因此短期 token 会携带完整 consent grant 而不是 core 最小集。这没有超出用户 consent，不是 token-exchange 静默扩权。
+- 配置化必需集合只表达运行下限：callback 采用 incoming binding 前试签一次 proxy capability，并在每次正式签发短期 capability 时再次校验；缺任一 core resource 抛 typed `BindingServiceAccessMismatchException` 并 fail closed。窄 read-only issuer（connected-service inventory、remote skill read）不受该下限约束，行为不变。
+- 缺 core 的 incoming binding 返回 409 `required_service_access_missing`，不 commit/adopt，不覆盖既有 binding，并按既有协议撤销 incoming binding；文案指引用户回 Lark 重新发送 `/init` 并保留授权页默认勾选的必需 services。
+- 存量被缩窄的 binding 通过一次 fresh `/init` 走 same-owner replacement/CAS 修复，无需迁移工具，也不要求先 `/unbind`。
+- optional service（如 `api-lark-bot`）只能作为 NyxID Developer App `default_service_catalog_slugs` 的 consent 预选项，不得进入全局 `AdditionalRequiredServiceSlugs`——否则未连接该服务的普通用户将无法建立 binding。
+- 可观测字段限定为 Aevatar 自己可见且可安全披露的部分：exchange 后的 token grant mode（`allow_all` / `restricted` / `unreadable`）、configured required resource count、missing required resource count、callback probe result、binding replacement result；binding 身份只以不可逆 digest 出现，不记录 OAuth code、raw binding id、access/refresh token 或完整 UserService ID。
+
+已知代价（UX 降级，非安全降级）：NyxID Consent 页的 required 标记完全来自 RFC 8707 参数，省略后 core services 变为可取消。运行下限仍 fail closed，不会产生可运行的欠授权 binding，但用户取消 core service 时会经历一次可感知的 409 repair loop。默认预选由 Developer App `default_service_catalog_slugs` 承担，必须覆盖 `aevatar`、部署默认 LLM、`ornn-api` 与 `chrono-sandbox`。
+
+该对账由部署自身声明、由运维核验：`/api/oauth/aevatar-client/status` 发布本部署解析出的 `required_service_slugs`（运行下限，非授权上限），`tools/ops/check_nyxid_consent_defaults.sh` 用它与 NyxID Developer App 的 `default_service_catalog_slugs` 做 diff，缺任一 slug 即明确失败。仓库内不维护第二份 provider 默认值。
+
+本节取代 2026-07-24 与 2026-07-16/2026-07-10 中“channel `/init` 的 `/oauth/authorize` 显式请求配置化必需 resources”的决定，并把 #2754“required services 在 consent UI 不可单独取消”从 consent-UI 前置强制降级为 Aevatar callback/runtime 的 post-hoc fail-closed 强制。其余 exchange 省略 `resource`、token claims + user-service catalog 校验、replacement CAS 与 owner 校验决定保持不变。
+
+NyxID 若未来自行引入 token grant 与 durable binding grant 的双快照，可重新评估在 authorize URL 恢复 explicit required resources，以同时获得 consent UI required 标记与完整 optional grant。该演进不是当前 NyxID 契约要求，也不是本决定的前提。
+
 ## Update 2026-07-24 - channel 历史 binding 通过 replacement 恢复
 
 `/whoami` 证明 Aevatar 的 external-subject binding pointer 存在。读取该 sender 自己的 NyxID connected-service inventory 只要求该 exact binding 能换出窄的 request-local inventory capability；它不要求 binding 同时覆盖 Aevatar LLM route、Ornn、Sandbox 等全部 runtime services。完整 runtime route readiness 仍由严格 capability broker 独立校验。inventory 查询失败不得反推“未绑定”，也不得建议 `/init`；`/init` 只用于真实 binding 缺失/撤销、用户主动补充 runtime service 授权或 same-owner renewal。任何路径都不得使用 bot owner credential、容器内 NyxID CLI 登录态或 catalog 猜测用户已经连接的服务。
 
 历史 Aevatar authorize URL 没有把 exact external subject 写入 NyxID binding。NyxID 的 in-place grant review 会联合校验 OAuth client、authenticated user、`binding_grant_id` 与 binding 中已经保存的 external subject；因此给旧 binding 的 review URL 临时补 external subject 仍会因“缺失 subject”或“subject 不匹配”失败，不能完成迁移。当前 channel contract 改为：
 
-- `/oauth/authorize` 始终发送 `external_subject_platform`、可选的 `external_subject_tenant`、`external_subject_external_user_id` 与配置化必需 resources，让 NyxID 签发带 exact subject 的新 binding。
+- `/oauth/authorize` 始终发送 `external_subject_platform`、可选的 `external_subject_tenant` 与 `external_subject_external_user_id`，让 NyxID 签发带 exact subject 的新 binding；resource 语义以后文 2026-08-05 update 为准。
 - 已有 binding 的 `SHA-256(binding_id)` 只放入 HMAC state 作为 callback CAS 预期值，不发送浏览器参数 `binding_grant_id`；raw binding id 也不进入浏览器 URL。
 - callback 必须确认 state hash 仍匹配当前 readmodel binding，并确认新登录 NyxID owner 与旧 binding owner 相同。正常 owner 来自 binding readmodel；仅当迁移 2026-07-17 以前、缺少 `owner_scope_id` 的 binding 时，才通过 owning-client `GET /oauth/bindings/{binding_id}` 读取 NyxID 权威 owner。
 - callback 在采用新 binding 前必须按 incoming binding id 试签一次 `proxy` capability，并验证 token 覆盖全部配置化必需 services。scope/service 不完整返回 409，binding 已失效返回 502，NyxID 校验暂不可用返回 503；三类失败都撤销 incoming binding，且不投递 commit/replacement。部署切换期间仍返回 `binding_updated=true` 的旧链接也必须对当前 binding 做同样试签后才能报告成功。
@@ -56,7 +80,7 @@ Studio Consent 的产品语义是“用户从 NyxID 已有且自己可授权的 
 - Studio 浏览器不再从环境变量维护默认 service,也不在 `/oauth/authorize` 拼装 `resource`.默认预选由 NyxID OAuth Client 的 `default_service_catalog_slugs` 负责,最终授权集合由用户在 Consent 页面确认.
 - `/api/auth/nyxid/config` 只返回 Studio 登录所需的 authority、client id 与 scope,不再暴露服务器内部的必需 resource 集合,避免把运行时最低依赖误解为用户授权上限.
 - Studio finalization 提供默认值为 `false` 的 typed `serviceAccessReview` 请求字段,供未来前端在用户主动发起授权审查时传入 `true`.前端应以 `prompt=consent` 进入 NyxID 的权威 Consent 页面;service picker 可以选择 NyxID catalog 中的已有资源,但服务端必须重新校验选择结果,Aevatar 不实现第二套授权事实源.
-- channel `/init` 的 `/oauth/authorize` 仍显式请求配置化的运行必需 resource 集合:核心 `aevatar`、`Aevatar:NyxId:DefaultRoute`、`Aevatar:Ornn:NyxIdSlug`、`Aevatar:NyxId:SandboxServiceSlug` 以及 `Aevatar:NyxId:AdditionalRequiredServiceSlugs`;该 resource flow 是 channel 的最低能力 grant,与 Studio 的完整用户选择边界分开解释.
+- channel `/init` 的 `/oauth/authorize` 与 Studio 一样不发送 `resource`，保留用户在 NyxID Consent 页面确认的完整 service grant；配置化必需集合只用于 token-exchange 后的最低运行能力校验。
 - authorization-code exchange 必须省略 `resource`,直接继承 authorization code 中已经完成的 Consent service 边界,不得由 callback/finalization 再次缩窄.
 - broker 的短期 token-exchange 省略 `resource`,继承完整 binding grant.若 token 未枚举全部必需 `resources`,broker 结合 token 已签名的 All Services/显式 service ID grant 与 NyxID 权威 user-service catalog 校验最低集合,并继续把原始完整 token 交给 runtime.
 - Studio finalization 只在显式 `serviceAccessReview` 或现有 binding 已失效时替换 binding.新 binding 必须先按 ID 完成一次短期 token 校验;actor 通过 `expected_previous_binding_id` 做 compare-and-swap,提交 replacement 后才撤销旧 binding.清理失败保存在 actor-owned `pending_retirement_binding_ids`,激活时继续对账,不使用进程内 registry.
@@ -74,7 +98,7 @@ Studio Consent 的产品语义是“用户从 NyxID 已有且自己可授权的 
 
 最终 resource contract 调整为:
 
-- binding 的必需 resource 集合是 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service. Mainnet Host 分别从 `Aevatar:NyxId:DefaultRoute`、`Aevatar:Ornn:NyxIdSlug` 和 `Aevatar:NyxId:SandboxServiceSlug` 注入实际 slug;Sandbox 未配置时使用 tool provider 的默认值 `chrono-sandbox`.`NyxIdBrokerOptions.AdditionalRequiredServiceSlugs` 作为其他 provider 的可配置扩展点,Identity 层不维护第二份 provider 默认值.
+- binding 的必需 resource 集合是 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service. Mainnet Host 从 `Aevatar:NyxId:DefaultRoute`、`Aevatar:Ornn:NyxIdSlug` 注入可配置 provider slug;`code_execute` 的 Sandbox identity 则由执行契约固定为 `chrono-sandbox`,禁止配置改写.`NyxIdBrokerOptions.AdditionalRequiredServiceSlugs` 只作为其他 provider 的可配置扩展点,Identity 层不维护第二份 provider 默认值.
 - channel `/oauth/authorize` 使用配置化必需集合;Studio `/oauth/authorize`、authorization-code exchange、broker token-exchange 与 `/api/auth/nyxid/config` 不携带该集合,以保留用户最终 Consent 边界.
 - broker 收到短期 access token 后必须验证其授权覆盖整个必需集合.优先使用 `resources` claim;Consent-only grant 则结合签名的 `allowed_service_ids/allow_all_services` 与 NyxID user-service catalog 验证.只含 `aevatar` 的 token 不再视为可用 sender capability,但必需集合之外的用户授权必须保留.
 - 历史决定：NyxID binding grant 是服务授权的唯一事实源;aevatar 只持有 opaque `binding_id`. 已绑定 sender 再次 `/init` 时,aevatar 把 `SHA-256(binding_id)` 放入浏览器可见的 `binding_grant_id`,同时发送 exact external subject并把同一哈希封入 HMAC state作为 callback 预期值;raw binding credential不离开服务端.
@@ -101,7 +125,7 @@ NyxID 2026-07-06 至 2026-07-08 的 OAuth 更新把第三方应用 service acces
 
 `aevatar`、部署默认 LLM、Ornn 与 Sandbox service 是 Studio 登录、channel binding 和后续对话/skill/code execution 正常工作的必要资源,不是可选 UI 偏好. 因此最终 contract 为:
 
-- channel `/init` 的 `/oauth/authorize` 请求显式携带配置化必需 resource 集合. `nyxid_api_base_url` 对应 NyxID backend `BASE_URL` / Aevatar `Aevatar:NyxId:ApiBaseUrl`,不得从浏览器 OAuth authority 或 JWT issuer 派生；各 service slug 由对应 provider 配置注入.控制台登录不发送该集合.
+- channel `/init` 的 `/oauth/authorize` 请求显式携带配置化必需 resource 集合. resource identity 对应 NyxID backend `BASE_URL` / Aevatar `Aevatar:NyxId:Authority`;服务端 HTTP 客户端优先使用 `Aevatar:NyxId:InternalApiBaseUrl`,未配置时才回退到现有公网 `Aevatar:NyxId:ApiBaseUrl`.内部传输地址不得参与 resource URI、issuer 或 audience 构造；各 service slug 由对应 provider 配置注入.控制台登录不发送该集合.
 - NyxID authorization decision 必须在服务端校验前端提交的 service ID 是否存在且可由当前用户授权;前端异步加载的 service picker 负责选择体验,不能单独成为授权事实源.带 RFC 8707 `resource` 的 flow 还必须由服务端解析并合并对应必需 service ID.
 - authorization-code exchange、控制台 refresh 与 broker 的主 token-exchange 都省略 `resource`,继承完整 Consent 边界;Aevatar 不把用户在前端选择的完整 grant 收窄为部署最低集合.
 - broker 每次拿到完整 grant token 后先校验 `resources` claim.若 claim 未枚举必需 resource,使用 token 的 `allow_all_services/allowed_service_ids` 与 NyxID `/api/v1/user-services` 的权威 ID/resource 映射校验;catalog 中存在但 token 未授权的 ID 不计入显式 grant.校验只读,返回给 runtime 的仍是原始完整 grant token.
@@ -184,8 +208,10 @@ aevatar grain state、projection、log、metric 持有 zero long-lived user secr
       &external_subject_platform=<platform>
       &external_subject_tenant=<tenant-if-present>
       &external_subject_external_user_id=<external-user-id>
-      &resource=<aevatar>&resource=<default-llm>&resource=<ornn>&resource=<sandbox>
       &state=<state_token>"
+     (不发送 RFC 8707 `resource`:发送会把 authorization code 与 binding
+      收窄到 core 集合,丢掉用户在 Consent 页批准的 optional services;
+      必需集合改由 callback 试签与每次短期签发 fail-closed 校验)
   -> 用户登录 → NyxID 302 回 aevatar /api/oauth/nyxid-callback?code=...&state=...
   -> aevatar callback handler:
        验 state_token HMAC + exp -> 解出 ExternalSubjectRef + pkce_verifier

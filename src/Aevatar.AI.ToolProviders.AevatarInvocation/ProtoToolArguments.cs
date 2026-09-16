@@ -161,6 +161,8 @@ internal static class ProtoToolArguments
             case JsonObject obj:
                 NormalizeEnumProperty(obj, "wait", NormalizeWaitEnum);
                 NormalizeEnumProperty(obj, "kind", NormalizeContentPartKind);
+                NormalizeEnumProperty(obj, "sourceKind", NormalizeChatFileSourceKind);
+                NormalizeEnumProperty(obj, "source_kind", NormalizeChatFileSourceKind);
                 foreach (var (_, child) in obj)
                     NormalizeToolEnums(child);
                 break;
@@ -179,7 +181,10 @@ internal static class ProtoToolArguments
         if (obj[propertyName] is not JsonValue value)
             return;
 
-        var raw = value.GetValue<string?>()?.Trim();
+        if (!value.TryGetValue<string>(out var raw))
+            return;
+
+        raw = raw.Trim();
         if (string.IsNullOrWhiteSpace(raw))
             return;
 
@@ -211,6 +216,22 @@ internal static class ProtoToolArguments
             "invocation_content_part_kind_audio" => "INVOCATION_CONTENT_PART_KIND_AUDIO",
             "invocation_content_part_kind_video" => "INVOCATION_CONTENT_PART_KIND_VIDEO",
             "invocation_content_part_kind_file" => "INVOCATION_CONTENT_PART_KIND_FILE",
+            _ => raw,
+        };
+
+    private static string NormalizeChatFileSourceKind(string raw) =>
+        raw.ToLowerInvariant() switch
+        {
+            "chat_input" => "CHAT_FILE_SOURCE_KIND_CHAT_INPUT",
+            "form_upload" => "CHAT_FILE_SOURCE_KIND_FORM_UPLOAD",
+            "connected_service_resource" => "CHAT_FILE_SOURCE_KIND_CONNECTED_SERVICE_RESOURCE",
+            "external_resource" => "CHAT_FILE_SOURCE_KIND_EXTERNAL_RESOURCE",
+            "generated" => "CHAT_FILE_SOURCE_KIND_GENERATED",
+            "chat_file_source_kind_chat_input" => "CHAT_FILE_SOURCE_KIND_CHAT_INPUT",
+            "chat_file_source_kind_form_upload" => "CHAT_FILE_SOURCE_KIND_FORM_UPLOAD",
+            "chat_file_source_kind_connected_service_resource" => "CHAT_FILE_SOURCE_KIND_CONNECTED_SERVICE_RESOURCE",
+            "chat_file_source_kind_external_resource" => "CHAT_FILE_SOURCE_KIND_EXTERNAL_RESOURCE",
+            "chat_file_source_kind_generated" => "CHAT_FILE_SOURCE_KIND_GENERATED",
             _ => raw,
         };
 }

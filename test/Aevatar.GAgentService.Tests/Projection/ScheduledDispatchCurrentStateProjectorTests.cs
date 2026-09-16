@@ -45,7 +45,9 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         (await store.GetAsync("scheduled-dispatch:schedule-1")).Should().BeNull();
         document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
         document.ServiceId.Should().Be("svc");
+        document.ServiceIdentity.Should().BeEquivalentTo(identity);
         document.ServiceEndpointId.Should().Be("chat");
+        ReadRequiredStringProperty(document, "ServiceRevisionId").Should().Be("rev-pinned");
         document.Prompt.Should().Be("run");
         document.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Generic.ToString());
         document.StateVersion.Should().Be(9);
@@ -681,6 +683,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
                 {
                     Identity = identity.Clone(),
                     EndpointId = "chat",
+                    RevisionId = "rev-pinned",
                     Payload = Any.Pack(new ChatRequestEvent { Prompt = "run" }),
                 },
             },

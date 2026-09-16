@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Google.Protobuf;
@@ -28,6 +29,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         string LastFlushedText,
         long Sequence,
         string StreamingElementId,
+        string? NyxProviderSlug,
         string? TerminalReason,
         LarkCardOperationInFlight? InFlight,
         long OperationGeneration,
@@ -35,7 +37,9 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         string? PendingFinalizeText,
         string? PendingFinalizeCommandId,
         IReadOnlyList<ConversationHistoryEntry> PendingAppendedHistory,
-        AgentRunLarkCardTextFallbackPhase TextFallbackPhase)
+        AgentRunLarkCardTextFallbackPhase TextFallbackPhase,
+        LarkCardAbortReason PendingAbortReason,
+        long PendingAbortTriggeredAtUnixMs)
     {
         public const string DefaultStreamingElementId = "streaming_main";
 
@@ -47,6 +51,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             LastFlushedText: string.Empty,
             Sequence: 0,
             StreamingElementId: DefaultStreamingElementId,
+            NyxProviderSlug: null,
             TerminalReason: null,
             InFlight: null,
             OperationGeneration: 0,
@@ -54,7 +59,9 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             PendingFinalizeText: null,
             PendingFinalizeCommandId: null,
             PendingAppendedHistory: [],
-            TextFallbackPhase: AgentRunLarkCardTextFallbackPhase.Idle);
+            TextFallbackPhase: AgentRunLarkCardTextFallbackPhase.Idle,
+            PendingAbortReason: LarkCardAbortReason.Unspecified,
+            PendingAbortTriggeredAtUnixMs: 0);
 
         public bool AllowsInterimEdit =>
             Phase is AgentRunLarkCardDeliveryPhase.Idle
@@ -88,10 +95,44 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         if (!IsCurrentCardDeliverySignal(evt.RunId, evt.CorrelationId))
             return;
 
+        evt = ApplyBlockingReceiptToCardChunk(evt);
         if (await HandleLarkCardStreamingChunkCoreAsync(evt, correlationId))
             return;
 
         await ForwardLarkCardTextFallbackSnapshotAsync(evt, correlationId);
+    }
+
+    private LlmReplyCardStreamChunkEvent ApplyBlockingReceiptToCardChunk(
+        LlmReplyCardStreamChunkEvent source)
+    {
+        var receipts = State.GenerationStep?.ToolReceipts;
+        if (receipts is not { Count: > 0 })
+            return source;
+
+        var reconciled = AgentToolReceiptDeliveryPolicy.Reconcile(receipts);
+        if (!AgentToolReceiptDeliveryPolicy.HasBlockingMutation(reconciled))
+            return source;
+
+        var toolCalls = State.GenerationStep!.AppendedHistory
+            .SelectMany(static entry => entry.ToolCalls)
+            .Select(AgentRunReplyStepMappers.ToProto)
+            .ToArray();
+        var delivery = AgentToolReceiptDeliveryPolicy.Build(
+            source.AccumulatedText,
+            outboundIntent: null,
+            appendedHistory: [],
+            receipts: reconciled,
+            toolCalls: toolCalls,
+            renderer: _toolReceiptRenderer);
+        if (string.IsNullOrWhiteSpace(delivery.ReplyText) ||
+            string.Equals(delivery.ReplyText, source.AccumulatedText, StringComparison.Ordinal))
+        {
+            return source;
+        }
+
+        var sanitized = source.Clone();
+        sanitized.AccumulatedText = delivery.ReplyText;
+        return sanitized;
     }
 
     [EventHandler(AllowSelfHandling = true)]
@@ -121,6 +162,9 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 return;
             case LarkCardOperationPhase.Finalize:
                 await HandleLarkCardFinalizeCompletionAsync(evt);
+                return;
+            case LarkCardOperationPhase.Abort:
+                await HandleLarkCardAbortCompletionAsync(evt);
                 return;
             default:
                 _logger.LogDebug(
@@ -168,27 +212,27 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 return;
             }
             case LarkCardOperationPhase.Finalize:
-                await TransitionLarkCardDeliveryPhaseAsync(
-                    correlationId,
-                    state,
-                    AgentRunLarkCardDeliveryPhase.Terminated,
-                    terminalReason: "finalize_timeout",
-                    fieldUpdate: s => s with { InFlight = null });
-                await CompleteCardStreamedDeliveryAsync(
+                if (await TryBeginLarkCardTimeoutAbortAsync(
+                        correlationId,
+                        LarkCardAbortReason.FinalizeTimeout,
+                        evt.FiredAtUnixMs,
+                        NormalizeOptional(evt.CommandId) ??
+                        state.PendingFinalizeCommandId ??
+                        BuildLlmReplyCommandId(correlationId),
+                        state,
+                        evt.Activity))
+                {
+                    return;
+                }
+
+                await CompleteFinalizeTimeoutWithoutAbortAsync(
                     correlationId,
                     NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
                     evt.Activity,
-                    state.CardMessageId ?? evt.CardMessageId ?? string.Empty,
-                    state.LastFlushedText,
-                    deliveryFailure: new LlmReplyDeliveryFailedEvent
-                    {
-                        CorrelationId = correlationId,
-                        RunId = State.RunId ?? string.Empty,
-                        FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                        ErrorCode = "finalize_timeout",
-                        ErrorMessage = "Card finalize operation timed out.",
-                    },
-                    appendedHistory: []);
+                    state);
+                return;
+            case LarkCardOperationPhase.Abort:
+                await HandleLarkCardAbortTimeoutAsync(evt, correlationId, state);
                 return;
         }
     }
@@ -312,6 +356,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                     InFlight = new LarkCardOperationInFlight(LarkCardOperationPhase.Create, 1, generation),
                     OperationGeneration = generation,
                     PendingAccumulatedText = evt.AccumulatedText,
+                    NyxProviderSlug = NormalizeOptional(evt.Activity?.TransportExtras?.NyxProviderSlug),
                 });
             await ScheduleLarkCardOperationTimeoutAsync(
                 correlationId,
@@ -376,7 +421,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         var result = ToCreateResult(evt);
         if (!result.Success)
         {
-            if (result.IsPostSendFailure)
+            if (result.DeliveryDisposition is LarkCardCreateDeliveryDisposition.Sent or
+                LarkCardCreateDeliveryDisposition.ReplyAuthoritySpentDeliveryUnknown)
             {
                 _logger.LogWarning(
                     "Card post-send failure; terminating turn without text-edit fallback. runId={RunId} correlation={CorrelationId} code={ErrorCode} cardId={CardId}",
@@ -396,13 +442,24 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                         OriginalCardId = NormalizeOptional(result.CardId),
                         InFlight = null,
                     });
+                var deliveryFailure = result.DeliveryDisposition is
+                    LarkCardCreateDeliveryDisposition.ReplyAuthoritySpentDeliveryUnknown
+                    ? new LlmReplyDeliveryFailedEvent
+                    {
+                        CorrelationId = correlationId,
+                        RunId = State.RunId ?? string.Empty,
+                        FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                        ErrorCode = result.ErrorCode,
+                        ErrorMessage = result.ErrorSummary,
+                    }
+                    : null;
                 await CompleteCardStreamedDeliveryAsync(
                     correlationId,
                     BuildLlmReplyCommandId(correlationId),
                     evt.Chunk?.Activity,
                     terminated.CardMessageId ?? string.Empty,
                     terminated.LastFlushedText,
-                    deliveryFailure: null,
+                    deliveryFailure,
                     appendedHistory: []);
                 return;
             }
@@ -607,6 +664,260 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             evt.AppendedHistory.ToArray());
     }
 
+    private async Task<bool> TryBeginLarkCardTimeoutAbortAsync(
+        string correlationId,
+        LarkCardAbortReason reason,
+        long triggeredAtUnixMs,
+        string commandId,
+        LarkCardDeliveryRuntimeState? currentState = null,
+        ChatActivity? referenceActivity = null)
+    {
+        var state = currentState ?? GetOrInitLarkCardDeliveryState();
+        if (state.Phase is not AgentRunLarkCardDeliveryPhase.Streaming || state.CardId is null)
+            return false;
+
+        if (state.InFlight?.Operation == LarkCardOperationPhase.Abort)
+            return true;
+
+        var activity = await BuildLarkCardAbortActivityAsync(
+            state,
+            referenceActivity,
+            CancellationToken.None);
+        var sequence = state.InFlight is null
+            ? state.Sequence + 1
+            : Math.Max(state.Sequence + 1, state.InFlight.Sequence + 2);
+        var generation = NextLarkCardOperationGeneration(state);
+        var abortTriggeredAtUnixMs = triggeredAtUnixMs > 0
+            ? triggeredAtUnixMs
+            : _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        var aborting = await TransitionLarkCardDeliveryPhaseAsync(
+            correlationId,
+            state,
+            AgentRunLarkCardDeliveryPhase.Streaming,
+            fieldUpdate: s => s with
+            {
+                InFlight = new LarkCardOperationInFlight(LarkCardOperationPhase.Abort, sequence, generation),
+                OperationGeneration = generation,
+                PendingAbortReason = reason,
+                PendingAbortTriggeredAtUnixMs = abortTriggeredAtUnixMs,
+                PendingAccumulatedText = null,
+            });
+        await ScheduleLarkCardOperationTimeoutAsync(
+            correlationId,
+            LarkCardOperationPhase.Abort,
+            sequence,
+            generation,
+            aborting.CardId,
+            aborting.CardMessageId,
+            commandId,
+            activity,
+            finalText: null,
+            aborting.LastFlushedText,
+            CancellationToken.None,
+            reason);
+        await StartLarkCardAbortOperationAsync(
+            activity,
+            correlationId,
+            commandId,
+            aborting,
+            reason,
+            sequence,
+            generation);
+        return true;
+    }
+
+    private async Task<ChatActivity> BuildLarkCardAbortActivityAsync(
+        LarkCardDeliveryRuntimeState state,
+        ChatActivity? referenceActivity,
+        CancellationToken ct)
+    {
+        var activity = referenceActivity?.Clone() ?? new ChatActivity();
+        activity.TransportExtras ??= new TransportExtras();
+        activity.TransportExtras.NyxUserAccessToken = string.Empty;
+        activity.TransportExtras.NyxProviderSlug = state.NyxProviderSlug ?? string.Empty;
+        var reference = State.RelayUserAccessTokenRef;
+        if (reference is null || string.IsNullOrWhiteSpace(reference.Ref))
+            return activity;
+        if (reference.ExpiresAtUnixMs > 0 &&
+            reference.ExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds())
+        {
+            return activity;
+        }
+        if (Services.GetService<IRuntimeSecretStore>() is not { } secretStore)
+            return activity;
+
+        try
+        {
+            var resolved = await secretStore.ResolveAsync(
+                new ResolveRuntimeSecretRequest(
+                    reference.Ref,
+                    ChannelRelayRuntimeSecretPurposes.UserAccessToken,
+                    State.RunId ?? string.Empty,
+                    State.CorrelationId ?? string.Empty,
+                    "Close a timed-out Lark streaming card."),
+                ct);
+            if (NormalizeOptional(resolved.Secret) is { } accessToken)
+                activity.TransportExtras.NyxUserAccessToken = accessToken;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to resolve Lark card timeout compensation credential. runId={RunId} correlation={CorrelationId}",
+                State.RunId,
+                State.CorrelationId);
+        }
+
+        return activity;
+    }
+
+    private async Task HandleLarkCardAbortCompletionAsync(LarkCardOperationCompletedEvent evt)
+    {
+        var correlationId = NormalizeOptional(evt.CorrelationId);
+        if (correlationId is null)
+            return;
+
+        var state = GetOrInitLarkCardDeliveryState();
+        if (!MatchesLarkCardInFlight(
+                state,
+                LarkCardOperationPhase.Abort,
+                evt.Sequence,
+                evt.OperationGeneration,
+                evt.CardId))
+        {
+            return;
+        }
+
+        var reason = state.PendingAbortReason != LarkCardAbortReason.Unspecified
+            ? state.PendingAbortReason
+            : evt.AbortReason;
+        var result = ToAbortResult(evt);
+        var terminalPhase = reason == LarkCardAbortReason.GenerationTimeout && result.Success
+            ? AgentRunLarkCardDeliveryPhase.Aborted
+            : AgentRunLarkCardDeliveryPhase.Terminated;
+        var terminalReason = BuildLarkCardAbortTerminalReason(reason, result.ErrorCode);
+        var terminalState = await TransitionLarkCardDeliveryPhaseAsync(
+            correlationId,
+            state,
+            terminalPhase,
+            terminalReason,
+            fieldUpdate: s => s with { InFlight = null });
+
+        if (!result.Success)
+        {
+            _logger.LogWarning(
+                "Lark card timeout compensation failed. runId={RunId} correlation={CorrelationId} reason={Reason} code={ErrorCode}",
+                State.RunId,
+                correlationId,
+                reason,
+                result.ErrorCode);
+        }
+
+        await CompleteLarkCardAbortOwnerAsync(
+            correlationId,
+            reason,
+            state.PendingAbortTriggeredAtUnixMs,
+            NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
+            evt.Activity,
+            terminalState);
+    }
+
+    private async Task HandleLarkCardAbortTimeoutAsync(
+        LarkCardOperationTimeoutFiredEvent evt,
+        string correlationId,
+        LarkCardDeliveryRuntimeState state)
+    {
+        var reason = state.PendingAbortReason != LarkCardAbortReason.Unspecified
+            ? state.PendingAbortReason
+            : evt.AbortReason;
+        var terminalState = await TransitionLarkCardDeliveryPhaseAsync(
+            correlationId,
+            state,
+            AgentRunLarkCardDeliveryPhase.Terminated,
+            terminalReason: BuildLarkCardAbortTerminalReason(reason, "abort_timeout"),
+            fieldUpdate: s => s with { InFlight = null });
+        await CompleteLarkCardAbortOwnerAsync(
+            correlationId,
+            reason,
+            state.PendingAbortTriggeredAtUnixMs,
+            NormalizeOptional(evt.CommandId) ?? state.PendingFinalizeCommandId ?? BuildLlmReplyCommandId(correlationId),
+            evt.Activity,
+            terminalState);
+    }
+
+    private async Task CompleteLarkCardAbortOwnerAsync(
+        string correlationId,
+        LarkCardAbortReason reason,
+        long triggeredAtUnixMs,
+        string commandId,
+        ChatActivity? activity,
+        LarkCardDeliveryRuntimeState state)
+    {
+        if (reason == LarkCardAbortReason.GenerationTimeout)
+        {
+            await CompleteReplyGenerationTimeoutAsync(new AgentRunReplyGenerationTimedOut
+            {
+                RunId = State.RunId ?? string.Empty,
+                CorrelationId = correlationId,
+                TargetActorId = State.TargetActorId ?? string.Empty,
+                TimedOutAtUnixMs = triggeredAtUnixMs,
+                Attempt = State.GenerationAttempt,
+            });
+            return;
+        }
+
+        await CompleteFinalizeTimeoutWithoutAbortAsync(correlationId, commandId, activity, state);
+    }
+
+    private async Task CompleteFinalizeTimeoutWithoutAbortAsync(
+        string correlationId,
+        string commandId,
+        ChatActivity? activity,
+        LarkCardDeliveryRuntimeState state)
+    {
+        if (!IsTerminalLarkCardDeliveryPhase(state.Phase))
+        {
+            await TransitionLarkCardDeliveryPhaseAsync(
+                correlationId,
+                state,
+                AgentRunLarkCardDeliveryPhase.Terminated,
+                terminalReason: "finalize_timeout",
+                fieldUpdate: s => s with { InFlight = null });
+        }
+
+        await CompleteCardStreamedDeliveryAsync(
+            correlationId,
+            commandId,
+            activity,
+            state.CardMessageId ?? string.Empty,
+            state.LastFlushedText,
+            deliveryFailure: new LlmReplyDeliveryFailedEvent
+            {
+                CorrelationId = correlationId,
+                RunId = State.RunId ?? string.Empty,
+                FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                ErrorCode = "finalize_timeout",
+                ErrorMessage = "Card finalize operation timed out.",
+            },
+            appendedHistory: []);
+    }
+
+    private static string BuildLarkCardAbortTerminalReason(
+        LarkCardAbortReason reason,
+        string? errorCode)
+    {
+        var prefix = reason == LarkCardAbortReason.GenerationTimeout
+            ? "llm_reply_timeout"
+            : "finalize_timeout";
+        return string.IsNullOrWhiteSpace(errorCode)
+            ? prefix
+            : $"{prefix}:card_abort_failed:{errorCode}";
+    }
+
     private async Task ContinueLarkCardCoalescedWorkAsync(
         string correlationId,
         LarkCardDeliveryRuntimeState state,
@@ -785,6 +1096,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             return;
 
         var completed = ToLarkCardDeliveryCompletedEvent(completion);
+        if (State.GenerationStep?.AgentProfileSnapshot is not null)
+            completed.AgentProfile = State.GenerationStep.AgentProfileSnapshot.Clone();
         try
         {
             await SendToAsync(targetActorId, completed, CancellationToken.None);
@@ -946,6 +1259,29 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         return PublishReplyOperationStepAsync(step, CancellationToken.None);
     }
 
+    private Task StartLarkCardAbortOperationAsync(
+        ChatActivity activityForToken,
+        string correlationId,
+        string commandId,
+        LarkCardDeliveryRuntimeState state,
+        LarkCardAbortReason reason,
+        long sequence,
+        long generation)
+    {
+        var step = ResolveLarkCardReplyStreamRenderer().CreateAbortStep(
+            new LarkCardAbortOperationStepInput(
+                activityForToken,
+                correlationId,
+                commandId,
+                state.CardId ?? string.Empty,
+                state.CardMessageId ?? string.Empty,
+                state.LastFlushedText,
+                reason,
+                sequence,
+                generation));
+        return PublishReplyOperationStepAsync(step, CancellationToken.None);
+    }
+
     private Task PublishReplyOperationStepAsync(ReplyOperationStepEvent step, CancellationToken ct) =>
         SendToAsync(Id, step, ct);
 
@@ -960,7 +1296,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
         ChatActivity? activity,
         string? finalText,
         string? lastFlushedText,
-        CancellationToken ct)
+        CancellationToken ct,
+        LarkCardAbortReason abortReason = LarkCardAbortReason.Unspecified)
     {
         if (_callbackScheduler is null)
             return;
@@ -982,6 +1319,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                     FinalText = finalText ?? string.Empty,
                     LastFlushedText = lastFlushedText ?? string.Empty,
                     FiredAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    AbortReason = abortReason,
                 }),
             ct: ct);
     }
@@ -1000,6 +1338,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             state.LastFlushedText ?? string.Empty,
             state.Sequence,
             NormalizeOptional(state.StreamingElementId) ?? LarkCardDeliveryRuntimeState.DefaultStreamingElementId,
+            NormalizeOptional(state.NyxProviderSlug),
             NormalizeOptional(state.TerminalReason),
             state.InFlightOperation == LarkCardOperationPhase.Unspecified
                 ? null
@@ -1012,7 +1351,9 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             NormalizeOptional(state.PendingFinalizeText),
             NormalizeOptional(state.PendingFinalizeCommandId),
             state.PendingAppendedHistory.Select(entry => entry.Clone()).ToArray(),
-            NormalizeLarkCardTextFallbackPhase(state.TextFallbackPhase));
+            NormalizeLarkCardTextFallbackPhase(state.TextFallbackPhase),
+            state.PendingAbortReason,
+            state.PendingAbortTriggeredAtUnixMs);
     }
 
     private async Task<LarkCardDeliveryRuntimeState> TransitionLarkCardDeliveryPhaseAsync(
@@ -1043,6 +1384,12 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             PendingFinalizeText = IsTerminalLarkCardDeliveryPhase(next) ? null : carried.PendingFinalizeText,
             PendingFinalizeCommandId = IsTerminalLarkCardDeliveryPhase(next) ? null : carried.PendingFinalizeCommandId,
             PendingAppendedHistory = IsTerminalLarkCardDeliveryPhase(next) ? [] : carried.PendingAppendedHistory,
+            PendingAbortReason = IsTerminalLarkCardDeliveryPhase(next)
+                ? LarkCardAbortReason.Unspecified
+                : carried.PendingAbortReason,
+            PendingAbortTriggeredAtUnixMs = IsTerminalLarkCardDeliveryPhase(next)
+                ? 0
+                : carried.PendingAbortTriggeredAtUnixMs,
             TerminalReason = IsTerminalLarkCardDeliveryPhase(next)
                 ? (terminalReason ?? carried.TerminalReason)
                 : carried.TerminalReason,
@@ -1101,6 +1448,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             evt.Sequence = updated.Sequence;
         if (!string.Equals(current.StreamingElementId, updated.StreamingElementId, StringComparison.Ordinal))
             evt.StreamingElementId = updated.StreamingElementId ?? LarkCardDeliveryRuntimeState.DefaultStreamingElementId;
+        if (!string.Equals(current.NyxProviderSlug, updated.NyxProviderSlug, StringComparison.Ordinal))
+            evt.NyxProviderSlug = updated.NyxProviderSlug ?? string.Empty;
         if (!string.Equals(current.TerminalReason, updated.TerminalReason, StringComparison.Ordinal))
             evt.TerminalReason = updated.TerminalReason ?? string.Empty;
 
@@ -1130,6 +1479,10 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             evt.AppendedHistory.AddRange(updated.PendingAppendedHistory.Select(entry => entry.Clone()));
         if (current.TextFallbackPhase != updated.TextFallbackPhase)
             evt.TextFallbackPhase = updated.TextFallbackPhase;
+        if (current.PendingAbortReason != updated.PendingAbortReason)
+            evt.PendingAbortReason = updated.PendingAbortReason;
+        if (current.PendingAbortTriggeredAtUnixMs != updated.PendingAbortTriggeredAtUnixMs)
+            evt.PendingAbortTriggeredAtUnixMs = updated.PendingAbortTriggeredAtUnixMs;
 
         return evt;
     }
@@ -1158,6 +1511,8 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             state.Sequence = evt.Sequence;
         if (evt.HasStreamingElementId)
             state.StreamingElementId = evt.StreamingElementId ?? string.Empty;
+        if (evt.HasNyxProviderSlug)
+            state.NyxProviderSlug = evt.NyxProviderSlug ?? string.Empty;
         if (evt.HasTerminalReason)
             state.TerminalReason = evt.TerminalReason ?? string.Empty;
         if (evt.HasInFlightOperation)
@@ -1174,6 +1529,10 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             state.PendingFinalizeCommandId = evt.FinalizeCommandId ?? string.Empty;
         if (evt.HasTextFallbackPhase)
             state.TextFallbackPhase = NormalizeLarkCardTextFallbackPhase(evt.TextFallbackPhase);
+        if (evt.HasPendingAbortReason)
+            state.PendingAbortReason = evt.PendingAbortReason;
+        if (evt.HasPendingAbortTriggeredAtUnixMs)
+            state.PendingAbortTriggeredAtUnixMs = evt.PendingAbortTriggeredAtUnixMs;
         if (evt.AppendedHistory.Count > 0)
         {
             state.PendingAppendedHistory.Clear();
@@ -1421,21 +1780,29 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
                 BuildFaultErrorCode(LarkCardOperationPhase.Create, raw),
                 raw.ExceptionMessage);
 
-        return raw.IsPostSendFailure
-            ? ConversationCardCreateResult.PostSendFailed(
+        return raw.CreateDeliveryDisposition switch
+        {
+            LarkCardCreateDeliveryDisposition.ReplyAuthoritySpentDeliveryUnknown =>
+                ConversationCardCreateResult.ReplyAuthoritySpentDeliveryUnknown(
+                    raw.CardId,
+                    raw.CardMessageId,
+                    raw.RawErrorCode,
+                    raw.RawErrorSummary),
+            LarkCardCreateDeliveryDisposition.Sent => ConversationCardCreateResult.PostSendFailed(
                 raw.CardId,
                 raw.CardMessageId,
                 raw.RawErrorCode,
                 raw.RawErrorSummary,
                 raw.IsRateLimited,
                 raw.IsTableLimitExceeded,
-                raw.IsCardUnavailable)
-            : ConversationCardCreateResult.Failed(
+                raw.IsCardUnavailable),
+            _ => ConversationCardCreateResult.Failed(
                 raw.RawErrorCode,
                 raw.RawErrorSummary,
                 raw.IsRateLimited,
                 raw.IsTableLimitExceeded,
-                raw.IsCardUnavailable);
+                raw.IsCardUnavailable),
+        };
     }
 
     private static ConversationCardStreamResult ToStreamResult(LarkCardOperationCompletedEvent evt)
@@ -1472,6 +1839,21 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             raw.FinalTextWritten);
     }
 
+    private static ConversationCardAbortResult ToAbortResult(LarkCardOperationCompletedEvent evt)
+    {
+        var raw = evt.RawResult ?? new LarkCardOperationRawResult();
+        if (evt.State == LarkCardOperationResultState.Succeeded)
+            return ConversationCardAbortResult.Succeeded();
+
+        return ConversationCardAbortResult.Failed(
+            evt.State == LarkCardOperationResultState.Faulted
+                ? BuildFaultErrorCode(LarkCardOperationPhase.Abort, raw)
+                : raw.RawErrorCode,
+            evt.State == LarkCardOperationResultState.Faulted
+                ? raw.ExceptionMessage
+                : raw.RawErrorSummary);
+    }
+
     private static string BuildFaultErrorCode(
         LarkCardOperationPhase operation,
         LarkCardOperationRawResult raw)
@@ -1481,6 +1863,7 @@ public sealed partial class AgentRunGAgent : IReplyOperationActorContext
             LarkCardOperationPhase.Create => "create",
             LarkCardOperationPhase.Stream => "stream",
             LarkCardOperationPhase.Finalize => "finalize",
+            LarkCardOperationPhase.Abort => "abort",
             _ => "unknown",
         };
         var exceptionType = string.IsNullOrWhiteSpace(raw.ExceptionType)

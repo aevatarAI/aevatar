@@ -1,4 +1,5 @@
 using Aevatar.BackendConsole.Hosting;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -9,11 +10,19 @@ namespace Aevatar.Mainnet.Host.Api.BackendConsole;
 internal static class AdminConsoleEndpoints
 {
     private const string PageRoute = "/admin";
+    private const string StudioPageRoute = "/admin/studio";
 
     private static readonly BackendConsoleAsset PageAsset = new(
         LogicalName: "admin",
         Assembly: typeof(AdminConsoleEndpoints).Assembly,
         ResourceSuffix: "BackendConsole.admin.html",
+        ContentType: "text/html",
+        InjectHostConfiguration: true);
+
+    private static readonly BackendConsoleAsset StudioPageAsset = new(
+        LogicalName: "admin-studio",
+        Assembly: typeof(WorkflowStudioEndpoints).Assembly,
+        ResourceSuffix: "CapabilityApi.studio-assistant.html",
         ContentType: "text/html",
         InjectHostConfiguration: true);
 
@@ -27,6 +36,12 @@ internal static class AdminConsoleEndpoints
             .WithSummary("Fused backend admin console served from an embedded static asset.")
             .AllowAnonymous();
 
+        app.MapGet(StudioPageRoute, GetAdminStudioPage)
+            .WithTags("BackendConsole")
+            .WithName("GetAdminStudioPage")
+            .WithSummary("Admin-owned Studio surface served from the canonical embedded Studio asset.")
+            .AllowAnonymous();
+
         return app;
     }
 
@@ -37,5 +52,14 @@ internal static class AdminConsoleEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(assets);
         return assets.Serve(PageAsset);
+    }
+
+    internal static IResult GetAdminStudioPage(
+        HttpContext http,
+        [FromServices] IBackendConsoleAssetService assets)
+    {
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(assets);
+        return assets.Serve(StudioPageAsset);
     }
 }

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using Aevatar.GAgentService.Abstractions.Ports;
 using FluentAssertions;
 
 namespace Aevatar.GAgentService.Integration.Tests;
@@ -18,7 +19,7 @@ public sealed class ScopeServiceMemberAccessEndpointTests : ScopeServiceEndpoint
     [InlineData("POST", "/api/scopes/scope-alpha/members/m-alpha/runs/run-alpha:signal")]
     [InlineData("POST", "/api/scopes/scope-alpha/members/m-alpha/runs/run-alpha:stop")]
     [InlineData("POST", "/api/scopes/scope-alpha/members/m-alpha/runs/run-alpha:retry-compensation")]
-    public async Task MemberFirstRoutes_ShouldRejectDifferentAuthenticatedMember(
+    public async Task MemberFirstRoutes_ShouldResolveScopedMember_WhenCallerIdentityDiffers(
         string method,
         string requestUri)
     {
@@ -30,27 +31,27 @@ public sealed class ScopeServiceMemberAccessEndpointTests : ScopeServiceEndpoint
         request.Headers.Add("X-Test-Member-Id", "m-attacker");
 
         var response = await host.Client.SendAsync(request);
-        var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        body.Should().Contain("MEMBER_ACCESS_DENIED");
-        host.MemberPublishedServiceResolver.Calls.Should().BeEmpty();
+        response.StatusCode.Should().NotBe(HttpStatusCode.Forbidden);
+        host.MemberPublishedServiceResolver.Calls.Should().ContainSingle()
+            .Which.Should().Be(new MemberPublishedServiceResolveRequest("scope-alpha", "m-alpha"));
     }
 
     [Fact]
-    public async Task MemberFirstRoute_ShouldAllowScopeOwner()
+    public async Task MemberFirstRoute_ShouldRejectDifferentAuthenticatedScope()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
         using var request = new HttpRequestMessage(
             HttpMethod.Get,
             "/api/scopes/scope-alpha/members/m-alpha/published-service");
-        request.Headers.Add("X-Test-Scope-Id", "scope-alpha");
-        request.Headers.Add("X-Test-Member-Id", "m-attacker");
-        request.Headers.Add("X-Test-Role", "owner");
+        request.Headers.Add("X-Test-Scope-Id", "scope-other");
+        request.Headers.Add("X-Test-Member-Id", "user-alpha");
 
         var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        host.MemberPublishedServiceResolver.Calls.Should().ContainSingle();
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        body.Should().Contain("SCOPE_ACCESS_DENIED");
+        host.MemberPublishedServiceResolver.Calls.Should().BeEmpty();
     }
 }

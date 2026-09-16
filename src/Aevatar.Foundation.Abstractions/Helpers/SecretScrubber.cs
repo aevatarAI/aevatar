@@ -3,6 +3,8 @@
 // crosses a persistence or logging boundary.
 // ─────────────────────────────────────────────────────────────
 
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Aevatar.Foundation.Abstractions.Helpers;
@@ -88,5 +90,83 @@ public static class SecretScrubber
             // Adversarial / pathological input defeated a matcher; fail closed rather than leak.
             return Marker;
         }
+    }
+
+    /// <summary>
+    /// Scrubs secret-bearing fields recursively while preserving a valid JSON payload.
+    /// Invalid JSON falls back to the free-form scrubber.
+    /// </summary>
+    public static string ScrubJson(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return value ?? string.Empty;
+
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                WriteScrubbedJson(document.RootElement, writer, null);
+            }
+
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch (JsonException)
+        {
+            return Scrub(value);
+        }
+    }
+
+    private static void WriteScrubbedJson(JsonElement element, Utf8JsonWriter writer, string? fieldName)
+    {
+        if (IsSensitiveJsonField(fieldName))
+        {
+            writer.WriteStringValue(Marker);
+            return;
+        }
+
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject())
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteScrubbedJson(property.Value, writer, property.Name);
+                }
+
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                    WriteScrubbedJson(item, writer, fieldName);
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(Scrub(element.GetString()));
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
+    }
+
+    private static bool IsSensitiveJsonField(string? fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(fieldName))
+            return false;
+
+        var normalized = new string(fieldName
+            .Where(char.IsLetterOrDigit)
+            .Select(char.ToLowerInvariant)
+            .ToArray());
+        return normalized is
+            "authorization" or "cookie" or "setcookie" or "bearer" or "bearertoken" or
+            "token" or "accesstoken" or "refreshtoken" or "idtoken" or
+            "apikey" or "secret" or "clientsecret" or "hmacsecret" or
+            "password" or "passwd" or "pwd" or "credential" or "credentials" or
+            "signature" or "signingkey" or "privatekey";
     }
 }

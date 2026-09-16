@@ -47,6 +47,8 @@ public static class ElasticsearchProjectionServiceCollectionExtensions
             provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
         services.AddSingleton<IProjectionDocumentReader<TReadModel, TKey>>(provider =>
             provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
+        services.AddSingleton<IProjectionDocumentMutator<TReadModel, TKey>>(provider =>
+            provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
         services.AddSingleton<IProjectionIndexConsistencyProbe<TReadModel>>(provider =>
             provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
         // Non-generic reconcile target so the startup hosted service can enumerate every ES

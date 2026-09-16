@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>Aevatar AI</title>
+  <style>
+    :root {
+      --ink: #182034;
+      --ink-strong: #0b1020;
+      --muted: #5c677d;
+      --faint: #8a94a8;
+      --line: #dfe4ed;
+      --line-strong: #c8d0de;
+      --canvas: #eef1f5;
+      --paper: #ffffff;
+      --paper-soft: #f7f8fa;
+      --rail: #101827;
+      --rail-deep: #0a101c;
+      --rail-text: #aab6cb;
+      --rail-active: #202d43;
+      --blue: #3567e8;
+      --blue-deep: #2452c4;
+      --blue-soft: #edf2ff;
+      --green: #17875a;
+      --green-soft: #e9f7f0;
+      --amber: #b96d0b;
+      --amber-soft: #fff5e5;
+      --red: #c43d47;
+      --red-soft: #fcedef;
+      --violet: #6d56c7;
+      --violet-soft: #f1eefc;
+      --shadow: 0 1px 2px rgba(10, 16, 28, .05), 0 8px 22px rgba(10, 16, 28, .05);
+      --rail-width: 224px;
+      --header-height: 64px;
+      --sans: "Alibaba Sans", "AlibabaSans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { margin: 0; color: var(--ink); background: var(--canvas); font: 14px/1.5 var(--sans); letter-spacing: 0; }
+    button, input, select, textarea { font: inherit; letter-spacing: 0; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    a { color: inherit; }
+    :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .hidden { display: none !important; }
+
+    .auth-shell {
+      min-height: 100%; display: grid; grid-template-columns: minmax(340px, .82fr) minmax(440px, 1.18fr);
+      background: var(--paper); position: relative; overflow: hidden;
+    }
+    .auth-product {
+      min-height: 100vh; display: flex; flex-direction: column; padding: clamp(34px, 5vw, 68px);
+      color: #edf2fa; background: #0c111b; border-right: 1px solid #273145;
+    }
+    .auth-brand { display: flex; align-items: center; gap: 12px; color: #fff; font-size: 16px; font-weight: 700; }
+    .auth-brand-mark, .auth-mobile-mark {
+      width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #526988;
+      border-radius: 7px; background: #17243a; color: #9bb8ff;
+    }
+    .auth-brand-mark svg, .auth-mobile-mark svg { width: 20px; height: 20px; }
+    .auth-product-copy { margin-top: clamp(72px, 15vh, 150px); max-width: 460px; }
+    .auth-product-label { margin: 0 0 13px; color: #7183a0; font: 700 11px/1.2 var(--mono); text-transform: uppercase; }
+    .auth-product-title { margin: 0; color: #fff; font-size: clamp(34px, 4.6vw, 60px); line-height: 1.04; font-weight: 700; }
+    .auth-product-title span { display: block; color: #8faef5; }
+    .auth-product-map { margin-top: auto; padding-top: 40px; }
+    .auth-map-line { height: 1px; background: #263147; }
+    .auth-map-row {
+      min-height: 52px; display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 11px;
+      align-items: center; border-bottom: 1px solid #202a3c; color: #9daac0;
+    }
+    .auth-map-row svg { width: 16px; height: 16px; color: #7699eb; }
+    .auth-map-row strong { color: #dfe7f4; font-size: 12px; font-weight: 650; }
+    .auth-map-state { color: #60718d; font: 700 9px/1 var(--mono); text-transform: uppercase; }
+    .auth-main { min-height: 100vh; display: grid; place-items: center; padding: clamp(34px, 7vw, 88px); background: #f7f8fa; }
+    .auth-panel { width: min(390px, 100%); text-align: left; }
+    .auth-mobile-brand { display: none; align-items: center; gap: 10px; margin-bottom: 56px; color: var(--ink-strong); font-weight: 700; }
+    .auth-kicker { margin: 0 0 10px; color: var(--blue); font: 700 11px/1.2 var(--mono); text-transform: uppercase; }
+    .auth-title { margin: 0; color: var(--ink-strong); font-size: 32px; line-height: 1.15; font-weight: 700; }
+    .auth-subtitle { margin: 11px 0 34px; color: var(--muted); font-size: 14px; }
+    .auth-button {
+      width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: center; gap: 10px;
+      border: 1px solid var(--blue); border-radius: 6px; background: var(--blue); color: #fff; font-weight: 650;
+      box-shadow: 0 8px 20px rgba(53, 103, 232, .18); transition: background .16s ease, transform .16s ease;
+    }
+    .auth-button:hover { background: var(--blue-deep); }
+    .auth-button:active { transform: translateY(1px); }
+    .auth-provider-logo { width: 21px; height: 21px; border-radius: 4px; }
+    .auth-meta { margin-top: 17px; color: var(--faint); font-size: 11px; text-align: center; }
+    .auth-error { margin: 17px 0 0; padding: 10px 12px; border: 1px solid #e9b7bc; border-radius: 6px; background: var(--red-soft); color: #8e313b; text-align: left; }
+
+    .app-shell { min-height: 100%; display: grid; grid-template-columns: var(--rail-width) minmax(0, 1fr); }
+    .rail { height: 100vh; position: sticky; top: 0; display: flex; flex-direction: column; color: var(--rail-text); background: var(--rail); border-right: 1px solid #253147; }
+    .rail-brand { height: var(--header-height); display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid #263248; color: #fff; font-weight: 680; font-size: 15px; }
+    .brand-glyph { width: 29px; height: 29px; display: grid; place-items: center; border: 1px solid #526988; border-radius: 7px; background: #17243a; color: #8eb0ff; }
+    .brand-glyph svg { width: 17px; height: 17px; }
+    .rail-label { padding: 22px 18px 8px; color: #697a96; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .rail-nav { display: grid; gap: 4px; padding: 0 10px; }
+    .nav-link { height: 40px; display: flex; align-items: center; gap: 11px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--rail-text); text-decoration: none; text-align: left; }
+    .nav-link:hover { color: #f3f6fb; background: #19243a; }
+    .nav-link.active { color: #fff; background: var(--rail-active); box-shadow: inset 3px 0 #6f96f4; }
+    .nav-link svg { width: 17px; height: 17px; flex: 0 0 auto; }
+    .rail-account { margin-top: auto; padding: 13px 12px; border-top: 1px solid #263248; display: grid; grid-template-columns: 34px minmax(0, 1fr) 32px; gap: 9px; align-items: center; }
+    .avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: #2c3b55; color: #fff; font-weight: 700; }
+    .account-copy { min-width: 0; }
+    .account-name, .account-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .account-name { color: #edf2fa; font-size: 12px; font-weight: 650; }
+    .account-email { color: #71809a; font-size: 10px; }
+
+    .main { min-width: 0; min-height: 100vh; display: flex; flex-direction: column; }
+    .topbar { height: var(--header-height); flex: 0 0 var(--header-height); position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 14px; padding: 0 24px; background: rgba(255, 255, 255, .96); border-bottom: 1px solid var(--line); }
+    .mobile-brand { display: none; }
+    .page-heading { min-width: 0; }
+    .page-heading h1 { margin: 0; color: var(--ink-strong); font-size: 18px; line-height: 1.25; font-weight: 680; }
+    .page-heading p { margin: 3px 0 0; color: var(--faint); font-size: 11px; }
+    .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    .net-state { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-size: 11px; font-weight: 650; }
+    .net-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    .content { flex: 1; min-width: 0; padding: 22px 24px 36px; }
+
+    .button { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--paper); color: var(--ink); font-weight: 600; }
+    .button:hover { border-color: #aeb8c8; background: var(--paper-soft); }
+    .button.primary { border-color: var(--blue); background: var(--blue); color: #fff; }
+    .button.primary:hover { background: var(--blue-deep); }
+    .button.danger { color: var(--red); }
+    .button.small { min-height: 30px; padding: 0 9px; font-size: 12px; }
+    .icon-button { width: 32px; height: 32px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--muted); }
+    .icon-button:hover { color: var(--ink); border-color: var(--line-strong); }
+    .icon-button svg, .button svg { width: 15px; height: 15px; }
+    .rail .icon-button { border-color: transparent; background: transparent; color: #7e8da7; }
+    .rail .icon-button:hover { color: #fff; background: #202c42; }
+    .mobile-logout { display: none; }
+
+    .notice { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 14px; padding: 10px 12px; border: 1px solid #d9c98d; border-left: 3px solid var(--amber); border-radius: 6px; background: var(--amber-soft); color: #79500d; font-size: 12px; }
+    .notice.error { border-color: #e6b8bd; border-left-color: var(--red); background: var(--red-soft); color: #85313a; }
+    .notice svg { width: 16px; height: 16px; flex: 0 0 auto; margin-top: 1px; }
+    .notice strong { color: inherit; }
+    .notice-copy { min-width: 0; }
+    .notice-detail { margin-top: 2px; color: currentColor; opacity: .78; font-size: 10px; }
+
+    .toolbar { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 16px; }
+    .toolbar-spacer { flex: 1; }
+    .search-box { min-width: 230px; height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+    .search-box:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
+    .search-box svg { width: 15px; height: 15px; color: var(--faint); }
+    .search-box input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--ink); }
+    .segmented { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 7px; background: #e7ebf1; }
+    .segmented button { min-height: 28px; padding: 0 11px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 12px; }
+    .segmented button.active { background: var(--paper); color: var(--ink-strong); font-weight: 650; box-shadow: 0 1px 2px rgba(10, 16, 28, .1); }
+
+    .kpi-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .kpi { min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); box-shadow: 0 1px 2px rgba(10, 16, 28, .03); }
+    .kpi-top { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; }
+    .kpi-icon { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; background: var(--blue-soft); color: var(--blue); }
+    .kpi-icon.green { background: var(--green-soft); color: var(--green); }
+    .kpi-icon.amber { background: var(--amber-soft); color: var(--amber); }
+    .kpi-icon.violet { background: var(--violet-soft); color: var(--violet); }
+    .kpi-icon svg { width: 14px; height: 14px; }
+    .kpi-value { margin-top: 8px; color: var(--ink-strong); font: 680 26px/1 var(--mono); }
+    .kpi-meta { margin-top: 7px; color: var(--faint); font-size: 11px; }
+
+    .section-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 16px; }
+    .section { min-width: 0; border-top: 1px solid var(--line-strong); background: var(--paper); }
+    .section-head { min-height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+    .section-title { margin: 0; color: var(--ink-strong); font-size: 13px; font-weight: 680; }
+    .section-meta { margin-left: auto; color: var(--faint); font-size: 11px; }
+    .table-wrap { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th { padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--paper-soft); color: var(--faint); font-size: 10px; font-weight: 700; text-align: left; text-transform: uppercase; white-space: nowrap; }
+    td { padding: 11px 12px; border-bottom: 1px solid #edf0f4; color: var(--ink); vertical-align: middle; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr.clickable:hover { background: #f7f9fc; cursor: pointer; }
+    .row-action { width: 100%; display: block; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; }
+    .row-action:hover .cell-title { color: var(--blue-deep); }
+    .cell-title { color: var(--ink-strong); font-weight: 650; }
+    .cell-sub { margin-top: 2px; color: var(--faint); font-size: 11px; }
+    .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge { display: inline-flex; align-items: center; gap: 5px; min-height: 21px; padding: 0 7px; border-radius: 5px; background: #edf0f4; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .badge.success { background: var(--green-soft); color: var(--green); }
+    .badge.running { background: var(--blue-soft); color: var(--blue-deep); }
+    .badge.waiting { background: var(--amber-soft); color: var(--amber); }
+    .badge.failed { background: var(--red-soft); color: var(--red); }
+    .badge.violet { background: var(--violet-soft); color: var(--violet); }
+    .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    .empty, .loading, .error-state { min-height: 190px; display: grid; place-items: center; padding: 28px; color: var(--faint); text-align: center; }
+    .empty svg, .error-state svg { width: 28px; height: 28px; margin-bottom: 8px; }
+    .error-state { color: var(--red); }
+    .skeleton { display: grid; gap: 10px; width: min(480px, 80%); }
+    .skeleton i { height: 11px; border-radius: 3px; background: #e6eaf0; animation: pulse 1.3s ease-in-out infinite; }
+    .skeleton i:nth-child(2) { width: 76%; }
+    .skeleton i:nth-child(3) { width: 88%; }
+    @keyframes pulse { 50% { opacity: .45; } }
+
+    .split-view { min-height: calc(100vh - 142px); display: grid; grid-template-columns: minmax(350px, .82fr) minmax(470px, 1.18fr); border-top: 1px solid var(--line-strong); background: var(--paper); }
+    .split-list { min-width: 0; border-right: 1px solid var(--line); }
+    .split-detail { min-width: 0; background: var(--paper-soft); }
+    .agent-row { width: 100%; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 13px 14px; border: 0; border-bottom: 1px solid #edf0f4; background: var(--paper); color: var(--ink); text-align: left; }
+    .agent-row:hover { background: #f7f9fc; }
+    .agent-row.active { background: var(--blue-soft); box-shadow: inset 3px 0 var(--blue); }
+    .agent-symbol { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #d7dfec; border-radius: 7px; background: #f4f7fb; color: var(--blue); }
+    .agent-symbol svg { width: 17px; height: 17px; }
+    .detail-pad { padding: 18px; }
+    .detail-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
+    .detail-head-copy { min-width: 0; }
+    .detail-title { margin: 0; color: var(--ink-strong); font-size: 17px; font-weight: 680; }
+    .detail-id { margin-top: 3px; color: var(--faint); font-size: 11px; }
+    .detail-actions { margin-left: auto; display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+    .field { min-width: 0; }
+    .field.full { grid-column: 1 / -1; }
+    .field label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; font-weight: 650; }
+    .field input, .field select, .field textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--paper); color: var(--ink); outline: 0; }
+    .field input, .field select { height: 36px; padding: 0 10px; }
+    .field textarea { min-height: 94px; padding: 9px 10px; resize: vertical; line-height: 1.5; }
+    .field textarea.code { min-height: 128px; font: 12px/1.5 var(--mono); }
+    .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
+    .form-section { margin-top: 16px; padding-top: 15px; border-top: 1px solid var(--line); }
+    .form-section h3 { margin: 0 0 11px; color: var(--ink-strong); font-size: 12px; }
+    .advanced { margin-top: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+    .advanced summary { padding: 10px 12px; color: var(--muted); font-size: 12px; font-weight: 650; cursor: pointer; }
+    .advanced[open] summary { border-bottom: 1px solid var(--line); }
+    .advanced-body { padding: 13px; }
+    .diagnostics { display: grid; gap: 7px; margin-top: 14px; }
+    .diagnostic { padding: 9px 10px; border-left: 3px solid var(--red); background: var(--red-soft); color: #85313a; font-size: 12px; }
+    .diagnostic.ok { border-left-color: var(--green); background: var(--green-soft); color: #12613f; }
+
+    .model-layout { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 16px; }
+    .model-pane { min-width: 0; border-top: 1px solid var(--line-strong); background: var(--paper); }
+    .model-body { padding: 16px; }
+    .route-list, .source-list { display: grid; gap: 8px; margin-top: 14px; }
+    .route-item, .source-item { padding: 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper-soft); }
+    .route-item-top, .source-item-top { display: flex; align-items: center; gap: 8px; }
+    .route-item p, .source-item p { margin: 5px 0 0; color: var(--faint); font-size: 11px; }
+    .model-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .model-tag { padding: 3px 7px; border: 1px solid #d9e1ef; border-radius: 4px; background: var(--paper); color: var(--muted); font: 10px var(--mono); }
+    .version-row { display: flex; gap: 14px; flex-wrap: wrap; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--paper-soft); color: var(--faint); font-size: 10px; }
+    .catalog-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; margin-top: 14px; }
+    .catalog-source-editor { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper-soft); }
+    .catalog-source-head { display: flex; align-items: flex-start; gap: 9px; }
+    .catalog-source-title { min-width: 0; flex: 1; }
+    .catalog-source-title strong, .catalog-source-title span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .catalog-source-title span { margin-top: 2px; color: var(--faint); font: 10px var(--mono); }
+    .catalog-source-actions { display: flex; gap: 6px; }
+    .catalog-models { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 11px; }
+    .model-option { min-width: 0; display: flex; align-items: center; gap: 7px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); color: var(--muted); font: 11px var(--mono); cursor: pointer; }
+    .model-option:hover { border-color: var(--line-strong); color: var(--ink); }
+    .model-option input { flex: 0 0 auto; margin: 0; accent-color: var(--blue); }
+    .model-option span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .catalog-hint { margin-top: 9px; color: var(--faint); font-size: 11px; }
+
+    .activity-controls { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 14px; }
+    .activity-list { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 16px; }
+    .run-row { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 14px; border: 0; border-bottom: 1px solid #edf0f4; background: var(--paper); color: var(--ink); text-align: left; cursor: pointer; }
+    .run-row:hover { background: #f7f9fc; }
+    .run-time { color: var(--faint); font-size: 10px; white-space: nowrap; }
+    .conversation-row { padding: 12px 14px; border-bottom: 1px solid #edf0f4; }
+    .conversation-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; color: var(--faint); font-size: 10px; }
+
+    .drawer-backdrop { position: fixed; inset: 0; z-index: 70; display: flex; justify-content: flex-end; background: rgba(8, 13, 23, .4); }
+    .drawer { width: min(760px, 94vw); height: 100%; display: flex; flex-direction: column; background: var(--paper); box-shadow: -18px 0 42px rgba(8, 13, 23, .2); }
+    .drawer-head { min-height: 62px; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid var(--line); }
+    .drawer-head-copy { min-width: 0; }
+    .drawer-title { margin: 0; color: var(--ink-strong); font-size: 15px; font-weight: 680; }
+    .drawer-sub { color: var(--faint); font-size: 10px; }
+    .drawer-close { margin-left: auto; }
+    .drawer-body { flex: 1; overflow: auto; padding: 18px; }
+    .detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-bottom: 18px; }
+    .detail-stat { padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper-soft); }
+    .detail-stat span { display: block; color: var(--faint); font-size: 10px; }
+    .detail-stat strong { display: block; margin-top: 4px; color: var(--ink-strong); font: 650 14px var(--mono); }
+    .timeline { position: relative; margin-left: 6px; padding-left: 19px; border-left: 1px solid var(--line-strong); }
+    .timeline-item { position: relative; padding: 0 0 15px; }
+    .timeline-item::before { content: ""; position: absolute; left: -24px; top: 5px; width: 8px; height: 8px; border: 2px solid var(--paper); border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+    .timeline-kind { color: var(--ink-strong); font-size: 12px; font-weight: 650; }
+    .timeline-meta { margin-top: 2px; color: var(--faint); font-size: 10px; }
+    .output { padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: #111827; color: #dbe5f4; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.6 var(--mono); }
+
+    .modal-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: rgba(8, 13, 23, .46); }
+    .modal { width: min(440px, 100%); border-radius: 8px; background: var(--paper); box-shadow: 0 24px 64px rgba(8, 13, 23, .3); }
+    .modal-head { display: flex; align-items: center; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+    .modal-title { margin: 0; color: var(--ink-strong); font-size: 15px; }
+    .modal-body { padding: 18px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); background: var(--paper-soft); }
+
+    .toast-stack { position: fixed; right: 18px; bottom: 18px; z-index: 100; display: grid; gap: 8px; width: min(360px, calc(100vw - 36px)); }
+    .toast { padding: 11px 13px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--paper); box-shadow: var(--shadow); color: var(--ink); animation: toast-in .18s ease-out; }
+    .toast.success { border-left: 3px solid var(--green); }
+    .toast.error { border-left: 3px solid var(--red); }
+    @keyframes toast-in { from { transform: translateY(7px); opacity: 0; } }
+
+    @media (max-width: 1050px) {
+      :root { --rail-width: 196px; }
+      .auth-shell { grid-template-columns: minmax(300px, .72fr) minmax(410px, 1fr); }
+      .auth-product { padding: 38px; }
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .section-grid, .model-layout, .activity-list { grid-template-columns: 1fr; }
+      .split-view { grid-template-columns: minmax(310px, .8fr) minmax(400px, 1.2fr); }
+    }
+    @media (max-width: 760px) {
+      .auth-shell { display: block; }
+      .auth-product { display: none; }
+      .auth-main { min-height: 100vh; padding: 30px 24px; }
+      .auth-mobile-brand { display: flex; }
+      .app-shell { display: block; padding-bottom: 62px; }
+      .rail { height: 62px; position: fixed; inset: auto 0 0; z-index: 50; display: block; border: 0; border-top: 1px solid #27334a; }
+      .rail-brand, .rail-label, .rail-account { display: none; }
+      .rail-nav { height: 100%; grid-template-columns: repeat(4, 1fr); gap: 0; padding: 4px 5px; }
+      .nav-link { height: 54px; flex-direction: column; justify-content: center; gap: 2px; padding: 0 2px; font-size: 10px; }
+      .nav-link.active { box-shadow: inset 0 2px #6f96f4; }
+      .nav-link svg { width: 16px; height: 16px; }
+      .topbar { padding: 0 14px; }
+      .mobile-brand { display: grid; }
+      .mobile-logout { display: inline-grid; }
+      .page-heading p, .net-state { display: none; }
+      .content { padding: 14px 12px 24px; }
+      .split-view { min-height: auto; display: block; }
+      .split-list { border-right: 0; }
+      .split-detail { border-top: 1px solid var(--line-strong); scroll-margin-top: 70px; }
+      .form-grid, .detail-grid { grid-template-columns: 1fr; }
+      .catalog-models { grid-template-columns: 1fr; }
+      .field.full { grid-column: auto; }
+      .search-box { min-width: 0; flex: 1 1 180px; }
+    }
+    @media (max-width: 460px) {
+      .auth-main { padding: 24px 20px; }
+      .auth-title { font-size: 26px; }
+      .kpi-grid { grid-template-columns: 1fr; }
+      .topbar-actions .button span { display: none; }
+      .detail-actions { width: 100%; margin-left: 0; justify-content: flex-start; }
+      .detail-head { flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body data-aevatar-ai>
+  <div id="auth-root" class="auth-shell">
+    <section class="auth-product" aria-label="Aevatar AI">
+      <div class="auth-brand"><span class="auth-brand-mark" id="auth-brand-mark" aria-hidden="true"></span><span>Aevatar AI</span></div>
+      <div class="auth-product-copy">
+        <p class="auth-product-label">Aevatar Mainnet</p>
+        <p class="auth-product-title">Build agents.<span>Observe outcomes.</span></p>
+      </div>
+      <div class="auth-product-map" aria-hidden="true">
+        <div class="auth-map-line"></div>
+        <div class="auth-map-row"><span data-icon="agents"></span><strong>Agents</strong><span class="auth-map-state">Configure</span></div>
+        <div class="auth-map-row"><span data-icon="models"></span><strong>Models</strong><span class="auth-map-state">Route</span></div>
+        <div class="auth-map-row"><span data-icon="activity"></span><strong>Activity</strong><span class="auth-map-state">Observe</span></div>
+      </div>
+    </section>
+    <main class="auth-main">
+      <div class="auth-panel">
+        <div class="auth-mobile-brand"><span class="auth-mobile-mark" id="auth-mobile-mark" aria-hidden="true"></span><span>Aevatar AI</span></div>
+        <p class="auth-kicker">Welcome</p>
+        <h1 class="auth-title">进入 Aevatar AI</h1>
+        <p class="auth-subtitle">使用你的 NyxID 账户继续。</p>
+        <button id="login-button" class="auth-button" type="button"><img class="auth-provider-logo" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACshmLzAAAGOklEQVRYCcVWy24cRRQ9PT2PnvGMx484fiMZFCJBwh4JKQsWbGDLGr4AiS9gwYp/QGKRLRsWiC1CkXiISESIxAl2CFJiJ36P2/Po6enmnFvdM2ODE0IW1Kimqu6tuufce+vRHoCU9X8rxedH9uCNL9Igc8E1z+fP2PJxq2f7Gah3CvrspNE4TTNOzybzzAgYdAY88j0jkvMZ4mQxoNxUHOZURuxO955CgHBmRbAZEgWul41zW2NDUfBSCdjL5AyIG6s5U/6RgMEYWGZhvC+rWYgdQQ3pJ6vnFRxpTRGQceDAkz4TPJuAFuRes+XQueK8LxR8lMsBaxUVtkW/ZOo47iM8OWQ9QlCpIx70MEhiI+scsi5tGZMhDZk/JZEXsiiFZ+jqO1IF6orFsi1OkoF5rbm+7yMIJjDdnEOpVMbDrQ0jIrJAks0TkCKR2Pr87xSBHMggz4CbzmidXSoT8i5BwtqYaOLltat4vPMAj7bvwy8oy46ECHCiEbFF/BsjQIg89Fk7TsiiQrnLN5iCCgoFD/1+hKjfo9GB2fS9MuUFXH3tTWzv/IktktB4HFw28sAPCYzAtJEkdp5J7jaXhyRJUJ+YxPzFJURxhOnJRSzNr6E5eQGlchkxZV998zna7WOuAd54/S3c3biJk3bLbCpK40TEeHQKMq8ldCXFRK0peLQ7IQaDBAvzy5i7sIB7m7/ivWsf4f13P0ZjsolKFSgFQFDjSjp3/cvPUCyUsXH/Fl5auYzf1n8cOjX0WBNZtONYnLejrkKdYHXpElZXXkWc9OnlFBYWVnB7/Raibh9X1t5GKWmifRShtR/hcKfPmuKdax+gUZsxwNbxgVKOycaMpc4Cm8FZxNm3CAwV5q9Tedw8d+79bIZ8r4TFxVVsbq6bh75fRNwBOi2G1E9QLPMk8DQO+jFmG2skfhl3fv/Jcr+3v4XpqYs4Ot6D7+lUqFgirOciQJZjMTCFJDpGHhcFQdWIhOGxGU3SAY4ODxGFKXphgt4xa9am3TJmJpcJMbC1yn81qJtrZphAwsrxhnuA99hQaBMVO+5ynfeLc8tslTNVJ3v0ZBNXVzwMCoTi1eCX1dIG5xXAcGgmUXRB6Z5wG5tCmhCWs5VvQo6HRzBbGVRq6PW65FBAq7VP/bSzaIY9/LF9k14TtJAYsE9wEUnjGGHodr1Mqej0iLhKTkSuiMwwBQJyN5c0+SJ26Eane2KbycUo5eVSwt3tb3H7wXdIOyQawlIQnQAHewfY3tugraLFS953e23bhEJ0aXVkhJOdAqlomDspf1iiqCu98Y6iHi+cHiqVSrabC2hH+7j+w4e4sf4FuuEASTtA0glwZ/N77Bzy8uHeSel5pVxDh8fYEOixMIyZhYBjaj4RDA8eKqUJ9PmIaORSkjHgOOKNV6830O06YgKIBiFub3+NzZ0biHkC/LSKr3/5FLvhphFQ6GemeQJau+5houOVUg19HqEMn5YdHzZAnec36nd46cQkoOAYFSOjPVmpBCZXRKTJS5xE7CYIilMkxTyw6B7Rda1bcvvJA66jt0yLXtGwvW9z9DdMgQZRv4ta0LRHJb+vlRr1ZUBpcakxqTT2057wefMpIq44/xr1aewfPra1eqiqwaRhZJOsGSOgMHeMZaVUNQ/4x0muOkLyzBEynfRZdXoXUPXrfBX1fSDCGsumnnJhuJ3laIwRcKxbJ7t815dsjvwTgLX6V5+eiFSqJ3b4y2TUaY6+Cbq9E56e0LwX1ExzGa1wx6FyXV7GCDhRP+7ipHOAxQuX7BISSE7C+gI1ImoF6EAlEzFVPc+qKrrIFucuIezsc/O5DWyK7O8MARnwjGm3d4zVxSsc01devQYgMPvlrQM8JcuilHKN1sqGbDnvXYoybGv+LhkTT08uYba5gq3de4zKoR0t+zY4x4LRIUkRnqhOYX72FRy0Hll1edeM0+UcAprkVPrAXLB0xNg/eshvgxYB+LFpB1G3h4qLRMErolZtYnZqxbQi3tP1mNmyqWf+nkLg9Mx6bda+gILyBL94+5ZPtTKg263MXa5z3ova5vFxe++0gXNG/5LAaJru+GqlYZ/eRd99IceDiA9XiA5zbZ/iBjZacw72c8x6moUX1J05BS9o7T8s/wtmEyNyA4hEvQAAAABJRU5ErkJggg==" /><span id="login-button-label">使用 NyxID 登录</span></button>
+        <div class="auth-meta">Aevatar Mainnet</div>
+        <p id="auth-error" class="auth-error hidden" role="alert"></p>
+      </div>
+    </main>
+  </div>
+
+  <div id="app-root" class="app-shell hidden">
+    <aside class="rail">
+      <div class="rail-brand"><span class="brand-glyph" id="brand-glyph"></span><span>Aevatar AI</span></div>
+      <div class="rail-label">Navigation</div>
+      <nav class="rail-nav" aria-label="主导航">
+        <a class="nav-link" href="#/overview" data-route="overview"><span data-icon="overview"></span><span>Overview</span></a>
+        <a class="nav-link" href="#/agents" data-route="agents"><span data-icon="agents"></span><span>Agents</span></a>
+        <a class="nav-link" href="#/models" data-route="models"><span data-icon="models"></span><span>Models</span></a>
+        <a class="nav-link" href="#/activity" data-route="activity"><span data-icon="activity"></span><span>Activity</span></a>
+      </nav>
+      <div class="rail-account">
+        <div class="avatar" id="account-avatar">A</div>
+        <div class="account-copy"><div class="account-name" id="account-name">NyxID</div><div class="account-email" id="account-email"></div></div>
+        <button class="icon-button" type="button" data-action="logout" title="退出登录" aria-label="退出登录"><span data-icon="logout"></span></button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <span class="brand-glyph mobile-brand" id="mobile-brand"></span>
+        <div class="page-heading"><h1 id="page-title">Overview</h1><p id="page-subtitle">AI runtime snapshot</p></div>
+        <div class="topbar-actions">
+          <span class="net-state"><i class="net-dot"></i>Authenticated</span>
+          <button class="button small" type="button" data-action="refresh"><span data-icon="refresh"></span><span>刷新</span></button>
+          <button class="icon-button mobile-logout" type="button" data-action="logout" title="退出登录" aria-label="退出登录"><span data-icon="logout"></span></button>
+        </div>
+      </header>
+      <div id="content" class="content"></div>
+    </main>
+  </div>
+
+  <div id="drawer-root"></div>
+  <div id="modal-root"></div>
+  <div id="toast-root" class="toast-stack" aria-live="polite"></div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    var AI_CONFIG = __AEVATAR_AI_CONFIG__;
+    var AUTH_FINALIZE_PATH = "/api/auth/nyxid/finalize";
+    var OIDC = {
+      authority: AI_CONFIG.authority || "",
+      clientId: AI_CONFIG.clientId || "",
+      loginScope: AI_CONFIG.scope || "",
+      redirectUri: location.origin + "/auto/callback",
+      storageKey: AI_CONFIG.storageKey || "aevatar:ai"
+    };
+    var TOKEN_KEY = OIDC.storageKey + ":token";
+    var PKCE_KEY = OIDC.storageKey + ":pkce";
+    var refreshOperation = null;
+    var refreshTimer = null;
+    var refreshSkewMs = 60000;
+    var authEpoch = 0;
+    var contextRequestId = 0;
+    var agentDetailRequestId = 0;
+    var runDetailRequestId = 0;
+    var loginPending = false;
+    var overlayReturnFocus = null;
+
+    var ROUTES = {
+      overview: { title: "Overview", subtitle: "AI runtime snapshot" },
+      agents: { title: "Agents", subtitle: "Agent definitions and releases" },
+      models: { title: "Models", subtitle: "Model routes and catalog policy" },
+      activity: { title: "Activity", subtitle: "Conversations and workflow runs" }
+    };
+    var state = {
+      route: "overview",
+      contextReady: false,
+      contextLoading: false,
+      contextError: null,
+      loading: Object.create(null),
+      errors: Object.create(null),
+      loadedAt: Object.create(null),
+      receipts: Object.create(null),
+      requestIds: Object.create(null),
+      overview: null,
+      agents: null,
+      agentMode: "owned",
+      agentQuery: "",
+      selectedAgent: null,
+      agentDetail: null,
+      agentOptions: null,
+      validation: null,
+      models: null,
+      activity: null,
+      runDetail: null
+    };
+
+    var ICONS = {
+      mark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4.5 7.3v9.4L12 21l7.5-4.3V7.3L12 3Z"/><path d="m8.2 14.3 3.8-7 3.8 7"/><path d="M9.5 12h5"/></svg>',
+      overview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>',
+      agents: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="10" x="3" y="8" rx="2"/><path d="M12 2v6M8 12h.01M16 12h.01M9 16h6"/></svg>',
+      models: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 8 4-8 4-8-4 8-4Z"/><path d="m4 10 8 4 8-4M4 14l8 4 8-4M4 18l8 4 8-4"/></svg>',
+      activity: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>',
+      refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6v5h-5M4 18v-5h5"/><path d="M18.5 9A7 7 0 0 0 6 6.5L4 9m16 6-2 2.5A7 7 0 0 1 5.5 15"/></svg>',
+      logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></svg>',
+      search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
+      plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+      close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m18 6-12 12M6 6l12 12"/></svg>',
+      check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m20 6-11 11-5-5"/></svg>',
+      upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>',
+      save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>',
+      info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+      empty: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4zM4 9h16M8 13h3M8 16h6"/></svg>',
+      arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 18 6-6-6-6"/></svg>'
+    };
+
+    function $(id) { return document.getElementById(id); }
+    function esc(value) { return String(value == null ? "" : value).replace(/[&<>"']/g, function (ch) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]; }); }
+    function json(value) { return JSON.stringify(value == null ? [] : value, null, 2); }
+    function arr(value) { return Array.isArray(value) ? value : []; }
+    function object(value) { return value && typeof value === "object" ? value : {}; }
+    function idempotencyKey(prefix) { return prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10); }
+    function icon(name) { return ICONS[name] || ""; }
+    function hydrateIcons(root) { (root || document).querySelectorAll("[data-icon]").forEach(function (el) { el.innerHTML = icon(el.getAttribute("data-icon")); }); }
+    function formatTime(value) { if (!value) return "—"; var d = new Date(value); return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(d); }
+    function formatDuration(value) { var n = Number(value); if (!Number.isFinite(n)) return "—"; return n < 1000 ? Math.round(n) + " ms" : (n / 1000).toFixed(n < 10000 ? 1 : 0) + " s"; }
+    function availability(value) { var v = String(value || "unavailable"); return '<span class="badge ' + (v === "available" ? "success" : v === "not_materialized" ? "waiting" : "failed") + '">' + esc(v.replace(/_/g, " ")) + "</span>"; }
+    function statusBadge(value) { var v = String(value || "unknown").trim().toLowerCase().replace(/[\s-]+/g, "_"); var success = ["success", "succeeded", "complete", "completed", "active", "published", "ready", "valid"], running = ["running", "started", "accepted", "queued", "provisioning"], waiting = ["waiting", "suspended", "pending", "awaiting_input", "awaiting_approval"], failed = ["failed", "failure", "error", "cancelled", "canceled", "inactive", "invalid", "unavailable"]; var kind = failed.indexOf(v) >= 0 ? "failed" : waiting.indexOf(v) >= 0 ? "waiting" : running.indexOf(v) >= 0 ? "running" : success.indexOf(v) >= 0 ? "success" : ""; return '<span class="badge ' + kind + '"><i class="badge-dot"></i>' + esc(v) + "</span>"; }
+    function errorMessage(error) { if (!error) return "请求失败"; if (error.message) return error.message; if (error.body) return typeof error.body === "string" ? error.body : error.body.message || error.body.title || error.body.code || "请求失败"; return "请求失败"; }
+    function ignoredError(error) { return Boolean(error && (error.unauthorized || error.stale)); }
+
+    function getToken() { try { var token = JSON.parse(localStorage.getItem(TOKEN_KEY) || "null"); return token && token.access_token ? token : null; } catch (_) { return null; } }
+    function invalidateSession(removeToken) { authEpoch += 1; contextRequestId += 1; agentDetailRequestId += 1; runDetailRequestId += 1; if (refreshTimer) clearTimeout(refreshTimer); refreshTimer = null; refreshOperation = null; if (removeToken) { localStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(PKCE_KEY); } return authEpoch; }
+    function setToken(token, expectedEpoch) { if (expectedEpoch != null && expectedEpoch !== authEpoch) return false; localStorage.setItem(TOKEN_KEY, JSON.stringify(token)); scheduleRefresh(token, authEpoch); return true; }
+    function clearToken() { invalidateSession(true); }
+    function decodeJwt(token) { try { var body = String(token || "").split(".")[1]; if (!body) return {}; body = body.replace(/-/g, "+").replace(/_/g, "/"); body += "=".repeat((4 - body.length % 4) % 4); return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(body), function (c) { return c.charCodeAt(0); }))); } catch (_) { return {}; } }
+    function expiresAt(token) { var claims = decodeJwt(token && token.access_token); if (Number(claims.exp) > 0) return Number(claims.exp) * 1000; var at = Number(token && token.obtained_at), seconds = Number(token && token.expires_in); return at > 0 && seconds > 0 ? at + seconds * 1000 : 0; }
+    function needsRefresh(token) { var expiry = expiresAt(token); return expiry > 0 && expiry <= Date.now() + refreshSkewMs; }
+    function scheduleRefresh(token, expectedEpoch) { if (refreshTimer) clearTimeout(refreshTimer); refreshTimer = null; if (!token || !token.refresh_token) return; var expiry = expiresAt(token); if (!expiry) return; var scheduledEpoch = expectedEpoch == null ? authEpoch : expectedEpoch; refreshTimer = setTimeout(function () { if (scheduledEpoch === authEpoch) refreshToken(false).catch(function () {}); }, Math.max(0, Math.min(2147483647, expiry - Date.now() - refreshSkewMs))); }
+    async function refreshToken(force) {
+      var operationEpoch = authEpoch;
+      var current = getToken();
+      if (!current) return null;
+      if (!current.refresh_token || (!force && !needsRefresh(current))) { scheduleRefresh(current, operationEpoch); return current; }
+      if (refreshOperation && refreshOperation.epoch === operationEpoch) return refreshOperation.promise;
+      var operation = { epoch: operationEpoch, promise: null };
+      operation.promise = (async function () {
+        var form = new URLSearchParams();
+        form.set("grant_type", "refresh_token"); form.set("refresh_token", current.refresh_token); form.set("client_id", OIDC.clientId);
+        var response = await fetch(OIDC.authority.replace(/\/+$/, "") + "/oauth/token", { method: "POST", headers: { "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() });
+        if (operationEpoch !== authEpoch) return null;
+        if (!response.ok) throw new Error("登录状态刷新失败");
+        var next = await response.json();
+        if (operationEpoch !== authEpoch) return null;
+        if (!next.access_token) throw new Error("刷新响应无访问令牌");
+        var merged = Object.assign({}, current, next, { obtained_at: Date.now() });
+        if (!next.refresh_token) merged.refresh_token = current.refresh_token;
+        if (!setToken(merged, operationEpoch)) return null;
+        return merged;
+      })();
+      refreshOperation = operation;
+      try { return await operation.promise; } finally { if (refreshOperation === operation) refreshOperation = null; }
+    }
+
+    function safeReturnPath() { var hash = /^#\/(overview|agents|models|activity)$/.test(location.hash) ? location.hash : "#/overview"; return "/ai" + hash; }
+    function randomHex(bytes) { var values = new Uint8Array(bytes); crypto.getRandomValues(values); return Array.from(values, function (v) { return v.toString(16).padStart(2, "0"); }).join(""); }
+    function base64Url(buffer) { var binary = String.fromCharCode.apply(null, new Uint8Array(buffer)); return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+    function setLoginPending(value) { loginPending = value; var button = $("login-button"), label = $("login-button-label"); button.disabled = value; label.textContent = value ? "正在跳转…" : "使用 NyxID 登录"; }
+    async function beginLogin() {
+      if (loginPending) return;
+      setLoginPending(true);
+      if (!OIDC.authority || !OIDC.clientId) { showAuth("登录配置不可用，请联系管理员。"); setLoginPending(false); return; }
+      try {
+        var verifier = randomHex(32), loginState = randomHex(24);
+        var challenge = base64Url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+        sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier: verifier, state: loginState, returnTo: safeReturnPath(), resources: [], tokenPurpose: "", authFlow: "" }));
+        var target = new URL(OIDC.authority.replace(/\/+$/, "") + "/oauth/authorize");
+        target.searchParams.set("response_type", "code"); target.searchParams.set("client_id", OIDC.clientId);
+        target.searchParams.set("redirect_uri", OIDC.redirectUri); target.searchParams.set("scope", OIDC.loginScope);
+        target.searchParams.set("state", loginState); target.searchParams.set("code_challenge", challenge); target.searchParams.set("code_challenge_method", "S256");
+        location.assign(target.toString());
+      } catch (error) { showAuth(errorMessage(error)); setLoginPending(false); }
+    }
+
+    async function api(path, options) {
+      options = options || {};
+      var requestEpoch = authEpoch;
+      var token = getToken();
+      if (token && needsRefresh(token)) { try { token = await refreshToken(false); } catch (_) {} }
+      if (requestEpoch !== authEpoch) throw { stale: true };
+      if (!token) { requireLogin("登录已失效，请重新登录。"); throw { unauthorized: true }; }
+      function request(active) { var headers = Object.assign({ "Accept": "application/json" }, options.headers || {}); headers.Authorization = "Bearer " + active.access_token; return fetch(path, Object.assign({}, options, { headers: headers })); }
+      var response = await request(token);
+      if (requestEpoch !== authEpoch) throw { stale: true };
+      if (response.status === 401 && token.refresh_token) { try { var refreshed = await refreshToken(true); if (refreshed) response = await request(refreshed); } catch (_) {} }
+      if (requestEpoch !== authEpoch) throw { stale: true };
+      if (response.status === 401) { requireLogin("登录已过期，请重新登录。"); throw { unauthorized: true }; }
+      var text = response.status === 204 ? "" : await response.text();
+      var body = null;
+      if (text) { try { body = JSON.parse(text); } catch (_) { body = text; } }
+      if (!response.ok) throw { status: response.status, body: body, message: object(body).message || object(body).title || object(body).code || (response.status === 403 ? "当前身份无权访问此数据" : "请求失败") };
+      return body;
+    }
+    function jsonOptions(method, body) { return { method: method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }; }
+
+    function showAuth(message) { $("auth-error").textContent = message || ""; $("auth-error").classList.toggle("hidden", !message); }
+    function resetCallerState() { state.contextReady = false; state.contextLoading = false; state.contextError = null; state.loading = Object.create(null); state.errors = Object.create(null); state.loadedAt = Object.create(null); state.receipts = Object.create(null); state.requestIds = Object.create(null); state.overview = state.agents = state.models = state.activity = null; state.selectedAgent = state.agentDetail = state.agentOptions = state.validation = state.runDetail = null; }
+    function requireLogin(message) { clearToken(); resetCallerState(); closeDrawer(); closeModal(); $("app-root").classList.add("hidden"); $("auth-root").classList.remove("hidden"); setLoginPending(false); showAuth(message || ""); }
+    async function enterApp(token) {
+      var sessionEpoch = invalidateSession(false), requestId = ++contextRequestId;
+      resetCallerState(); state.contextLoading = true;
+      var claims = decodeJwt(token.id_token || token.access_token), name = claims.name || claims.preferred_username || claims.email || "NyxID User", email = claims.email || "";
+      $("account-name").textContent = name; $("account-email").textContent = email; $("account-avatar").textContent = String(name).charAt(0).toUpperCase() || "A";
+      $("auth-root").classList.add("hidden"); $("app-root").classList.remove("hidden"); showAuth(""); scheduleRefresh(token, sessionEpoch); route();
+      try {
+        var context = await api("/api/ai/context"), account = object(object(context).account), displayName = account.displayName || name;
+        if (sessionEpoch !== authEpoch || requestId !== contextRequestId) return;
+        $("account-name").textContent = displayName; $("account-avatar").textContent = String(displayName).charAt(0).toUpperCase() || "A";
+        state.contextReady = true; state.contextLoading = false; route();
+      } catch (error) {
+        if (!ignoredError(error) && sessionEpoch === authEpoch && requestId === contextRequestId) { state.contextLoading = false; state.contextError = errorMessage(error); render(); }
+      }
+    }
+    function logout() { requireLogin(""); }
+
+    function currentRoute() { var match = /^#\/(overview|agents|models|activity)$/.exec(location.hash); return match ? match[1] : "overview"; }
+    function route() {
+      var next = currentRoute();
+      if (location.hash !== "#/" + next) { location.replace("#/" + next); return; }
+      state.route = next;
+      document.querySelectorAll(".nav-link").forEach(function (link) { link.classList.toggle("active", link.getAttribute("data-route") === next); });
+      $("page-title").textContent = ROUTES[next].title; $("page-subtitle").textContent = ROUTES[next].subtitle;
+      render(); if (state.contextReady) loadRoute(next, false);
+    }
+    function render() {
+      if (!state.contextReady) { $("content").innerHTML = state.contextError ? errorView(state.contextError) : loadingView(); hydrateIcons($("content")); return; }
+      var html = state.route === "overview" ? renderOverview() : state.route === "agents" ? renderAgents() : state.route === "models" ? renderModels() : renderActivity();
+      html = routeNotices(state.route) + html;
+      $("content").innerHTML = html; hydrateIcons($("content"));
+    }
+    async function loadRoute(name, force) {
+      if (!state.contextReady) return;
+      if (state.loading[name] || (!force && state[name])) return;
+      var requestEpoch = authEpoch, requestId = (state.requestIds[name] || 0) + 1, value = null, options = state.agentOptions;
+      state.requestIds[name] = requestId; state.loading[name] = true; state.errors[name] = null; render();
+      try {
+        if (name === "overview") value = await api("/api/ai/overview?take=6");
+        if (name === "agents") { value = await api("/api/ai/agents?take=100"); if (!options) options = await api("/api/ai/agents/editor-options"); }
+        if (name === "models") value = await api("/api/ai/models");
+        if (name === "activity") value = await api("/api/ai/activity?take=30");
+        if (requestEpoch !== authEpoch || state.requestIds[name] !== requestId) return;
+        state[name] = value; if (name === "agents") state.agentOptions = options; state.loadedAt[name] = Date.now();
+      } catch (error) { if (!ignoredError(error) && requestEpoch === authEpoch && state.requestIds[name] === requestId) state.errors[name] = errorMessage(error); }
+      finally { if (requestEpoch === authEpoch && state.requestIds[name] === requestId) { state.loading[name] = false; if (state.route === name) render(); } }
+    }
+    function loadingView() { return '<div class="loading"><div class="skeleton"><i></i><i></i><i></i></div></div>'; }
+    function errorView(message, action) { return '<div class="error-state"><div>' + icon("info") + '<div>' + esc(message) + '</div><button class="button small" type="button" data-action="' + esc(action || "refresh") + '" style="margin-top:12px">重试</button></div></div>'; }
+    function emptyView(label) { return '<div class="empty"><div>' + icon("empty") + '<div>' + esc(label) + "</div></div></div>"; }
+    function routeNotices(name) { var html = "", receipt = object(state.receipts[name]); if (state.errors[name] && state[name]) html += '<div class="notice error" role="status">' + icon("info") + '<div class="notice-copy"><strong>刷新失败，当前显示上次成功的数据。</strong><div class="notice-detail">' + esc(state.errors[name]) + (state.loadedAt[name] ? " · 更新于 " + esc(formatTime(state.loadedAt[name])) : "") + '</div></div></div>'; if (receipt.message) html += '<div class="notice" role="status">' + icon("info") + '<div class="notice-copy"><strong>' + esc(receipt.message) + '</strong><div class="notice-detail">命令已接收，尚未确认读模型可见' + (receipt.commandId ? " · " + esc(receipt.commandId) : "") + '</div></div></div>'; return html; }
+    function acceptedReceipt(message, receipt) { return { message: message, commandId: object(receipt).commandId || "" }; }
+
+    function collectionCount(collection) { if (!collection) return 0; if (Number.isFinite(Number(collection.totalCount))) return Number(collection.totalCount); return arr(collection.items).length; }
+    function renderOverview() {
+      if (state.loading.overview && !state.overview) return loadingView();
+      if (state.errors.overview && !state.overview) return errorView(state.errors.overview);
+      var data = object(state.overview), agents = object(data.agents), owned = object(agents.owned), system = object(agents.systemTemplates), conversations = object(data.recentConversations), runs = object(data.recentRuns);
+      var convoItems = arr(conversations.items), runItems = arr(runs.items);
+      return '<div class="kpi-grid">' +
+        kpi("My agents", owned.itemCount, availability(owned.availability), "agents", "") +
+        kpi("System agents", system.itemCount, availability(system.availability), "agents", "violet") +
+        kpi("Conversations", convoItems.length, availability(conversations.availability), "activity", "green") +
+        kpi("Recent runs", runItems.length, availability(runs.availability), "activity", "amber") +
+        '</div><div class="section-grid">' +
+        '<section class="section"><div class="section-head"><h2 class="section-title">Recent runs</h2><a class="section-meta" href="#/activity">View all</a></div>' + overviewRuns(runItems) + '</section>' +
+        '<section class="section"><div class="section-head"><h2 class="section-title">Recent conversations</h2><span class="section-meta">' + esc(convoItems.length) + '</span></div>' + overviewConversations(convoItems) + '</section></div>';
+    }
+    function kpi(label, value, meta, iconName, kind) { var output = value == null ? "—" : value; return '<article class="kpi"><div class="kpi-top"><span>' + esc(label) + '</span><span class="kpi-icon ' + kind + '">' + icon(iconName) + '</span></div><div class="kpi-value">' + esc(output) + '</div><div class="kpi-meta">' + meta + '</div></article>'; }
+    function overviewRuns(items) {
+      if (!items.length) return emptyView("暂无运行记录");
+      return '<div class="table-wrap"><table><thead><tr><th>Run</th><th>Status</th><th>Updated</th></tr></thead><tbody>' + items.map(function (run) { return '<tr><td><button class="row-action" type="button" data-action="open-run" data-run-id="' + esc(run.runId) + '" aria-label="查看运行 ' + esc(run.workflowName || run.runId) + '"><span class="cell-title truncate" style="display:block">' + esc(run.workflowName || run.runId) + '</span><span class="cell-sub mono" style="display:block">' + esc(run.runId) + '</span></button></td><td>' + statusBadge(run.status) + '</td><td class="run-time">' + esc(formatTime(run.updatedAtUtc)) + '</td></tr>'; }).join("") + '</tbody></table></div>';
+    }
+    function overviewConversations(items) {
+      if (!items.length) return emptyView("暂无会话记录");
+      return items.map(function (item) { return '<div class="conversation-row"><div class="cell-title truncate">' + esc(item.title || item.conversationId) + '</div><div class="conversation-meta"><span>' + esc(item.messageCount || 0) + ' messages</span><span>' + esc(item.llmModel || item.llmRoute || "—") + '</span><span>' + esc(formatTime(item.updatedAtUtc)) + '</span></div></div>'; }).join("");
+    }
+
+    function activeAgentCollection() { var data = object(state.agents); return state.agentMode === "system" ? object(data.systemTemplates) : object(data.owned); }
+    function filteredAgents() { var query = state.agentQuery.trim().toLowerCase(); return arr(activeAgentCollection().items).filter(function (item) { return !query || [item.displayName, item.profileSlug, item.purpose, item.status].join(" ").toLowerCase().indexOf(query) >= 0; }); }
+    function renderAgents() {
+      if (state.loading.agents && !state.agents) return loadingView();
+      if (state.errors.agents && !state.agents) return errorView(state.errors.agents);
+      var collection = activeAgentCollection(), items = filteredAgents();
+      var toolbar = '<div class="toolbar"><div class="segmented"><button class="' + (state.agentMode === "owned" ? "active" : "") + '" data-action="agent-mode" data-mode="owned">My agents</button><button class="' + (state.agentMode === "system" ? "active" : "") + '" data-action="agent-mode" data-mode="system">System</button></div><label class="search-box">' + icon("search") + '<input id="agent-search" value="' + esc(state.agentQuery) + '" placeholder="Search agents" autocomplete="off" /></label><span>' + availability(collection.availability) + '</span><span class="toolbar-spacer"></span>' + (state.agentMode === "owned" ? '<button class="button primary" type="button" data-action="create-agent">' + icon("plus") + 'New agent</button>' : "") + '</div>';
+      var list = items.length ? items.map(function (item) { var active = state.selectedAgent && state.selectedAgent.profileSlug === item.profileSlug; return '<button class="agent-row ' + (active ? "active" : "") + '" type="button" data-action="select-agent" data-agent-slug="' + esc(item.profileSlug) + '"><span class="agent-symbol">' + icon("agents") + '</span><span><span class="cell-title truncate" style="display:block">' + esc(item.displayName || item.profileSlug) + '</span><span class="cell-sub mono">' + esc(item.profileSlug) + '</span></span>' + statusBadge(item.status || (item.published ? "published" : "draft")) + '</button>'; }).join("") : emptyView("暂无 Agent");
+      return toolbar + '<div class="split-view"><div class="split-list">' + list + '</div><div class="split-detail" id="agent-detail">' + renderAgentDetail() + '</div></div>';
+    }
+    function renderAgentDetail() {
+      var selected = state.selectedAgent;
+      if (!selected) return emptyView("选择一个 Agent 查看详情");
+      if (state.agentMode === "system") return '<div class="detail-pad"><div class="detail-head"><span class="agent-symbol">' + icon("agents") + '</span><div class="detail-head-copy"><h2 class="detail-title">' + esc(selected.displayName || selected.profileSlug) + '</h2><div class="detail-id mono">' + esc(selected.profileSlug) + '</div></div>' + statusBadge(selected.status) + '</div><div class="form-section"><h3>Purpose</h3><p>' + esc(selected.purpose || "—") + '</p></div><div class="form-section"><h3>Published revision</h3><span class="mono">' + esc(selected.publishedRevision || 0) + '</span></div></div>';
+      if (state.loading.agentDetail) return loadingView();
+      if (state.errors.agentDetail) return errorView(state.errors.agentDetail, "refresh-agent-detail");
+      var detail = object(state.agentDetail), draft = object(detail.draft), runtime = object(draft.runtimeProfile), options = object(state.agentOptions), limits = object(options.runtimeParameters);
+      if (!detail.profileSlug) return emptyView("Agent 详情尚未可见，请刷新");
+      function runtimeValue(name, fallback) { return runtime[name] == null ? (limits[name] == null ? fallback : limits[name]) : runtime[name]; }
+      var agentKinds = arr(options.supportedAgentKinds), toolSets = arr(options.allowedRouteToolSetRefs), modes = arr(options.activationModes);
+      var html = '<form id="agent-editor" class="detail-pad"><div class="detail-head"><span class="agent-symbol">' + icon("agents") + '</span><div class="detail-head-copy"><h2 class="detail-title">' + esc(detail.profileSlug) + '</h2><div class="detail-id">Revision <span class="mono">' + esc(detail.draftRevision || 0) + '</span> · Published <span class="mono">' + esc(detail.publishedRevision || 0) + '</span></div></div><div class="detail-actions"><button class="button small" type="button" data-action="validate-agent">' + icon("check") + 'Validate</button><button class="button small" type="button" data-action="publish-agent">' + icon("upload") + 'Publish</button><button class="button primary small" type="submit">' + icon("save") + 'Save draft</button></div></div>' +
+        '<div class="form-grid"><div class="field"><label for="agent-display-name">Display name</label><input id="agent-display-name" required value="' + esc(draft.displayName || selected.displayName || "") + '" /></div><div class="field"><label for="agent-purpose">Purpose</label><input id="agent-purpose" value="' + esc(draft.purpose || selected.purpose || "") + '" /></div><div class="field full"><label for="agent-instructions">Instructions</label><textarea id="agent-instructions" required>' + esc(draft.instructions || "") + '</textarea></div></div>' +
+        '<div class="form-section"><h3>Runtime profile</h3><div class="form-grid"><div class="field"><label for="agent-kind">Agent kind</label>' + selectInput("agent-kind", agentKinds, runtime.agentKind || agentKinds[0] || "") + '</div><div class="field"><label for="agent-toolset">Route tool set</label>' + selectInput("agent-toolset", toolSets, runtime.routeToolSetRef || toolSets[0] || "") + '</div></div><details class="advanced"><summary>Advanced runtime constraints</summary><div class="advanced-body"><div class="form-grid"><div class="field"><label for="agent-mode">Activation mode</label>' + selectInput("agent-mode", modes, runtime.activationMode || modes[0] || "SHADOW") + '</div><div class="field"><label for="agent-max-steps">Max plan steps</label><input id="agent-max-steps" type="number" min="1" value="' + esc(runtimeValue("maxPlanSteps", 12)) + '" /></div><div class="field"><label for="agent-handoff">Handoff TTL (s)</label><input id="agent-handoff" type="number" min="1" value="' + esc(runtimeValue("handoffTtlSeconds", 900)) + '" /></div><div class="field"><label for="agent-classifier">Classifier timeout (ms)</label><input id="agent-classifier" type="number" min="1" value="' + esc(runtimeValue("classifierTimeoutMs", 15000)) + '" /></div><div class="field"><label for="agent-skill-timeout">Skill fetch timeout (ms)</label><input id="agent-skill-timeout" type="number" min="1" value="' + esc(runtimeValue("exactSkillFetchTimeoutMs", 15000)) + '" /></div><div class="field"><label for="agent-skill-bytes">Max skill bytes</label><input id="agent-skill-bytes" type="number" min="1" value="' + esc(runtimeValue("maxSelectedSkillBytes", 65536)) + '" /></div><div class="field"><label for="agent-max-tools">Maximum tool policy</label><textarea class="code" id="agent-max-tools">' + esc(json(object(runtime.maximumToolPolicy))) + '</textarea></div><div class="field"><label for="agent-recovery-tools">Recovery tool policy</label><textarea class="code" id="agent-recovery-tools">' + esc(json(object(runtime.recoveryToolPolicy))) + '</textarea></div></div></div></details></div>' + renderValidation() + '</form>';
+      return html;
+    }
+    function selectInput(id, values, current) { var list = arr(values).slice(); if (current && list.indexOf(current) < 0) list.unshift(current); return '<select id="' + id + '">' + list.map(function (value) { return '<option value="' + esc(value) + '"' + (value === current ? " selected" : "") + '>' + esc(value) + '</option>'; }).join("") + '</select>'; }
+    function renderValidation() { if (!state.validation) return '<div class="diagnostics"></div>'; if (state.validation.isValid) return '<div class="diagnostics"><div class="diagnostic ok">Validation passed for draft revision ' + esc(state.validation.draftRevision) + '</div></div>'; return '<div class="diagnostics">' + arr(state.validation.diagnostics).map(function (item) { return '<div class="diagnostic"><strong>' + esc(item.code) + '</strong> · ' + esc(item.field) + '<br />' + esc(item.message) + '</div>'; }).join("") + '</div>'; }
+    function parseJsonField(id, fallback) { var value = $(id).value.trim(); if (!value) return fallback; try { return JSON.parse(value); } catch (_) { throw new Error($(id).previousElementSibling.textContent + " JSON 格式无效"); } }
+    function agentDraftBody() {
+      var existingRuntime = object(object(object(state.agentDetail).draft).runtimeProfile);
+      return { draft: { displayName: $("agent-display-name").value.trim(), purpose: $("agent-purpose").value.trim(), instructions: $("agent-instructions").value.trim(), runtimeProfile: { agentKind: $("agent-kind").value, routeToolSetRef: $("agent-toolset").value, activationMode: $("agent-mode").value, maximumToolPolicy: parseJsonField("agent-max-tools", { toolNames: [], toolSetRefs: [] }), recoveryToolPolicy: parseJsonField("agent-recovery-tools", { toolNames: [], toolSetRefs: [] }), maxPlanSteps: Number($("agent-max-steps").value), handoffTtlSeconds: Number($("agent-handoff").value), classifierTimeoutMs: Number($("agent-classifier").value), exactSkillFetchTimeoutMs: Number($("agent-skill-timeout").value), maxSelectedSkillBytes: Number($("agent-skill-bytes").value), members: arr(existingRuntime.members) } }, expectedVersion: state.agentDetail.authorityStateVersion, idempotencyKey: idempotencyKey("agent-draft") };
+    }
+    function revealAgentDetailOnNarrowScreen() {
+      if (!window.matchMedia || !window.matchMedia("(max-width: 760px)").matches) return;
+      requestAnimationFrame(function () { var detail = $("agent-detail"); if (detail) detail.scrollIntoView({ block: "start" }); });
+    }
+    async function selectAgent(slug) {
+      var collection = activeAgentCollection(), requestEpoch = authEpoch, requestId = ++agentDetailRequestId; state.selectedAgent = arr(collection.items).find(function (item) { return item.profileSlug === slug; }) || null; state.agentDetail = null; state.validation = null; state.errors.agentDetail = null; state.receipts.agents = null; render();
+      revealAgentDetailOnNarrowScreen();
+      if (state.agentMode === "system" || !state.selectedAgent) return;
+      state.loading.agentDetail = true; render();
+      try { var detail = await api("/api/ai/agents/" + encodeURIComponent(slug)); if (requestEpoch === authEpoch && requestId === agentDetailRequestId && state.selectedAgent && state.selectedAgent.profileSlug === slug) state.agentDetail = detail; }
+      catch (error) { if (!ignoredError(error) && requestEpoch === authEpoch && requestId === agentDetailRequestId) state.errors.agentDetail = errorMessage(error); }
+      finally { if (requestEpoch === authEpoch && requestId === agentDetailRequestId) { state.loading.agentDetail = false; if (state.route === "agents") render(); } }
+    }
+    function reloadAgentDetail() { if (state.selectedAgent) selectAgent(state.selectedAgent.profileSlug); }
+    async function saveAgentDraft() { try { var slug = state.selectedAgent.profileSlug, body = agentDraftBody(), receipt = await api("/api/ai/agents/" + encodeURIComponent(slug) + "/draft", jsonOptions("PUT", body)); if (!state.selectedAgent || state.selectedAgent.profileSlug !== slug) return; state.agentDetail = Object.assign({}, object(state.agentDetail), { draft: body.draft }); state.validation = null; state.receipts.agents = acceptedReceipt("Agent 草稿更新已接受", receipt); render(); toast("草稿更新已接受，等待读模型确认", "success"); } catch (error) { if (!ignoredError(error)) toast(errorMessage(error), "error"); } }
+    async function validateAgent() { var slug = state.selectedAgent && state.selectedAgent.profileSlug; if (!slug) return; try { var validation = await api("/api/ai/agents/" + encodeURIComponent(slug) + ":validate", { method: "POST" }); if (!state.selectedAgent || state.selectedAgent.profileSlug !== slug) return; state.validation = validation; render(); toast(state.validation.isValid ? "校验通过" : "校验发现问题", state.validation.isValid ? "success" : "error"); } catch (error) { if (!ignoredError(error)) toast(errorMessage(error), "error"); } }
+    async function publishAgent() { var slug = state.selectedAgent && state.selectedAgent.profileSlug; if (!slug || !state.agentDetail) return; try { var body = { expectedVersion: state.agentDetail.authorityStateVersion, idempotencyKey: idempotencyKey("agent-publish") }, receipt = await api("/api/ai/agents/" + encodeURIComponent(slug) + ":publish", jsonOptions("POST", body)); if (!state.selectedAgent || state.selectedAgent.profileSlug !== slug) return; state.receipts.agents = acceptedReceipt("Agent 发布命令已接受", receipt); render(); toast("发布命令已接受，等待读模型确认", "success"); } catch (error) { if (!ignoredError(error)) toast(errorMessage(error), "error"); } }
+    function openCreateAgent() { overlayReturnFocus = document.activeElement; $("modal-root").innerHTML = '<div class="modal-backdrop" data-action="close-modal"><form class="modal" id="create-agent-form" role="dialog" aria-modal="true" aria-labelledby="create-agent-title" tabindex="-1"><div class="modal-head"><h2 class="modal-title" id="create-agent-title">New agent</h2></div><div class="modal-body"><div class="field"><label for="new-agent-slug">Profile slug</label><input id="new-agent-slug" required pattern="[a-z0-9][a-z0-9-]*" placeholder="research-assistant" autocomplete="off" /></div></div><div class="modal-actions"><button class="button" type="button" data-action="close-modal">取消</button><button class="button primary" type="submit">创建</button></div></form></div>'; setTimeout(function () { var input = $("new-agent-slug"); if (input) input.focus(); }, 0); }
+    function closeModal() { var restore = overlayReturnFocus; $("modal-root").innerHTML = ""; overlayReturnFocus = null; if (restore && document.contains(restore)) restore.focus(); }
+    async function createAgent() { var slug = $("new-agent-slug").value.trim(); try { var receipt = await api("/api/ai/agents", jsonOptions("POST", { profileSlug: slug, idempotencyKey: idempotencyKey("agent-create") })); closeModal(); state.receipts.agents = acceptedReceipt("Agent 创建命令已接受", receipt); if (state.route === "agents") render(); toast("创建命令已接受，刷新后查看物化结果", "success"); } catch (error) { if (!ignoredError(error)) toast(errorMessage(error), "error"); } }
+
+    function renderModels() {
+      if (state.loading.models && !state.models) return loadingView();
+      if (state.errors.models && !state.models) return errorView(state.errors.models);
+      var data = object(state.models), personal = object(data.personalDefault), settings = object(personal.settings), catalog = object(data.catalog), policy = object(catalog.policy), selection = object(settings.savedSelection), modelSelection = object(selection.modelSelection), routes = arr(settings.routeOptions), sources = arr(policy.sources);
+      var writableSources = sources.map(function (source) { return { serviceSlugSnapshot: source.serviceSlugSnapshot || "", userServiceId: source.userServiceId || "", modelSelection: { mode: "explicit_models", modelIds: arr(source.modelIds) } }; });
+      var selectedRoute = selection.routeValue || "", selectedModel = modelSelection.modelId || "";
+      var personalBody = '<div class="version-row"><span>' + availability(personal.availability) + '</span><span>Version <b class="mono">' + esc(personal.authorityStateVersion == null ? "—" : personal.authorityStateVersion) + '</b></span><span>' + esc(formatTime(personal.updatedAtUtc)) + '</span></div><div class="model-body">' +
+        '<form id="personal-model-form"><div class="form-grid"><div class="field"><label for="model-route">Default route</label><select id="model-route">' + routes.map(function (route) { return '<option value="' + esc(route.routeValue) + '"' + (route.routeValue === selectedRoute ? " selected" : "") + (route.allowed === false ? " disabled" : "") + '>' + esc(route.label || route.routeValue) + '</option>'; }).join("") + '</select></div><div class="field"><label for="model-id">Model</label><select id="model-id"></select></div></div><div style="margin-top:12px"><button class="button primary small" type="submit"' + (object(settings.capabilities).canSave === false ? " disabled" : "") + '>' + icon("save") + 'Save default</button></div></form>' +
+        '<div class="route-list">' + (routes.length ? routes.map(renderRoute).join("") : emptyView("暂无可用路由")) + '</div></div>';
+      var catalogBody = '<div class="version-row"><span>' + availability(catalog.availability) + '</span><span>Version <b class="mono">' + esc(catalog.authorityStateVersion == null ? "—" : catalog.authorityStateVersion) + '</b></span><span>Effective <b>' + esc(policy.effectiveSource || "—") + '</b></span></div><div class="model-body"><form id="catalog-form"><div class="form-grid"><div class="field"><label for="catalog-mode">Mode</label><select id="catalog-mode"><option value="inherit_platform"' + (policy.mode === "inherit_platform" ? " selected" : "") + '>inherit platform</option><option value="custom_replace"' + (policy.mode === "custom_replace" ? " selected" : "") + '>custom replace</option></select></div><div class="field full"><label for="catalog-sources">Sources</label><textarea class="code" id="catalog-sources">' + esc(json(writableSources)) + '</textarea></div></div><button class="button primary small" type="submit" style="margin-top:12px">' + icon("save") + 'Save catalog</button></form><div class="source-list">' + (sources.length ? sources.map(renderSource).join("") : emptyView("暂无 catalog source")) + '</div></div>';
+      setTimeout(syncModelOptions, 0);
+      return '<div class="model-layout"><section class="model-pane"><div class="section-head"><h2 class="section-title">Personal default</h2><span class="section-meta">' + esc(settings.selectionStatus || "") + '</span></div>' + personalBody + '</section><section class="model-pane"><div class="section-head"><h2 class="section-title">Catalog policy</h2><span class="section-meta">' + (policy.configured ? "Configured" : "Inherited") + '</span></div>' + catalogBody + '</section></div>';
+    }
+    function renderRoute(route) { var models = arr(object(route.modelCatalog).modelIds); return '<div class="route-item"><div class="route-item-top"><strong>' + esc(route.label || route.routeValue) + '</strong>' + statusBadge(route.status || (route.ready ? "ready" : "unavailable")) + '</div><p>' + esc(route.description || object(route.modelCatalog).diagnostic || route.source || "") + '</p><div class="model-tags">' + models.slice(0, 8).map(function (model) { return '<span class="model-tag">' + esc(model) + '</span>'; }).join("") + '</div></div>'; }
+    function renderSource(source) { return '<div class="source-item"><div class="source-item-top"><strong class="mono">' + esc(source.sourceId) + '</strong><span class="badge violet">' + esc(source.modelSelectionMode || "catalog") + '</span></div><p>' + esc(source.serviceSlugSnapshot || source.catalogServiceId || source.userServiceId || "") + '</p><div class="model-tags">' + arr(source.modelIds).map(function (model) { return '<span class="model-tag">' + esc(model) + '</span>'; }).join("") + '</div></div>'; }
+    function selectedRouteOption() { var select = $("model-route"), data = object(state.models), routes = arr(object(object(data.personalDefault).settings).routeOptions); return routes.find(function (route) { return route.routeValue === (select && select.value); }) || routes[0] || {}; }
+    function syncModelOptions() { var target = $("model-id"); if (!target) return; var settings = object(object(object(state.models).personalDefault).settings), saved = object(settings.savedSelection), current = object(saved.modelSelection), route = selectedRouteOption(), catalog = object(route.modelCatalog), models = arr(catalog.modelIds), selected = route.routeValue === saved.routeValue ? current.modelId || "" : ""; target.innerHTML = '<option value=""' + (!selected ? " selected" : "") + '>Route default</option>' + models.map(function (model) { return '<option value="' + esc(model) + '"' + (model === selected ? " selected" : "") + '>' + esc(model) + '</option>'; }).join(""); }
+    async function savePersonalModel() { try { var body = { routeValue: $("model-route").value, modelId: $("model-id").value || null }, receipt = await api("/api/ai/models/personal-default", jsonOptions("PUT", body)), settings = object(object(object(state.models).personalDefault).settings); settings.savedSelection = Object.assign({}, object(settings.savedSelection), { routeValue: body.routeValue, modelSelection: { kind: body.modelId ? "explicit_model" : "provider_default", modelId: body.modelId } }); state.receipts.models = acceptedReceipt("个人默认模型更新已接受", receipt); render(); toast("默认模型更新已接受，等待读模型确认", "success"); } catch (error) { if (!ignoredError(error)) toast(errorMessage(error), "error"); } }
+    async function saveCatalog() { try { var data = object(state.models), catalog = object(data.catalog), body = { mode: $("catalog-mode").value, sources: parseJsonField("catalog-sources", []), expectedVersion: catalog.authorityStateVersion, idempotencyKey: idempotencyKey("model-catalog") }, receipt = await api("/api/ai/models/catalog", jsonOptions("PUT", body)); state.receipts.models = acceptedReceipt("模型目录更新已接受", receipt); render(); toast("模型目录更新已接受，等待读模型确认", "success"); } catch (error) { if (!ignoredError(error)) toast(errorMessage(error), "error"); } }
+
+    function renderActivity() {
+      if (state.loading.activity && !state.activity) return loadingView();
+      if (state.errors.activity && !state.activity) return errorView(state.errors.activity);
+      var data = object(state.activity), conversations = object(data.conversations), runs = object(data.runs), convoItems = arr(conversations.items), runItems = arr(runs.items);
+      return '<div class="activity-controls"><span>' + availability(conversations.availability) + '</span><span>' + availability(runs.availability) + '</span><span class="toolbar-spacer"></span><span class="section-meta">' + esc(convoItems.length) + ' conversations · ' + esc(runItems.length) + ' runs</span></div><div class="activity-list"><section class="section"><div class="section-head"><h2 class="section-title">Conversations</h2><span class="section-meta">latest</span></div>' + (convoItems.length ? convoItems.map(function (item) { return '<div class="conversation-row"><div class="cell-title truncate">' + esc(item.title || item.conversationId) + '</div><div class="cell-sub mono truncate">' + esc(item.conversationId) + '</div><div class="conversation-meta"><span>' + esc(item.messageCount || 0) + ' messages</span><span>' + esc(item.taskStatus || "—") + '</span><span>' + esc(item.llmModel || item.llmRoute || "—") + '</span><span>' + esc(formatTime(item.updatedAtUtc)) + '</span></div></div>'; }).join("") : emptyView("暂无会话记录")) + '</section><section class="section"><div class="section-head"><h2 class="section-title">Workflow runs</h2><span class="section-meta">' + esc(runs.totalCount == null ? runItems.length : runs.totalCount) + '</span></div>' + (runItems.length ? runItems.map(function (run) { return '<button class="run-row" type="button" data-action="open-run" data-run-id="' + esc(run.runId) + '" aria-label="查看运行 ' + esc(run.workflowName || run.runId) + '"><span><span class="cell-title truncate" style="display:block">' + esc(run.workflowName || run.runId) + '</span><span class="cell-sub mono truncate" style="display:block">' + esc(run.runId) + ' · ' + esc(run.runOrigin || "") + '</span></span><span style="text-align:right">' + statusBadge(run.status) + '<span class="run-time" style="display:block;margin-top:4px">' + esc(formatTime(run.updatedAtUtc)) + '</span></span></button>'; }).join("") : emptyView("暂无运行记录")) + '</section></div>';
+    }
+    async function openRun(runId) { var requestEpoch = authEpoch, requestId = ++runDetailRequestId; if (!$("drawer-root").firstChild) overlayReturnFocus = document.activeElement; $("drawer-root").innerHTML = '<div class="drawer-backdrop" data-action="close-drawer"><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="run-detail-title" data-run-id="' + esc(runId) + '" tabindex="-1"><div class="drawer-head"><div class="drawer-head-copy"><h2 class="drawer-title" id="run-detail-title">Run detail</h2><div class="drawer-sub mono">' + esc(runId) + '</div></div><button class="icon-button drawer-close" type="button" data-action="close-drawer" title="关闭" aria-label="关闭">' + icon("close") + '</button></div><div class="drawer-body">' + loadingView() + '</div></aside></div>'; state.runDetail = null; var closeButton = document.querySelector(".drawer-close"); if (closeButton) closeButton.focus();
+      try { var detail = await api("/api/ai/activity/runs/" + encodeURIComponent(runId)); if (requestEpoch !== authEpoch || requestId !== runDetailRequestId) return; state.runDetail = detail; renderRunDrawer(runId); }
+      catch (error) { if (!ignoredError(error) && requestEpoch === authEpoch && requestId === runDetailRequestId) { var drawer = document.querySelector(".drawer"), body = drawer && drawer.getAttribute("data-run-id") === runId ? drawer.querySelector(".drawer-body") : null; if (body) body.innerHTML = errorView(errorMessage(error), "refresh-run-detail"); } }
+    }
+    function renderRunDrawer(runId) { var root = $("drawer-root"), detail = object(state.runDetail), summary = object(detail.summary), stats = object(detail.statistics), usage = object(detail.usageTotals), steps = arr(detail.steps), timeline = arr(detail.timeline); if (!root.firstChild) return; root.innerHTML = '<div class="drawer-backdrop" data-action="close-drawer"><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="run-detail-title" data-run-id="' + esc(runId) + '" tabindex="-1"><div class="drawer-head"><div class="drawer-head-copy"><h2 class="drawer-title" id="run-detail-title">' + esc(summary.workflowName || "Run detail") + '</h2><div class="drawer-sub mono">' + esc(runId) + '</div></div>' + statusBadge(summary.status) + '<button class="icon-button drawer-close" type="button" data-action="close-drawer" title="关闭" aria-label="关闭">' + icon("close") + '</button></div><div class="drawer-body"><div class="detail-grid">' + detailStat("Duration", formatDuration(summary.durationMs)) + detailStat("Steps", stats.completedSteps + "/" + stats.totalSteps) + detailStat("Tokens", usage.totalTokens == null ? "—" : usage.totalTokens) + detailStat("Version", detail.authorityStateVersion) + '</div>' +
+        '<section class="form-section"><h3>Steps</h3>' + (steps.length ? '<div class="table-wrap"><table><thead><tr><th>Step</th><th>Outcome</th><th>Duration</th></tr></thead><tbody>' + steps.map(function (step) { return '<tr><td><div class="cell-title">' + esc(step.displayName || step.stepId) + '</div><div class="cell-sub mono">' + esc(step.stepId) + '</div></td><td>' + statusBadge(step.success === true ? "success" : step.success === false ? "failed" : step.outcome) + '</td><td class="mono">' + esc(formatDuration(step.durationMs)) + '</td></tr>'; }).join("") + '</tbody></table></div>' : emptyView("暂无步骤")) + '</section>' +
+        '<section class="form-section"><h3>Timeline</h3>' + (timeline.length ? '<div class="timeline">' + timeline.map(function (event) { return '<div class="timeline-item"><div class="timeline-kind">' + esc(event.kind) + '</div><div class="timeline-meta">' + esc(event.stage || "") + (event.stepId ? " · " + esc(event.stepId) : "") + ' · ' + esc(formatTime(event.timestampUtc)) + '</div></div>'; }).join("") + '</div>' : emptyView("暂无时间线")) + '</section>' +
+        (detail.finalOutput ? '<section class="form-section"><h3>Final output</h3><div class="output">' + esc(detail.finalOutput) + '</div></section>' : "") + '</div></aside></div>'; var closeButton = root.querySelector(".drawer-close"); if (closeButton) closeButton.focus(); }
+    function detailStat(label, value) { return '<div class="detail-stat"><span>' + esc(label) + '</span><strong>' + esc(value == null ? "—" : value) + '</strong></div>'; }
+    function closeDrawer() { runDetailRequestId += 1; var restore = overlayReturnFocus; $("drawer-root").innerHTML = ""; state.runDetail = null; overlayReturnFocus = null; if (restore && document.contains(restore)) restore.focus(); }
+
+    function toast(message, kind) { var el = document.createElement("div"); el.className = "toast " + (kind || ""); el.textContent = message; $("toast-root").appendChild(el); setTimeout(function () { el.remove(); }, 4200); }
+
+    document.addEventListener("click", function (event) {
+      var target = event.target.closest("[data-action]"); if (!target) return;
+      var action = target.getAttribute("data-action");
+      if (action === "logout") logout();
+      if (action === "refresh") { if (state.contextReady) loadRoute(state.route, true); else if (getToken()) enterApp(getToken()); }
+      if (action === "refresh-agent-detail") reloadAgentDetail();
+      if (action === "refresh-run-detail") { var drawer = document.querySelector(".drawer"), runId = drawer && drawer.getAttribute("data-run-id"); if (runId) openRun(runId); }
+      if (action === "agent-mode") { agentDetailRequestId += 1; state.agentMode = target.getAttribute("data-mode"); state.selectedAgent = state.agentDetail = state.validation = null; state.loading.agentDetail = false; state.errors.agentDetail = null; render(); }
+      if (action === "select-agent") selectAgent(target.getAttribute("data-agent-slug"));
+      if (action === "create-agent") openCreateAgent();
+      if (action === "validate-agent") validateAgent();
+      if (action === "publish-agent") publishAgent();
+      if (action === "open-run") openRun(target.getAttribute("data-run-id"));
+      if (action === "close-drawer" && (target === event.target || target.classList.contains("drawer-close"))) closeDrawer();
+      if (action === "close-modal" && (target === event.target || target.tagName === "BUTTON")) closeModal();
+    });
+    document.addEventListener("input", function (event) { if (event.target.id === "agent-search") { state.agentQuery = event.target.value; var position = event.target.selectionStart; render(); var next = $("agent-search"); if (next) { next.focus(); next.setSelectionRange(position, position); } } });
+    document.addEventListener("change", function (event) { if (event.target.id === "model-route") syncModelOptions(); });
+    document.addEventListener("keydown", function (event) {
+      var overlay = document.querySelector(".modal, .drawer");
+      if (event.key === "Escape" && overlay) { event.preventDefault(); overlay.classList.contains("modal") ? closeModal() : closeDrawer(); return; }
+      if (event.key !== "Tab" || !overlay) return;
+      var focusable = Array.from(overlay.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')).filter(function (item) { return item.offsetParent !== null; });
+      if (!focusable.length) { event.preventDefault(); overlay.focus(); return; }
+      var first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    });
+    document.addEventListener("submit", function (event) {
+      if (event.target.id === "agent-editor") { event.preventDefault(); saveAgentDraft(); }
+      if (event.target.id === "create-agent-form") { event.preventDefault(); createAgent(); }
+      if (event.target.id === "personal-model-form") { event.preventDefault(); savePersonalModel(); }
+      if (event.target.id === "catalog-form") { event.preventDefault(); saveCatalog(); }
+    });
+    $("login-button").addEventListener("click", beginLogin);
+    window.addEventListener("hashchange", route);
+    window.addEventListener("storage", function (event) { if (event.key !== TOKEN_KEY) return; var token = getToken(); if (token) enterApp(token); else requireLogin(""); });
+
+    $("auth-brand-mark").innerHTML = icon("mark"); $("auth-mobile-mark").innerHTML = icon("mark"); $("brand-glyph").innerHTML = icon("mark"); $("mobile-brand").innerHTML = icon("mark"); hydrateIcons(document);
+    var bootToken = getToken();
+    if (bootToken) enterApp(bootToken); else requireLogin("");
+  })();
+  </script>
+</body>
+</html>

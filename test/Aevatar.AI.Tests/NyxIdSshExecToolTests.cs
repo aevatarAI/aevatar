@@ -446,7 +446,7 @@ public class NyxIdSshExecToolTests
                 """{"service":"raw-catalog","command":"date","principal":"ubuntu"}""");
 
             await act.Should().ThrowAsync<InvalidOperationException>()
-                .WithMessage("NyxID base URL is not configured.");
+                .WithMessage("NyxID transport base URL is not configured.");
         }
         finally
         {

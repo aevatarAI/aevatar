@@ -25,6 +25,8 @@ public interface ILarkCardReplyStreamRenderer : IReplyOperationStepRenderer
     ReplyOperationStepEvent CreateStreamStep(LarkCardStreamOperationStepInput input);
 
     ReplyOperationStepEvent CreateFinalizeStep(LarkCardFinalizeOperationStepInput input);
+
+    ReplyOperationStepEvent CreateAbortStep(LarkCardAbortOperationStepInput input);
 }
 
 public interface IReplyOperationActorContext
@@ -97,5 +99,16 @@ public sealed record LarkCardFinalizeOperationStepInput(
     string StreamingElementId,
     bool FinalDiffers,
     IReadOnlyList<ConversationHistoryEntry> AppendedHistory,
+    long Sequence,
+    long Generation);
+
+public sealed record LarkCardAbortOperationStepInput(
+    ChatActivity ActivityForToken,
+    string CorrelationId,
+    string CommandId,
+    string CardId,
+    string CardMessageId,
+    string LastFlushedText,
+    LarkCardAbortReason Reason,
     long Sequence,
     long Generation);

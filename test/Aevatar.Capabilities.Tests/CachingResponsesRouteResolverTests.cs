@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
-using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Application.Responses;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
@@ -9,143 +10,144 @@ namespace Aevatar.Capabilities.Tests;
 
 public sealed class ResponsesRouteResolverTests
 {
-    [Fact]
-    public async Task ResolveRouteValueAsync_ShouldReturnSlugRouteValue_FromCatalog()
-    {
-        var catalog = new RecordingCatalogPort(new NyxIdLlmServicesResult(
-        [
-            MakeService("anthropic", "/api/v1/llm/anthropic/v1", allowed: true),
-            MakeService("chrono-llm", "/api/v1/proxy/s/chrono-llm", allowed: true),
-        ], null));
-        var resolver = new ResponsesRouteResolver(catalog, NullLogger<ResponsesRouteResolver>.Instance);
-
-        (await resolver.ResolveRouteValueAsync("anthropic", "bearer-1", CancellationToken.None))
-            .Should().Be("/api/v1/llm/anthropic/v1");
-        (await resolver.ResolveRouteValueAsync("chrono-llm", "bearer-1", CancellationToken.None))
-            .Should().Be("/api/v1/proxy/s/chrono-llm");
-    }
+    private static readonly ResponsesCallerScope CallerScope =
+        new("scope-alpha", "owner-alpha", LlmSessionOriginKind.ApiKey);
 
     [Fact]
-    public async Task ResolveRouteValueAsync_ShouldReturnNullForUnknownSlug()
+    public async Task ResolveRouteTargetAsync_ShouldPreserveCatalogIdentityFromApplicationDecision()
     {
-        var catalog = new RecordingCatalogPort(new NyxIdLlmServicesResult(
-        [
-            MakeService("anthropic", "/api/v1/llm/anthropic/v1", allowed: true),
-        ], null));
-        var resolver = new ResponsesRouteResolver(catalog, NullLogger<ResponsesRouteResolver>.Instance);
-
-        (await resolver.ResolveRouteValueAsync("mistralai", "bearer-1", CancellationToken.None))
-            .Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ResolveRouteValueAsync_ShouldIncludeDisallowedServicesSoDownstreamCanReturnHonestError()
-    {
-        // Catalog's `Allowed=false` reflects "user hasn't bound a credential" (a UI hint),
-        // not "this route can't serve requests." Several services with
-        // `requires_connection=true + connected=false` (e.g. chrono-llm in prod) still
-        // serve traffic because the backing LLM is shared at deployment level. Including
-        // the route lets NyxID return the honest 403/404 if the caller really can't reach
-        // the upstream, instead of aevatar pretending the slug doesn't exist.
-        var catalog = new RecordingCatalogPort(new NyxIdLlmServicesResult(
-        [
-            MakeService("chrono-llm", "/api/v1/proxy/s/chrono-llm", allowed: false),
-        ], null));
-        var resolver = new ResponsesRouteResolver(catalog, NullLogger<ResponsesRouteResolver>.Instance);
-
-        (await resolver.ResolveRouteValueAsync("chrono-llm", "bearer-1", CancellationToken.None))
-            .Should().Be("/api/v1/proxy/s/chrono-llm");
-    }
-
-    [Fact]
-    public async Task ResolveRouteValueAsync_ShouldUseCatalogPortResultWithoutOwningCache()
-    {
-        var catalog = new MutableCatalogPort(new NyxIdLlmServicesResult(
-        [
-            MakeService("anthropic", "/api/v1/llm/anthropic/v1", allowed: true),
-        ], null));
-        var resolver = new ResponsesRouteResolver(catalog, NullLogger<ResponsesRouteResolver>.Instance);
-
-        (await resolver.ResolveRouteValueAsync("anthropic", "bearer-1", CancellationToken.None))
-            .Should().Be("/api/v1/llm/anthropic/v1");
-
-        catalog.Result = new NyxIdLlmServicesResult(
-        [
-            MakeService("anthropic", "/api/v1/llm/anthropic/v2", allowed: true),
-        ], null);
-
-        (await resolver.ResolveRouteValueAsync("anthropic", "bearer-1", CancellationToken.None))
-            .Should().Be("/api/v1/llm/anthropic/v2");
-        catalog.FetchCount.Should().Be(2, "the resolver delegates catalog freshness to IUserLlmCatalogPort");
-    }
-
-    [Fact]
-    public async Task ResolveRouteValueAsync_ShouldReadCatalogForEachBearer()
-    {
-        var catalog = new RecordingCatalogPort(new NyxIdLlmServicesResult(
-        [
-            MakeService("anthropic", "/api/v1/llm/anthropic/v1", allowed: true),
-        ], null));
-        var resolver = new ResponsesRouteResolver(catalog, NullLogger<ResponsesRouteResolver>.Instance);
-
-        await resolver.ResolveRouteValueAsync("anthropic", "bearer-A", CancellationToken.None);
-        await resolver.ResolveRouteValueAsync("anthropic", "bearer-B", CancellationToken.None);
-
-        catalog.FetchCount.Should().Be(2, "caller/authority cache boundaries are owned by IUserLlmCatalogPort");
-    }
-
-    private static NyxIdLlmService MakeService(string slug, string routeValue, bool allowed) =>
-        new(
-            CatalogEntryId: slug,
-            ServiceSlug: slug,
-            DisplayName: slug,
-            RouteValue: routeValue,
-            ModelCatalog: LLMSelectionPolicy.NormalizeCatalog(
-                [],
-                null,
-                LLMModelCatalogDiagnosticKind.NotPublished),
-            Status: allowed ? "ready" : "not_connected",
-            Source: NyxIdLlmProviderSource.GatewayProvider,
-            Allowed: allowed,
-            Description: null);
-
-    private sealed class RecordingCatalogPort : IUserLlmCatalogPort
-    {
-        private readonly NyxIdLlmServicesResult _result;
-        public int FetchCount { get; private set; }
-
-        public RecordingCatalogPort(NyxIdLlmServicesResult result) => _result = result;
-
-        public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct)
+        var application = new RecordingRouteApplicationService
         {
-            FetchCount++;
-            return Task.FromResult(_result);
-        }
+            Source = new NyxIdResolvedCatalogModelSource(
+                "catalog service/alpha",
+                "chrono-llm"),
+        };
+        var resolver = CreateResolver(application);
 
-        public Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct) =>
-            GetServicesAsync(bearerToken, ct);
+        var target = await resolver.ResolveRouteTargetAsync(
+            "chrono-llm",
+            "gpt-5.5",
+            CallerScope,
+            CancellationToken.None);
 
-        public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct) =>
-            throw new NotSupportedException("Provision not used by route resolver.");
+        target.Should().NotBeNull();
+        target!.SourceIdentityCase.Should().Be(
+            LLMRouteTarget.SourceIdentityOneofCase.CatalogServiceId);
+        target.CatalogServiceId.Should().Be("catalog service/alpha");
+        target.ServiceSlugSnapshot.Should().Be("chrono-llm");
+        application.LastScopeId.Should().Be("scope-alpha");
+        application.LastServiceSlug.Should().Be("chrono-llm");
+        application.LastUpstreamModelId.Should().Be("gpt-5.5");
     }
 
-    private sealed class MutableCatalogPort : IUserLlmCatalogPort
+    [Fact]
+    public async Task ResolveRouteTargetAsync_ShouldPreserveExactScopeUserServiceIdentity()
     {
-        public int FetchCount { get; private set; }
-        public NyxIdLlmServicesResult Result { get; set; }
-
-        public MutableCatalogPort(NyxIdLlmServicesResult result) => Result = result;
-
-        public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct)
+        var resolver = CreateResolver(new RecordingRouteApplicationService
         {
-            FetchCount++;
-            return Task.FromResult(Result);
+            Source = new NyxIdResolvedUserModelSource("user-legacy", "legacy-llm"),
+        });
+
+        var target = await resolver.ResolveRouteTargetAsync(
+            "legacy-llm",
+            "model-a",
+            CallerScope,
+            CancellationToken.None);
+
+        target.Should().NotBeNull();
+        target!.SourceIdentityCase.Should().Be(
+            LLMRouteTarget.SourceIdentityOneofCase.UserServiceId);
+        target.UserServiceId.Should().Be("user-legacy");
+        target.ServiceSlugSnapshot.Should().Be("legacy-llm");
+    }
+
+    [Fact]
+    public async Task ResolveRouteTargetAsync_ShouldReturnNullWhenApplicationFindsNoSource()
+    {
+        var resolver = CreateResolver(new RecordingRouteApplicationService());
+
+        var target = await resolver.ResolveRouteTargetAsync(
+            "shared-runtime",
+            "model-a",
+            CallerScope,
+            CancellationToken.None);
+
+        target.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveRouteTargetAsync_ShouldBridgeApplicationFailureToResponsesFailure()
+    {
+        var sourceFailure = new HttpRequestException("inventory offline");
+        var applicationFailure = new LLMModelCatalogApplicationException(
+            LLMModelCatalogApplicationErrorKind.Unavailable,
+            "MODEL_ROUTE_UNAVAILABLE",
+            "Model routing is unavailable.",
+            sourceFailure);
+        var resolver = CreateResolver(new RecordingRouteApplicationService
+        {
+            Exception = applicationFailure,
+        });
+
+        var act = () => resolver.ResolveRouteTargetAsync(
+            "chrono-llm",
+            "model-a",
+            CallerScope,
+            CancellationToken.None);
+
+        var thrown = await act.Should().ThrowAsync<ResponsesRouteUnavailableException>();
+        thrown.Which.InnerException.Should().BeSameAs(sourceFailure);
+    }
+
+    [Fact]
+    public async Task ResolveRouteTargetAsync_ShouldPreserveCallerCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var sourceFailure = new OperationCanceledException(cancellation.Token);
+        var resolver = CreateResolver(new RecordingRouteApplicationService
+        {
+            Exception = sourceFailure,
+        });
+
+        var act = () => resolver.ResolveRouteTargetAsync(
+            "chrono-llm",
+            "model-a",
+            CallerScope,
+            cancellation.Token);
+
+        var thrown = await act.Should().ThrowAsync<OperationCanceledException>();
+        thrown.Which.Should().BeSameAs(sourceFailure);
+    }
+
+    private static ResponsesRouteResolver CreateResolver(
+        ILLMModelRouteApplicationService application) =>
+        new(application, NullLogger<ResponsesRouteResolver>.Instance);
+
+    private sealed class RecordingRouteApplicationService : ILLMModelRouteApplicationService
+    {
+        public NyxIdResolvedModelSource? Source { get; init; }
+
+        public Exception? Exception { get; init; }
+
+        public string? LastScopeId { get; private set; }
+
+        public string? LastServiceSlug { get; private set; }
+
+        public string? LastUpstreamModelId { get; private set; }
+
+        public Task<NyxIdResolvedModelSource?> ResolveAsync(
+            string scopeId,
+            string serviceSlug,
+            string upstreamModelId,
+            CancellationToken ct = default)
+        {
+            LastScopeId = scopeId;
+            LastServiceSlug = serviceSlug;
+            LastUpstreamModelId = upstreamModelId;
+            return Exception is null
+                ? Task.FromResult(Source)
+                : Task.FromException<NyxIdResolvedModelSource?>(Exception);
         }
-
-        public Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct) =>
-            GetServicesAsync(bearerToken, ct);
-
-        public Task<NyxIdLlmService> ProvisionAsync(string bearerToken, string provisionEndpointId, CancellationToken ct) =>
-            throw new NotSupportedException("Provision not used by route resolver.");
     }
 }

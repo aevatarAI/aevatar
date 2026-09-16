@@ -9,6 +9,7 @@ using Aevatar.GAgents.Channel.Identity.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
@@ -410,6 +411,74 @@ public sealed class IdentityOAuthCallbackEndpointTests
     }
 
     [Fact]
+    public async Task IssuedBindingMissingRequiredService_LeavesExistingBindingInPlace()
+    {
+        // Dropping RFC 8707 `resource` from /oauth/authorize means the Consent
+        // page no longer marks core services as non-deselectable, so a user can
+        // arrive here holding an under-granted incoming binding. The repair loop
+        // must be lossless: the working binding stays, the incoming one is
+        // revoked, and the user is told to re-run /init.
+        var existing = new BindingId { Value = "bnd_existing" };
+        const string incoming = "bnd_incoming";
+        var subject = SampleSubject();
+        var broker = NewBroker(
+            subject,
+            incoming,
+            expectedBindingHash: NyxIdRemoteCapabilityBroker.HashBindingId(existing.Value));
+        var capabilityBroker = (INyxIdCapabilityBroker)broker;
+        capabilityBroker
+            .IssueShortLivedByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<string>(),
+                Arg.Any<CapabilityScope>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<CapabilityHandle>>(_ => throw new BindingServiceAccessMismatchException(
+                subject,
+                ["https://nyxid.test/api/v1/proxy/s/ornn-api"]));
+        var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
+        queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<BindingId?>(existing));
+        var bindingDispatch = new RecordingCommandDispatch<CommitBindingCommand>();
+        var bindingReplaceDispatch = new RecordingCommandDispatch<ReplaceBindingCommand>();
+        var capabilityDispatch = new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>();
+        var loggerFactory = new RecordingLoggerFactory();
+
+        var result = await InvokeCallbackAsync(
+            broker,
+            queryPort,
+            bindingDispatch,
+            capabilityDispatch,
+            bindingReplaceDispatch,
+            NewOwnerScopeResolver("owner-user-1"),
+            format: "json",
+            loggerFactory: loggerFactory);
+
+        await capabilityBroker.Received(1).IssueShortLivedByBindingIdAsync(
+            subject,
+            incoming,
+            Arg.Is<CapabilityScope>(scope => scope.Value == AevatarOAuthClientScopes.Proxy),
+            Arg.Any<CancellationToken>());
+        await broker.Received(1).RevokeBindingByIdAsync(incoming, Arg.Any<CancellationToken>());
+        bindingReplaceDispatch.Commands.Should().BeEmpty();
+        bindingDispatch.Commands.Should().BeEmpty();
+        capabilityDispatch.Commands.Should().BeEmpty();
+
+        using var document = await ExecuteJsonAsync(result, StatusCodes.Status409Conflict);
+        document.RootElement.GetProperty("error").GetString().Should().Be("required_service_access_missing");
+        var detail = document.RootElement.GetProperty("detail").GetString();
+        detail.Should().Contain("/init");
+        document.RootElement.GetRawText().Should().NotContainAny(
+            incoming,
+            existing.Value,
+            "auth-code",
+            "pkce-verifier",
+            "short-lived-capability");
+        var logs = string.Join('\n', loggerFactory.Messages);
+        logs.Should().Contain(NyxIdRemoteCapabilityBroker.BindingDigest(incoming));
+        logs.Should().NotContain(incoming);
+    }
+
+    [Fact]
     public async Task IssuedBindingAlreadyRevoked_RevokesIncomingWithoutDispatch()
     {
         const string incoming = "bnd_incoming";
@@ -671,7 +740,8 @@ public sealed class IdentityOAuthCallbackEndpointTests
         ICommandDispatchService<ObserveBrokerCapabilityCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> capabilityDispatch,
         ICommandDispatchService<ReplaceBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>? bindingReplaceDispatch = null,
         IOwnerScopeResolver? ownerScopeResolver = null,
-        string? format = null)
+        string? format = null,
+        ILoggerFactory? loggerFactory = null)
     {
         bindingReplaceDispatch ??= new RecordingCommandDispatch<ReplaceBindingCommand>();
         ownerScopeResolver ??= NewOwnerScopeResolver(null);
@@ -687,7 +757,7 @@ public sealed class IdentityOAuthCallbackEndpointTests
             bindingReplaceDispatch: bindingReplaceDispatch,
             ownerScopeResolver: ownerScopeResolver,
             brokerCapabilityDispatch: capabilityDispatch,
-            loggerFactory: NullLoggerFactory.Instance,
+            loggerFactory: loggerFactory ?? NullLoggerFactory.Instance,
             ct: CancellationToken.None);
     }
 
@@ -786,6 +856,36 @@ public sealed class IdentityOAuthCallbackEndpointTests
                 Body = new MemoryStream(),
             },
         };
+    }
+
+    private sealed class RecordingLoggerFactory : ILoggerFactory
+    {
+        public List<string> Messages { get; } = [];
+
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(Messages);
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class RecordingLogger(List<string> messages) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter) =>
+                messages.Add(formatter(state, exception));
+        }
     }
 
 }

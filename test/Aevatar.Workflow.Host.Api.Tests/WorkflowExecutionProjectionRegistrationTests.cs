@@ -11,6 +11,7 @@ using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.DependencyInjection;
 using Aevatar.Workflow.Projection.Metadata;
+using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
@@ -54,6 +55,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
         var continuationDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExternalApprovalContinuationDocument>>();
         var graphWriter = provider.GetRequiredService<IProjectionGraphWriter<WorkflowRunInsightReportDocument>>();
+        var versionedGraphStore = provider.GetRequiredService<IVersionedProjectionGraphStore>();
         var currentStateMaterializers = provider.GetServices<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
         var artifactMaterializers = provider.GetServices<IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>>();
         currentStateStore.Should().NotBeNull();
@@ -64,12 +66,16 @@ public class WorkflowExecutionProjectionRegistrationTests
         dispatcher.Should().NotBeNull();
         continuationDispatcher.Should().NotBeNull();
         graphWriter.Should().NotBeNull();
+        versionedGraphStore.Should().BeSameAs(relationStore);
         currentStateMaterializers.Should().ContainSingle();
         // Continuation projector, insight report projector, and the committed-fact audit materializer.
         artifactMaterializers.Should().HaveCount(3);
         provider.GetRequiredService<WorkflowExecutionCurrentStateProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowExternalApprovalContinuationProjector>().Should().NotBeNull();
         provider.GetRequiredService<WorkflowRunInsightReportArtifactProjector>().Should().NotBeNull();
+        provider.GetRequiredService<WorkflowRunIncrementalGraphMaterializer>().Should().NotBeNull();
+        provider.GetRequiredService<WorkflowProjectionGraphCutoverOrchestrator>().Should().NotBeNull();
+        provider.GetRequiredService<WorkflowExecutionArtifactQueryPort>().Should().NotBeNull();
 
         // The binding write path is decorated with the heal/guard dispatcher (Definition supersedes a
         // clobbered Run-kind slot) and the binding projector consumes it.
@@ -103,8 +109,66 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         provider.Metadata.IndexName.Should().Be("workflow-execution-reports");
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        var rootProperties = provider.Metadata.Mappings["properties"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        AssertNotIndexedTextFields(rootProperties, "input", "final_output", "final_error");
+        var stepEntries = rootProperties["step_entries"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        var stepProperties = stepEntries["properties"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        AssertNotIndexedTextFields(
+            stepProperties,
+            "output_preview",
+            "error",
+            "assigned_value",
+            "suspension_prompt",
+            "suspension_content",
+            "failure_output");
+        foreach (var field in new[] { "file_item_results", "vote_agreement_decision", "latest_failed_attempt" })
+        {
+            var mapping = stepProperties[field]
+                .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+            mapping["enabled"].Should().Be(false);
+        }
+
+        AssertObjectTextFieldsNotIndexed(rootProperties, "role_reply_entries", "content");
+        AssertObjectTextFieldsNotIndexed(rootProperties, "timeline_entries", "message");
+        AssertObjectTextFieldsNotIndexed(
+            rootProperties,
+            "operation_entries",
+            "input_summary",
+            "output",
+            "error",
+            "arguments_json",
+            "result_json",
+            "reasoning_content");
         provider.Metadata.Settings.Should().BeEmpty();
         provider.Metadata.Aliases.Should().BeEmpty();
+    }
+
+    private static void AssertObjectTextFieldsNotIndexed(
+        IReadOnlyDictionary<string, object?> rootProperties,
+        string objectField,
+        params string[] textFields)
+    {
+        var objectMapping = rootProperties[objectField]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        var properties = objectMapping["properties"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        AssertNotIndexedTextFields(properties, textFields);
+    }
+
+    private static void AssertNotIndexedTextFields(
+        IReadOnlyDictionary<string, object?> properties,
+        params string[] fields)
+    {
+        foreach (var field in fields)
+        {
+            var mapping = properties[field]
+                .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+            mapping["type"].Should().Be("text");
+            mapping["index"].Should().Be(false);
+        }
     }
 
     [Fact]
@@ -114,6 +178,36 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         provider.Metadata.IndexName.Should().Be("workflow-execution-current-states");
         provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        var rootProperties = provider.Metadata.Mappings["properties"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+        foreach (var field in new[]
+                 {
+                     "root_actor_id", "definition_actor_id", "run_id", "workflow_id", "scope_id", "schedule_id",
+                     "status", "saga_status", "run_origin", "workflow_name", "input_summary",
+                 })
+        {
+            var mapping = rootProperties[field]
+                .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+            mapping["type"].Should().Be("keyword", $"'{field}' is a current-state filter/search/sort dimension");
+        }
+
+        rootProperties["updated_at_utc_value"]
+            .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject["type"].Should().Be("date");
+        AssertNotIndexedTextFields(
+            rootProperties,
+            "workflow_yaml",
+            "input",
+            "final_output",
+            "final_error",
+            "compilation_error",
+            "dead_letter_error");
+        foreach (var field in new[] { "input_file_ref_entries", "connector_approval_entries", "capability_admission_plan" })
+        {
+            var mapping = rootProperties[field]
+                .Should().BeAssignableTo<IReadOnlyDictionary<string, object?>>().Subject;
+            mapping["enabled"].Should().Be(false);
+        }
+
         provider.Metadata.Settings.Should().BeEmpty();
         provider.Metadata.Aliases.Should().BeEmpty();
     }

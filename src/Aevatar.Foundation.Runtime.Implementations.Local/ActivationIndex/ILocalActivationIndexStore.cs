@@ -1,10 +1,12 @@
-using System.Collections.Concurrent;
+using Aevatar.Foundation.Abstractions.Runtime;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Local.ActivationIndex;
 
 internal interface ILocalActivationIndexStore
 {
-    Task UpsertAsync(string actorId, string agentKind, CancellationToken ct = default);
+    Task UpsertAsync(string actorId, RuntimeActorIdentity identity, CancellationToken ct = default);
+
+    Task<RuntimeActorIdentity?> GetIdentityAsync(string actorId, CancellationToken ct = default);
 
     Task<string?> GetAgentKindAsync(string actorId, CancellationToken ct = default);
 
@@ -13,29 +15,70 @@ internal interface ILocalActivationIndexStore
 
 internal sealed class InMemoryLocalActivationIndexStore : ILocalActivationIndexStore
 {
-    private readonly ConcurrentDictionary<string, string> _index = new(StringComparer.Ordinal);
+    private readonly ILocalActorRuntimeEnvelopeStore _envelopes;
 
-    public Task UpsertAsync(string actorId, string agentKind, CancellationToken ct = default)
+    public InMemoryLocalActivationIndexStore(ILocalActorRuntimeEnvelopeStore envelopes)
+    {
+        _envelopes = envelopes ?? throw new ArgumentNullException(nameof(envelopes));
+    }
+
+    public Task UpsertAsync(
+        string actorId,
+        RuntimeActorIdentity identity,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(agentKind);
+        ArgumentNullException.ThrowIfNull(identity);
+        ArgumentException.ThrowIfNullOrWhiteSpace(identity.Kind);
         ct.ThrowIfCancellationRequested();
-        _index[actorId] = agentKind;
-        return Task.CompletedTask;
+        return UpsertCoreAsync(actorId, identity, ct);
+    }
+
+    public Task<RuntimeActorIdentity?> GetIdentityAsync(
+        string actorId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ct.ThrowIfCancellationRequested();
+        return GetIdentityCoreAsync(actorId, ct);
     }
 
     public Task<string?> GetAgentKindAsync(string actorId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
-        return Task.FromResult(_index.GetValueOrDefault(actorId));
+        return GetAgentKindCoreAsync(actorId, ct);
     }
 
     public Task DeleteAsync(string actorId, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
-        _index.TryRemove(actorId, out _);
-        return Task.CompletedTask;
+        return _envelopes.DeleteAsync(actorId, ct);
     }
+
+    private async Task UpsertCoreAsync(
+        string actorId,
+        RuntimeActorIdentity identity,
+        CancellationToken ct)
+    {
+        while (true)
+        {
+            var current = await _envelopes.GetAsync(actorId, ct);
+            var next = current?.Clone() ?? new RuntimeActorStateEnvelope();
+            next.Identity = identity.Clone();
+            if (await _envelopes.CompareExchangeAsync(actorId, current, next, ct))
+                return;
+        }
+    }
+
+    private async Task<RuntimeActorIdentity?> GetIdentityCoreAsync(
+        string actorId,
+        CancellationToken ct) =>
+        (await _envelopes.GetAsync(actorId, ct))?.Identity?.Clone();
+
+    private async Task<string?> GetAgentKindCoreAsync(
+        string actorId,
+        CancellationToken ct) =>
+        (await _envelopes.GetAsync(actorId, ct))?.Identity?.Kind;
 }

@@ -12,6 +12,7 @@ using Aevatar.GAgents.RoleCatalog;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.GAgents.WorkOrder;
+using Aevatar.GAgents.WorkflowDelivery;
 using Aevatar.Studio.Workspace;
 using Aevatar.Studio.Application.Studio.ProjectionRecovery;
 using Aevatar.Studio.Infrastructure.ProjectionRecovery;
@@ -56,6 +57,14 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                 services,
                 configuration,
                 static document => document.RootActorId);
+            RegisterElasticsearch<ScopeWorkflowCatalogueSourceDocument>(
+                services,
+                configuration,
+                static document => document.Id);
+            RegisterElasticsearch<ScopeWorkflowCatalogueRowDocument>(
+                services,
+                configuration,
+                static document => document.Id);
             RegisterElasticsearch<RoleCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ConnectorCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ChatConversationCurrentStateDocument>(services, configuration);
@@ -67,6 +76,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<GAgentRegistryCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserMemoryCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserConfigCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<LLMModelCatalogPolicyCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioMemberCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioMemberBindingRunCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioTeamCurrentStateDocument>(services, configuration);
@@ -82,12 +92,21 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                 StudioWorkspaceVersionRegressionRepairService>();
             RegisterElasticsearch<ContentArtifactCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<WorkOrderCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<WorkflowDeliveryCurrentStateDocument>(services, configuration);
         }
         else
         {
             RegisterInMemory<WorkflowExecutionBoardDocument>(
                 services,
                 static document => document.RootActorId,
+                static document => document.UpdatedAt);
+            RegisterInMemory<ScopeWorkflowCatalogueSourceDocument>(
+                services,
+                static document => document.Id,
+                static document => document.UpdatedAt);
+            RegisterInMemory<ScopeWorkflowCatalogueRowDocument>(
+                services,
+                static document => document.Id,
                 static document => document.UpdatedAt);
             RegisterInMemory<RoleCatalogCurrentStateDocument>(services);
             RegisterInMemory<ConnectorCatalogCurrentStateDocument>(services);
@@ -100,12 +119,14 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<GAgentRegistryCurrentStateDocument>(services);
             RegisterInMemory<UserMemoryCurrentStateDocument>(services);
             RegisterInMemory<UserConfigCurrentStateDocument>(services);
+            RegisterInMemory<LLMModelCatalogPolicyCurrentStateDocument>(services);
             RegisterInMemory<StudioMemberCurrentStateDocument>(services);
             RegisterInMemory<StudioMemberBindingRunCurrentStateDocument>(services);
             RegisterInMemory<StudioTeamCurrentStateDocument>(services);
             RegisterInMemory<StudioWorkspaceCurrentStateDocument>(services);
             RegisterInMemory<ContentArtifactCurrentStateDocument>(services);
             RegisterInMemory<WorkOrderCurrentStateDocument>(services);
+            RegisterInMemory<WorkflowDeliveryCurrentStateDocument>(services);
         }
 
         return services;
@@ -171,6 +192,8 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         ProjectionDocumentProviderKind providerKind)
     {
         return HasDocumentReaderForProvider<WorkflowExecutionBoardDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ScopeWorkflowCatalogueSourceDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ScopeWorkflowCatalogueRowDocument>(services, providerKind)
                && HasDocumentReaderForProvider<RoleCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ConnectorCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ChatConversationCurrentStateDocument>(services, providerKind)
@@ -179,12 +202,14 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<GAgentRegistryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserMemoryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<LLMModelCatalogPolicyCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberBindingRunCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ContentArtifactCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<WorkOrderCurrentStateDocument>(services, providerKind);
+               && HasDocumentReaderForProvider<WorkOrderCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<WorkflowDeliveryCurrentStateDocument>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDoc>(IServiceCollection services)
@@ -224,6 +249,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
     {
         return TypeRegistry.FromMessages(
             UserConfigGAgentState.Descriptor,
+            LLMModelCatalogPolicyGAgentState.Descriptor,
             GAgentRegistryState.Descriptor,
             ConnectorCatalogState.Descriptor,
             RoleCatalogState.Descriptor,
@@ -235,7 +261,8 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             StudioTeamState.Descriptor,
             StudioWorkspaceState.Descriptor,
             ContentArtifactState.Descriptor,
-            WorkOrderState.Descriptor);
+            WorkOrderState.Descriptor,
+            WorkflowDeliveryState.Descriptor);
     }
 
 }

@@ -1,9 +1,12 @@
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans;
 using Orleans.Runtime;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 
@@ -16,6 +19,8 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private const string SchedulerStateName = "runtime-callback-scheduler-v2";
     private const int SchedulerSlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2;
     private static readonly TimeSpan OneShotReminderRetryPeriod = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan FleetReconcileInitialDelay = TimeSpan.FromSeconds(1);
+    internal static readonly TimeSpan FleetReconcilePeriod = TimeSpan.FromSeconds(10);
 
     private readonly IPersistentState<RuntimeCallbackSchedulerState> _state;
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
@@ -41,6 +46,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         int dueTimeMs,
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
+        ThrowIfGenericMutationTargetsReservedSlot(callbackId);
         ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
         await RecoverPendingReminderUnregistrationsAsync();
         var dueTime = TimeSpan.FromMilliseconds(dueTimeMs);
@@ -63,6 +69,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         int periodMs,
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
+        ThrowIfGenericMutationTargetsReservedSlot(callbackId);
         ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(periodMs, 0);
         await RecoverPendingReminderUnregistrationsAsync();
@@ -86,6 +93,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ThrowIfGenericMutationTargetsReservedSlot(callbackId);
         await RecoverPendingReminderUnregistrationsAsync();
         if (!_state.State.ReminderCallbacks.TryGetValue(callbackId, out var reminderCallback))
             return;
@@ -103,6 +111,15 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 
     public async Task PurgeAsync()
     {
+        if (string.Equals(
+                this.GetPrimaryKeyString(),
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet capability authority callback scheduler is runtime-reserved and cannot be purged.");
+        }
+
         var persistedIds = _state.State.PendingReminderUnregistrations
             .Concat(_state.State.ReminderCallbacks.Keys)
             .Concat(_state.State.CallbackGenerations.Keys)
@@ -126,6 +143,87 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 
         DeactivateOnIdle();
     }
+
+    public async Task<long> EnsureRuntimeFleetReconcileTimerAsync()
+    {
+        EnsureFleetAuthoritySchedulerIdentity();
+        await RecoverPendingReminderUnregistrationsAsync();
+
+        if (_state.State.ReminderCallbacks.TryGetValue(
+                RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+                out var existing) &&
+            IsValidFleetReconcileSchedule(existing))
+        {
+            await EnsurePhysicalFleetReconcileReminderAsync(existing);
+            return existing.Generation;
+        }
+
+        var generation = await ResetExistingCallbackAndGetNextGenerationAsync(
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId);
+        await UpsertReminderCallbackAsync(
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+            generation,
+            periodic: true,
+            checked((int)FleetReconcilePeriod.TotalMilliseconds),
+            CreateFleetReconcileTriggerEnvelope(),
+            FleetReconcileInitialDelay,
+            RuntimeCallbackDeliveryMode.FiredSelfEvent);
+        return generation;
+    }
+
+    private async Task EnsurePhysicalFleetReconcileReminderAsync(
+        RuntimeScheduledCallback existing)
+    {
+        var reminderName = BuildReminderName(
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId);
+        if (await this.GetReminder(reminderName) != null)
+            return;
+
+        var remainingMs = existing.NextDueAtUnixTimeMs -
+                          DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var dueTime = TimeSpan.FromMilliseconds(
+            Math.Clamp(remainingMs, 1L, existing.PeriodMillis));
+        await this.RegisterOrUpdateReminder(
+            reminderName,
+            dueTime,
+            TimeSpan.FromMilliseconds(existing.PeriodMillis));
+    }
+
+    public Task<bool> VerifyRuntimeFleetReconcileDeliveryAsync(EventEnvelope envelope)
+    {
+        EnsureFleetAuthoritySchedulerIdentity();
+        return Task.FromResult(IsExactRuntimeFleetReconcileDelivery(_state.State, envelope));
+    }
+
+    internal static bool IsExactRuntimeFleetReconcileDelivery(
+        RuntimeCallbackSchedulerState state,
+        EventEnvelope envelope)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(envelope);
+        if (envelope.Payload?.Is(RuntimeFleetReconcileRequested.Descriptor) != true ||
+            string.IsNullOrWhiteSpace(envelope.Id) ||
+            envelope.Runtime?.Callback is not { } callback ||
+            !string.Equals(
+                callback.CallbackId,
+                RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+                StringComparison.Ordinal) ||
+            !state.ReminderCallbacks.TryGetValue(
+                RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+                out var scheduled) ||
+            scheduled.Generation != callback.Generation ||
+            scheduled.SlotEpoch != callback.SlotEpoch)
+        {
+            return false;
+        }
+
+        return HasExactEnvelope(scheduled.PendingDeliveryEnvelope, envelope) ||
+               HasExactEnvelope(scheduled.LastDeliveryEnvelope, envelope);
+    }
+
+    private static bool HasExactEnvelope(EventEnvelope? persisted, EventEnvelope delivered) =>
+        persisted != null &&
+        persisted.ToByteString().Equals(delivered.ToByteString());
 
     private bool StagePendingReminderUnregistrations(IEnumerable<string> callbackIds)
     {
@@ -184,6 +282,56 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTimeMs, 0);
         DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(triggerEnvelope);
     }
+
+    private void ThrowIfGenericMutationTargetsReservedSlot(string callbackId)
+    {
+        if (!string.Equals(
+                callbackId,
+                RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (string.Equals(
+                this.GetPrimaryKeyString(),
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet reconcile callback is runtime-reserved and cannot be mutated through the generic callback API.");
+        }
+    }
+
+    private void EnsureFleetAuthoritySchedulerIdentity()
+    {
+        if (!string.Equals(
+                this.GetPrimaryKeyString(),
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The protected fleet reconcile operation is only valid for the fixed fleet authority scheduler.");
+        }
+    }
+
+    private static bool IsValidFleetReconcileSchedule(RuntimeScheduledCallback callback) =>
+        callback.Periodic &&
+        callback.Generation > 0 &&
+        callback.SlotEpoch == SchedulerSlotEpoch &&
+        callback.PeriodMillis == checked((int)FleetReconcilePeriod.TotalMilliseconds) &&
+        callback.DeliveryMode == RuntimeCallbackScheduleDeliveryMode.FiredSelfEvent &&
+        callback.TriggerEnvelope?.Payload?.Is(RuntimeFleetReconcileRequested.Descriptor) == true;
+
+    private static EventEnvelope CreateFleetReconcileTriggerEnvelope() => new()
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            TopologyAudience.Self),
+        Payload = Any.Pack(new RuntimeFleetReconcileRequested()),
+    };
 
     private async Task<long> ResetExistingCallbackAndGetNextGenerationAsync(string callbackId)
     {
@@ -272,14 +420,25 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             return;
         }
 
-        var fireIndex = scheduled.FireIndex + 1;
-        await PublishScheduledEnvelopeAsync(
-            callbackId,
-            scheduled.Generation,
-            scheduled.SlotEpoch,
-            checked((int)fireIndex),
-            scheduled.TriggerEnvelope,
-            FromProtoDeliveryMode(scheduled.DeliveryMode),
+        var deliveryEnvelope = scheduled.PendingDeliveryEnvelope;
+        if (deliveryEnvelope == null)
+        {
+            var fireIndex = checked(scheduled.FireIndex + 1);
+            deliveryEnvelope = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
+                this.GetPrimaryKeyString(),
+                callbackId,
+                scheduled.Generation,
+                fireIndex,
+                scheduled.TriggerEnvelope,
+                FromProtoDeliveryMode(scheduled.DeliveryMode),
+                scheduled.SlotEpoch);
+            scheduled.PendingDeliveryEnvelope = deliveryEnvelope.Clone();
+            _state.State.ReminderCallbacks[callbackId] = scheduled;
+            await _state.WriteStateAsync();
+        }
+
+        await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(
+            deliveryEnvelope.Clone(),
             ct);
 
         if (!scheduled.Periodic)
@@ -292,7 +451,18 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             return;
         }
 
-        scheduled.FireIndex = fireIndex;
+        var deliveredFireIndex = deliveryEnvelope.Runtime?.Callback?.FireIndex ?? 0;
+        if (deliveredFireIndex <= scheduled.FireIndex)
+        {
+            throw new InvalidOperationException(
+                $"Persisted callback delivery fire index {deliveredFireIndex} is not newer than {scheduled.FireIndex}.");
+        }
+
+        scheduled.FireIndex = deliveredFireIndex;
+        scheduled.LastDeliveryEnvelopeId = deliveryEnvelope.Id;
+        scheduled.LastDeliveryFireIndex = deliveredFireIndex;
+        scheduled.LastDeliveryEnvelope = deliveryEnvelope.Clone();
+        scheduled.PendingDeliveryEnvelope = null;
         scheduled.NextDueAtUnixTimeMs = ResolveNextPeriodicDueAtUnixTimeMs(
             scheduled,
             observedAtUtc);
@@ -345,27 +515,6 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             await _state.WriteStateAsync();
             throw;
         }
-    }
-
-    private async Task PublishScheduledEnvelopeAsync(
-        string callbackId,
-        long generation,
-        int slotEpoch,
-        int fireIndex,
-        EventEnvelope triggerEnvelope,
-        RuntimeCallbackDeliveryMode deliveryMode,
-        CancellationToken ct)
-    {
-        var envelope = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
-            this.GetPrimaryKeyString(),
-            callbackId,
-            generation,
-            fireIndex,
-            triggerEnvelope,
-            deliveryMode,
-            slotEpoch);
-
-        await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(envelope, ct);
     }
 
     // Orleans resolves the reminder registry from the ambient grain execution context, which is

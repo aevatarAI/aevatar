@@ -5,6 +5,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -231,6 +232,77 @@ public sealed class ReplyStreamRendererTests
         completed.RawResult.RawErrorSummary.Should().Be("stream rejected");
     }
 
+    [Fact]
+    public async Task LarkCardRenderer_CancelsSlowIoBeforeActorTimeoutAndDispatchesFault()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var runner = new RecordingCardTurnRunner
+        {
+            CreateOperation = WaitForCreateCancellationAsync,
+        };
+        var renderer = new LarkCardReplyStreamRenderer(
+            runner,
+            NullLogger<LarkCardReplyStreamRenderer>.Instance,
+            timeProvider,
+            TimeSpan.FromSeconds(8));
+        var context = new RecordingReplyOperationContext(matchesNyx: false, matchesLark: true);
+        var step = renderer.CreateCreateStep(new LarkCardCreateOperationStepInput(
+            CreateCardChunk(),
+            "corr-card",
+            "streaming_main",
+            Sequence: 1,
+            Generation: 2));
+
+        var execution = renderer.ExecuteAsync(context, step, CancellationToken.None);
+        timeProvider.Advance(TimeSpan.FromSeconds(8));
+        await execution;
+
+        var completed = context.Dispatched.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<LarkCardOperationCompletedEvent>().Subject;
+        completed.State.Should().Be(LarkCardOperationResultState.Faulted);
+        completed.RawResult.ExceptionType.Should().Be(nameof(TimeoutException));
+        completed.Chunk.AccumulatedText.Should().Be("card hello");
+    }
+
+    [Fact]
+    public async Task LarkCardRenderer_CreatesAndExecutesTypedAbortStep()
+    {
+        var runner = new RecordingCardTurnRunner();
+        var renderer = new LarkCardReplyStreamRenderer(
+            runner,
+            NullLogger<LarkCardReplyStreamRenderer>.Instance);
+        var context = new RecordingReplyOperationContext(matchesNyx: false, matchesLark: true);
+        var step = renderer.CreateAbortStep(new LarkCardAbortOperationStepInput(
+            CreateActivity(),
+            "corr-card",
+            "cmd-card",
+            "card-1",
+            "message-1",
+            "partial text",
+            LarkCardAbortReason.GenerationTimeout,
+            Sequence: 9,
+            Generation: 10));
+
+        step.OperationId.Should().Be("corr-card:Abort:9:10");
+        step.OperationName.Should().Be("lark-card-abort");
+        step.LarkCard.Operation.Should().Be(LarkCardOperationPhase.Abort);
+        step.LarkCard.AbortReason.Should().Be(LarkCardAbortReason.GenerationTimeout);
+
+        await renderer.ExecuteAsync(context, step, CancellationToken.None);
+
+        runner.Aborts.Should().ContainSingle(call =>
+            call.CardId == "card-1" &&
+            call.Sequence == 9 &&
+            call.ActivityUserAccessToken == "runtime-user-token" &&
+            call.RuntimeUserAccessToken == "runtime-user-token");
+        var completed = context.Dispatched.Should().ContainSingle().Subject.Event
+            .Should().BeOfType<LarkCardOperationCompletedEvent>().Subject;
+        completed.Operation.Should().Be(LarkCardOperationPhase.Abort);
+        completed.OperationId.Should().Be("corr-card:Abort:9:10");
+        completed.AbortReason.Should().Be(LarkCardAbortReason.GenerationTimeout);
+        completed.Activity.TransportExtras.NyxUserAccessToken.Should().BeEmpty();
+    }
+
     private static LlmReplyStreamChunkEvent CreateTextChunk() =>
         new()
         {
@@ -313,14 +385,19 @@ public sealed class ReplyStreamRendererTests
 
         public List<StreamCall> Streams { get; } = [];
 
+        public List<AbortCall> Aborts { get; } = [];
+
         public ConversationCardStreamResult StreamResult { get; init; } =
             ConversationCardStreamResult.Succeeded();
+
+        public Func<CancellationToken, Task<ConversationCardCreateResult>>? CreateOperation { get; init; }
 
         public Task<ConversationCardCreateResult> RunCardCreateAsync(
             LlmReplyCardStreamChunkEvent chunk,
             string streamingElementId,
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct) =>
+            CreateOperation?.Invoke(ct) ??
             Task.FromResult(ConversationCardCreateResult.Succeeded("card-1", "message-1"));
 
         public Task<ConversationCardStreamResult> RunCardStreamAsync(
@@ -348,6 +425,36 @@ public sealed class ReplyStreamRendererTests
             Finalizes.Add(referenceActivity.Clone());
             return Task.FromResult(ConversationCardFinalizeResult.Succeeded());
         }
+
+        public Task<ConversationCardAbortResult> RunCardAbortAsync(
+            ChatActivity referenceActivity,
+            string cardId,
+            long sequence,
+            ConversationTurnRuntimeContext runtimeContext,
+            CancellationToken ct)
+        {
+            Aborts.Add(new AbortCall(
+                cardId,
+                sequence,
+                referenceActivity.TransportExtras?.NyxUserAccessToken ?? string.Empty,
+                runtimeContext.NyxUserAccessToken ?? string.Empty));
+            return Task.FromResult(ConversationCardAbortResult.Succeeded());
+        }
+    }
+
+    private static async Task<ConversationCardCreateResult> WaitForCreateCancellationAsync(
+        CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<ConversationCardCreateResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = cancellationToken.Register(
+            static state =>
+            {
+                var tuple = ((TaskCompletionSource<ConversationCardCreateResult>, CancellationToken))state!;
+                tuple.Item1.TrySetCanceled(tuple.Item2);
+            },
+            (completion, cancellationToken));
+        return await completion.Task;
     }
 
     private sealed record StreamCall(
@@ -355,6 +462,12 @@ public sealed class ReplyStreamRendererTests
         string CardId,
         string ElementId,
         long Sequence);
+
+    private sealed record AbortCall(
+        string CardId,
+        long Sequence,
+        string ActivityUserAccessToken,
+        string RuntimeUserAccessToken);
 
     private sealed class RecordingReplyOperationContext(
         bool matchesNyx,
@@ -382,7 +495,9 @@ public sealed class ReplyStreamRendererTests
             ChatActivity? activity,
             string? replyToken,
             long replyTokenExpiresAtUnixMs) =>
-            ConversationTurnRuntimeContext.Empty;
+            new(
+                NyxRelayReplyToken: null,
+                NyxUserAccessToken: activity?.TransportExtras?.NyxUserAccessToken);
 
         public void RestoreRuntimeTransportCredentials(
             ChatActivity? activity,

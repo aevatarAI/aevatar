@@ -27,11 +27,15 @@ workflow codex_exec
   -> codex-runner calls https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public
 ```
 
-The persistent agent key is intended to terminate at NyxID. It is only the
-Authorization value on the Aevatar-to-NyxID request and is never serialized into
-the chrono request body by Aevatar. NyxID service configuration must keep
-`forward_access_token=false`, `inject_delegation_token=true`, and
-temporary `delegation_token_scope=proxy:*`.
+The persistent agent key is intended to terminate at NyxID. Aevatar sends it only
+in `X-API-Key` on the Aevatar-to-NyxID request, deliberately leaving
+`Authorization` absent, and never serializes it into the chrono request body.
+This prevents `forward_access_token` policy from forwarding the key to
+chrono-sandbox: there is no bearer on this request to forward. The NyxID service
+must keep `inject_delegation_token=true` and temporary
+`delegation_token_scope=proxy:*`. `forward_access_token` may be either value;
+the shared `chrono-sandbox` UserService uses `true` so the ordinary `/execute`
+endpoint receives the authenticated caller bearer.
 
 The widened delegation scope belongs only to the five-minute runner token; the
 persistent agent key remains restricted to the exact `chrono-sandbox`
@@ -41,13 +45,14 @@ and internal until NyxID can enforce a capability limited to
 `chrono-llm-public`, after which both Aevatar and chrono-sandbox reject
 `proxy:*`.
 
-For the internal P0, that mutable UserService policy is an explicit trust
+For the internal P0, the mutable delegation policy remains an explicit trust
 boundary rather than a guarantee Aevatar can enforce. A UserService owner can
-currently change `forward_access_token` after provisioning. Aevatar validates
-the policy during provision and rotation, but only NyxID can eliminate the
-time-of-check/time-of-use gap. Public rollout therefore remains blocked on
-#2899 adding an immutable policy/version or a request-level fail-closed
-"never forward the caller credential" constraint.
+currently change delegation injection or scope after provisioning. Aevatar
+validates the policy during provision and rotation, but only NyxID can eliminate
+the time-of-check/time-of-use gap. Transport remains safe from
+`forward_access_token` drift because the caller request has no Authorization
+credential to forward. Public rollout therefore remains blocked on #2899 adding
+an immutable policy/version or an equivalent request-level constraint.
 
 ## Credential Authority
 

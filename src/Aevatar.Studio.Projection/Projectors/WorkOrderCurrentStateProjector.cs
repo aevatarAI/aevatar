@@ -87,6 +87,12 @@ public sealed class WorkOrderCurrentStateProjector
             CreatedAtUnixMs = ToUnixTimeMilliseconds(state.CreatedAtUtc),
             TimeoutAtUnixMs = ToUnixTimeMilliseconds(state.TimeoutAtUtc),
             InputPrompt = state.Input?.Chat?.Prompt ?? string.Empty,
+            AvailableActions = new WorkOrderAvailableActionsDocument
+            {
+                CanReassign = state.AvailableActions?.CanReassign ?? false,
+                CanDispatch = state.AvailableActions?.CanDispatch ?? false,
+                CanCancel = state.AvailableActions?.CanCancel ?? false,
+            },
         };
 
     private static void ApplyRun(

@@ -25,7 +25,7 @@ public sealed class ManagedCodexEligibilityOptions
 public sealed class ManagedCodexOptions
 {
     public const string SectionName = "Aevatar:CodexExecution:ManagedSandbox";
-    public const string ChronoSandboxServiceSlug = "chrono-sandbox";
+    public const string ManagedCodexServiceSlug = "chrono-sandbox";
     public const string ChronoLlmServiceSlug = "chrono-llm-public";
     public const string ChronoExecutionPath = "/codex/execute";
     internal const int MutationLeaseSafetySeconds = 10;

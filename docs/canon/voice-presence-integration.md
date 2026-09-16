@@ -45,7 +45,7 @@ JSON projection of the `VoiceControlFrame` protobuf.
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
   DEV["Browser · ESP32-P4<br/>Home Assistant · Frigate"]
-  subgraph EDGE["voice-presence — edge :5050"]
+  subgraph EDGE["voice-presence — edge service"]
     VS["VoiceSession<br/>WebRTC/WHIP · /ws/audio"]
     BRAIN["AevatarVoiceClient<br/>(IRealtimeBrainClient)"]
     ET["EdgeTools API<br/>/edge-tools/openapi.json"]
@@ -149,6 +149,15 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
   `VoiceClientToolCallTimeoutExpired` self-signal before reusing the same
   provider result delivery path. No process-local pending map or device command
   queue is part of this contract.
+- **Tool catalog proof** — Voice uses the shared request-scoped discovery path
+  and persists one `AgentTurnToolCatalogProof` snapshot for the lease/session.
+  The allowlist has a 6-tool optimization target and a hard 32 KiB canonical
+  schema limit; exceeding the count target neither rejects nor truncates an exact
+  catalog. An empty allowlist is restricted empty, never unrestricted. Readiness, provider schema
+  injection and `IVoiceToolInvoker` validate the same names/schema/digest, and
+  any re-materialization mismatch fails before tool execution. Voice does not
+  inherit the whole `workspace.default` ceiling. See
+  [agent-turn-tool-catalog.md](agent-turn-tool-catalog.md).
 - **Lease** — the host attaches a transport lease (`transport_lease_id`,
   `owner_id`, `lease_epoch`, `lease_expires_at`) the actor owns; the volatile
   media relay is bound to that lease. Host/provider connect paths must carry
@@ -214,6 +223,19 @@ authorization-code exchange repeats that exact resource set, and refresh uses
 the resources stored with the feature token. The shared baseline token is not
 overwritten. Owning the NyxID service and authorizing a particular access token
 to proxy it are separate facts.
+
+For a caller without a resolved voice target, `/voice` provisions a dedicated
+`nyxid.voice` `RoleGAgent` through `POST
+/api/scopes/{scopeId}/voice-agents`. The application command service creates the
+actor, registers caller-scope ownership, and dispatches the
+`VoicePresenceEnableRequested` command for `voice_presence_openai`; the HTTP 202
+receipt promises only accepted dispatch. The page then writes the
+`voice-default` rule with both `actor_id` and `voice_module_name`, and polls the
+policy plus voice-capability read models before dialing. It never substitutes a
+`nyxid.chat` conversation actor: that actor owns the NyxID conversation
+controller state and does not implement the voice capability contract. A
+console-managed `voice-default` rule left by the former conversation path is
+replaced after the actor registry proves that mismatch.
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -286,6 +308,7 @@ sequenceDiagram
 - ADR-0033 — Voice Provider Credential via NyxID Ephemeral Broker
 - ADR-013 — NyxID pure passthrough (media red line)
 - `docs/canon/nyxid-connected-service-tools.md`
+- `docs/canon/agent-turn-tool-catalog.md`
 - `docs/operations/2026-06-18-aevatar-mode-voice-presence-setup.md`
 - Milestone 23 "Voice Realtime" — foundational slices #1939–#1945 (merged)
 

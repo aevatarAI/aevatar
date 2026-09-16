@@ -25,6 +25,9 @@ public sealed class StudioMemberBindingRunQueryPortTests
                 Status = StudioMemberBindingRunStatusNames.PlatformBindingPending,
                 StateVersion = 7,
                 PlatformBindingCommandId = "platform-bind-1",
+                PlatformExecutionStage = "readiness_in_flight",
+                PlatformExecutionAttempt = 4,
+                LastReadinessStatus = "serving_set_missing",
                 UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-04-30T08:00:00Z")),
             },
         ]);
@@ -39,6 +42,9 @@ public sealed class StudioMemberBindingRunQueryPortTests
         run.Status.Should().Be(StudioMemberBindingRunStatusNames.PlatformBindingPending);
         run.StateVersion.Should().Be(7);
         run.PlatformBindingCommandId.Should().Be("platform-bind-1");
+        run.PlatformExecutionStage.Should().Be("readiness_in_flight");
+        run.PlatformExecutionAttempt.Should().Be(4);
+        run.LastReadinessStatus.Should().Be("serving_set_missing");
         run.UpdatedAt.Should().Be(DateTimeOffset.Parse("2026-04-30T08:00:00Z"));
         run.Result.Should().BeNull();
     }

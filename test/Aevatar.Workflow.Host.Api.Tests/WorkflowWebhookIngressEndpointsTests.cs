@@ -44,13 +44,13 @@ public sealed class WorkflowWebhookIngressEndpointsTests
         responseBody.Should().Contain("delivery-1");
         replay.Requests.Should().ContainSingle();
         replay.Requests[0].DeliveryId.Should().Be("delivery-1");
-        replay.Requests[0].CommandId.Should().Be("webhook:invoice:lark:delivery-1");
-        replay.Requests[0].CorrelationId.Should().Be("webhook:invoice:lark:delivery-1");
+        replay.Requests[0].CommandId.Should().MatchRegex("^webhook:[0-9a-f]{64}$");
+        replay.Requests[0].CorrelationId.Should().Be(replay.Requests[0].CommandId);
         dispatch.Commands.Should().ContainSingle();
         var command = dispatch.Commands[0];
         command.Source.WorkflowName.Should().Be("invoice-flow");
-        command.Prompt.Should().Be("Webhook says invoice ready");
-        command.CommandIdSeed.Should().Be("webhook:invoice:lark:delivery-1");
+        command.Prompt.Should().Be("""{"message":"Webhook says invoice ready"}""");
+        command.CommandIdSeed.Should().Be(replay.Requests[0].CommandId);
         command.CorrelationIdSeed.Should().Be(command.CommandIdSeed);
         command.ExternalIngress.Should().NotBeNull();
         command.ExternalIngress!.RouteKey.Should().Be("invoice");
@@ -112,6 +112,144 @@ public sealed class WorkflowWebhookIngressEndpointsTests
         responseBody.Should().Contain("WEBHOOK_AUTH_INVALID");
         dispatch.Commands.Should().BeEmpty();
         replay.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RequestBuilder_ShouldRejectDeliveryHeaderThatDiffersFromSignedBody()
+    {
+        var options = CreateOptions();
+        options.Bindings[0].DeliveryIdHeader = "X-Delivery-Id";
+        var http = CreateHttpContext(new RecordingReplayStore());
+        var body = Encoding.UTF8.GetBytes("""{"id":"signed-id","text":"ready"}""");
+        http.Request.Headers["X-Delivery-Id"] = "forged-id";
+        Sign(http, "secret", body);
+
+        var result = new WorkflowWebhookIngressRequestBuilder(Options.Create(options)).Build(
+            http.Request,
+            "invoice",
+            body,
+            DateTimeOffset.UtcNow);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("WEBHOOK_DELIVERY_ID_MISMATCH");
+    }
+
+    [Fact]
+    public void RequestBuilder_ShouldUseUnambiguousStableCommandSeeds()
+    {
+        var firstOptions = CreateOptions();
+        firstOptions.Bindings[0].RouteKey = "a:b";
+        firstOptions.Bindings[0].SourceId = "c";
+        var firstHttp = CreateHttpContext(new RecordingReplayStore());
+        var body = Encoding.UTF8.GetBytes("""{"id":"d","text":"ready"}""");
+        Sign(firstHttp, "secret", body);
+
+        var firstBuilder = new WorkflowWebhookIngressRequestBuilder(Options.Create(firstOptions));
+        var first = firstBuilder.Build(firstHttp.Request, "a:b", body, DateTimeOffset.UtcNow);
+        var repeated = firstBuilder.Build(firstHttp.Request, "a:b", body, DateTimeOffset.UtcNow);
+
+        var secondOptions = CreateOptions();
+        secondOptions.Bindings[0].RouteKey = "a";
+        secondOptions.Bindings[0].SourceId = "b:c";
+        var secondHttp = CreateHttpContext(new RecordingReplayStore());
+        Sign(secondHttp, "secret", body);
+        var second = new WorkflowWebhookIngressRequestBuilder(Options.Create(secondOptions)).Build(
+            secondHttp.Request,
+            "a",
+            body,
+            DateTimeOffset.UtcNow);
+
+        first.Succeeded.Should().BeTrue();
+        repeated.Request!.CommandIdSeed.Should().Be(first.Request!.CommandIdSeed);
+        second.Succeeded.Should().BeTrue();
+        second.Request!.CommandIdSeed.Should().NotBe(first.Request.CommandIdSeed);
+        first.Request.CommandIdSeed.Should().MatchRegex("^webhook:[0-9a-f]{64}$");
+    }
+
+    [Fact]
+    public async Task RequestBuilder_ShouldJsonEscapeTemplateValues()
+    {
+        var options = CreateOptions();
+        var http = CreateHttpContext(new RecordingReplayStore());
+        var body = Encoding.UTF8.GetBytes(
+            """{"id":"delivery-1","text":"quote \" slash \\ newline\nnext"}""");
+        Sign(http, "secret", body);
+
+        var result = new WorkflowWebhookIngressRequestBuilder(Options.Create(options)).Build(
+            http.Request,
+            "invoice",
+            body,
+            DateTimeOffset.UtcNow);
+
+        result.Succeeded.Should().BeTrue();
+        using var prompt = JsonDocument.Parse(result.Request!.Prompt);
+        prompt.RootElement.GetProperty("message").GetString()
+            .Should().Be("Webhook says quote \" slash \\ newline\nnext");
+    }
+
+    [Fact]
+    public async Task RequestBuilder_ShouldRejectMissingTemplatePath()
+    {
+        var options = CreateOptions();
+        var http = CreateHttpContext(new RecordingReplayStore());
+        var body = Encoding.UTF8.GetBytes("""{"id":"delivery-1"}""");
+        Sign(http, "secret", body);
+
+        var result = new WorkflowWebhookIngressRequestBuilder(Options.Create(options)).Build(
+            http.Request,
+            "invoice",
+            body,
+            DateTimeOffset.UtcNow);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("WEBHOOK_PROMPT_PATH_MISSING");
+    }
+
+    [Fact]
+    public async Task RequestBuilder_ShouldRenderRunDateInConfiguredTimeZone()
+    {
+        var options = CreateOptions();
+        options.Bindings[0].PromptTemplate = """{"date":"{{@run_date}}"}""";
+        options.Bindings[0].TimeZoneId = "Asia/Singapore";
+        var http = CreateHttpContext(new RecordingReplayStore());
+        var body = Encoding.UTF8.GetBytes("""{"id":"delivery-1"}""");
+        var receivedAt = DateTimeOffset.Parse("2026-08-13T16:30:00Z");
+        Sign(http, "secret", body, receivedAt.ToUnixTimeSeconds());
+
+        var singapore = new WorkflowWebhookIngressRequestBuilder(Options.Create(options)).Build(
+            http.Request,
+            "invoice",
+            body,
+            receivedAt);
+        singapore.Request!.Prompt.Should().Be("""{"date":"2026-08-14"}""");
+
+        options.Bindings[0].TimeZoneId = null;
+        var utc = new WorkflowWebhookIngressRequestBuilder(Options.Create(options)).Build(
+            http.Request,
+            "invoice",
+            body,
+            receivedAt);
+        utc.Request!.Prompt.Should().Be("""{"date":"2026-08-13"}""");
+    }
+
+    [Fact]
+    public async Task RequestBuilder_ShouldRejectTimestampOutsideUnixRange()
+    {
+        var options = CreateOptions();
+        var http = CreateHttpContext(new RecordingReplayStore());
+        var body = Encoding.UTF8.GetBytes("""{"id":"delivery-1","text":"ready"}""");
+        http.Request.Headers["X-Aevatar-Timestamp"] = long.MaxValue.ToString();
+        http.Request.Headers["X-Aevatar-Signature"] = "sha256=invalid";
+
+        var result = new WorkflowWebhookIngressRequestBuilder(Options.Create(options)).Build(
+            http.Request,
+            "invoice",
+            body,
+            DateTimeOffset.UtcNow);
+
+        result.Succeeded.Should().BeFalse();
+        result.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        result.ErrorCode.Should().Be("WEBHOOK_AUTH_INVALID");
     }
 
     [Fact]
@@ -278,7 +416,7 @@ public sealed class WorkflowWebhookIngressEndpointsTests
             WorkflowName = "invoice-flow",
             ScopeId = "scope-1",
             DeliveryIdJsonPath = "id",
-            PromptTemplate = "Webhook says {{text}}",
+            PromptTemplate = """{"message":"Webhook says {{text}}"}""",
             HmacSecret = "secret",
         });
         return options;
@@ -298,9 +436,13 @@ public sealed class WorkflowWebhookIngressEndpointsTests
         return http;
     }
 
-    private static void Sign(HttpContext http, string secret, byte[] body)
+    private static void Sign(
+        HttpContext http,
+        string secret,
+        byte[] body,
+        long? timestampUnixSeconds = null)
     {
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var timestamp = (timestampUnixSeconds ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()).ToString();
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
         var signaturePayload = Encoding.UTF8.GetBytes(timestamp + ".").Concat(body).ToArray();
         http.Request.Headers["X-Aevatar-Timestamp"] = timestamp;

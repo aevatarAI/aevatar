@@ -31,4 +31,6 @@ public sealed record NyxIdRequestCapability
     public string BodyMode { get; init; } = string.Empty;
 
     public string ResponseMode { get; init; } = string.Empty;
+
+    public string Risk { get; init; } = string.Empty;
 }

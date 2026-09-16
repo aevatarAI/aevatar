@@ -10,6 +10,7 @@ using Aevatar.Foundation.Core.Configurations;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Core.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Local.ActivationIndex;
@@ -20,6 +21,7 @@ using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.Foundation.Core.Runtime;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -52,10 +54,16 @@ public static class ServiceCollectionExtensions
             (IStreamLifecycleManager)sp.GetRequiredService<IStreamProvider>());
         services.TryAddSingleton<IStreamForwardingRegistry>(sp =>
             sp.GetRequiredService<InMemoryStreamForwardingRegistry>());
+        services.TryAddSingleton<IStreamForwardingBindingAuthority>(sp =>
+            sp.GetRequiredService<InMemoryStreamForwardingRegistry>());
         services.TryAddSingleton<IActorEventSubscriptionProvider>(sp =>
             new StreamProviderActorEventSubscriptionProvider(sp.GetRequiredService<IStreamProvider>()));
         services.TryAddSingleton<InMemoryActorRuntimeCallbackScheduler>();
         services.TryAddSingleton<IActorRuntimeCallbackScheduler>(sp =>
+            sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>());
+        services.TryAddSingleton<IRuntimeFleetReconcileScheduleOwner>(sp =>
+            sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>());
+        services.TryAddSingleton<IRuntimeFleetReconcileDeliveryVerifier>(sp =>
             sp.GetRequiredService<InMemoryActorRuntimeCallbackScheduler>());
 
         // Actor Runtime
@@ -75,13 +83,37 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton(eventSourcingOptions));
 
         services.TryAddSingleton(typeof(IStateStore<>), typeof(InMemoryStateStore<>));
-        services.TryAddSingleton(typeof(IEventSourcingSnapshotStore<>), typeof(InMemoryEventSourcingSnapshotStore<>));
+        services.TryAddSingleton<ILocalActorRuntimeEnvelopeStore,
+            InMemoryLocalActorRuntimeEnvelopeStore>();
+        services.TryAddSingleton(
+            typeof(IEventSourcingSnapshotStore<>),
+            typeof(LocalActorRuntimeEnvelopeSnapshotStore<>));
         services.TryAddSingleton<ICommittedStatePublicationStateStore, InMemoryCommittedStatePublicationStateStore>();
         services.TryAddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         services.TryAddSingleton<IEventStore, InMemoryEventStore>();
         services.TryAddSingleton<IEventStoreMaintenance>(sp =>
             (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>());
         services.TryAddSingleton<IActorDeactivationHookDispatcher, ActorDeactivationHookDispatcher>();
+        services.TryAddSingleton<AsyncLocalRuntimeActorStateSchemaContextAccessor>();
+        services.TryAddSingleton<IRuntimeActorStateSchemaContextReader>(sp =>
+            sp.GetRequiredService<AsyncLocalRuntimeActorStateSchemaContextAccessor>());
+        services.TryAddSingleton<IRuntimeActorStateSchemaContextAccessor>(sp =>
+            sp.GetRequiredService<AsyncLocalRuntimeActorStateSchemaContextAccessor>());
+        services.TryAddSingleton<IRuntimeActorStateSchemaContextBinder>(sp =>
+            sp.GetRequiredService<AsyncLocalRuntimeActorStateSchemaContextAccessor>());
+        services.TryAddSingleton<AsyncLocalRuntimeFleetReconcileDeliveryAttestationAccessor>();
+        services.TryAddSingleton<IRuntimeFleetReconcileDeliveryAttestationReader>(sp =>
+            sp.GetRequiredService<AsyncLocalRuntimeFleetReconcileDeliveryAttestationAccessor>());
+        services.TryAddSingleton<IRuntimeFleetReconcileDeliveryAttestationBinder>(sp =>
+            sp.GetRequiredService<AsyncLocalRuntimeFleetReconcileDeliveryAttestationAccessor>());
+        services.TryAddSingleton<IRuntimeFleetCapabilityAdmissionReader,
+            DenyAllRuntimeFleetCapabilityAdmissionReader>();
+        services.TryAddSingleton<IRuntimeFleetCapabilityQuiescenceReader,
+            DenyAllRuntimeFleetCapabilityQuiescenceReader>();
+        services.TryAddSingleton<IRuntimeLocalMembershipIdentityReader,
+            UnavailableRuntimeLocalMembershipIdentityReader>();
+        services.TryAddSingleton<IRuntimeFleetMembershipSnapshotSource,
+            UnavailableRuntimeFleetMembershipSnapshotSource>();
         services.TryAddSingleton<ILocalActivationIndexStore, InMemoryLocalActivationIndexStore>();
 
         // Context
@@ -95,7 +127,8 @@ public static class ServiceCollectionExtensions
         // Kind-token identity registry (issue #498). Mirrors the Orleans
         // runtime registration so in-memory + Orleans paths share the same
         // identity model.
-        services.AddAevatarAgentKindRegistry();
+        services.AddAevatarAgentKindRegistry(builder =>
+            builder.ScanAssemblies(typeof(RuntimeFleetCapabilityAuthorityGAgent).Assembly));
 
         return services;
     }
@@ -115,7 +148,11 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IEventStore, FileEventStore>());
         services.Replace(ServiceDescriptor.Singleton<IEventStoreMaintenance>(sp =>
             (IEventStoreMaintenance)sp.GetRequiredService<IEventStore>()));
-        services.Replace(ServiceDescriptor.Singleton(typeof(IEventSourcingSnapshotStore<>), typeof(FileEventSourcingSnapshotStore<>)));
+        services.Replace(ServiceDescriptor.Singleton<ILocalActorRuntimeEnvelopeStore,
+            FileLocalActorRuntimeEnvelopeStore>());
+        services.Replace(ServiceDescriptor.Singleton(
+            typeof(IEventSourcingSnapshotStore<>),
+            typeof(LocalActorRuntimeEnvelopeSnapshotStore<>)));
         services.Replace(ServiceDescriptor.Singleton<ICommittedStatePublicationStateStore, FileCommittedStatePublicationStateStore>());
         return services;
     }

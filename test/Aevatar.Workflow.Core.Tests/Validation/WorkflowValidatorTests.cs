@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Interactions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
 using FluentAssertions;
@@ -7,6 +8,75 @@ namespace Aevatar.Workflow.Core.Tests.Validation;
 
 public sealed class WorkflowValidatorTests
 {
+    [Fact]
+    public void Validate_WhenLegacyWorkflowLlmScopeIsMissing_ShouldPreserveV0Compatibility()
+    {
+        var errors = WorkflowValidator.Validate(WorkflowWith(Step("reply", "llm_call", new())));
+
+        errors.Should().NotContain(error => error.Contains("allowed_tools", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_WhenCurrentWorkflowLlmScopeIsMissing_ShouldReject()
+    {
+        var errors = WorkflowValidator.Validate(
+            WorkflowWith(Step("reply", "llm_call", new())),
+            CurrentToolCatalogValidationOptions(),
+            availableWorkflowNames: null);
+
+        errors.Should().ContainSingle(error =>
+            error.Contains("must declare an explicit allowed_tools scope", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_WhenCurrentWorkflowDeclaresEmptyAllowedTools_ShouldAcceptRestrictedEmptyCatalog()
+    {
+        var step = Step("reply", "llm_call", new());
+        step = new StepDefinition
+        {
+            Id = step.Id,
+            Type = step.Type,
+            Parameters = step.Parameters,
+            AgentToolScope = new WorkflowAgentToolScopeDefinition
+            {
+                RestrictAllowedToolNames = true,
+                AllowedToolNames = [],
+            },
+        };
+
+        var errors = WorkflowValidator.Validate(
+            WorkflowWith(step),
+            CurrentToolCatalogValidationOptions(),
+            availableWorkflowNames: null);
+
+        errors.Should().NotContain(error => error.Contains("allowed_tools", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_WhenCurrentWorkflowAllowedToolsExceedOptimizationTarget_ShouldAccept()
+    {
+        var allowedTools = Enumerable.Range(0, WorkflowToolCatalogPolicies.MaximumWorkflowToolCount + 1)
+            .Select(index => $"tool_{index}")
+            .ToList();
+        var step = new StepDefinition
+        {
+            Id = "reply",
+            Type = "llm_call",
+            AgentToolScope = new WorkflowAgentToolScopeDefinition
+            {
+                RestrictAllowedToolNames = true,
+                AllowedToolNames = allowedTools,
+            },
+        };
+
+        var errors = WorkflowValidator.Validate(
+            WorkflowWith(step),
+            CurrentToolCatalogValidationOptions(),
+            availableWorkflowNames: null);
+
+        errors.Should().NotContain(error => error.Contains("allowed_tools", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Validate_WhenLeaseAcquireUsesDefaults_ShouldAccept()
     {
@@ -243,6 +313,12 @@ public sealed class WorkflowValidatorTests
 
     private static WorkflowDefinition WorkflowWith(StepDefinition step) =>
         WorkflowWith([step]);
+
+    private static WorkflowValidator.WorkflowValidationOptions CurrentToolCatalogValidationOptions() =>
+        new()
+        {
+            RequireExplicitLlmAgentToolScopes = true,
+        };
 
     private static WorkflowDefinition WorkflowWith(params StepDefinition[] steps) =>
         new()

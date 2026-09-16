@@ -53,7 +53,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             var stepId = request.StepId?.Trim() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(stepId))
             {
-                await PublishFailedCompletionAsync(stepId, runId, "reflect step requires non-empty step_id", ctx, ct);
+                await PublishFailedCompletionAsync(stepId, runId, request.ExecutionId, "reflect step requires non-empty step_id", ctx, ct);
                 return;
             }
 
@@ -64,7 +64,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             }
             catch (Exception ex)
             {
-                await PublishFailedCompletionAsync(stepId, runId, $"reflect target resolution failed: {ex.Message}", ctx, ct);
+                await PublishFailedCompletionAsync(stepId, runId, request.ExecutionId, $"reflect target resolution failed: {ex.Message}", ctx, ct);
                 return;
             }
 
@@ -79,6 +79,8 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
                 MaxRounds = Math.Clamp(maxRounds, 1, 10),
                 Round = 0,
                 Phase = ReflectPhaseState.Critique,
+                ExecutionId = request.ExecutionId,
+                InputValueId = request.InputValueId,
             };
             CopyParameters(request.Parameters, reflectState.ChatMetadataParameters);
 
@@ -89,7 +91,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             }
             catch (Exception ex)
             {
-                await PublishFailedCompletionAsync(stepId, runId, $"reflect dispatch failed: {ex.Message}", ctx, ct);
+                await PublishFailedCompletionAsync(stepId, runId, request.ExecutionId, $"reflect dispatch failed: {ex.Message}", ctx, ct);
             }
 
             return;
@@ -114,6 +116,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             await PublishFailedCompletionAsync(
                 pendingState.StepId,
                 pendingState.RunId,
+                pendingState.ExecutionId,
                 string.IsNullOrWhiteSpace(llmCompleted.Error) ? "reflect LLM call failed." : llmCompleted.Error,
                 ctx,
                 ct);
@@ -137,8 +140,10 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = pendingState.StepId,
                     RunId = pendingState.RunId,
+                    ExecutionId = pendingState.ExecutionId,
                     Success = true,
                     Output = pendingState.CurrentDraft,
+                    OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 };
                 completed.Annotations["reflect.rounds"] = round.ToString();
                 completed.Annotations["reflect.passed"] = passed.ToString();
@@ -161,7 +166,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             }
             catch (Exception ex)
             {
-                await PublishFailedCompletionAsync(pendingState.StepId, pendingState.RunId, $"reflect improve dispatch failed: {ex.Message}", ctx, ct);
+                await PublishFailedCompletionAsync(pendingState.StepId, pendingState.RunId, pendingState.ExecutionId, $"reflect improve dispatch failed: {ex.Message}", ctx, ct);
             }
 
             return;
@@ -179,7 +184,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
         }
         catch (Exception ex)
         {
-            await PublishFailedCompletionAsync(pendingState.StepId, pendingState.RunId, $"reflect critique dispatch failed: {ex.Message}", ctx, ct);
+            await PublishFailedCompletionAsync(pendingState.StepId, pendingState.RunId, pendingState.ExecutionId, $"reflect critique dispatch failed: {ex.Message}", ctx, ct);
         }
     }
 
@@ -212,7 +217,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
             ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
         };
-        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyDurableAgentKeyOrSenderNyxIdAccessToken(
+            ctx,
+            intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
@@ -251,7 +258,9 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
             ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
         };
-        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyDurableAgentKeyOrSenderNyxIdAccessToken(
+            ctx,
+            intent);
         CopyParametersToIntent(state.ChatMetadataParameters, intent);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
@@ -274,6 +283,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
     private static Task PublishFailedCompletionAsync(
         string stepId,
         string runId,
+        string executionId,
         string error,
         IEventContext ctx,
         CancellationToken ct) =>
@@ -282,9 +292,11 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = stepId,
                 RunId = runId,
+                ExecutionId = executionId,
                 Success = false,
                 Error = error,
                 WorkerId = ctx.AgentId,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             },
             TopologyAudience.Self,
             ct);

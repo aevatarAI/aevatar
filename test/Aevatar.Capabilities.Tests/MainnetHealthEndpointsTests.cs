@@ -41,7 +41,7 @@ public sealed class MainnetHealthEndpointsTests
         using var documentElasticsearch = new EnvironmentVariableScope(
             "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled", "false");
         using var graphProvider = new EnvironmentVariableScope(
-            "AEVATAR_Projection__Graph__Providers__InMemory__Enabled", "true");
+            "AEVATAR_Projection__Graph__Providers__InMemory__Enabled", "false");
         using var graphNeo4j = new EnvironmentVariableScope(
             "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled", "false");
         using var projectionEnvironment = new EnvironmentVariableScope(
@@ -111,6 +111,15 @@ public sealed class MainnetHealthEndpointsTests
             .Single(static component => component.GetProperty("name").GetString() == "studio");
         studioReadinessComponent.GetProperty("status").GetString().Should().Be("healthy");
         studioReadinessComponent.GetProperty("message").GetString().Should().Be("Required routes are mapped.");
+        var workflowGraphReadinessComponent = readinessPayload.RootElement
+            .GetProperty("components")
+            .EnumerateArray()
+            .Single(static component => component.GetProperty("name").GetString() == "workflow-graph-readmodel");
+        workflowGraphReadinessComponent.GetProperty("status").GetString().Should().Be("healthy");
+        workflowGraphReadinessComponent.GetProperty("message").GetString()
+            .Should().Be("Workflow graph read model is disabled by configuration.");
+        workflowGraphReadinessComponent.GetProperty("details").GetProperty("enabled").GetString()
+            .Should().Be(bool.FalseString);
 
         var apiHealthResponse = await client.GetAsync("/api/health");
         var apiHealthBody = await apiHealthResponse.Content.ReadAsStringAsync();
@@ -167,7 +176,7 @@ public sealed class MainnetHealthEndpointsTests
             ["GAgentService:Demo:Enabled"] = "false",
             ["Projection:Document:Providers:InMemory:Enabled"] = "true",
             ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
-            ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
+            ["Projection:Graph:Providers:InMemory:Enabled"] = "false",
             ["Projection:Graph:Providers:Neo4j:Enabled"] = "false",
             ["Audit:ActorIdentityHasher:ActiveKeyId"] = "key-1",
             ["Audit:ActorIdentityHasher:Keys:0:KeyId"] = "key-1",

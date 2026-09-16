@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
@@ -6,7 +7,9 @@ using Aevatar.Configuration;
 using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -97,6 +100,15 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         toolNames.Should().Contain("document_extract");
         toolNames.Should().Contain("spreadsheet_extract");
+        var agentToolNames = new List<string>();
+        foreach (var agentToolSource in provider.GetServices<IAgentToolSource>())
+        {
+            var agentTools = await agentToolSource.DiscoverToolsAsync();
+            agentToolNames.AddRange(agentTools.Select(x => x.Name));
+        }
+
+        agentToolNames.Should().Contain("document_extract");
+        agentToolNames.Should().Contain("spreadsheet_extract");
         provider.GetRequiredService<IOptions<WorkflowSpreadsheetExtractOptions>>()
             .Value.MaxRowsPerSheet.Should().Be(50);
         services.Should().Contain(x =>
@@ -104,6 +116,7 @@ public sealed class WorkflowInfrastructureCoverageTests
             x.ImplementationType == typeof(WorkflowRunActorPort));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowDefinitionProvisioningPort));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowRunProvisioningPort));
+        services.Should().Contain(x => x.ServiceType == typeof(IWorkflowRunLineageRecordingPort));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowDefinitionParser));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowDefinitionResolver) &&
@@ -234,7 +247,13 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.AddLogging();
         services.AddSingleton<IActorRuntime, RecordingActorRuntime>();
         services.AddSingleton<IActorDispatchPort, RecordingActorDispatchPort>();
+        var forwardingRegistry = new InMemoryStreamForwardingRegistry();
+        services.AddSingleton<IStreamForwardingRegistry>(forwardingRegistry);
+        services.AddSingleton<IStreamForwardingBindingAuthority>(forwardingRegistry);
         services.AddSingleton<Aevatar.Foundation.Abstractions.IStreamProvider, InMemoryStreamProvider>();
+        services.AddSingleton<IStreamForwardingRegistry, InMemoryStreamForwardingRegistry>();
+        services.AddSingleton<IStreamForwardingBindingAuthority>(sp =>
+            (InMemoryStreamForwardingRegistry)sp.GetRequiredService<IStreamForwardingRegistry>());
         services.AddSingleton<IScriptRuntimeCommandPort, RecordingScriptRuntimeCommandPort>();
         services.AddSingleton<IWorkflowRunProvisioningPort, RecordingWorkflowRunProvisioningPort>();
 
@@ -993,12 +1012,27 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         options.DuplicatePolicy.Should().Be(WorkflowDefinitionDuplicatePolicy.Override);
         options.WorkflowDirectories.Should().Contain(AevatarPaths.RepoRootWorkflows);
-        options.WorkflowDirectories.Should().NotContain(
-            Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
+        options.WorkflowDirectories.Should().NotContain(AevatarPaths.RepoRootWorkflowTemplates);
+        options.WorkflowDirectories.Should().NotContain(Path.Combine(AevatarPaths.RepoRoot, "workflows", "turing-completeness"));
     }
 
     [Fact]
-    public void AddWorkflowCapabilityServices_ShouldNotLoadRemovedRepositoryExamplesIntoGenericHost()
+    public void AddWorkflowCapabilityServices_ShouldKeepStartupSourceCredentialSkippingDisabledByDefault()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddWorkflowCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<WorkflowDefinitionFileSourceOptions>>().Value;
+
+        options.SkipSourceCredentialRequiredDefinitionsOnStartup.Should().BeFalse();
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityServices_ShouldLoadRepositoryWorkflowsFromWorkflowSource()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -1017,16 +1051,20 @@ public sealed class WorkflowInfrastructureCoverageTests
             NullLogger.Instance,
             options.DuplicatePolicy);
 
-        registry.GetYaml("direct").Should().NotBeNull();
+        registry.GetYaml("mission_wall_15_node_probe").Should().NotBeNull();
+        registry.GetYaml("simple_qa").Should().NotBeNull();
+        registry.GetYaml("codex_execute").Should().NotBeNull();
         registry.GetYaml("demo_template").Should().BeNull();
-        registry.GetYaml("host-callback-budget-branch").Should().BeNull();
     }
 
     [Fact]
     public async Task RegistryWorkflowDefinitionResolver_ShouldTrimLookup_AndReturnNullForBlank()
     {
         var registry = new WorkflowDefinitionCatalog();
-        registry.Register("direct", "name: direct");
+        registry.Register(
+            "direct",
+            "name: direct",
+            Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode.Interactive);
         var resolver = new RegistryWorkflowDefinitionResolver(registry);
 
         (await resolver.GetWorkflowYamlAsync(" direct ", CancellationToken.None)).Should().Contain("name: direct");

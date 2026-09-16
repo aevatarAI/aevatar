@@ -44,5 +44,7 @@ The resolver is exposed through `IMemberPublishedServiceResolver`, so a later ac
 - Binding execution still publishes through the existing service command/runtime path after the member actor has admitted the request and resolved its `publishedServiceId`.
 - Runs and run detail still read workflow run read models; they do not query actor state or replay events.
 - Responses use `publishedServiceId` instead of overloading `serviceId` in member-centric DTOs.
+- Current-scope workflow discovery and launch resolve Studio workflow descriptors through the member read model's explicit `workflowId -> publishedServiceId` mapping. They never derive a service identity from `workflowId`, `memberId`, or route shape.
+- A `workflowId` that resolves to multiple published service identities, or conflicts with an existing conventional `default/{workflowId}` service, is reported as stale and omitted from runnable discovery results. Callers must not guess which identity to start.
 - The member-first public contract does not accept an `appId` override or expose the fixed service namespace.
 - The legacy scope-service member binding routes under `Aevatar.GAgentService.Hosting` are intentionally removed; member binding uses the StudioMember async protocol so the member actor remains the single authority for `LastBinding`, active run status, and `BindReady`.

@@ -2,8 +2,10 @@ using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
 
@@ -208,6 +210,36 @@ public sealed class AgentToolExecutionContextMapperTests
     }
 
     [Fact]
+    public void ToPayloadAndFromPayload_ShouldPreserveDurableNyxIdCredentialHandle()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            DurableNyxIdCredential = new DurableCallerCredentialRef
+            {
+                Ref = "sec-channel-agent-key",
+                Purpose = CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                OwnerScopeKey = "scope-channel",
+                SubjectId = "key-channel",
+                SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+                SecretReference = new SecretReference
+                {
+                    Ref = "sec-channel-agent-key",
+                    Purpose = CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+                    OwnerScopeKey = "scope-channel",
+                    Fingerprint = "fingerprint-channel",
+                    Version = 1,
+                    CreatedAtUnixMs = 1_700_000_000_000,
+                },
+            },
+        };
+
+        var payload = AgentToolExecutionContextMapper.ToPayload(context);
+        var restored = AgentToolExecutionContextMapper.FromPayload(payload);
+
+        restored.DurableNyxIdCredential.Should().Be(context.DurableNyxIdCredential);
+    }
+
+    [Fact]
     public void ToPayloadAndFromPayload_ShouldPreserveRequestIssuedTime()
     {
         const long issuedAtUnixMs = 1_785_484_800_000;
@@ -226,6 +258,103 @@ public sealed class AgentToolExecutionContextMapperTests
 
         payload.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
         restored.Request.IssuedAtUnixMs.Should().Be(issuedAtUnixMs);
+    }
+
+    [Fact]
+    public void OperationAdmission_ShouldRoundTripThroughExecutionAndRecoveryProtobuf()
+    {
+        var admission = ExactOperationAdmission();
+        var context = AgentToolExecutionContext.Empty with
+        {
+            OperationAdmission = admission,
+        };
+
+        var executionPayload = AgentToolExecutionContextPayload.Parser.ParseFrom(
+            context.ToPayload().ToByteArray());
+        var recoveryPayload = AgentToolRecoveryContextPayload.Parser.ParseFrom(
+            context.ToRecoveryPayload().ToByteArray());
+
+        executionPayload.OperationAdmission.IdentityCase.Should().Be(
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PublishedEndpoint);
+        recoveryPayload.OperationAdmission.IdentityCase.Should().Be(
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PublishedEndpoint);
+        AgentToolExecutionContextMapper.FromPayload(executionPayload).OperationAdmission
+            .Should().BeEquivalentTo(admission);
+        AgentToolExecutionContextMapper.FromRecoveryPayload(recoveryPayload).OperationAdmission
+            .Should().BeEquivalentTo(admission);
+    }
+
+    [Fact]
+    public void PlatformBuiltInAdmission_ShouldRoundTripThroughExecutionAndRecoveryProtobuf()
+    {
+        var admission = ExactOperationAdmission() with
+        {
+            Identity = new AgentToolOperationIdentity.PlatformBuiltIn("code_execute"),
+            AuthorizationBasis = AgentToolOperationAuthorizationBasis.PlatformContract,
+        };
+        var context = AgentToolExecutionContext.Empty with
+        {
+            OperationAdmission = admission,
+        };
+
+        var executionPayload = AgentToolExecutionContextPayload.Parser.ParseFrom(
+            context.ToPayload().ToByteArray());
+        var recoveryPayload = AgentToolRecoveryContextPayload.Parser.ParseFrom(
+            context.ToRecoveryPayload().ToByteArray());
+
+        executionPayload.OperationAdmission.IdentityCase.Should().Be(
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PlatformBuiltIn);
+        recoveryPayload.OperationAdmission.IdentityCase.Should().Be(
+            AgentToolOperationAdmissionPayload.IdentityOneofCase.PlatformBuiltIn);
+        AgentToolExecutionContextMapper.FromPayload(executionPayload).OperationAdmission
+            .Should().BeEquivalentTo(admission);
+        AgentToolExecutionContextMapper.FromRecoveryPayload(recoveryPayload).OperationAdmission
+            .Should().BeEquivalentTo(admission);
+    }
+
+    [Fact]
+    public void OperationAdmission_WhenIdentityOneofIsMissing_ShouldFailClosed()
+    {
+        var malformed = new AgentToolOperationAdmissionPayload
+        {
+            ServiceInstanceId = "usvc-alpha",
+            ServiceSlug = "api-shop",
+            HttpMethod = "GET",
+            PathTemplate = "/orders/{orderId}",
+            ContractDigest = "contract-digest-alpha",
+        };
+        var executionPayload = new AgentToolExecutionContextPayload
+        {
+            OperationAdmission = malformed.Clone(),
+        };
+        var recoveryPayload = new AgentToolRecoveryContextPayload
+        {
+            OperationAdmission = malformed.Clone(),
+        };
+
+        AgentToolExecutionContextMapper.FromPayload(executionPayload).OperationAdmission
+            .Should().BeNull();
+        AgentToolExecutionContextMapper.FromRecoveryPayload(recoveryPayload).OperationAdmission
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void OperationAdmission_WhenSelectedIdentityIsEmpty_ShouldFailClosed()
+    {
+        var malformed = new AgentToolOperationAdmissionPayload
+        {
+            ServiceInstanceId = "usvc-alpha",
+            ServiceSlug = "api-shop",
+            PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload(),
+        };
+
+        var restored = AgentToolExecutionContextMapper.FromRecoveryPayload(
+            new AgentToolRecoveryContextPayload
+            {
+                OperationAdmission = malformed,
+            });
+
+        restored.OperationAdmission.Should().BeNull();
     }
 
     [Fact]
@@ -335,7 +464,7 @@ public sealed class AgentToolExecutionContextMapperTests
                 " access-1 ",
                 " org-1 ",
                 " sender-access-1 ",
-                AgentToolNyxIdCredentialKind.ProxyDelegation),
+                AgentToolNyxIdCredentialKind.AgentKey),
             new AgentToolCallerContext(" scope-1 ", " owner-1 ", " response-1 "),
             new AgentToolChannelContext(
                 " telegram ",
@@ -364,7 +493,9 @@ public sealed class AgentToolExecutionContextMapperTests
                 PrimarySkillName: " goal-skill ",
                 MaxOrnnSearchAttempts: 2,
                 CommandArguments: " ship ",
-                DiscoveryRequested: true),
+                DiscoveryRequested: true,
+                IsolatePriorConversationHistory: true,
+                MountWorkflowsRequested: true),
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["external-trace"] = "trace-1",
@@ -384,7 +515,7 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.Credentials.NyxIdAccessToken.Should().Be("access-1");
         copy.Credentials.NyxIdOrgToken.Should().Be("org-1");
         copy.Credentials.SenderNyxIdAccessToken.Should().Be("sender-access-1");
-        copy.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.ProxyDelegation);
+        copy.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
         copy.Caller.ScopeId.Should().Be("scope-1");
         copy.Caller.OwnerSubject.Should().Be("owner-1");
         copy.Caller.ResponseId.Should().Be("response-1");
@@ -427,6 +558,8 @@ public sealed class AgentToolExecutionContextMapperTests
         copy.SkillRecovery.MaxOrnnSearchAttempts.Should().Be(2);
         copy.SkillRecovery.CommandArguments.Should().Be("ship");
         copy.SkillRecovery.DiscoveryRequested.Should().BeTrue();
+        copy.SkillRecovery.IsolatePriorConversationHistory.Should().BeTrue();
+        copy.SkillRecovery.MountWorkflowsRequested.Should().BeTrue();
         copy.ExecutionOwner.Kind.Should().Be(AgentToolExecutionOwnerKind.HostService);
         copy.ExecutionOwner.OwnerId.Should().Be("svc-context-roundtrip");
         copy.ExternalMetadata.Should().ContainSingle().Which.Should().Be(new KeyValuePair<string, string>("external-trace", "trace-1"));
@@ -450,6 +583,8 @@ public sealed class AgentToolExecutionContextMapperTests
         context.SkillRecovery.CommandName.Should().Be("goal");
         context.SkillRecovery.CommandArguments.Should().BeNull();
         context.SkillRecovery.DiscoveryRequested.Should().BeFalse();
+        context.SkillRecovery.IsolatePriorConversationHistory.Should().BeFalse();
+        context.SkillRecovery.MountWorkflowsRequested.Should().BeFalse();
     }
 
     [Fact]
@@ -569,6 +704,106 @@ public sealed class AgentToolExecutionContextMapperTests
         source.Should().NotContain("AgentToolRequestContext.TryGet(");
         source.Should().NotContain(".ToLegacyMetadata(");
         source.Should().NotContain("HttpAuthorizationMetadataKey");
+    }
+
+    private static AgentToolOperationAdmission ExactOperationAdmission()
+    {
+        var readOperation = new AgentToolOperationAdmission(
+            "usvc-alpha",
+            "api-shop",
+            new AgentToolOperationIdentity.PublishedEndpoint("get-order"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/orders/{orderId}",
+            "read-contract-digest-alpha",
+            [
+                new AgentToolOperationParameter(
+                    "orderId",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+                new AgentToolOperationParameter(
+                    "page_token",
+                    AgentToolOperationParameterLocation.Query,
+                    false,
+                    AgentToolOperationValueSchema.Text),
+            ],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.ReadOnly,
+                AgentToolOperationApproval.None,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive]),
+            "catalog-digest-alpha");
+
+        return new AgentToolOperationAdmission(
+            "usvc-alpha",
+            "api-shop",
+            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "POST",
+            "/orders/{orderId}",
+            "contract-digest-alpha",
+            [
+                new AgentToolOperationParameter(
+                    "orderId",
+                    AgentToolOperationParameterLocation.Path,
+                    true,
+                    AgentToolOperationValueSchema.Text),
+            ],
+            new AgentToolOperationRequestBody(
+                true,
+                "application/json",
+                new AgentToolOperationValueSchema(
+                    AgentToolOperationValueKind.Object,
+                    [
+                        new AgentToolOperationSchemaProperty(
+                            "lines",
+                            new AgentToolOperationValueSchema(
+                                AgentToolOperationValueKind.Array,
+                                [],
+                                new HashSet<string>(StringComparer.Ordinal),
+                                AgentToolOperationValueSchema.Text,
+                                [],
+                                false)),
+                    ],
+                    new HashSet<string>(["lines"], StringComparer.Ordinal),
+                    null,
+                    [],
+                    false)),
+            new AgentToolOperationResponsePolicy(true, false, ["application/json"]),
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.Write,
+                AgentToolOperationApproval.Required,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]),
+            "catalog-digest-alpha",
+            new AgentToolOperationReadBack(
+                readOperation,
+                new Struct
+                {
+                    Fields =
+                    {
+                        ["orderId"] = Google.Protobuf.WellKnownTypes.Value.ForString("order-alpha"),
+                    },
+                },
+                new AgentToolReadBackAssertion(
+                    AgentToolReadBackMatch.ArrayContainsEquals,
+                    "/items",
+                    Google.Protobuf.WellKnownTypes.Value.ForString("created"),
+                    "/status"),
+                "order_created",
+                new AgentToolReadBackAssertion(
+                    AgentToolReadBackMatch.Equals,
+                    "/code",
+                    Google.Protobuf.WellKnownTypes.Value.ForNumber(1390003)),
+                new AgentToolReadBackPagination(
+                    "/has_more",
+                    "/page_token",
+                    AgentToolOperationParameterLocation.Query,
+                    "page_token",
+                    200)));
     }
 
     private static string FindRepositoryRoot()

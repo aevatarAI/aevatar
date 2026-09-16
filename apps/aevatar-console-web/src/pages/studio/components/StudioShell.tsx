@@ -83,7 +83,7 @@ function formatMemberTone(tone: StudioShellMemberTone | undefined): string {
 }
 
 const shellRootStyle: React.CSSProperties = {
-  background: '#f7f8fb',
+  background: '#f4f4f0',
   display: 'flex',
   flex: 1,
   height: '100%',
@@ -93,39 +93,37 @@ const shellRootStyle: React.CSSProperties = {
 };
 
 const railStyle: React.CSSProperties = {
-  background:
-    'linear-gradient(180deg, rgba(255, 253, 249, 0.98) 0%, rgba(249, 245, 237, 0.98) 100%)',
-  borderRight: '1px solid #ebe2d4',
+  background: '#fbfaf7',
+  borderRight: '1px solid #e5e0d4',
   display: 'flex',
   flexDirection: 'column',
   flexShrink: 0,
   minHeight: 0,
-  width: 276,
+  width: 264,
 };
 
 const railHeaderStyle: React.CSSProperties = {
-  borderBottom: '1px solid #ece3d5',
+  borderBottom: '1px solid #e8e3d8',
   display: 'grid',
   gap: 10,
-  padding: '14px 12px 12px',
+  padding: '14px 14px 12px',
 };
 
 const railSectionStyle: React.CSSProperties = {
-  borderBottom: '1px solid #ece3d5',
   display: 'flex',
   flexDirection: 'column',
   gap: 8,
-  padding: '10px 12px 12px',
+  padding: '12px 10px 12px',
 };
 
 const railSectionHeaderStyle: React.CSSProperties = {
   alignItems: 'center',
-  color: '#7b6e5a',
+  color: '#8a8172',
   display: 'flex',
-  fontSize: 10,
+  fontSize: 10.5,
   fontWeight: 700,
   gap: 6,
-  letterSpacing: 0,
+  letterSpacing: '0.04em',
   textTransform: 'uppercase',
 };
 
@@ -144,14 +142,14 @@ const railSectionHeaderStackStyle: React.CSSProperties = {
 const memberListStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
-  gap: 10,
+  gap: 2,
   minHeight: 0,
   overflowX: 'hidden',
   overflowY: 'auto',
 };
 
 const shellMainStyle: React.CSSProperties = {
-  background: '#fcfbf8',
+  background: 'transparent',
   display: 'flex',
   flex: 1,
   flexDirection: 'column',
@@ -171,11 +169,11 @@ const shellContentStyle: React.CSSProperties = {
 };
 
 const shellAlertsStyle: React.CSSProperties = {
-  borderBottom: '1px solid rgba(229, 220, 203, 0.9)',
+  borderBottom: '1px solid #e8e3d8',
   display: 'flex',
   flexDirection: 'column',
-  gap: 12,
-  padding: '0 16px 12px',
+  gap: 10,
+  padding: '0 20px 12px',
 };
 
 const shellHeaderStyle: React.CSSProperties = {
@@ -202,16 +200,16 @@ const shellPageBodyStyle: React.CSSProperties = {
   flexDirection: 'column',
   minHeight: 0,
   overflowX: 'hidden',
-  padding: '14px 16px 16px',
+  padding: '16px 20px 20px',
 };
 
 const lifecycleSectionStyle: React.CSSProperties = {
   background: 'transparent',
-  borderBottom: '1px solid rgba(229, 220, 203, 0.82)',
+  borderBottom: '1px solid #e8e3d8',
   display: 'flex',
   flexDirection: 'column',
   gap: 6,
-  padding: '0 16px 10px',
+  padding: '0 20px 12px',
 };
 
 const lifecycleHeaderStyle: React.CSSProperties = {
@@ -232,22 +230,22 @@ const lifecycleRowStyle: React.CSSProperties = {
 };
 
 const lifecycleConnectorStyle: React.CSSProperties = {
-  background: '#dbcdb4',
+  background: '#d9d2c2',
   borderRadius: 999,
   display: 'block',
-  flex: '0 0 20px',
+  flex: '0 0 16px',
   height: 1,
 };
 
 const railSearchInputStyle: React.CSSProperties = {
-  background: 'rgba(255, 252, 246, 0.96)',
-  border: '1px solid #e5dccb',
-  borderRadius: 10,
+  background: '#ffffff',
+  border: '1px solid #e5e0d4',
+  borderRadius: 8,
   color: '#2f2a23',
-  fontSize: 11.5,
+  fontSize: 12,
   minWidth: 0,
   outline: 'none',
-  padding: '8px 10px',
+  padding: '7px 10px',
   width: '100%',
 };
 
@@ -259,10 +257,10 @@ const railFilterRowStyle: React.CSSProperties = {
 
 const railFilterButtonStyle: React.CSSProperties = {
   alignItems: 'center',
-  background: 'rgba(255, 250, 244, 0.92)',
-  border: '1px solid #e6decd',
+  background: 'transparent',
+  border: '1px solid transparent',
   borderRadius: 999,
-  color: '#5f574b',
+  color: '#6f675a',
   cursor: 'pointer',
   display: 'inline-flex',
   fontSize: 10.5,
@@ -274,15 +272,14 @@ const railFilterButtonStyle: React.CSSProperties = {
 
 const railPillStyle: React.CSSProperties = {
   alignItems: 'center',
-  background: 'rgba(245, 239, 228, 0.96)',
-  border: '1px solid #e4dac8',
+  background: '#f0ede4',
   borderRadius: 999,
   color: '#6c6558',
   display: 'inline-flex',
   fontSize: 10,
   fontWeight: 700,
   lineHeight: '16px',
-  minHeight: 22,
+  minHeight: 20,
   padding: '0 8px',
 };
 
@@ -360,18 +357,18 @@ function resolveMemberToneStyles(
       };
     case 'draft':
       return {
-        background: 'rgba(245, 158, 11, 0.16)',
+        background: 'rgba(217, 119, 6, 0.14)',
         color: '#b45309',
       };
     case 'planned':
       return {
-        background: 'rgba(99, 102, 241, 0.12)',
-        color: '#4338ca',
+        background: 'rgba(79, 70, 229, 0.12)',
+        color: '#4f46e5',
       };
     default:
       return {
-        background: 'rgba(148, 163, 184, 0.14)',
-        color: '#475569',
+        background: 'rgba(100, 116, 139, 0.12)',
+        color: '#64748b',
       };
   }
 }
@@ -534,9 +531,10 @@ const StudioShell: React.FC<StudioShellProps> = ({
             <Typography.Title
               level={4}
               style={{
-                color: '#16120d',
-                fontSize: 14,
+                color: '#17130c',
+                fontSize: 13,
                 fontWeight: 700,
+                letterSpacing: '0.01em',
                 margin: 0,
                 lineHeight: '20px',
               }}
@@ -571,9 +569,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
                     onClick={() => setMemberFilter(option.key)}
                     style={{
                       ...railFilterButtonStyle,
-                      background: active ? '#131820' : railFilterButtonStyle.background,
-                      borderColor: active ? '#131820' : '#e6decd',
-                      color: active ? '#fbfaf6' : '#5f574b',
+                      background: active ? '#17130c' : railFilterButtonStyle.background,
+                      color: active ? '#fbfaf6' : railFilterButtonStyle.color,
                     }}
                     type="button"
                   >
@@ -631,27 +628,25 @@ const StudioShell: React.FC<StudioShellProps> = ({
                     }
                     role="button"
                     style={{
-                      background: isSelected
-                        ? 'linear-gradient(180deg, rgba(25, 34, 48, 0.98) 0%, rgba(34, 43, 58, 0.98) 100%)'
-                        : 'rgba(255, 252, 246, 0.98)',
-                      border: `1px solid ${isSelected ? '#141a22' : '#ebe3d4'}`,
-                      borderRadius: 16,
+                      background: isSelected ? '#ffffff' : 'transparent',
+                      border: `1px solid ${isSelected ? '#e5e0d4' : 'transparent'}`,
+                      borderRadius: 10,
                       boxShadow: isSelected
-                        ? '0 10px 22px rgba(15, 23, 42, 0.14)'
-                        : '0 4px 14px rgba(110, 94, 71, 0.05)',
+                        ? '0 1px 3px rgba(28, 24, 16, 0.08)'
+                        : 'none',
                       cursor:
                         member.disabled || !onSelectMember ? 'default' : 'pointer',
                       alignItems: 'center',
                       display: 'flex',
-                      gap: 10,
+                      gap: 8,
                       opacity: member.disabled ? 0.56 : 1,
                       boxSizing: 'border-box',
                       minHeight: 0,
                       overflow: 'hidden',
-                      padding: '10px 12px',
+                      padding: '7px 10px',
                       textAlign: 'left',
                       transition:
-                        'background-color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease',
+                        'background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease',
                       width: '100%',
                     }}
                     title={[member.description, member.meta].filter(Boolean).join(' · ')}
@@ -672,17 +667,15 @@ const StudioShell: React.FC<StudioShellProps> = ({
                         aria-hidden="true"
                         style={{
                           alignItems: 'center',
-                          background: isSelected
-                            ? 'rgba(255, 255, 255, 0.14)'
-                            : 'rgba(32, 24, 12, 0.05)',
+                          background: isSelected ? '#f0ede4' : 'transparent',
                           borderRadius: 8,
-                          color: isSelected ? '#f8dcc2' : '#6b5c48',
+                          color: isSelected ? '#5a5142' : '#8a8172',
                           display: 'inline-flex',
                           flexShrink: 0,
-                          fontSize: 11,
-                          height: 24,
+                          fontSize: 12,
+                          height: 26,
                           justifyContent: 'center',
-                          width: 24,
+                          width: 26,
                         }}
                       >
                         {memberIcon}
@@ -698,28 +691,23 @@ const StudioShell: React.FC<StudioShellProps> = ({
                       >
                         <span
                           style={{
-                            background: isSelected
-                              ? 'rgba(255, 255, 255, 0.14)'
-                              : 'rgba(243, 236, 224, 0.92)',
-                            border: `1px solid ${isSelected ? 'rgba(255,255,255,0.12)' : '#e6decd'}`,
-                            borderRadius: 999,
-                            color: isSelected ? '#f4efe6' : '#746655',
+                            color: '#9a9184',
                             display: 'inline-flex',
                             flexShrink: 0,
                             fontSize: 9.5,
                             fontWeight: 700,
+                            letterSpacing: '0.02em',
                             lineHeight: '14px',
-                            minHeight: 20,
-                            padding: '0 7px',
+                            textTransform: 'uppercase',
                           }}
                         >
                           {formatMemberKindLabel(kind)}
                         </span>
                         <span
                           style={{
-                            color: isSelected ? '#fbfaf6' : '#111827',
+                            color: isSelected ? '#17130c' : '#3f382d',
                             fontSize: 13,
-                            fontWeight: 700,
+                            fontWeight: isSelected ? 700 : 600,
                             lineHeight: '20px',
                             minWidth: 0,
                             overflow: 'hidden',
@@ -735,8 +723,6 @@ const StudioShell: React.FC<StudioShellProps> = ({
                         style={{
                           alignItems: 'center',
                           alignSelf: 'center',
-                          background: toneStyles.background,
-                          borderRadius: 999,
                           color: toneStyles.color,
                           display: 'inline-flex',
                           flexShrink: 0,
@@ -744,9 +730,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
                           fontWeight: 700,
                           justifyContent: 'center',
                           lineHeight: '14px',
-                          minHeight: 22,
-                          minWidth: 24,
-                          padding: '0 7px',
+                          minHeight: 20,
+                          padding: '0 2px',
                         }}
                       >
                         <span
@@ -818,13 +803,13 @@ const StudioShell: React.FC<StudioShellProps> = ({
                 const indicatorBackground = isActive
                   ? '#ffffff'
                   : step.disabled || isPlanned
-                    ? '#f3f4f6'
-                    : '#eef4ff';
+                    ? '#f1eee7'
+                    : '#ece8de';
                 const indicatorColor = isActive
-                  ? '#111827'
+                  ? '#17130c'
                   : step.disabled || isPlanned
-                    ? '#9ca3af'
-                    : '#2f54eb';
+                    ? '#a29a8b'
+                    : '#6f675a';
                 return (
                   <React.Fragment key={step.key}>
                     {index > 0 ? (
@@ -838,8 +823,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
                       title={step.description}
                       style={{
                         alignItems: 'center',
-                        background: isActive ? '#111827' : '#ffffff',
-                        border: `1px solid ${isActive ? '#111827' : '#e5dccb'}`,
+                        background: isActive ? '#17130c' : '#ffffff',
+                        border: `1px solid ${isActive ? '#17130c' : '#e5e0d4'}`,
                         borderRadius: 999,
                         cursor:
                           step.disabled || !onSelectLifecycleStep
@@ -850,7 +835,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                         gap: 8,
                         minHeight: 0,
                         opacity: step.disabled ? 0.68 : 1,
-                        padding: '6px 14px',
+                        padding: '5px 12px',
                         textAlign: 'left',
                       }}
                       type="button"
@@ -859,24 +844,23 @@ const StudioShell: React.FC<StudioShellProps> = ({
                         style={{
                           alignItems: 'center',
                           background: indicatorBackground,
-                          border: `1px solid ${isActive ? '#ffffff' : indicatorBackground}`,
                           borderRadius: 999,
                           color: indicatorColor,
                           display: 'inline-flex',
                           flexShrink: 0,
                           fontSize: 9.5,
                           fontWeight: 700,
-                          height: 22,
+                          height: 18,
                           justifyContent: 'center',
-                          width: 22,
+                          width: 18,
                         }}
                       >
                         {step.disabled || isPlanned ? index + 1 : <CheckOutlined />}
                       </span>
                       <span
                         style={{
-                          color: isActive ? '#ffffff' : '#111827',
-                          fontSize: 10.5,
+                          color: isActive ? '#ffffff' : '#3f382d',
+                          fontSize: 11,
                           fontWeight: isActive ? 700 : 600,
                           lineHeight: '16px',
                           minWidth: 0,

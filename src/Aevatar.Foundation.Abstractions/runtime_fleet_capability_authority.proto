@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package aevatar.runtime;
+
+option csharp_namespace = "Aevatar.Foundation.Abstractions.Runtime";
+
+import "google/protobuf/timestamp.proto";
+import "runtime_fleet_capability.proto";
+
+// Runtime-owned callback payload. It deliberately carries no authority input;
+// runtime ingress binds a non-serializable attestation after validating the
+// exact scheduler-persisted delivery identity.
+message RuntimeFleetReconcileRequested
+{
+}
+
+enum RuntimeFleetMembershipObservationOutcome
+{
+  RUNTIME_FLEET_MEMBERSHIP_OBSERVATION_OUTCOME_UNSPECIFIED = 0;
+  RUNTIME_FLEET_MEMBERSHIP_OBSERVATION_OUTCOME_OBSERVED = 1;
+  RUNTIME_FLEET_MEMBERSHIP_OBSERVATION_OUTCOME_UNAVAILABLE = 2;
+  RUNTIME_FLEET_MEMBERSHIP_OBSERVATION_OUTCOME_INVALID = 3;
+  RUNTIME_FLEET_MEMBERSHIP_OBSERVATION_OUTCOME_SOURCE_FAILED = 4;
+  RUNTIME_FLEET_MEMBERSHIP_OBSERVATION_OUTCOME_REGRESSED_OR_CONFLICTED = 5;
+}
+
+message RuntimeFleetMembershipObservedEvent
+{
+  string transition_id = 1;
+  aevatar.runtime.RuntimeFleetMembershipSnapshot membership = 2;
+}
+
+message RuntimeFleetReconciliationRecordedEvent
+{
+  string transition_id = 1;
+  string delivery_envelope_id = 2;
+  int64 callback_generation = 3;
+  int64 callback_fire_index = 4;
+  int32 callback_slot_epoch = 5;
+  RuntimeFleetMembershipObservationOutcome observation_outcome = 6;
+  google.protobuf.Timestamp attempted_at = 7;
+}
+
+message RuntimeFleetCapabilityGateState
+{
+  aevatar.runtime.RuntimeFleetCapability capability = 1;
+  aevatar.runtime.RuntimeFleetCapabilityGateStatus status = 2;
+  int64 capability_epoch = 3;
+  int64 membership_epoch = 4;
+  string membership_digest = 5;
+  string deployment_revision = 6;
+  int32 minimum_reader_contract_version = 7;
+  string required_contract_id = 8;
+  google.protobuf.Timestamp changed_at = 9;
+  string last_transition_id = 10;
+  string revocation_reason = 11;
+  // Fleet reader revision whose exact unanimous advertisement closed this gate.
+  int32 quiescence_reader_contract_version = 12;
+}
+
+message RuntimeFleetCapabilityGateOpenedEvent
+{
+  RuntimeFleetCapabilityGateState gate = 1;
+}
+
+message RuntimeFleetCapabilityGateRevokedEvent
+{
+  RuntimeFleetCapabilityGateState gate = 1;
+}
+
+// Typed terminal bridge transition. Phase A is forward-only: an older authority must never be
+// reintroduced after this event is committed.
+message RuntimeFleetCapabilityGateQuiescedEvent
+{
+  RuntimeFleetCapabilityGateState gate = 1;
+}
+
+message RuntimeFleetCapabilityAuthorityState
+{
+  aevatar.runtime.RuntimeFleetMembershipSnapshot membership = 1;
+  repeated RuntimeFleetCapabilityGateState gates = 2;
+  string last_membership_transition_id = 3;
+  string last_reconcile_transition_id = 4;
+  string last_reconcile_delivery_envelope_id = 5;
+  int64 last_reconcile_callback_generation = 6;
+  int64 last_reconcile_callback_fire_index = 7;
+  int32 last_reconcile_callback_slot_epoch = 8;
+  RuntimeFleetMembershipObservationOutcome last_membership_observation_outcome = 9;
+  google.protobuf.Timestamp last_reconcile_attempted_at = 10;
+}

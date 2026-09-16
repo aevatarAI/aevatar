@@ -1,5 +1,5 @@
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Microsoft.Extensions.Configuration;
@@ -9,8 +9,7 @@ namespace Aevatar.Mainnet.Host.Api.Hosting;
 
 internal sealed class MainnetNyxIdResourcePolicyValidator(
     IConfiguration configuration,
-    OrnnOptions ornnOptions,
-    NyxIdToolOptions nyxIdToolOptions) : IValidateOptions<NyxIdBrokerOptions>
+    OrnnOptions ornnOptions) : IValidateOptions<NyxIdBrokerOptions>
 {
     public ValidateOptionsResult Validate(string? name, NyxIdBrokerOptions options)
     {
@@ -44,12 +43,20 @@ internal sealed class MainnetNyxIdResourcePolicyValidator(
                 $"'{providerOrnnSlug}' resolved from Aevatar:Ornn:NyxIdSlug.");
         }
 
-        var providerSandboxSlug = nyxIdToolOptions.SandboxServiceSlug?.Trim() ?? string.Empty;
-        if (!requiredAdditionalSlugs.Contains(providerSandboxSlug))
+        var configuredSandboxSlug = configuration["Aevatar:NyxId:SandboxServiceSlug"]?.Trim();
+        if (!string.IsNullOrEmpty(configuredSandboxSlug) &&
+            !string.Equals(configuredSandboxSlug, CodeExecutionContract.ServiceSlug, StringComparison.Ordinal))
+        {
+            failures.Add(
+                "Aevatar:NyxId:SandboxServiceSlug cannot override the canonical code_execute service " +
+                $"'{CodeExecutionContract.ServiceSlug}'.");
+        }
+
+        if (!requiredAdditionalSlugs.Contains(CodeExecutionContract.ServiceSlug))
         {
             failures.Add(
                 $"{nameof(NyxIdBrokerOptions.AdditionalRequiredServiceSlugs)} must contain the sandbox provider route " +
-                $"'{providerSandboxSlug}' resolved from Aevatar:NyxId:SandboxServiceSlug.");
+                $"'{CodeExecutionContract.ServiceSlug}' required by the code execution contract.");
         }
 
         return failures.Count == 0

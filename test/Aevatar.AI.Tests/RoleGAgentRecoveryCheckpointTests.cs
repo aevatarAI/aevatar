@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
@@ -21,7 +22,7 @@ namespace Aevatar.AI.Tests;
 
 public sealed class RoleGAgentRecoveryCheckpointTests
 {
-    private static readonly DateTimeOffset Now = new(2026, 8, 2, 8, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
 
     [Fact]
     public async Task PrepareBatch_WhenIntentCommitFails_ShouldNotInvokeTool()
@@ -45,6 +46,50 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             .WithMessage("intent commit failed");
         executionPort.Requests.Should().BeEmpty();
         tool.ExecutionCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Recover_WhenToolOwnsExactAdmission_ShouldUseActorCommittedProtobufFact()
+    {
+        var admission = ExactOperationAdmission();
+        var tool = new AdmissionOwnedTestTool(
+            "exact-read",
+            AgentToolReplayPolicy.ReadOnlyRetryable,
+            admission);
+        var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"ok\":true}"));
+        var fixture = await CreateFixtureAsync(
+            "role-exact-admission-recovery",
+            tool: tool,
+            executionPort: executionPort);
+        await fixture.StartSessionAsync("session-a");
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executor = new StreamingToolExecutor(
+            tools,
+            toolContext: ToolContext(fixture.ActorId, "session-a", "initial-bearer"),
+            toolExecutionPort: executionPort,
+            checkpointPort: fixture.Agent);
+
+        await executor.PrepareBatchAsync(
+            "session-a",
+            0,
+            [ToolCall("call-a", tool.Name, "{\"input\":\"safe\"}")]);
+        var committed = fixture.Agent.State.Sessions["session-a"].RecoveryCheckpoint;
+        var checkpoint = RoleChatRecoveryCheckpoint.Parser.ParseFrom(committed.ToByteArray());
+        var restored = AgentToolExecutionContextMapper.FromRecoveryPayload(
+            checkpoint.ToolIntents.Should().ContainSingle().Which.RecoveryContext);
+
+        restored.OperationAdmission.Should().BeEquivalentTo(admission);
+
+        await InvokeRecoveredResultsAsync(
+            fixture.Agent,
+            "session-a",
+            checkpoint,
+            ToolContext(fixture.ActorId, "session-a", "reissued-bearer"));
+
+        executionPort.Requests.Should().ContainSingle();
+        executionPort.Requests[0].ExecutionContext.OperationAdmission
+            .Should().BeEquivalentTo(admission);
     }
 
     [Fact]
@@ -752,6 +797,70 @@ public sealed class RoleGAgentRecoveryCheckpointTests
         executionPort.Requests.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ActorRecovery_WhenChannelAgentKeyIsSealed_ShouldResolveAgentKeyWithoutUserBearer()
+    {
+        const string agentKey = "channel-agent-key-primary";
+        var vault = CreateVault();
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            "scope-channel",
+            "key-channel",
+            agentKey,
+            "channel Agent Key recovery",
+            Now.AddHours(24)));
+        var durableReference = new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = stored.Reference.Purpose,
+            OwnerScopeKey = stored.Reference.OwnerScopeKey,
+            SubjectId = "key-channel",
+            SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+            SecretReference = stored.Reference.Clone(),
+        };
+        var tool = new TestTool("channel-agent-key-tool", AgentToolReplayPolicy.ReadOnlyRetryable);
+        var executionPort = new RecordingExecutionPort(ExecutedOutcome("{\"ok\":true}"));
+        var provider = new CountingProviderFactory("channel Agent Key recovery completed");
+        var fixture = await CreateFixtureAsync(
+            "role-channel-agent-key-recovery",
+            vault: vault,
+            tool: tool,
+            executionPort: executionPort,
+            providerFactory: provider);
+        var context = ToolContext(fixture.ActorId, "session-a") with
+        {
+            Credentials = new AgentToolCredentials(
+                agentKey,
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.AgentKey),
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+        };
+        await StartCredentialSessionAsync(fixture, "session-a", context, durableReference);
+        await fixture.Agent.PrepareBatchAsync(new ChatToolBatchIntent(
+            "session-a",
+            0,
+            [new ChatToolOperationIntent(
+                ToolCall("call-a", tool.Name, "{}"),
+                context,
+                AgentToolReplayPolicy.ReadOnlyRetryable,
+                ToolPresentationDescriptors.Generic(tool.Name, tool.Description))]));
+
+        await fixture.Agent.HandleChatRecoveryContinuationRequestedAsync(new RoleChatRecoveryContinuationRequested
+        {
+            SessionId = "session-a",
+            ExpectedCheckpointGeneration =
+                fixture.Agent.State.Sessions["session-a"].RecoveryCheckpoint.Generation,
+        });
+
+        var request = executionPort.Requests.Should().ContainSingle().Which;
+        request.ExecutionContext.Credentials.NyxIdAccessToken.Should().Be(agentKey);
+        request.ExecutionContext.Credentials.NyxIdCredentialKind.Should()
+            .Be(AgentToolNyxIdCredentialKind.AgentKey);
+        request.ExecutionContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        fixture.Agent.State.Sessions["session-a"].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+    }
+
     [Theory]
     [InlineData("other-actor", "session-a", "operation-a", false)]
     [InlineData("actor-a", "other-session", "operation-a", false)]
@@ -808,11 +917,27 @@ public sealed class RoleGAgentRecoveryCheckpointTests
                 "skill",
                 2,
                 "arguments-with-secret",
-                true),
+                true,
+                IsolatePriorConversationHistory: true,
+                MountWorkflowsRequested: true),
         };
 
-        var payloadBytes = context.ToRecoveryPayload().ToByteArray();
+        var recoveryPayload = context.ToRecoveryPayload();
+        var payloadBytes = recoveryPayload.ToByteArray();
         var persisted = System.Text.Encoding.UTF8.GetString(payloadBytes);
+
+        AgentToolExecutionContextMapper
+            .FromRecoveryPayload(recoveryPayload)
+            .SkillRecovery
+            .IsolatePriorConversationHistory
+            .Should()
+            .BeTrue();
+        AgentToolExecutionContextMapper
+            .FromRecoveryPayload(recoveryPayload)
+            .SkillRecovery
+            .MountWorkflowsRequested
+            .Should()
+            .BeTrue();
 
         persisted.Should().NotContain(bearer)
             .And.NotContain(orgToken)
@@ -856,6 +981,30 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             Caller = new AgentToolCallerContext("scope-a", "subject-a", null),
             ExecutionOwner = AgentToolExecutionOwners.Actor(actorId),
         };
+
+    private static AgentToolOperationAdmission ExactOperationAdmission() => new(
+        "usvc-alpha",
+        "api-shop",
+        new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"),
+        AgentToolOperationAuthorizationBasis.PublishedContract,
+        "GET",
+        "/orders/{orderId}",
+        "contract-digest-alpha",
+        [
+            new AgentToolOperationParameter(
+                "orderId",
+                AgentToolOperationParameterLocation.Path,
+                true,
+                AgentToolOperationValueSchema.Text),
+        ],
+        null,
+        new AgentToolOperationResponsePolicy(true, false, ["application/json"]),
+        new AgentToolOperationExecutionPolicy(
+            AgentToolOperationRisk.ReadOnly,
+            AgentToolOperationApproval.None,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive]),
+        "catalog-digest-alpha");
 
     private static AgentToolExecutionOutcome ExecutedOutcome(string result) => new(
         AgentToolExecutionOutcomeKind.Executed,
@@ -1018,10 +1167,11 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             .BuildServiceProvider();
         var agent = new TestRoleGAgent(
             executionPort,
-            [new StaticToolSource([tool])],
+            [tool],
             timeProvider,
             vault,
-            providerFactory)
+            providerFactory,
+            providerFactory is not null)
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -1064,21 +1214,79 @@ public sealed class RoleGAgentRecoveryCheckpointTests
 
     private sealed class TestRoleGAgent(
         IAgentToolExecutionPort executionPort,
-        IEnumerable<IAgentToolSource> toolSources,
+        IReadOnlyList<IAgentTool> exactTools,
         TimeProvider timeProvider,
         ISecretVault vault,
-        ILLMProviderFactory? providerFactory)
+        ILLMProviderFactory? providerFactory,
+        bool enableExplicitCatalog)
         : RoleGAgent(
             executionPort,
             llmProviderFactory: providerFactory,
-            toolSources: toolSources,
+            toolSources: [new StaticToolSource(exactTools)],
             timeProvider: timeProvider,
             chatToolRecoverySecretVault: vault)
     {
         public Task PersistForTestAsync(IMessage evt) => PersistDomainEventAsync(evt);
+
+        protected override Task<AgentProfileTurnAuthorityPreparation?> PrepareAgentProfileTurnAuthorityAsync(
+            ChatRequestEvent request,
+            AgentToolExecutionContext toolContext,
+            CancellationToken ct)
+        {
+            if (!enableExplicitCatalog)
+                return base.PrepareAgentProfileTurnAuthorityAsync(request, toolContext, ct);
+
+            ct.ThrowIfCancellationRequested();
+            var authority = new AgentProfileTurnAuthorityState
+            {
+                ReconciliationKey = new AgentProfileTurnReconciliationKey
+                {
+                    SessionId = request.SessionId,
+                    Attempt = 1,
+                },
+                CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+                {
+                    ProfileId = "profile-recovery-test",
+                    ProfileVersion = "v1",
+                    PolicyRevision = "policy-v1",
+                    IntentId = "recovery-test-tool",
+                },
+                AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            };
+            authority.AuthorityCeilingToolNames.Add(exactTools.Select(static tool => tool.Name));
+            return Task.FromResult<AgentProfileTurnAuthorityPreparation?>(
+                AgentProfileTurnAuthorityPreparation.Create(authority));
+        }
+
+        protected override Task<AgentTurnToolCatalogMaterialization?> MaterializeCommittedAgentTurnToolCatalogAsync(
+            ChatRequestEvent request,
+            AgentToolExecutionContext toolContext,
+            AgentProfileTurnAuthorityState committedAuthority,
+            CancellationToken ct)
+        {
+            if (!enableExplicitCatalog)
+            {
+                return base.MaterializeCommittedAgentTurnToolCatalogAsync(
+                    request,
+                    toolContext,
+                    committedAuthority,
+                    ct);
+            }
+
+            ct.ThrowIfCancellationRequested();
+            var catalog = new AgentTurnToolCatalog(
+                committedAuthority.AuthorityCeilingToolNames,
+                profilePromptLayer: null,
+                selectedSkillPromptLayer: null,
+                selectedIntentId: committedAuthority.CandidateRoute?.IntentId,
+                candidateIntentId: committedAuthority.CandidateRoute?.IntentId,
+                exactTools: exactTools);
+            return Task.FromResult<AgentTurnToolCatalogMaterialization?>(
+                AgentTurnToolCatalogMaterialization.Create(catalog, committedAuthority.Clone()));
+        }
     }
 
-    private sealed class TestTool(string name, AgentToolReplayPolicy replayPolicy) : IAgentTool
+    private class TestTool(string name, AgentToolReplayPolicy replayPolicy) : IAgentTool
     {
         public string Name => name;
         public string Description => name;
@@ -1091,6 +1299,15 @@ public sealed class RoleGAgentRecoveryCheckpointTests
             ExecutionCount++;
             return Task.FromResult("{\"executed\":true}");
         }
+    }
+
+    private sealed class AdmissionOwnedTestTool(
+        string name,
+        AgentToolReplayPolicy replayPolicy,
+        AgentToolOperationAdmission admission)
+        : TestTool(name, replayPolicy), IAgentToolOperationAdmissionOwner
+    {
+        public AgentToolOperationAdmission OperationAdmission { get; } = admission;
     }
 
     private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource

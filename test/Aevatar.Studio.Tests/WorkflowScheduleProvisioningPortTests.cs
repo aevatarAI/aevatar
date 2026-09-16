@@ -38,6 +38,13 @@ public sealed class WorkflowScheduleProvisioningPortTests
     {
         public ProvisionWorkflowRequest? Request { get; private set; }
 
+        public Task<ProvisionWorkflowPreparation> PrepareAsync(
+            string scopeId,
+            ProvisionWorkflowCallerCredential callerCredential,
+            ProvisionWorkflowRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<ProvisionWorkflowResponse> ProvisionAsync(
             string scopeId,
             ProvisionWorkflowCallerCredential callerCredential,
@@ -50,7 +57,7 @@ public sealed class WorkflowScheduleProvisioningPortTests
                 scopeId,
                 request.TeamId ?? string.Empty,
                 ProvisionWorkflowBindingStatusNames.Accepted,
-                "/workflow/observatory"));
+                "/admin#/observatory"));
         }
     }
 }

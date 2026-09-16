@@ -11,11 +11,14 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Runtime.Observability;
 using Aevatar.Foundation.Runtime.Actors;
 using Aevatar.Foundation.Abstractions.Propagation;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.Runtime;
 using Aevatar.Foundation.Runtime.Implementations.Local.ActivationIndex;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Google.Protobuf;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 
@@ -23,9 +26,11 @@ namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 public sealed class LocalActorRuntime : IActorRuntime
 {
     private readonly ConcurrentDictionary<string, LocalActor> _actors = new();
+    private readonly ConcurrentDictionary<string, Lazy<Task<LocalActor>>> _actorActivations = new();
     private readonly IStreamProvider _streams;
     private readonly IStreamLifecycleManager _streamLifecycleManager;
     private readonly ILocalActivationIndexStore _activationIndexStore;
+    private readonly ILocalActorRuntimeEnvelopeStore _runtimeEnvelopeStore;
     private readonly IServiceProvider _services;
     private readonly IActorRuntimeCallbackScheduler? _callbackScheduler;
     private readonly IActorDeactivationHookDispatcher? _deactivationHookDispatcher;
@@ -42,8 +47,10 @@ public sealed class LocalActorRuntime : IActorRuntime
         _services = services;
         _streamLifecycleManager = streamLifecycleManager;
         _logger = logger ?? NullLogger<LocalActorRuntime>.Instance;
+        _runtimeEnvelopeStore = services.GetService<ILocalActorRuntimeEnvelopeStore>()
+            ?? new InMemoryLocalActorRuntimeEnvelopeStore();
         _activationIndexStore = services.GetService<ILocalActivationIndexStore>()
-            ?? new InMemoryLocalActivationIndexStore();
+            ?? new InMemoryLocalActivationIndexStore(_runtimeEnvelopeStore);
         _callbackScheduler = services.GetService<IActorRuntimeCallbackScheduler>();
         _deactivationHookDispatcher = services.GetService<IActorDeactivationHookDispatcher>();
     }
@@ -72,6 +79,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         var registry = _services.GetRequiredService<IAgentKindRegistry>();
         var implementation = registry.Resolve(agentKind.Trim());
         var actorId = id ?? $"{implementation.Metadata.Kind}:{Guid.NewGuid():N}";
+        EnsureReservedFleetAuthorityIdentity(actorId, implementation.Metadata.Kind);
 
         if (_actors.TryGetValue(actorId, out var existing))
         {
@@ -87,6 +95,60 @@ public sealed class LocalActorRuntime : IActorRuntime
             return existing;
         }
 
+        var candidate = new Lazy<Task<LocalActor>>(
+            () => CreateActorCoreAsync(actorId, implementation),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+        var activation = _actorActivations.GetOrAdd(actorId, candidate);
+        try
+        {
+            var actor = await activation.Value.WaitAsync(ct);
+            if (!string.Equals(
+                    actor.Agent.GetType().FullName,
+                    implementation.Metadata.ImplementationClrTypeName,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Actor '{actorId}' already exists with agent type " +
+                    $"'{actor.Agent.GetType().FullName}', expected kind " +
+                    $"'{implementation.Metadata.Kind}'.");
+            }
+
+            return actor;
+        }
+        catch
+        {
+            if (activation.IsValueCreated &&
+                activation.Value.IsCompleted &&
+                !activation.Value.IsCompletedSuccessfully)
+            {
+                _actorActivations.TryRemove(
+                    new KeyValuePair<string, Lazy<Task<LocalActor>>>(actorId, activation));
+            }
+            throw;
+        }
+    }
+
+    private async Task<LocalActor> CreateActorCoreAsync(
+        string actorId,
+        AgentImplementation implementation)
+    {
+        if (_actors.TryGetValue(actorId, out var existing))
+            return existing;
+
+        var preparation = await PrepareRuntimeEnvelopeAsync(
+            actorId,
+            implementation,
+            CancellationToken.None);
+        var runtimeEnvelope = preparation.Envelope;
+        var identity = runtimeEnvelope.Identity?.Clone() ??
+            throw new InvalidOperationException(
+                $"Actor '{actorId}' runtime envelope has no identity.");
+        if (!string.Equals(identity.Kind, implementation.Metadata.Kind, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Actor '{actorId}' is indexed as kind '{identity.Kind}', expected '{implementation.Metadata.Kind}'.");
+        }
+
         var agent = implementation.Factory(_services);
         var agentType = agent.GetType();
         var logger = _services.GetService<ILoggerFactory>()?.CreateLogger(agentType.Name) ?? NullLogger.Instance;
@@ -96,7 +158,11 @@ public sealed class LocalActorRuntime : IActorRuntime
             actorId,
             _streams,
             logger,
-            _deactivationHookDispatcher);
+            _deactivationHookDispatcher,
+            identity,
+            _services.GetService<IRuntimeActorStateSchemaContextBinder>(),
+            _services.GetService<IRuntimeFleetReconcileDeliveryVerifier>(),
+            _services.GetService<IRuntimeFleetReconcileDeliveryAttestationBinder>());
         var publisher = new LocalActorPublisher(
             actorId,
             () => actor.ParentId,
@@ -129,8 +195,7 @@ public sealed class LocalActorRuntime : IActorRuntime
         using var activity = AevatarActivitySource.StartAgentSpawn(actorId, implementation.Metadata.Kind);
         try
         {
-            await _activationIndexStore.UpsertAsync(actorId, implementation.Metadata.Kind, ct);
-            await actor.ActivateAsync(ct);
+            await actor.ActivateAsync(CancellationToken.None);
             AgentMetrics.ActiveActors.Add(1);
             AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
             _logger.LogInformation("Actor {Id} ({Kind}) created", actorId, implementation.Metadata.Kind);
@@ -139,16 +204,131 @@ public sealed class LocalActorRuntime : IActorRuntime
         catch (Exception ex)
         {
             _actors.TryRemove(actorId, out _);
-            await _activationIndexStore.DeleteAsync(actorId, ct);
+            if (preparation.Created)
+            {
+                await _runtimeEnvelopeStore.DeleteAsync(
+                    actorId,
+                    CancellationToken.None);
+            }
             AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Error, ex.Message);
             throw;
         }
     }
 
+    private async Task<RuntimeEnvelopePreparation> PrepareRuntimeEnvelopeAsync(
+        string actorId,
+        AgentImplementation implementation,
+        CancellationToken ct)
+    {
+        while (true)
+        {
+            var stateContractTypeName = implementation.StateContractType.FullName ??
+                implementation.StateContractType.Name;
+            var current = await _runtimeEnvelopeStore.GetForActivationAsync(
+                actorId,
+                stateContractTypeName,
+                ct);
+            var identity = current?.Identity?.Clone() ?? new RuntimeActorIdentity
+            {
+                Kind = implementation.Metadata.Kind,
+                StateSchemaVersion = 0,
+            };
+            if (!string.Equals(identity.Kind, implementation.Metadata.Kind, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Actor '{actorId}' is indexed as kind '{identity.Kind}', expected '{implementation.Metadata.Kind}'.");
+            }
+
+            var decision = await RuntimeActorStateMigrationAdmission.EvaluateAsync(
+                identity,
+                current?.StateContractTypeName,
+                current?.StateSnapshot?.ToByteArray(),
+                implementation,
+                _services.GetService<IRuntimeFleetCapabilityAdmissionReader>() ??
+                    new DenyAllRuntimeFleetCapabilityAdmissionReader(),
+                _services.GetService<IRuntimeLocalMembershipIdentityReader>() ??
+                    new UnavailableRuntimeLocalMembershipIdentityReader(),
+                _services.GetService<TimeProvider>(),
+                _services.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
+                ct,
+                _services.GetService<IRuntimeFleetCapabilityQuiescenceReader>());
+
+            if (decision.IsAdmitted)
+            {
+                var revalidated = await RuntimeActorStateMigrationAdmission.EvaluateAsync(
+                    identity,
+                    current?.StateContractTypeName,
+                    current?.StateSnapshot?.ToByteArray(),
+                    implementation,
+                    _services.GetService<IRuntimeFleetCapabilityAdmissionReader>() ??
+                        new DenyAllRuntimeFleetCapabilityAdmissionReader(),
+                    _services.GetService<IRuntimeLocalMembershipIdentityReader>() ??
+                        new UnavailableRuntimeLocalMembershipIdentityReader(),
+                    _services.GetService<TimeProvider>(),
+                    _services.GetService<RuntimeActorStateMigrationAdmissionOptions>(),
+                    ct,
+                    _services.GetService<IRuntimeFleetCapabilityQuiescenceReader>());
+                if (!RuntimeActorStateMigrationAdmission.HasSameAdmissionProof(
+                        decision,
+                        revalidated))
+                {
+                    decision = RuntimeActorStateMigrationDecision.Blocked;
+                }
+            }
+
+            var next = current?.Clone() ?? new RuntimeActorStateEnvelope();
+            next.Identity = identity;
+            if (decision.IsAdmitted)
+            {
+                next.Identity.StateSchemaVersion = decision.StateSchemaVersion;
+                next.Identity.StateSchemaAdoptions.Add(decision.AdoptionReceipts);
+                next.StateContractTypeName = decision.StateTypeName ?? string.Empty;
+                next.StateSnapshot = ByteString.CopyFrom(decision.Snapshot ?? []);
+            }
+
+            if (current != null && next.Equals(current))
+                return new RuntimeEnvelopePreparation(next, Created: false);
+            if (await _runtimeEnvelopeStore.CompareExchangeAsync(actorId, current, next, ct))
+                return new RuntimeEnvelopePreparation(next, Created: current == null);
+        }
+    }
+
+    private sealed record RuntimeEnvelopePreparation(
+        RuntimeActorStateEnvelope Envelope,
+        bool Created);
+
     /// <summary>Destroys actor and cleans up stream and activation index.</summary>
     public async Task DestroyAsync(string id, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        if (string.Equals(
+                id,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet capability authority is runtime-reserved and cannot be destroyed.");
+        }
+
+        if (_actorActivations.TryGetValue(id, out var activation) &&
+            activation.IsValueCreated)
+        {
+            try
+            {
+                await activation.Value.WaitAsync(ct);
+            }
+            catch (Exception exception) when (
+                activation.Value.IsFaulted || activation.Value.IsCanceled)
+            {
+                // Failed activation has no live actor to deactivate; normal
+                // cleanup below still removes its persisted envelope/index.
+                _logger.LogWarning(
+                    exception,
+                    "Cleaning up failed local activation for actor {ActorId}.",
+                    id);
+            }
+        }
+        _actorActivations.TryRemove(id, out _);
         if (_callbackScheduler != null)
             await _callbackScheduler.PurgeActorAsync(id, ct);
 
@@ -200,6 +380,27 @@ public sealed class LocalActorRuntime : IActorRuntime
         _logger.LogInformation("Actor {Id} destroyed", id);
     }
 
+    private static void EnsureReservedFleetAuthorityIdentity(
+        string actorId,
+        string agentKind)
+    {
+        var hasReservedId = string.Equals(
+            actorId,
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            StringComparison.Ordinal);
+        var hasReservedKind = string.Equals(
+            agentKind,
+            RuntimeFleetCapabilityAuthorityIdentity.AgentKind,
+            StringComparison.Ordinal);
+        if (hasReservedId != hasReservedKind)
+        {
+            throw new InvalidOperationException(
+                $"Runtime fleet authority identity requires the exact actor id/kind pair " +
+                $"'{RuntimeFleetCapabilityAuthorityIdentity.ActorId}' / " +
+                $"'{RuntimeFleetCapabilityAuthorityIdentity.AgentKind}'.");
+        }
+    }
+
     /// <summary>Gets actor by ID.</summary>
     public async Task<IActor?> GetAsync(string id)
     {
@@ -228,6 +429,7 @@ public sealed class LocalActorRuntime : IActorRuntime
     /// <summary>Creates parent-child link and registers stream-layer forwarding binding.</summary>
     public async Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
     {
+        ThrowIfFleetAuthorityTopologyEndpoint(parentId, childId);
         var parent = await GetRequiredAsync(parentId);
         var child = await GetRequiredAsync(childId);
         parent.AddChild(childId);
@@ -246,6 +448,22 @@ public sealed class LocalActorRuntime : IActorRuntime
         using var activity = AevatarActivitySource.StartAgentLink(parentId, childId);
         AevatarActivitySource.SafeSetStatus(activity, System.Diagnostics.ActivityStatusCode.Ok);
         _logger.LogInformation("Link: {Parent} → {Child}", parentId, childId);
+    }
+
+    private static void ThrowIfFleetAuthorityTopologyEndpoint(string parentId, string childId)
+    {
+        if (string.Equals(
+                parentId,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal) ||
+            string.Equals(
+                childId,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet capability authority cannot participate in actor hierarchy links.");
+        }
     }
 
     /// <summary>Removes parent link from child.</summary>

@@ -11,6 +11,9 @@ import "ai_messages.proto";
 import "workflow_execution_messages.proto";
 import "nyxid_chat_task.proto";
 import "agent_profiles.proto";
+import "ToolProviders/agent_tool_admission.proto";
+import "Credentials/credential_secret_references.proto";
+import "google/protobuf/timestamp.proto";
 
 enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
@@ -87,6 +90,55 @@ message AgentRunGAgentState {
   AgentRunLarkCardDeliveryCompletion pending_card_delivery_completion = 26;
   repeated aevatar.gagents.channel.abstractions.DeliveryLedgerEntry recent_deliveries = 27;
   aevatar.gagents.channel.abstractions.DeliveryLedgerEntry last_successful_delivery = 28;
+  AgentRunPendingToolApprovalState pending_tool_approval = 29;
+  AgentRunToolApprovalResolutionState last_tool_approval_resolution = 30;
+  bool produced_use_source_activity_delivery_context = 31;
+  // Typed ownership handoff to WorkflowRunDeliveryGAgent. When present, the
+  // produced reply is intentionally invisible: output retries re-dispatch this
+  // receipt to ConversationGAgent instead of re-running the LLM/tool chain.
+  aevatar.ai.WorkflowRunBackgroundDeliveryReceipt produced_workflow_run_delivery = 32;
+  // Encrypted, TTL-bound handle only. The raw NyxID user bearer remains outside
+  // actor state and is resolved solely for Lark CardKit timeout compensation.
+  aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 33;
+}
+
+enum AgentRunToolApprovalDecision {
+  AGENT_RUN_TOOL_APPROVAL_DECISION_UNSPECIFIED = 0;
+  AGENT_RUN_TOOL_APPROVAL_DECISION_APPROVED = 1;
+  AGENT_RUN_TOOL_APPROVAL_DECISION_REJECTED = 2;
+}
+
+// Actor-owned suspension identity for exactly one tool call. Runtime
+// credentials and raw argument values are deliberately excluded.
+message AgentRunPendingToolApprovalState {
+  string run_id = 1;
+  string correlation_id = 2;
+  int32 attempt = 3;
+  int32 step_index = 4;
+  string approval_request_id = 5;
+  string tool_request_id = 6;
+  string tool_call_id = 7;
+  string tool_name = 8;
+  string arguments_sha256 = 9;
+  bool is_destructive = 10;
+  string side_effect_kind = 11;
+  string subject_kind = 12;
+  string subject_id = 13;
+  string sender_id = 14;
+  string registration_scope_id = 15;
+  string conversation_key = 16;
+  int64 requested_at_unix_ms = 17;
+  int64 notification_dispatched_at_unix_ms = 18;
+  AgentRunToolApprovalDecision decision = 19;
+  int64 decided_at_unix_ms = 20;
+}
+
+message AgentRunToolApprovalResolutionState {
+  string approval_request_id = 1;
+  string tool_call_id = 2;
+  string arguments_sha256 = 3;
+  AgentRunToolApprovalDecision decision = 4;
+  int64 decided_at_unix_ms = 5;
 }
 
 enum AgentRunLarkCardDeliveryPhase {
@@ -125,6 +177,9 @@ message AgentRunLarkCardDeliveryState {
   string pending_finalize_command_id = 14;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry pending_appended_history = 15;
   AgentRunLarkCardTextFallbackPhase text_fallback_phase = 16;
+  string nyx_provider_slug = 17;
+  aevatar.gagents.channel.runtime.LarkCardAbortReason pending_abort_reason = 18;
+  int64 pending_abort_triggered_at_unix_ms = 19;
 }
 
 message AgentRunLarkCardDeliveryChangedEvent {
@@ -148,6 +203,9 @@ message AgentRunLarkCardDeliveryChangedEvent {
   optional string finalize_command_id = 18;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 19;
   optional AgentRunLarkCardTextFallbackPhase text_fallback_phase = 20;
+  optional string nyx_provider_slug = 21;
+  optional aevatar.gagents.channel.runtime.LarkCardAbortReason pending_abort_reason = 22;
+  optional int64 pending_abort_triggered_at_unix_ms = 23;
 }
 
 message AgentRunLarkCardDeliveryCompletion {
@@ -192,6 +250,64 @@ message AgentRunToolCall {
   string arguments_json = 3;
 }
 
+message AgentRunPendingToolAuthorization {
+  AgentRunToolCall call = 1;
+  bool has_requires_approval = 2;
+  bool requires_approval = 3;
+  bool is_read_only = 4;
+  bool is_destructive = 5;
+  string side_effect_kind = 6;
+  string tool_definition_fingerprint = 7;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 8;
+}
+
+enum AgentRunToolResultViewStatus {
+  AGENT_RUN_TOOL_RESULT_VIEW_STATUS_UNKNOWN = 0;
+  AGENT_RUN_TOOL_RESULT_VIEW_STATUS_SUCCESS = 1;
+  AGENT_RUN_TOOL_RESULT_VIEW_STATUS_NO_MATCH = 2;
+  AGENT_RUN_TOOL_RESULT_VIEW_STATUS_NOT_FOUND = 3;
+  AGENT_RUN_TOOL_RESULT_VIEW_STATUS_ERROR = 4;
+}
+
+message AgentRunSkillSearchMatchView {
+  string skill_name = 1;
+  string description = 2;
+  bool is_private = 3;
+  string category = 4;
+  repeated string tags = 5;
+}
+
+message AgentRunSkillSearchToolResultView {
+  AgentRunToolResultViewStatus status = 1;
+  bool has_matches = 2;
+  repeated AgentRunSkillSearchMatchView matches = 3;
+  string error = 4;
+  optional int32 http_status = 5;
+  string display_text = 6;
+}
+
+message AgentRunSkillLoadToolResultView {
+  AgentRunToolResultViewStatus status = 1;
+  string skill_name = 2;
+  bool loaded = 3;
+  string error = 4;
+  optional int32 http_status = 5;
+  string display_text = 6;
+}
+
+message AgentRunToolFailureResultView {
+  aevatar.ai.AgentToolReceiptStatus status = 1;
+  string error_code = 2;
+  string safe_message = 3;
+}
+
+message AgentRunToolResultView {
+  string tool_name = 1;
+  AgentRunSkillSearchToolResultView skill_search = 2;
+  AgentRunSkillLoadToolResultView skill_load = 3;
+  AgentRunToolFailureResultView failure = 4;
+}
+
 message AgentRunChatMessage {
   string role = 1;
   string content = 2;
@@ -199,6 +315,7 @@ message AgentRunChatMessage {
   repeated aevatar.ai.ChatContentPart content_parts = 4;
   string tool_call_id = 5;
   repeated AgentRunToolCall tool_calls = 6;
+  AgentRunToolResultView tool_result_view = 7;
 }
 
 message AgentRunReplyStepState {
@@ -230,6 +347,14 @@ message AgentRunReplyStepState {
   // tool-stripping / server-default-routing semantics of final_no_tools_step: the recovery retry
   // keeps tools + the user's routing + channel-context and only trims history to the recent floor.
   bool empty_reply_retry = 25;
+  repeated AgentRunPendingToolAuthorization pending_tool_authorizations = 26;
+  bool pending_tool_authorization_consumed = 27;
+  // Immutable authority pinned before the first user-facing model call. Exact tool objects are
+  // request-local and are therefore re-materialized from these typed facts on replay/retry.
+  aevatar.ai.AgentProfileSnapshot agent_profile_snapshot = 28;
+  aevatar.ai.AgentProfileTurnAuthorityState agent_profile_turn_authority = 29;
+  aevatar.ai.AgentTurnToolCatalogProofPayload tool_catalog_proof = 30;
+  string tool_catalog_policy_version = 31;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
@@ -246,6 +371,17 @@ message AgentRunLlmStepResult {
   string finish_reason = 6;
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 7;
   bool has_streamed_text_content = 8;
+  repeated AgentRunPendingToolAuthorization pending_tool_authorizations = 10;
+  // Exact request identity used to authorize this LLM step's tool calls. The
+  // initial step context predates BuildLlmStepRequest and therefore cannot
+  // supply this value to a later approval continuation on its own.
+  string tool_request_id = 11;
+  // Exact server-authorized catalog supplied to the provider for this model
+  // invocation. Empty also truthfully represents a no-tools model round.
+  repeated string available_tool_names = 12;
+  // Distinguishes an exact empty catalog from legacy evidence that did not
+  // capture the model-visible catalog at all.
+  bool tool_catalog_captured = 13;
 }
 
 // Typed tool IO facts returned after the run actor has reconciled and persisted
@@ -259,6 +395,14 @@ message AgentRunToolStepResult {
   // example reply_with_interaction). The executor surfaces the captured intent
   // here for the run actor to merge into AgentRunReplyStepState.outbound_intent.
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 4;
+  AgentRunToolAuthorizationOutcome authorization_outcome = 5;
+}
+
+enum AgentRunToolAuthorizationOutcome {
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_UNSPECIFIED = 0;
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_TRANSIENT_MATCHED = 1;
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_DURABLE_MATCHED = 2;
+  AGENT_RUN_TOOL_AUTHORIZATION_OUTCOME_REJECTED = 3;
 }
 
 // Transient command for the run actor. The nested NeedsLlmReplyEvent may carry
@@ -327,6 +471,42 @@ message AgentRunReplyProducedEvent {
   aevatar.gagents.channel.abstractions.MessageContent outbound = 9;
   repeated aevatar.gagents.channel.runtime.ConversationHistoryEntry appended_history = 10;
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 11;
+  bool use_source_activity_delivery_context = 12;
+  // Successful background-delivery registration transfers all user-visible
+  // approval and terminal output ownership away from AgentRunGAgent.
+  aevatar.ai.WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 13;
+}
+
+message AgentRunToolApprovalRequestedEvent {
+  AgentRunPendingToolApprovalState pending = 1;
+}
+
+message AgentRunToolApprovalNotificationDispatchedEvent {
+  string approval_request_id = 1;
+  int64 dispatched_at_unix_ms = 2;
+}
+
+message AgentRunToolApprovalDecisionRecordedEvent {
+  string approval_request_id = 1;
+  string tool_call_id = 2;
+  string arguments_sha256 = 3;
+  AgentRunToolApprovalDecision decision = 4;
+  int64 decided_at_unix_ms = 5;
+}
+
+// Transient card-callback command. The nested request may carry the fresh
+// callback reply token and NyxID user bearer and must never be persisted.
+message AgentRunToolApprovalDecisionRequested {
+  string run_id = 1;
+  string approval_request_id = 2;
+  string tool_call_id = 3;
+  string tool_name = 4;
+  string arguments_sha256 = 5;
+  bool approved = 6;
+  string sender_id = 7;
+  string registration_scope_id = 8;
+  string conversation_key = 9;
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 10;
 }
 
 // Persisted after admission gates pass and before the transient generation
@@ -338,6 +518,7 @@ message AgentRunReplyGenerationRequestedEvent {
   string target_actor_id = 3;
   int64 requested_at_unix_ms = 4;
   int32 attempt = 5;
+  aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 6;
 }
 
 // Persisted per-step waterline owned by AgentRunGAgent. Runtime-only
@@ -640,6 +821,13 @@ message WorkflowRunDeliveryGAgentState {
   string pending_terminal_publisher_actor_id = 31;
   int64 pending_terminal_buffered_at_unix_ms = 32;
   aevatar.workflow.WorkflowRunTerminalStatus terminal_outcome = 33;
+  aevatar.workflow.WorkflowRunToolApprovalNotification pending_tool_approval_notification = 34;
+  repeated string delivered_tool_approval_request_ids = 35;
+  int32 tool_approval_delivery_attempt = 36;
+  string tool_approval_retry_callback_id = 37;
+  int64 tool_approval_retry_at_unix_ms = 38;
+  string pending_tool_approval_publisher_actor_id = 39;
+  int64 pending_tool_approval_buffered_at_unix_ms = 40;
 }
 
 message WorkflowRunDeliveryReserveRequested {
@@ -707,6 +895,49 @@ message WorkflowRunDeliveryTerminalNotificationDiscardedEvent {
   string workflow_command_id = 2;
   string reason = 3;
   int64 discarded_at_unix_ms = 4;
+}
+
+message WorkflowRunDeliveryToolApprovalNotificationBufferedEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string publisher_actor_id = 3;
+  aevatar.workflow.WorkflowRunToolApprovalNotification notification = 4;
+  int64 buffered_at_unix_ms = 5;
+}
+
+message WorkflowRunDeliveryToolApprovalNotificationDeliveredEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string approval_request_id = 3;
+  int32 attempt = 4;
+  string sent_activity_id = 5;
+  string platform_message_id = 6;
+  int64 delivered_at_unix_ms = 7;
+}
+
+message WorkflowRunDeliveryToolApprovalNotificationRetryScheduledEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string approval_request_id = 3;
+  int32 attempt = 4;
+  string callback_id = 5;
+  int64 retry_at_unix_ms = 6;
+}
+
+message WorkflowRunDeliveryToolApprovalNotificationRetryReached {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_command_id = 3;
+  string approval_request_id = 4;
+  int32 attempt = 5;
+}
+
+message WorkflowRunDeliveryToolApprovalNotificationDiscardedEvent {
+  string delivery_id = 1;
+  string workflow_command_id = 2;
+  string approval_request_id = 3;
+  string reason = 4;
+  int64 discarded_at_unix_ms = 5;
 }
 
 message WorkflowRunDeliveryAbandonRequested {
@@ -829,6 +1060,41 @@ message NyxIdChatConversationRegistrationUnavailableEvent {
   string correlation_id = 6;
 }
 
+enum NyxIdChatPendingCreationFirstTurnOutcome {
+  NYX_ID_CHAT_PENDING_CREATION_FIRST_TURN_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_PENDING_CREATION_FIRST_TURN_OUTCOME_STARTED = 1;
+  NYX_ID_CHAT_PENDING_CREATION_FIRST_TURN_OUTCOME_UNAVAILABLE = 2;
+}
+
+message NyxIdChatPendingCreationFirstTurnFinalizedEvent {
+  string conversation_actor_id = 1;
+  string turn_id = 2;
+  string credential_ref = 3;
+  NyxIdChatPendingCreationFirstTurnOutcome outcome = 4;
+  string failure_code = 5;
+  string safe_message = 6;
+  google.protobuf.Timestamp committed_at = 7;
+}
+
+enum NyxIdChatPendingSteeringContinuationOutcome {
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_STARTED = 1;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_SECRET_UNAVAILABLE = 2;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_INVALID_COMMAND = 3;
+  NYX_ID_CHAT_PENDING_STEERING_CONTINUATION_OUTCOME_IDENTITY_MISMATCH = 4;
+}
+
+message NyxIdChatPendingSteeringContinuationFinalizedEvent {
+  string conversation_actor_id = 1;
+  string continuation_turn_id = 2;
+  string credential_ref = 3;
+  NyxIdChatPendingSteeringContinuationOutcome outcome = 4;
+  string failure_code = 5;
+  string safe_message = 6;
+  google.protobuf.Timestamp committed_at = 7;
+  NyxIdChatConversationGAgentState state = 8;
+}
+
 message NyxIdChatConversationDeletionStartedEvent {
   string scope_id = 1;
   string actor_id = 2;
@@ -848,6 +1114,7 @@ message NyxIdChatConversationHistoryDeletedEvent {
   string actor_id = 2;
   string command_id = 3;
   string correlation_id = 4;
+  google.protobuf.Timestamp deleted_at = 5;
 }
 
 message NyxIdChatConversationDeletionCompensationStartedEvent {

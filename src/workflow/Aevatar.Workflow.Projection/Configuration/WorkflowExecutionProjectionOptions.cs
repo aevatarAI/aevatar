@@ -57,4 +57,15 @@ public sealed class WorkflowExecutionProjectionOptions
     /// </summary>
     public bool ValidateGraphProviderOnStartup { get; set; } = true;
 
+    /// <summary>
+    /// Enables background reconciliation of stale running workflow read models.
+    /// </summary>
+    public bool EnableTerminalStateReconciliation { get; set; } = true;
+
+    /// <summary>
+    /// Minimum read-model inactivity age before a running workflow is offered
+    /// to its authoritative actor for terminal-state reconciliation.
+    /// </summary>
+    public int TerminalStateReconciliationStaleAfterSeconds { get; set; } = 900;
+
 }

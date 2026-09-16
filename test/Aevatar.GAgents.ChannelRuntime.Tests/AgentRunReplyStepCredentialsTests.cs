@@ -30,6 +30,7 @@ public sealed class AgentRunReplyStepCredentialsTests
                 NyxIdAccessToken = "user-token",
                 NyxIdOrgToken = "org-token",
                 SenderNyxIdAccessToken = "sender-token",
+                SourceReadableNyxIdAccessToken = "source-readable-user-token",
             },
             SenderBinding = new AgentToolSenderBindingContextPayload { BindingId = "bnd-1" },
             Caller = new AgentToolCallerContextPayload { OwnerSubject = "owner-subj", ScopeId = "scope-1" },
@@ -48,6 +49,7 @@ public sealed class AgentRunReplyStepCredentialsTests
                 NyxIdAccessToken = "owner-token",
                 NyxIdOrgToken = "owner-org-token",
                 SenderNyxIdAccessToken = "leaked-sender",
+                SourceReadableNyxIdAccessToken = "source-readable-owner-token",
             },
         },
     };
@@ -63,12 +65,14 @@ public sealed class AgentRunReplyStepCredentialsTests
         stripped.ToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
         stripped.ToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
         stripped.ToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+        stripped.ToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeEmpty();
         stripped.OwnerFallbackLlmControl.NyxIdAccessToken.Should().BeEmpty();
         stripped.OwnerFallbackLlmControl.NyxIdOrgToken.Should().BeEmpty();
         stripped.OwnerFallbackLlmControl.SenderNyxIdAccessToken.Should().BeEmpty();
         stripped.OwnerFallbackToolContext.Credentials.NyxIdAccessToken.Should().BeEmpty();
         stripped.OwnerFallbackToolContext.Credentials.NyxIdOrgToken.Should().BeEmpty();
         stripped.OwnerFallbackToolContext.Credentials.SenderNyxIdAccessToken.Should().BeEmpty();
+        stripped.OwnerFallbackToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeEmpty();
     }
 
     [Fact]
@@ -93,6 +97,8 @@ public sealed class AgentRunReplyStepCredentialsTests
 
         original.LlmControl.NyxIdAccessToken.Should().Be("user-token");
         original.ToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        original.ToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be(
+            "source-readable-user-token");
         original.OwnerFallbackLlmControl.NyxIdAccessToken.Should().Be("owner-token");
     }
 

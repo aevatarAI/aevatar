@@ -18,6 +18,7 @@ public class ChatRunStartErrorMapperTests
     [InlineData(WorkflowChatRunStartError.WorkflowBindingMismatch, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.AgentWorkflowNotConfigured, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.InvalidWorkflowYaml, StatusCodes.Status400BadRequest)]
+    [InlineData(WorkflowChatRunStartError.ExternalCapabilityNotReady, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.WorkflowNameMismatch, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.InvalidCallerCredential, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.InvalidConversationInput, StatusCodes.Status400BadRequest)]
@@ -71,6 +72,16 @@ public class ChatRunStartErrorMapperTests
 
         mapped.Code.Should().Be("INVALID_WORKFLOW_YAML");
         mapped.Message.Should().Be("Workflow YAML is invalid.");
+    }
+
+    [Fact]
+    public void ToCommandError_ExternalCapabilityNotReady_ShouldMapExpectedPayload()
+    {
+        var mapped = ChatRunStartErrorMapper.ToCommandError(
+            WorkflowChatRunStartError.ExternalCapabilityNotReady);
+
+        mapped.Code.Should().Be("EXTERNAL_WORKFLOW_CAPABILITY_NOT_READY");
+        mapped.Message.Should().Be("External workflow capability admission failed.");
     }
 
     [Fact]

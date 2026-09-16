@@ -7,6 +7,9 @@
     <RootNamespace>Aevatar.CQRS.Projection.Stores.Abstractions</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Grpc.Tools">
       <PrivateAssets>all</PrivateAssets>
@@ -15,5 +18,6 @@
   </ItemGroup>
   <ItemGroup>
     <Protobuf Include="projection_document_delete_marker.proto" GrpcServices="None" />
+    <Protobuf Include="projection_graph_delta.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

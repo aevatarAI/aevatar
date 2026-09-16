@@ -905,7 +905,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   const selectedConversationMessages = useQuery({
     queryKey: ['studio-files-chat-history', scopeId, selectedConversationId],
     enabled: Boolean(scopeId && selectedConversationId),
-    queryFn: () => chatHistoryApi.loadConversation(scopeId, selectedConversationId),
+    queryFn: () => chatHistoryApi.loadConversation(selectedConversationId),
   });
 
   React.useEffect(() => {
@@ -1009,10 +1009,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     chatDeleteOperationRef.current = operation;
 
     try {
-      await chatHistoryApi.deleteConversation(
-        operation.scopeId,
-        operation.conversationId,
-      );
+      await chatHistoryApi.deleteConversation(operation.conversationId);
       if (scopeIdRef.current !== operation.scopeId) {
         return;
       }

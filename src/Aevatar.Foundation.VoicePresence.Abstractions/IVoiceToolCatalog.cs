@@ -6,9 +6,9 @@ namespace Aevatar.Foundation.VoicePresence.Abstractions;
 public interface IVoiceToolCatalog
 {
     /// <summary>
-    /// Discovers all currently available voice-callable tools.
+    /// Materializes the immutable, budgeted catalog used by one voice session.
     /// </summary>
-    Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(
+    Task<VoiceToolCatalogSnapshot> DiscoverAsync(
         VoiceToolExecutionContext? toolContext = null,
         CancellationToken ct = default);
 }

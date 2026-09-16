@@ -7,7 +7,9 @@ import {
   buildTeamMemberWorkflowStudioHref,
   buildTeamStudioHref,
   buildTeamsHref,
+  buildTeamWorkOrderDetailHref,
   readTeamDetailRouteState,
+  readTeamWorkOrderRouteState,
 } from "./teamRoutes";
 
 describe("teamRoutes", () => {
@@ -352,5 +354,38 @@ describe("teamRoutes", () => {
       testTeam: false,
       workflowId: "wf-2",
     });
+  });
+
+  it("builds and reads a canonical Team-scoped WorkOrder detail route", () => {
+    const href = buildTeamWorkOrderDetailHref({
+      scopeId: " scope-alpha ",
+      teamId: " team-alpha ",
+      workOrderId: " wo-alpha ",
+    });
+
+    expect(href).toBe(
+      "/scopes/scope-alpha/teams/team-alpha/work-orders/wo-alpha",
+    );
+    expect(readTeamWorkOrderRouteState(href)).toEqual({
+      scopeId: "scope-alpha",
+      teamId: "team-alpha",
+      workOrderId: "wo-alpha",
+    });
+  });
+
+  it("keeps WorkOrders contextual when the detail identity is absent", () => {
+    expect(
+      buildTeamWorkOrderDetailHref({
+        scopeId: "scope-alpha",
+        teamId: "team-alpha",
+        workOrderId: " ",
+      }),
+    ).toBe("/scopes/scope-alpha/teams/team-alpha?tab=work-orders");
+    expect(
+      readTeamDetailRouteState(
+        "?tab=work-orders",
+        "/scopes/scope-alpha/teams/team-alpha",
+      ).tab,
+    ).toBe("work-orders");
   });
 });

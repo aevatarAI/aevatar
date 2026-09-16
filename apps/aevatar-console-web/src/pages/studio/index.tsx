@@ -451,8 +451,8 @@ const inventoryActionsHintStyle: React.CSSProperties = {
 
 const inventorySelectionPillStyle: React.CSSProperties = {
   alignItems: 'center',
-  background: 'rgba(255, 250, 244, 0.96)',
-  border: '1px solid #e7dece',
+  background: 'rgba(240, 237, 228, 0.6)',
+  border: '1px solid transparent',
   borderRadius: 999,
   color: '#5f574b',
   display: 'inline-flex',
@@ -488,8 +488,8 @@ const inventoryActionRowStyle: React.CSSProperties = {
 
 const inventoryActionButtonStyle: React.CSSProperties = {
   alignItems: 'center',
-  background: 'rgba(255, 252, 246, 0.98)',
-  border: '1px solid #e6decd',
+  background: '#ffffff',
+  border: '1px solid #e5e0d4',
   borderRadius: 999,
   color: '#5f574b',
   cursor: 'pointer',
@@ -504,8 +504,8 @@ const inventoryActionButtonStyle: React.CSSProperties = {
 
 const inventoryActionPrimaryButtonStyle: React.CSSProperties = {
   ...inventoryActionButtonStyle,
-  background: 'rgba(17, 24, 39, 0.96)',
-  border: '1px solid rgba(17, 24, 39, 0.96)',
+  background: '#17130c',
+  border: '1px solid #17130c',
   color: '#fbfaf6',
 };
 
@@ -518,9 +518,9 @@ const inventoryActionDangerButtonStyle: React.CSSProperties = {
 
 const inventoryEntryButtonStyle: React.CSSProperties = {
   ...inventoryActionButtonStyle,
-  background: '#eef4ff',
-  border: '1px solid #6b8cff',
-  color: '#2f54eb',
+  background: '#eff6ff',
+  border: '1px solid #bfdbfe',
+  color: '#1d4ed8',
 };
 
 const inventoryEntryPillStyle: React.CSSProperties = {
@@ -11180,10 +11180,11 @@ const StudioPage: React.FC = () => {
       data-testid="studio-context-bar"
       style={{
         alignItems: 'center',
+        borderBottom: '1px solid #e8e3d8',
         display: 'flex',
         flexWrap: 'wrap',
         gap: 12,
-        padding: '8px 16px 4px',
+        padding: '12px 20px',
       }}
     >
       <AevatarBackButton
@@ -11203,10 +11204,10 @@ const StudioPage: React.FC = () => {
         <div
           data-testid="studio-context-title"
           style={{
-            color: '#1d2129',
-            fontSize: 16,
+            color: '#17130c',
+            fontSize: 15,
             fontWeight: 700,
-            letterSpacing: 0,
+            letterSpacing: '-0.01em',
             lineHeight: '22px',
             minWidth: 0,
           }}

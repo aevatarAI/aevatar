@@ -6,6 +6,32 @@ owner: liyingpei
 
 # ADR-0015: AGUI / SSE Projection Session Pipeline
 
+> 2026-08-07 update (#3290): a valid long-running workflow role held one
+> persistent-stream `DeliverBatch` open while committing more than a thousand
+> token-sized `RoleChatSessionProgressedEvent` facts. Their projection fan-out
+> filled the shared queue cache, so another command received an accepted receipt
+> but never reached a committed run state. Role chat now publishes the first
+> text/reasoning delta immediately and coalesces subsequent consecutive deltas
+> into bounded batches. The persistent-stream delivery horizon is three minutes,
+> which covers the 120-second role turn plus post-turn finalization; the previous
+> 10-second horizon incorrectly classified healthy AI turns as failed delivery.
+
+> 2026-08-04 update (#3170): workflow role streaming now commits the existing
+> typed `RoleChatSessionProgressedEvent` contract for text, reasoning, media,
+> and tool progress. The workflow run-event projector maps those committed
+> facts to presentation frames. Transient workflow chunk messages are removed;
+> only the workflow root actor may emit the workflow terminal frame.
+
+> 2026-08-03 update (#3170): production command
+> `8088d2e7-50a9-418f-8f88-b1a1897fcc7f` was accepted but its SSE emitted only
+> context and keepalive frames. The original pod stdout had expired; a canary on
+> the same `d0e20fe9` image (`d3c07a09-2d79-4a4d-87d5-9908df80c4d1`) reproduced
+> the stall while the run actor committed through state version 11. Orleans then
+> logged delivery to a consumer on the previous silo activation failing, followed
+> by continuous queue-cache pressure. The Kafka provider used a non-faulting
+> delivery failure handler, so the stale explicit subscription kept its cursor
+> and blocked shared queue progress.
+
 > 2026-07-21 update: NyxIdChat live output is actor-committed progress. Text,
 > reasoning, media, tool lifecycle, usage, authorization, and terminal frames
 > use one `EventEnvelope -> Projection -> AGUI -> SSE` path with actor-owned
@@ -52,6 +78,10 @@ Host 只负责：
 3. 提供 `emitAsync` 或 SSE writer
 
 Host 不再拥有 observation lifecycle、completion 判定、runtime lease 状态或 raw stream subscription。
+
+Accepted receipt 之后的首次可观察性由 interaction layer 约束，而不是由 Host heartbeat 猜测。Workflow chat 的默认 deadline 是 30 秒：首个 projection-backed frame 到达后，workflow 继续遵循自身执行/步骤 timeout；deadline 前始终没有业务 frame 时，interaction 抛出 typed observation timeout，external adapter 输出 `RUN_OBSERVATION_TIMEOUT` terminal error 并关闭 stream。
+
+Persistent stream transport 必须在 delivery retry horizon 耗尽后 fault 失效的 explicit subscription。尤其是 rollout 后指向旧 silo activation 的 consumer，不能永久保留 cursor 并阻止共享 queue cache purge；subscription fault/removal 由 Orleans pulling agent 按 subscription id 完成，不得在 HTTP/query path 通过整 stream reset 修复。
 
 The application-facing lifecycle contract is
 `IRealtimeSession<TInbound,TReceipt,TStartError,TOutboundFrame,TCompletion>`.
@@ -110,6 +140,20 @@ Required behavior:
 - explicit replay is a typed progress payload, restores tool, reasoning, media, text, usage, and terminal frames from the committed snapshot, and does not commit a second completion;
 - attachment-scoped sequence/protobuf fencing removes post-fan-out duplicates without collapsing distinct frames in a multi-frame replay sequence;
 - no in-process session registry, callback-owned progress state, `Task.Run`, or extra projection transport envelope is introduced.
+
+### 3.2 Workflow role live progress uses the same committed contract
+
+`WorkflowRoleGAgent` commits `RoleChatSessionProgressedEvent` for each live
+text, reasoning, media, and tool lifecycle update. Its completion commits the
+existing typed `terminal_progress` tail for usage, fallback text, text end, and
+authorization. `WorkflowExecutionRunEventProjector` maps those committed facts
+to `WorkflowRunEventEnvelope`; it does not consume a workflow-only transient
+chunk protocol.
+
+Role progress is presentation input, not workflow completion authority. The
+adapter deliberately ignores role `terminal` and `replay` payloads, and only a
+terminal event committed by the workflow root actor may close the workflow run
+stream.
 
 ### 4. StreamingProxy durable completion 必须落到 committed terminal fact
 

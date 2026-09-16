@@ -9,7 +9,8 @@ internal static class WorkflowRunDefinitionValidationSupport
     public static List<string> Validate(
         WorkflowDefinition workflow,
         IEnumerable<string> knownModuleStepTypes,
-        IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory)
+        IEventModuleFactory<IWorkflowExecutionContext> stepExecutorFactory,
+        bool requireCurrentToolCatalogPolicy = false)
     {
         var knownStepTypes = new HashSet<string>(knownModuleStepTypes, StringComparer.OrdinalIgnoreCase);
         knownStepTypes.UnionWith(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes);
@@ -21,6 +22,7 @@ internal static class WorkflowRunDefinitionValidationSupport
             {
                 RequireKnownStepTypes = true,
                 KnownStepTypes = knownStepTypes,
+                RequireExplicitLlmAgentToolScopes = requireCurrentToolCatalogPolicy,
             },
             availableWorkflowNames: null);
     }

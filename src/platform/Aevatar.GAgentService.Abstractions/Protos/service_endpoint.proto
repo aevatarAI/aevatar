@@ -57,6 +57,9 @@ message ServiceInvocationRequest {
   // the ServiceRun outbox; workflow callers may also provide the workflow
   // callback above so the workflow Run remains the terminal fact source.
   ServiceRunCompletionNotificationTarget service_run_completion_notification_target = 12;
+  // Exact provisioning/automation operation that caused a scheduled Run.
+  // schedule_id identifies the stable schedule; this identifies one attempt.
+  string schedule_operation_id = 13;
 }
 
 message WorkflowServiceCompletionNotificationTarget {

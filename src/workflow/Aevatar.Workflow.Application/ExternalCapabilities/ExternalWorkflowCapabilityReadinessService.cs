@@ -100,6 +100,8 @@ public sealed class ExternalWorkflowCapabilityReadinessService(
                 $"{descriptor.Selector.NyxIdRequest.UserServiceId}\n" +
                 WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(
                     descriptor.Selector.NyxIdRequest),
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution =>
+                "canonical-platform-code-execution",
             _ => throw new InvalidOperationException(
                 "External workflow capability selector identity is unavailable."),
         };

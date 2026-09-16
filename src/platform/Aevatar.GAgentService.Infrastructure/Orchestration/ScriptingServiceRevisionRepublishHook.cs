@@ -4,7 +4,9 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Core.Ports;
 using Aevatar.Scripting.Abstractions;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Security.Cryptography;
@@ -16,15 +18,19 @@ public sealed class ScriptingServiceRevisionRepublishHook : ICommittedStatePubli
 {
     private readonly IServiceScriptingRepublishCandidateQueryReader _candidateReader;
     private readonly IServiceCommandPort _serviceCommandPort;
+    private readonly IServiceImplementationAdapter _scriptingAdapter;
     private readonly ILogger<ScriptingServiceRevisionRepublishHook> _logger;
 
     public ScriptingServiceRevisionRepublishHook(
         IServiceScriptingRepublishCandidateQueryReader candidateReader,
         IServiceCommandPort serviceCommandPort,
+        IEnumerable<IServiceImplementationAdapter> implementationAdapters,
         ILogger<ScriptingServiceRevisionRepublishHook>? logger = null)
     {
         _candidateReader = candidateReader ?? throw new ArgumentNullException(nameof(candidateReader));
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
+        _scriptingAdapter = (implementationAdapters ?? throw new ArgumentNullException(nameof(implementationAdapters)))
+            .Single(adapter => adapter.ImplementationKind == ServiceImplementationKind.Scripting);
         _logger = logger ?? NullLogger<ScriptingServiceRevisionRepublishHook>.Instance;
     }
 
@@ -57,12 +63,15 @@ public sealed class ScriptingServiceRevisionRepublishHook : ICommittedStatePubli
             try
             {
                 var revisionId = BuildRepublishedRevisionId(candidate, promoted);
-                await EnsureRevisionAsync(candidate, promoted, revisionId, ct);
+                var revisionSpec = BuildRevisionSpec(candidate, promoted, revisionId);
+                var expectedArtifactHash = await ComputeExpectedArtifactHashAsync(revisionSpec, ct);
+                await EnsureRevisionAsync(candidate, revisionSpec, ct);
                 await _serviceCommandPort.PrepareRevisionAsync(
                     new PrepareServiceRevisionCommand
                     {
                         Identity = candidate.Identity.Clone(),
                         RevisionId = revisionId,
+                        PreparationSpec = revisionSpec.Clone(),
                     },
                     ct);
                 await _serviceCommandPort.PublishRevisionAsync(
@@ -70,13 +79,7 @@ public sealed class ScriptingServiceRevisionRepublishHook : ICommittedStatePubli
                     {
                         Identity = candidate.Identity.Clone(),
                         RevisionId = revisionId,
-                    },
-                    ct);
-                await _serviceCommandPort.SetDefaultServingRevisionAsync(
-                    new SetDefaultServingRevisionCommand
-                    {
-                        Identity = candidate.Identity.Clone(),
-                        RevisionId = revisionId,
+                        PublicationSpec = revisionSpec.Clone(),
                     },
                     ct);
                 await _serviceCommandPort.ActivateServiceRevisionAsync(
@@ -84,6 +87,7 @@ public sealed class ScriptingServiceRevisionRepublishHook : ICommittedStatePubli
                     {
                         Identity = candidate.Identity.Clone(),
                         RevisionId = revisionId,
+                        ExpectedArtifactHash = expectedArtifactHash,
                     },
                     ct);
 
@@ -193,8 +197,7 @@ public sealed class ScriptingServiceRevisionRepublishHook : ICommittedStatePubli
 
     private async Task EnsureRevisionAsync(
         ServiceScriptingRepublishCandidateSnapshot candidate,
-        ScriptCatalogRevisionPromotedEvent promoted,
-        string revisionId,
+        ServiceRevisionSpec revisionSpec,
         CancellationToken ct)
     {
         try
@@ -202,7 +205,7 @@ public sealed class ScriptingServiceRevisionRepublishHook : ICommittedStatePubli
             await _serviceCommandPort.CreateRevisionAsync(
                 new CreateServiceRevisionCommand
                 {
-                    Spec = BuildRevisionSpec(candidate, promoted, revisionId),
+                    Spec = revisionSpec.Clone(),
                 },
                 ct);
         }
@@ -211,9 +214,25 @@ public sealed class ScriptingServiceRevisionRepublishHook : ICommittedStatePubli
             _logger.LogDebug(
                 ex,
                 "Republish revision {RevisionId} already exists for service {ServiceKey}; continuing lifecycle commands.",
-                revisionId,
+                revisionSpec.RevisionId,
                 ServiceKeys.Build(candidate.Identity));
         }
+    }
+
+    private async Task<string> ComputeExpectedArtifactHashAsync(
+        ServiceRevisionSpec revisionSpec,
+        CancellationToken ct)
+    {
+        var prepared = await _scriptingAdapter.PrepareRevisionAsync(
+            new PrepareServiceRevisionRequest
+            {
+                ServiceKey = ServiceKeys.Build(revisionSpec.Identity),
+                Spec = revisionSpec.Clone(),
+            },
+            ct);
+        var normalized = prepared.Clone();
+        normalized.ArtifactHash = string.Empty;
+        return Convert.ToHexString(SHA256.HashData(normalized.ToByteArray()));
     }
 
     private static string BuildStableHash(params string?[] values)

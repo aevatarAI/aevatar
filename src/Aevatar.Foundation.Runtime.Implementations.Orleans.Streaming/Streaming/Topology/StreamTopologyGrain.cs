@@ -121,6 +121,8 @@ public sealed class StreamTopologyGrain(
             EventTypeFilter = binding.EventTypeFilter.OrderBy(x => x, StringComparer.Ordinal).ToList(),
             Version = binding.Version,
             LeaseId = binding.LeaseId,
+            TargetActorKind = binding.TargetActorKind,
+            ActivationGeneration = binding.ActivationGeneration,
         };
 
     private static StreamForwardingBindingEntry CloneEntry(StreamForwardingBindingEntry entry) =>
@@ -133,6 +135,8 @@ public sealed class StreamTopologyGrain(
             EventTypeFilter = [.. entry.EventTypeFilter],
             Version = entry.Version,
             LeaseId = entry.LeaseId,
+            TargetActorKind = entry.TargetActorKind,
+            ActivationGeneration = entry.ActivationGeneration,
         };
 
     private static bool EntryEquals(StreamForwardingBindingEntry left, StreamForwardingBindingEntry right)
@@ -142,6 +146,8 @@ public sealed class StreamTopologyGrain(
             left.ForwardingMode != right.ForwardingMode ||
             left.Version != right.Version ||
             !string.Equals(left.LeaseId, right.LeaseId, StringComparison.Ordinal) ||
+            !string.Equals(left.TargetActorKind, right.TargetActorKind, StringComparison.Ordinal) ||
+            left.ActivationGeneration != right.ActivationGeneration ||
             left.DirectionFilter.Count != right.DirectionFilter.Count ||
             left.EventTypeFilter.Count != right.EventTypeFilter.Count)
         {

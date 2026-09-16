@@ -3,6 +3,7 @@ using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Capabilities;
+using Aevatar.Configuration;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Hosting.CapabilityApi;
@@ -74,8 +75,22 @@ public static class AevatarPlatformHostBuilderExtensions
                 if (int.TryParse(builder.Configuration["Aevatar:SystemSkills:MaxBytes"], out var maxBytes))
                     aiOptions.SystemSkillOverlayMaxBytes = maxBytes;
                 aiOptions.EnableWebTools = true;
-                aiOptions.WebSearchNyxIdSlug = builder.Configuration["Aevatar:WebSearch:NyxIdSlug"];
-                aiOptions.WebSearchApiBaseUrl = builder.Configuration["Aevatar:WebSearch:ApiBaseUrl"];
+                aiOptions.WebSearchNyxIdBaseUrl =
+                    FirstConfiguredValue(
+                        builder.Configuration,
+                        "Aevatar:Web:NyxIdBaseUrl")
+                    ?? NyxIdEndpointResolver.ResolvePublicApiBaseUrl(builder.Configuration);
+                aiOptions.WebSearchNyxIdSlug =
+                    FirstConfiguredValue(
+                        builder.Configuration,
+                        "Aevatar:Web:NyxIdSearchSlug",
+                        "Aevatar:Web:SearchSlug",
+                        "Aevatar:WebSearch:NyxIdSlug");
+                aiOptions.WebSearchApiBaseUrl =
+                    FirstConfiguredValue(
+                        builder.Configuration,
+                        "Aevatar:Web:SearchApiBaseUrl",
+                        "Aevatar:WebSearch:ApiBaseUrl");
                 if (options.EnableWorkflowCapability)
                     aiOptions.EnableWorkflowTools = true;
                 if (options.EnableScriptingCapability)
@@ -121,6 +136,18 @@ public static class AevatarPlatformHostBuilderExtensions
                 Category = "dependency",
                 ProbeAsync = static async (serviceProvider, cancellationToken) =>
                 {
+                    var providerStatus = serviceProvider.GetService<ProjectionGraphProviderStatus>();
+                    if (providerStatus is { Enabled: false })
+                    {
+                        return AevatarHealthContributorResult.Healthy(
+                            "Workflow graph read model is disabled by configuration.",
+                            new Dictionary<string, string>
+                            {
+                                ["provider"] = providerStatus.ProviderName,
+                                ["enabled"] = bool.FalseString,
+                            });
+                    }
+
                     var graphStore = serviceProvider.GetRequiredService<IProjectionGraphStore>();
                     _ = await graphStore.ListNodesByOwnerAsync(
                         scope: WorkflowExecutionGraphConstants.Scope,
@@ -187,6 +214,20 @@ public static class AevatarPlatformHostBuilderExtensions
 
     private static bool ReadBoolean(string? value) =>
         bool.TryParse(value, out var result) && result;
+
+    private static string? FirstConfiguredValue(
+        IConfiguration configuration,
+        params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            var value = configuration[key];
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+
+        return null;
+    }
 
     private static AgentToolAdmissionPolicy ResolveAgentToolAdmissionPolicy(
         IConfiguration configuration)

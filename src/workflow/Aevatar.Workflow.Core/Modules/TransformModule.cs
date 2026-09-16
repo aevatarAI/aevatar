@@ -53,7 +53,7 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
             transformOperation = ResolveTransformOperation(request);
             if (transformOperation is not null)
             {
-                output = ExecuteTransformOperation(input, transformOperation);
+                output = ExecuteTransformOperation(input, transformOperation, ct);
             }
             else
             {
@@ -101,7 +101,9 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = true, Output = output,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         }, TopologyAudience.Self, ct);
     }
 
@@ -114,9 +116,11 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = false,
             Output = string.Empty,
             Error = string.IsNullOrWhiteSpace(error) ? "Transform operation failed." : error,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         }, TopologyAudience.Self, ct);
 
     private static TransformOperationSpec? ResolveTransformOperation(StepRequestEvent request)
@@ -136,6 +140,7 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
             Value = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "value", "value_field", "field").Trim(),
             Aggregate = ParseTransformAggregateKind(
                 WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "aggregate", "agg")),
+            Template = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "template"),
         };
 
         var precision = WorkflowParameterValueParser.GetString(request.Parameters, string.Empty, "precision", "scale").Trim();
@@ -161,6 +166,7 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
             "min" => TransformOperationKind.Min,
             "max" => TransformOperationKind.Max,
             "groupby" => TransformOperationKind.GroupBy,
+            "template" => TransformOperationKind.Template,
             _ => TransformOperationKind.Unspecified,
         };
 
@@ -181,7 +187,10 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
             ? string.Empty
             : value.Trim().Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
 
-    private static string ExecuteTransformOperation(string input, TransformOperationSpec spec)
+    private static string ExecuteTransformOperation(
+        string input,
+        TransformOperationSpec spec,
+        CancellationToken cancellationToken)
     {
         if (spec.HasPrecision && spec.Precision < 0)
             throw new InvalidOperationException("transform precision must be zero or greater.");
@@ -196,6 +205,7 @@ public sealed class TransformModule : IEventModule<IWorkflowExecutionContext>
             TransformOperationKind.Min => FormatDecimal(ReadNumericValues(input, spec).Min()),
             TransformOperationKind.Max => FormatDecimal(ReadNumericValues(input, spec).Max()),
             TransformOperationKind.GroupBy => GroupBy(input, spec),
+            TransformOperationKind.Template => BoundedTemplateRenderer.Render(input, spec.Template, cancellationToken),
             _ => input,
         };
     }

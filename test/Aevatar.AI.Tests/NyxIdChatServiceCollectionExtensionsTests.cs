@@ -39,7 +39,23 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void AddNyxIdChat_WhenAssistantActionsEnabled_ShouldRegisterStrictStartupFetcher()
+    public void AddNyxIdChat_Default_ShouldDenyCanaryEffectFaultAuthorization()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+        using var provider = services.BuildServiceProvider();
+
+        var options = provider.GetRequiredService<NyxIdChatCanaryEffectFaultOptions>();
+        options.Enabled.Should().BeFalse();
+        options.AllowedOwnerSubjects.Should().BeEmpty();
+        provider.GetRequiredService<INyxIdChatCanaryEffectFaultAuthorizationPolicy>()
+            .CanArm("ce646b72-dd49-4ea8-bc1e-8273672c102c")
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void AddNyxIdChat_WhenAssistantActionsEnabled_ShouldRegisterStartupFetcher()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -80,9 +96,12 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
             descriptor.ServiceType == typeof(IAgentProfileTurnClassifier) &&
             descriptor.ImplementationFactory != null);
         services.Should().ContainSingle(descriptor =>
-            descriptor.ServiceType == typeof(AgentProfileTurnCatalogMaterializer));
+            descriptor.ServiceType == typeof(IAgentProfileConnectedOperationSelector) &&
+            descriptor.ImplementationFactory != null);
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(AgentTurnToolCatalogMaterializer));
         services.Should().NotContain(descriptor =>
-            descriptor.ServiceType == typeof(AgentProfileTurnCatalog));
+            descriptor.ServiceType == typeof(AgentTurnToolCatalog));
     }
 
     [Fact]
@@ -132,6 +151,25 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
         services.Should().Contain(descriptor =>
             descriptor.ServiceType == typeof(IAgentToolExecutionPort) &&
             descriptor.ImplementationType == typeof(AdmittedAgentToolExecutor));
+    }
+
+    [Fact]
+    public void AddNyxIdChat_ShouldRegisterAsynchronousTurnOperationPorts()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdChatTurnOperationDispatchPort) &&
+            descriptor.ImplementationType == typeof(NyxIdChatTurnOperationDispatchPort));
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdChatTurnOperationReconciliationPort) &&
+            descriptor.ImplementationType ==
+            typeof(AdmittedNyxIdChatTurnOperationReconciliationPort));
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(INyxIdChatToolVerificationPort) &&
+            descriptor.ImplementationType == typeof(NyxIdChatToolVerificationPort));
     }
 
     [Fact]

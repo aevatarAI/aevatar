@@ -9,5 +9,6 @@ public sealed class NyxIdAppAuthOptions
 
     public bool? Enabled { get; set; }
     public string Authority { get; set; } = "https://nyx-api.chrono-ai.fun";
+    public string ApiBaseUrl { get; set; } = "https://nyx-api.chrono-ai.fun";
     public bool RequireHttpsMetadata { get; set; } = true;
 }

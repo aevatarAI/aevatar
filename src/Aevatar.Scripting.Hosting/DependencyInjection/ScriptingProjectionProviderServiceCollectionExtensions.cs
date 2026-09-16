@@ -21,11 +21,13 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
         if (configuration == null)
         {
-            if (HasAllScriptingDocumentReaders(services, ProjectionDocumentProviderKind.InMemory))
-                return services;
-
             AddInMemoryDocumentStores(services);
-            services.AddInMemoryGraphProjectionStore();
+            if (!UseExistingGraphProviderOrThrow(
+                    services,
+                    new ProjectionGraphProviderStatus("InMemory", Enabled: true)))
+            {
+                services.AddInMemoryGraphProjectionStore();
+            }
             return services;
         }
 
@@ -39,14 +41,11 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
 
         EnforceGraphProviderPolicy(configuration, enableInMemoryGraph);
 
-        if (HasAllScriptingDocumentReaders(services, documentProvider.Kind))
-            return services;
-
         var graphProviderCount = (enableNeo4jGraph ? 1 : 0) + (enableInMemoryGraph ? 1 : 0);
-        if (graphProviderCount != 1)
+        if (graphProviderCount > 1)
         {
             throw new InvalidOperationException(
-                "Exactly one graph projection provider must be enabled. Configure either Projection:Graph:Providers:Neo4j:Enabled=true or Projection:Graph:Providers:InMemory:Enabled=true.");
+                "Only one graph projection provider can be enabled. Configure either Projection:Graph:Providers:Neo4j:Enabled=true or Projection:Graph:Providers:InMemory:Enabled=true.");
         }
 
         if (documentProvider.ElasticsearchEnabled)
@@ -78,14 +77,26 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
             AddInMemoryDocumentStores(services);
         }
 
+        var expectedGraphProvider = enableNeo4jGraph
+            ? new ProjectionGraphProviderStatus("Neo4j", Enabled: true)
+            : enableInMemoryGraph
+                ? new ProjectionGraphProviderStatus("InMemory", Enabled: true)
+                : new ProjectionGraphProviderStatus("Disabled", Enabled: false);
+        if (UseExistingGraphProviderOrThrow(services, expectedGraphProvider))
+            return services;
+
         if (enableNeo4jGraph)
         {
             services.AddNeo4jGraphProjectionStore(
                 optionsFactory: _ => BuildNeo4jGraphOptions(configuration));
         }
-        else
+        else if (enableInMemoryGraph)
         {
             services.AddInMemoryGraphProjectionStore();
+        }
+        else
+        {
+            services.AddDisabledGraphProjectionStore();
         }
 
         return services;
@@ -98,17 +109,6 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         TryAddInMemoryDocumentStore<ScriptReadModelDocument>(services, static readModel => readModel.Id);
         TryAddInMemoryDocumentStore<ScriptEvolutionReadModel>(services, static readModel => readModel.Id);
         TryAddInMemoryDocumentStore<ScriptNativeDocumentReadModel>(services, static readModel => readModel.Id);
-    }
-
-    private static bool HasAllScriptingDocumentReaders(
-        IServiceCollection services,
-        ProjectionDocumentProviderKind providerKind)
-    {
-        return HasDocumentReaderForProvider<ScriptDefinitionSnapshotDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<ScriptCatalogEntryDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<ScriptReadModelDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<ScriptEvolutionReadModel>(services, providerKind)
-               && HasDocumentReaderForProvider<ScriptNativeDocumentReadModel>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDocument>(IServiceCollection services)
@@ -186,16 +186,40 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         {
             throw new InvalidOperationException(
                 "Legacy provider single-selection options are no longer supported. " +
-                "Use Projection:Document:Providers:*:Enabled and Projection:Graph:Providers:*:Enabled with exactly one provider enabled per store type.");
+                "Use Projection:Document:Providers:*:Enabled with exactly one document provider and " +
+                "Projection:Graph:Providers:*:Enabled with at most one graph provider.");
         }
     }
 
     private static bool ResolveNeo4jGraphEnabled(IConfiguration configuration)
     {
         var section = configuration.GetSection("Projection:Graph:Providers:Neo4j");
-        var explicitEnabled = section["Enabled"];
-        var hasUri = (section["Uri"]?.Trim().Length ?? 0) > 0;
-        return ResolveOptionalBool(explicitEnabled, hasUri);
+        return ResolveOptionalBool(section["Enabled"], fallbackValue: false);
+    }
+
+    private static bool UseExistingGraphProviderOrThrow(
+        IServiceCollection services,
+        ProjectionGraphProviderStatus expectedStatus)
+    {
+        if (!services.Any(x => x.ServiceType == typeof(IProjectionGraphStore)))
+            return false;
+
+        var statusDescriptors = services
+            .Where(x => x.ServiceType == typeof(ProjectionGraphProviderStatus))
+            .ToArray();
+        var registeredStatus = statusDescriptors.Length == 1
+            ? statusDescriptors[0].ImplementationInstance as ProjectionGraphProviderStatus
+            : null;
+        var hasVersionedStore = services.Any(x => x.ServiceType == typeof(IVersionedProjectionGraphStore));
+        if (!hasVersionedStore || registeredStatus != expectedStatus)
+        {
+            throw new InvalidOperationException(
+                $"The existing graph projection provider registration is incompatible with the configured " +
+                $"'{expectedStatus.ProviderName}' provider. Register IProjectionGraphStore, " +
+                "IVersionedProjectionGraphStore, and ProjectionGraphProviderStatus as one matching provider.");
+        }
+
+        return true;
     }
 
     private static Neo4jProjectionGraphStoreOptions BuildNeo4jGraphOptions(
@@ -231,7 +255,7 @@ public static class ScriptingProjectionProviderServiceCollectionExtensions
         {
             throw new InvalidOperationException(
                 "InMemory graph provider is not allowed by projection policy. " +
-                "Disable Projection:Graph:Providers:InMemory:Enabled and configure Neo4j.");
+                "Disable Projection:Graph:Providers:InMemory:Enabled and either configure Neo4j or disable graph projection.");
         }
     }
 

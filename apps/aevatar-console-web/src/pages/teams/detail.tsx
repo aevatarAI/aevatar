@@ -63,6 +63,7 @@ import TeamMembersTab, {
 } from './tabs/TeamMembersTab';
 import TeamOverviewTab from './tabs/TeamOverviewTab';
 import { resolveWorkflowOperationalUnit } from './workflowOperationalUnits';
+import TeamWorkOrdersTab from './tabs/TeamWorkOrdersTab';
 
 const teamProjectionRetryLimit = 5;
 const teamProjectionRetryBaseMs = 500;
@@ -229,8 +230,10 @@ function formatTeamTabLabel(
         defaultMessage: 'Automations',
         id: 'teams.detail.tabs.automations',
       });
-    case 'members':
-      return intl.formatMessage({ id: 'teams.detail.tabs.members' });
+    case "members":
+      return intl.formatMessage({ id: "teams.detail.tabs.members" });
+    case "work-orders":
+      return intl.formatMessage({ id: "teams.detail.tabs.workOrders" });
     default:
       return intl.formatMessage({ id: 'teams.detail.tabs.overview' });
   }
@@ -1494,15 +1497,10 @@ const TeamDetailPage: React.FC = () => {
     ],
   );
   const tabOptions: TeamTabOption[] = [
-    { label: t('pages.teams.detail.copy.45', 'Overview'), value: 'overview' },
-    {
-      label: t('teams.detail.tabs.automations', 'Automations'),
-      value: 'automations',
-    },
-    {
-      label: t('pages.teams.detail.copy.46', 'Team members'),
-      value: 'members',
-    },
+    { label: t("pages.teams.detail.copy.45", "Overview"), value: "overview" },
+    { label: t("teams.detail.tabs.automations", "Automations"), value: "automations" },
+    { label: t("teams.detail.tabs.workOrders", "Requests"), value: "work-orders" },
+    { label: t("pages.teams.detail.copy.46", "Team members"), value: "members" },
   ];
 
   const initialLoading =
@@ -2219,6 +2217,14 @@ const TeamDetailPage: React.FC = () => {
     );
   };
 
+  const renderWorkOrdersTab = () => (
+    <TeamWorkOrdersTab
+      onNavigate={(href) => history.push(href)}
+      scopeId={scopeId}
+      teamId={selectedTeamId}
+    />
+  );
+
   let tabContent: React.ReactNode;
   switch (activeTab) {
     case 'automations':
@@ -2226,6 +2232,9 @@ const TeamDetailPage: React.FC = () => {
       break;
     case 'members':
       tabContent = renderMembersTab();
+      break;
+    case "work-orders":
+      tabContent = renderWorkOrdersTab();
       break;
     default:
       tabContent = renderOverviewTab();

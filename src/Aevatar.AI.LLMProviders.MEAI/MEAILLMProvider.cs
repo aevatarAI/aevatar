@@ -603,6 +603,11 @@ public sealed class MEAILLMProvider : ILLMProvider
         if (request.Model != null) { options.ModelId = request.Model; hasOptions = true; }
         if (request.Temperature.HasValue) { options.Temperature = (float)request.Temperature.Value; hasOptions = true; }
         if (request.MaxTokens.HasValue) { options.MaxOutputTokens = request.MaxTokens.Value; hasOptions = true; }
+        if (request.AllowMultipleToolCalls.HasValue)
+        {
+            options.AllowMultipleToolCalls = request.AllowMultipleToolCalls.Value;
+            hasOptions = true;
+        }
 
         if (!string.IsNullOrWhiteSpace(request.RequestId) || request.Metadata is { Count: > 0 })
         {

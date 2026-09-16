@@ -429,7 +429,6 @@ describe('StudioFilesPage', () => {
 
     await waitFor(() => {
       expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
-        'scope-1',
         'conversation-1',
       );
     });
@@ -476,14 +475,13 @@ describe('StudioFilesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
     await waitFor(() =>
       expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
-        'scope-1',
         'conversation-1',
       ),
     );
 
     React.act(() => switchScope('scope-2'));
     await waitFor(() =>
-      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledWith('scope-2'),
+      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(2),
     );
     expect(await screen.findByText('Scope conversation')).toBeInTheDocument();
     await React.act(async () => resolveDelete());
@@ -525,7 +523,6 @@ describe('StudioFilesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
     await waitFor(() =>
       expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
-        'scope-1',
         'conversation-1',
       ),
     );

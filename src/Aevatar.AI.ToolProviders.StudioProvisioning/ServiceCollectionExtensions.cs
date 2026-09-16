@@ -29,6 +29,8 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, StudioMemberQueryToolSource>());
         services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IAgentToolSource, StudioMemberInvocationReadinessToolSource>());
+        services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, StudioWorkflowQueryToolSource>());
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, StudioScheduleQueryToolSource>());

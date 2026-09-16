@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.Foundation.Abstractions;
@@ -26,7 +27,8 @@ public sealed class ResponsesCommandFacadeTests
         var facade = CreateFacade(
             sessionPort: sessions,
             dispatchPort: dispatch,
-            routeResolver: new StaticResponsesRouteResolver("route-value"),
+            routeResolver: new StaticResponsesRouteResolver(
+                CatalogRouteTarget("catalog-openai", "openai")),
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("openai/gpt-5")));
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
@@ -47,7 +49,10 @@ public sealed class ResponsesCommandFacadeTests
         sessions.UpdatedStatuses.Should().BeEmpty();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.Model.Should().Be("gpt-5");
-        command.RoutePreference.Should().Be("route-value");
+        command.RoutePreference.Should().BeEmpty();
+        AssertRouteTarget(
+            command.RouteTarget,
+            CatalogRouteTarget("catalog-openai", "openai"));
         command.ScopeId.Should().Be("scope-1");
         command.BearerToken.Should().Be("token");
         var toolContext = AgentToolExecutionContextMapper.FromPayload(command.ToolContext);
@@ -57,7 +62,93 @@ public sealed class ResponsesCommandFacadeTests
         toolContext.Caller.ResponseId.Should().Be(command.ResponseId);
         toolContext.Caller.OwnerScopeId.Should().Be("owner-1");
         toolContext.Credentials.NyxIdAccessToken.Should().Be("token");
-        toolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
+        toolContext.Routing.NyxIdRoutePreference.Should().BeNull();
+        AssertRouteTarget(
+            toolContext.Routing.RouteTarget,
+            CatalogRouteTarget("catalog-openai", "openai"));
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenRouteInventoryIsUnavailable_ShouldReturnServiceUnavailableWithoutDispatch()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            routeResolver: new UnavailableResponsesRouteResolver());
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "anthropic/claude-sonnet",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().Be(new ResponsesCommandError(
+            503,
+            "model_route_unavailable",
+            "The model routing inventory is temporarily unavailable."));
+        dispatch.Calls.Should().BeEmpty();
+        sessions.Registered.Should().ContainSingle();
+        sessions.UpdatedStatuses.Should().ContainSingle()
+            .Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenQualifiedModelRouteCannotResolve_ShouldFailClosedWithoutDispatch()
+    {
+        var sessions = new RecordingSessionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            sessionPort: sessions,
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver(null));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "chrono-llm/gpt-5.5",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().Be(new ResponsesCommandError(
+            404,
+            "model_not_found",
+            "Model 'gpt-5.5' is not configured for service 'chrono-llm'."));
+        dispatch.Calls.Should().BeEmpty();
+        sessions.UpdatedStatuses.Should().ContainSingle()
+            .Which.Status.Should().Be(LlmSessionStatus.Failed);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenBareModelHasNoRoutePreference_ShouldUseDefaultGateway()
+    {
+        var dispatch = new RecordingActorDispatchPort();
+        var facade = CreateFacade(
+            dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver(null));
+
+        var result = await facade.CreateAsync(new ResponsesCommandRequest(
+            "gpt-5.5",
+            "hello",
+            [],
+            false,
+            null,
+            null,
+            null,
+            []), CallerScopeContext("token"));
+
+        result.Error.Should().BeNull();
+        var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
+        command.Model.Should().Be("gpt-5.5");
+        command.RoutePreference.Should().BeEmpty();
     }
 
     [Fact]
@@ -66,7 +157,8 @@ public sealed class ResponsesCommandFacadeTests
         var dispatch = new RecordingActorDispatchPort();
         var facade = CreateFacade(
             dispatchPort: dispatch,
-            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm-public"),
+            routeResolver: new StaticResponsesRouteResolver(
+                UserRouteTarget("us-chrono-public", "chrono-llm-public")),
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToModelAction(string.Empty)),
             defaultIngressModel: "chrono-llm-public/gpt-5.5");
 
@@ -83,7 +175,10 @@ public sealed class ResponsesCommandFacadeTests
         result.Error.Should().BeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.Model.Should().Be("gpt-5.5");
-        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
+        command.RoutePreference.Should().BeEmpty();
+        AssertRouteTarget(
+            command.RouteTarget,
+            UserRouteTarget("us-chrono-public", "chrono-llm-public"));
     }
 
     [Fact]
@@ -93,7 +188,8 @@ public sealed class ResponsesCommandFacadeTests
         var dispatch = new RecordingActorDispatchPort();
         var facade = CreateFacade(
             dispatchPort: dispatch,
-            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            routeResolver: new StaticResponsesRouteResolver(
+                UserRouteTarget("us-chrono", "chrono-llm")),
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
                 ForwardToModelAction("deepseek/deepseek-chat")),
             defaultIngressModel: "fallback-vendor/fallback-model",
@@ -121,7 +217,8 @@ public sealed class ResponsesCommandFacadeTests
         var dispatch = new RecordingActorDispatchPort();
         var facade = CreateFacade(
             dispatchPort: dispatch,
-            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            routeResolver: new StaticResponsesRouteResolver(
+                UserRouteTarget("us-chrono", "chrono-llm")),
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
                 ForwardToModelAction("gpt-5.4-mini"),
                 usedFallback: true));
@@ -140,7 +237,10 @@ public sealed class ResponsesCommandFacadeTests
         result.Completed.Should().NotBeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.Model.Should().Be("gpt-5.4-mini");
-        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        command.RoutePreference.Should().BeEmpty();
+        AssertRouteTarget(
+            command.RouteTarget,
+            UserRouteTarget("us-chrono", "chrono-llm"));
     }
 
     [Fact]
@@ -149,7 +249,8 @@ public sealed class ResponsesCommandFacadeTests
         var dispatch = new RecordingActorDispatchPort();
         var facade = CreateFacade(
             dispatchPort: dispatch,
-            routeResolver: new StaticResponsesRouteResolver("/api/v1/proxy/s/chrono-llm"),
+            routeResolver: new StaticResponsesRouteResolver(
+                UserRouteTarget("us-chrono", "chrono-llm")),
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(
                 ForwardToModelAction("gpt-5.4-mini")));
 
@@ -167,7 +268,10 @@ public sealed class ResponsesCommandFacadeTests
         result.Completed.Should().NotBeNull();
         var command = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload.Unpack<LlmRunRequested>();
         command.Model.Should().Be("gpt-5.4-mini");
-        command.RoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm");
+        command.RoutePreference.Should().BeEmpty();
+        AssertRouteTarget(
+            command.RouteTarget,
+            UserRouteTarget("us-chrono", "chrono-llm"));
     }
 
     [Fact]
@@ -175,13 +279,15 @@ public sealed class ResponsesCommandFacadeTests
     {
         var sessions = new RecordingSessionPort();
         var dispatch = new RecordingActorDispatchPort();
+        var invokeTool = new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent");
         var facade = CreateFacade(
             sessionPort: sessions,
             dispatchPort: dispatch,
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(GAgentToolHintAction("member-1")),
-            toolSetRegistry: new StaticToolSetRegistry([
-                new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"),
-            ]));
+            toolSetRegistry: new StaticToolSetRegistry([invokeTool]),
+            ownedToolCatalogPlanner: new StaticOwnedToolCatalogPlanner(
+                "workspace.default",
+                [invokeTool]));
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
             "client-model",
@@ -228,13 +334,15 @@ public sealed class ResponsesCommandFacadeTests
                 },
             },
         };
+        var invokeTool = new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent");
         var facade = CreateFacade(
             sessionPort: sessions,
             dispatchPort: dispatch,
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(action),
-            toolSetRegistry: new StaticToolSetRegistry([
-                new StubAgentTool("aevatar_invoke_gagent", "Invoke a GAgent"),
-            ]));
+            toolSetRegistry: new StaticToolSetRegistry([invokeTool]),
+            ownedToolCatalogPlanner: new StaticOwnedToolCatalogPlanner(
+                "workspace.default",
+                [invokeTool]));
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
             "client-model",
@@ -593,7 +701,8 @@ public sealed class ResponsesCommandFacadeTests
     public async Task CreateAsync_ShouldCarryTypedToolContext_WhenRequestIsStreaming()
     {
         var facade = CreateFacade(
-            routeResolver: new StaticResponsesRouteResolver("route-value"),
+            routeResolver: new StaticResponsesRouteResolver(
+                CatalogRouteTarget("catalog-openai", "openai")),
             chatRouteDecisionPort: new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("openai/gpt-5")));
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
@@ -615,7 +724,13 @@ public sealed class ResponsesCommandFacadeTests
         result.StreamPlan.LlmRequest.ToolContext!.Request.RequestId.Should().Be(result.StreamPlan.Normalized.ResponseId);
         result.StreamPlan.LlmRequest.ToolContext.Caller.ScopeId.Should().Be("scope-1");
         result.StreamPlan.LlmRequest.ToolContext.Credentials.NyxIdAccessToken.Should().Be("token");
-        result.StreamPlan.LlmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().Be("route-value");
+        result.StreamPlan.LlmRequest.ToolContext.Routing.NyxIdRoutePreference.Should().BeNull();
+        AssertRouteTarget(
+            result.StreamPlan.LlmRequest.RouteTarget,
+            CatalogRouteTarget("catalog-openai", "openai"));
+        AssertRouteTarget(
+            result.StreamPlan.LlmRequest.ToolContext.Routing.RouteTarget,
+            CatalogRouteTarget("catalog-openai", "openai"));
     }
 
     [Fact]
@@ -625,7 +740,8 @@ public sealed class ResponsesCommandFacadeTests
         var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("openai/gpt-5"));
         var facade = CreateFacade(
             dispatchPort: dispatch,
-            routeResolver: new StaticResponsesRouteResolver("route-value"),
+            routeResolver: new StaticResponsesRouteResolver(
+                CatalogRouteTarget("catalog-openai", "openai")),
             chatRouteDecisionPort: routeDecisionPort);
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
@@ -659,6 +775,8 @@ public sealed class ResponsesCommandFacadeTests
         var routeDecisionPort = new StaticResponsesChatRouteDecisionPort(ForwardToModelAction("openai/gpt-5"));
         var facade = CreateFacade(
             dispatchPort: dispatch,
+            routeResolver: new StaticResponsesRouteResolver(
+                CatalogRouteTarget("catalog-openai", "openai")),
             chatRouteDecisionPort: routeDecisionPort);
 
         var result = await facade.CreateAsync(new ResponsesCommandRequest(
@@ -999,7 +1117,8 @@ public sealed class ResponsesCommandFacadeTests
         string? defaultIngressModel = null,
         IOwnerLlmConfigSource? ownerLlmConfigSource = null,
         ResponsesIngressOptions? ingressOptions = null,
-        ILlmRunExecutor? llmRunExecutor = null)
+        ILlmRunExecutor? llmRunExecutor = null,
+        IResponsesOwnedToolCatalogPlanner? ownedToolCatalogPlanner = null)
     {
         var effectiveSessionPort = sessionPort ?? new RecordingSessionPort();
         var options = ingressOptions ?? (defaultIngressModel is null
@@ -1018,7 +1137,48 @@ public sealed class ResponsesCommandFacadeTests
             NullLogger<ResponsesCommandFacade>.Instance,
             options is null ? null : Options.Create(options),
             ownerLlmConfigSource,
-            llmRunExecutor);
+            llmRunExecutor,
+            ownedToolCatalogPlanner);
+    }
+
+    private sealed class StaticOwnedToolCatalogPlanner(
+        string toolSetName,
+        IReadOnlyList<IAgentTool> tools) : IResponsesOwnedToolCatalogPlanner
+    {
+        private readonly AgentProfileSnapshot _profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-test",
+            ProfileVersion = "1.0.0",
+            AgentKind = "workspace.chat",
+            PolicyRevision = "policy-test",
+            RouteToolSetRef = toolSetName,
+            PublishedRevision = 1,
+            MaxOwnedToolCount = AgentTurnToolCatalogBudget.Ordinary.MaximumToolCount,
+            MaxSchemaBytes = AgentTurnToolCatalogBudget.Ordinary.MaximumSchemaBytes,
+        });
+
+        public Task<ResponsesOwnedToolCatalogPlan> PlanAsync(
+            ChatRouteAction? routeAction,
+            string scopeId,
+            string turnIdentity,
+            string userMessage,
+            AgentToolExecutionContext toolContext,
+            CancellationToken ct = default)
+        {
+            var catalog = new AgentTurnToolCatalog(
+                tools.Select(static tool => tool.Name),
+                profilePromptLayer: null,
+                selectedSkillPromptLayer: null,
+                selectedIntentId: "invoke",
+                candidateIntentId: "invoke",
+                diagnostics: null,
+                exactTools: tools);
+            return Task.FromResult(new ResponsesOwnedToolCatalogPlan(
+                catalog,
+                _profile,
+                toolSetName,
+                null));
+        }
     }
 
     private static OwnerLlmConfig OwnerConfig(string modelId) => new(
@@ -1098,6 +1258,27 @@ public sealed class ResponsesCommandFacadeTests
             forwardedToolCalls,
             completion);
 
+    private static LLMRouteTarget CatalogRouteTarget(string catalogServiceId, string serviceSlug) => new()
+    {
+        CatalogServiceId = catalogServiceId,
+        ServiceSlugSnapshot = serviceSlug,
+    };
+
+    private static LLMRouteTarget UserRouteTarget(string userServiceId, string serviceSlug) => new()
+    {
+        UserServiceId = userServiceId,
+        ServiceSlugSnapshot = serviceSlug,
+    };
+
+    private static void AssertRouteTarget(LLMRouteTarget? actual, LLMRouteTarget expected)
+    {
+        actual.Should().NotBeNull();
+        actual!.SourceIdentityCase.Should().Be(expected.SourceIdentityCase);
+        actual.CatalogServiceId.Should().Be(expected.CatalogServiceId);
+        actual.UserServiceId.Should().Be(expected.UserServiceId);
+        actual.ServiceSlugSnapshot.Should().Be(expected.ServiceSlugSnapshot);
+    }
+
     private static ChatRouteAction ForwardToModelAction(string modelName) => new()
     {
         ForwardToModel = new ForwardToModel { ModelName = modelName },
@@ -1150,10 +1331,24 @@ public sealed class ResponsesCommandFacadeTests
             throw new ResponsesCallerScopeUnavailableException("access token is invalid");
     }
 
-    private sealed class StaticResponsesRouteResolver(string? routeValue) : IResponsesRouteResolver
+    private sealed class StaticResponsesRouteResolver(LLMRouteTarget? routeTarget) : IResponsesRouteResolver
     {
-        public Task<string?> ResolveRouteValueAsync(string slug, string bearerToken, CancellationToken ct) =>
-            Task.FromResult(routeValue);
+        public Task<LLMRouteTarget?> ResolveRouteTargetAsync(
+            string serviceSlug,
+            string upstreamModelId,
+            ResponsesCallerScope callerScope,
+            CancellationToken ct) =>
+            Task.FromResult(routeTarget?.Clone());
+    }
+
+    private sealed class UnavailableResponsesRouteResolver : IResponsesRouteResolver
+    {
+        public Task<LLMRouteTarget?> ResolveRouteTargetAsync(
+            string serviceSlug,
+            string upstreamModelId,
+            ResponsesCallerScope callerScope,
+            CancellationToken ct) =>
+            throw new ResponsesRouteUnavailableException("inventory unavailable");
     }
 
     private sealed class StaticResponsesChatRouteDecisionPort(

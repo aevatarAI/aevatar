@@ -2,7 +2,11 @@ using System.Security.Claims;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using WorkflowProtocol = Aevatar.Workflow.Abstractions;
@@ -12,6 +16,7 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 public static class WorkflowCallerCredentialExtractor
 {
     private const string BearerPrefix = "Bearer ";
+    private const string JwtBearerAuthenticationScheme = "Bearer";
     private const string NyxIdDelegationTokenHeader = "X-NyxID-Delegation-Token";
     private const string DefaultNyxIdCapabilityScope = "proxy";
 
@@ -31,12 +36,42 @@ public static class WorkflowCallerCredentialExtractor
         ILogger? logger = null,
         CancellationToken ct = default)
     {
+        return ExtractAsync(http, bindingQueryPort, null, logger, ct);
+    }
+
+    public static ValueTask<WorkflowCallerCredentialExtractionResult> ExtractAsync(
+        HttpContext? http,
+        IExternalIdentityBindingQueryPort? bindingQueryPort,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider,
+        ILogger? logger = null,
+        CancellationToken ct = default)
+    {
         var tokens = ExtractCredentialTokens(http);
         if (!tokens.Succeeded)
             return ValueTask.FromResult(Invalid());
         return tokens.ExecutionRawToken == null
             ? ValueTask.FromResult(WorkflowCallerCredentialExtractionResult.Success(null))
-            : ParseCredentialAsync(tokens, http, bindingQueryPort, logger, ct);
+            : ParseCredentialAsync(
+                tokens,
+                http,
+                bindingQueryPort,
+                callerAccessTokenProvider,
+                logger,
+                ct);
+    }
+
+    public static ValueTask<WorkflowCallerCredentialExtractionResult> ExtractAsync(
+        HttpContext? http,
+        CancellationToken ct = default)
+    {
+        var services = http?.Features.Get<IServiceProvidersFeature>()?.RequestServices;
+        var loggerFactory = services?.GetService<ILoggerFactory>();
+        return ExtractAsync(
+            http,
+            services?.GetService<IExternalIdentityBindingQueryPort>(),
+            services?.GetService<IWorkflowCallerAccessTokenProvider>(),
+            loggerFactory?.CreateLogger("Aevatar.Workflow.CallerCredential"),
+            ct);
     }
 
     private static CallerCredentialTokensExtractionResult ExtractCredentialTokens(HttpContext? http)
@@ -97,7 +132,7 @@ public static class WorkflowCallerCredentialExtractor
             tokens.SourceReadableRawToken);
         if (execution.IsValid && !sourceReadable.IsInvalid)
         {
-            var selection = CreateAdmissionSelection(tokens, execution, sourceReadable);
+            var selection = CreateAdmissionSelection(tokens, execution, sourceReadable, http);
             return WorkflowCallerCredentialExtractionResult.Success(
                 new WorkflowCallerCredential(
                     execution.NormalizedBearerToken,
@@ -114,6 +149,7 @@ public static class WorkflowCallerCredentialExtractor
         CallerCredentialTokensExtractionResult tokens,
         HttpContext? http,
         IExternalIdentityBindingQueryPort? bindingQueryPort,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider,
         ILogger? logger,
         CancellationToken ct)
     {
@@ -122,17 +158,67 @@ public static class WorkflowCallerCredentialExtractor
             tokens.SourceReadableRawToken);
         if (execution.IsValid && !sourceReadable.IsInvalid)
         {
-            var selection = CreateAdmissionSelection(tokens, execution, sourceReadable);
+            var authority = await ResolveAuthenticatedNyxIdAuthorityAsync(
+                http,
+                bindingQueryPort,
+                logger,
+                ct);
+            if (!sourceReadable.IsValid &&
+                tokens.ExecutionKind == WorkflowProtocol.NyxIdCallerCredentialKind.ProxyDelegation &&
+                !string.IsNullOrWhiteSpace(authority?.BindingId) &&
+                callerAccessTokenProvider != null)
+            {
+                var issuedToken = await TryIssueSourceReadableTokenAsync(
+                    callerAccessTokenProvider,
+                    authority,
+                    logger,
+                    ct);
+                sourceReadable = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(issuedToken);
+            }
+
+            var selection = CreateAdmissionSelection(tokens, execution, sourceReadable, http);
             return WorkflowCallerCredentialExtractionResult.Success(
                 new WorkflowCallerCredential(
                     execution.NormalizedBearerToken,
-                    await ResolveAuthenticatedNyxIdAuthorityAsync(http, bindingQueryPort, logger, ct),
+                    authority,
                     tokens.ExecutionKind,
                     sourceReadable.NormalizedBearerToken),
                 selection);
         }
 
         return Invalid();
+    }
+
+    private static async ValueTask<string?> TryIssueSourceReadableTokenAsync(
+        IWorkflowCallerAccessTokenProvider callerAccessTokenProvider,
+        WorkflowCallerNyxIdAuthority authority,
+        ILogger? logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await callerAccessTokenProvider.IssueAsync(
+                new WorkflowProtocol.WorkflowCallerNyxIdAuthority
+                {
+                    Platform = authority.Platform,
+                    Tenant = authority.Tenant,
+                    ExternalUserId = authority.ExternalUserId,
+                    Scope = authority.Scope,
+                    BindingId = authority.BindingId ?? string.Empty,
+                },
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(
+                ex,
+                "Caller NyxID source-readable token exchange failed; continuing with the verified proxy delegation.");
+            return null;
+        }
     }
 
     private static WorkflowCallerNyxIdAuthority? ResolveAuthenticatedNyxIdAuthority(HttpContext? http)
@@ -254,11 +340,80 @@ public static class WorkflowCallerCredentialExtractor
     private static WorkflowProtocol.NyxIdCallerCredentialSelection CreateAdmissionSelection(
         CallerCredentialTokensExtractionResult tokens,
         WorkflowProtocol.WorkflowCallerCredentialTokenParseResult execution,
-        WorkflowProtocol.WorkflowCallerCredentialTokenParseResult sourceReadable) =>
-        sourceReadable.IsValid
-            ? WorkflowProtocol.NyxIdCallerCredentialSelection.SourceReadableUserBearer(
-                sourceReadable.NormalizedBearerToken!)
-            : CreateSelection(tokens.ExecutionKind, execution.NormalizedBearerToken!);
+        WorkflowProtocol.WorkflowCallerCredentialTokenParseResult sourceReadable,
+        HttpContext? http)
+    {
+        if (sourceReadable.IsValid)
+        {
+            return !string.IsNullOrWhiteSpace(tokens.SourceReadableRawToken) &&
+                   IsAuthenticatedHumanAccessToken(http)
+                ? WorkflowProtocol.NyxIdCallerCredentialSelection.DirectUserBearer(
+                    sourceReadable.NormalizedBearerToken!)
+                : WorkflowProtocol.NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    sourceReadable.NormalizedBearerToken!);
+        }
+
+        if (tokens.ExecutionKind == WorkflowProtocol.NyxIdCallerCredentialKind.SourceReadableUserBearer)
+        {
+            return IsAuthenticatedHumanAccessToken(http)
+                ? WorkflowProtocol.NyxIdCallerCredentialSelection.DirectUserBearer(
+                    execution.NormalizedBearerToken!)
+                : WorkflowProtocol.NyxIdCallerCredentialSelection.SourceReadableUserBearer(
+                    execution.NormalizedBearerToken!);
+        }
+
+        return CreateSelection(tokens.ExecutionKind, execution.NormalizedBearerToken!);
+    }
+
+    private static bool IsAuthenticatedHumanAccessToken(HttpContext? http)
+    {
+        var authentication = http?.Features
+            .Get<IAuthenticateResultFeature>()?
+            .AuthenticateResult;
+        var ticket = authentication?.Ticket;
+        var principal = ticket?.Principal;
+        if (authentication?.Succeeded != true ||
+            ticket == null ||
+            !string.Equals(
+                ticket.AuthenticationScheme,
+                JwtBearerAuthenticationScheme,
+                StringComparison.Ordinal) ||
+            principal?.Identity?.IsAuthenticated != true ||
+            !HasExactClaim(principal, "token_type", "access") ||
+            HasTrueClaim(principal, "delegated") ||
+            HasTrueClaim(principal, "sa") ||
+            HasTrueClaim(principal, "relay") ||
+            HasTrueClaim(principal, "assistant_forward") ||
+            HasTrueClaim(principal, "aevatar.scope_service") ||
+            HasNonEmptyClaim(principal, "act"))
+        {
+            return false;
+        }
+
+        return !string.IsNullOrWhiteSpace(ReadFirstClaim(
+            principal,
+            "uid",
+            "sub",
+            ClaimTypes.NameIdentifier,
+            "user_id"));
+    }
+
+    private static bool HasExactClaim(
+        ClaimsPrincipal principal,
+        string claimType,
+        string expectedValue) =>
+        principal.Claims.Any(claim =>
+            string.Equals(claim.Type, claimType, StringComparison.Ordinal) &&
+            string.Equals(claim.Value?.Trim(), expectedValue, StringComparison.Ordinal));
+
+    private static bool HasTrueClaim(ClaimsPrincipal principal, string claimType) =>
+        HasExactClaim(principal, claimType, bool.TrueString.ToLowerInvariant()) ||
+        HasExactClaim(principal, claimType, bool.TrueString);
+
+    private static bool HasNonEmptyClaim(ClaimsPrincipal principal, string claimType) =>
+        principal.Claims.Any(claim =>
+            string.Equals(claim.Type, claimType, StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(claim.Value));
 }
 
 readonly record struct CallerCredentialTokensExtractionResult(

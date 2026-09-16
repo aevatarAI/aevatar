@@ -64,6 +64,7 @@ const STUDIO_HOST_ROUTES = new Set([
   '/scopes/:scopeId/teams/:teamId/members/new/workflow',
   '/scopes/:scopeId/teams/:teamId/members/:memberId/workflow',
 ]);
+const SELF_MANAGED_AUTH_ROUTES = new Set(["/studio"]);
 
 function isFullscreenDisplayRoute(pathname: string): boolean {
   return (
@@ -89,10 +90,11 @@ function isStudioHostRoute(pathname: string): boolean {
   );
 }
 
-function shouldDefaultCollapseLayout(
-  pathname: string,
-  search: string,
-): boolean {
+export function requiresGlobalAuthGate(pathname: string): boolean {
+  return !PUBLIC_ROUTES.has(pathname) && !SELF_MANAGED_AUTH_ROUTES.has(pathname);
+}
+
+function shouldDefaultCollapseLayout(pathname: string, search: string): boolean {
   if (!isStudioHostRoute(pathname)) {
     return false;
   }
@@ -784,22 +786,22 @@ export const layout = ({
           const isPublicRoute = PUBLIC_ROUTES.has(pathname);
           const isStudioRoute = isStudioHostRoute(pathname);
           const isDisplayRoute = isFullscreenDisplayRoute(pathname);
+          const requiresGlobalAuth = requiresGlobalAuthGate(pathname);
           const liveSession = loadStoredAuthSession();
           const needsProtectedRouteRedirect =
-            !isPublicRoute &&
-            !isStudioRoute &&
+            requiresGlobalAuth &&
             !liveSession &&
             !hasRestorableAuthSession();
 
           const content = needsProtectedRouteRedirect ? (
             <ProtectedRouteRedirectGate pathname={pathname} />
-          ) : !isPublicRoute && !isStudioRoute && !liveSession ? (
-            <AuthSessionBootstrap pathname={pathname}>
-              {children}
-            </AuthSessionBootstrap>
-          ) : (
-            children
-          );
+          ) : requiresGlobalAuth && !liveSession ? (
+              <AuthSessionBootstrap pathname={pathname}>
+                {children}
+              </AuthSessionBootstrap>
+            ) : (
+              children
+            );
           return (
             <ConsoleRuntimeProviders
               isFullscreenDisplayRoute={isDisplayRoute}

@@ -56,8 +56,6 @@ export type ChatStudioTarget = {
 export type LocalChatStatus =
   | "draft"
   | "streaming"
-  | "needs_confirmation"
-  | "creating"
   | "completed_text"
   | "completed_with_studio_target"
   | "error";
@@ -104,13 +102,6 @@ export type ConversationSessionSnapshot = {
   runtime?: ConversationRuntimeIdentity;
 };
 
-export type ChatHistoryContext = {
-  scopeId: string;
-  conversationId: string;
-  stateVersion: number;
-  turnId: string;
-};
-
 export type ConversationMeta = {
   id: string;
   llmModel?: string | null;
@@ -146,18 +137,12 @@ export type StoredChatMessage = {
 export type ChatConversationDetail = {
   messages: StoredChatMessage[];
   stateVersion: number;
+  projectionStatus: "current" | "pending";
 };
 
 export type ChatHistoryIndex = {
   conversations: ConversationMeta[];
   nextCursor?: string | null;
-};
-
-export type ChatCreateRecovery = {
-  conversationId: string;
-  stateVersion: number;
-  status: string;
-  turnId: string;
 };
 
 export type ChatSessionState = {

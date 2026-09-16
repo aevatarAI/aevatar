@@ -35,11 +35,14 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         using var environment = new OAuthBootstrapEnvironment();
         var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
             static _ => OAuthClientReceipt());
-        var service = NewService(dispatch);
+        var projectionRebuildDispatch = new RecordingCommandDispatch<RebuildAevatarOAuthClientProjectionCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch, projectionRebuildDispatch);
 
         await service.StartAsync(CancellationToken.None);
 
         dispatch.Commands.Should().ContainSingle();
+        projectionRebuildDispatch.Commands.Should().ContainSingle();
         var command = dispatch.Commands[0];
         command.ClientId.Should().Be(ConfiguredClientId);
         command.ClientIdIssuedAtUnix.Should().BeGreaterThan(0);
@@ -70,11 +73,14 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         using var environment = new OAuthBootstrapEnvironment();
         var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
             static _ => OAuthClientReceipt());
-        var service = NewService(dispatch);
+        var projectionRebuildDispatch = new RecordingCommandDispatch<RebuildAevatarOAuthClientProjectionCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(dispatch, projectionRebuildDispatch);
 
         await service.DispatchBootstrapIntentAsync(CancellationToken.None);
 
         dispatch.Commands.Should().ContainSingle();
+        projectionRebuildDispatch.Commands.Should().ContainSingle();
         var command = dispatch.Commands[0];
         command.ClientId.Should().Be(ConfiguredClientId);
         command.NyxidAuthority.Should().Be(environment.Authority);
@@ -94,6 +100,24 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
         await act.Should()
             .ThrowAsync<InvalidOperationException>()
             .WithMessage("*InvalidTarget*");
+    }
+
+    [Fact]
+    public async Task DispatchBootstrapIntentAsync_Throws_WhenProjectionRebuildDispatchRejects()
+    {
+        using var environment = new OAuthBootstrapEnvironment();
+        var dispatch = new RecordingCommandDispatch<ProvisionAevatarOAuthClientCommand>(
+            static _ => OAuthClientReceipt());
+        var service = NewService(
+            dispatch,
+            new RejectingCommandDispatch<RebuildAevatarOAuthClientProjectionCommand>());
+
+        var act = () => service.DispatchBootstrapIntentAsync(CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("*projection rebuild dispatch rejected*InvalidTarget*");
+        dispatch.Commands.Should().ContainSingle();
     }
 
     [Fact]
@@ -247,10 +271,12 @@ public sealed class AevatarOAuthClientBootstrapServiceTests
 
     private static AevatarOAuthClientBootstrapService NewService(
         ICommandDispatchService<ProvisionAevatarOAuthClientCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> dispatch,
+        ICommandDispatchService<RebuildAevatarOAuthClientProjectionCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError>? projectionRebuildDispatch = null,
         bool enabled = true,
         string clientId = ConfiguredClientId) =>
         new(
             dispatch,
+            projectionRebuildDispatch ?? new RecordingCommandDispatch<RebuildAevatarOAuthClientProjectionCommand>(static _ => OAuthClientReceipt()),
             Options.Create(new AevatarOAuthClientOptions { ClientId = clientId }),
             Options.Create(new AevatarOAuthClientBootstrapOptions { Enabled = enabled }),
             NullLogger<AevatarOAuthClientBootstrapService>.Instance);

@@ -113,11 +113,13 @@ public sealed class AevatarAIFeatureOptions
     public string? ServiceInvokeNamespace { get; set; }
     public bool BypassServiceInvokeApproval { get; set; }
     public bool EnableWebTools { get; set; }
+    public string? WebSearchNyxIdBaseUrl { get; set; }
     public string? WebSearchNyxIdSlug { get; set; }
     public string? WebSearchApiBaseUrl { get; set; }
     public bool EnableWorkflowTools { get; set; }
     public bool EnableScriptingTools { get; set; }
     public bool EnableBindingTools { get; set; }
+    public bool EnableWorkflowExternalCapabilityAuthoringTools { get; set; }
     public VoicePresenceFeatureOptions VoicePresence { get; } = new();
 }
 
@@ -155,15 +157,16 @@ public static class ServiceCollectionExtensions
             .Register<WorkflowRoleGAgent>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, AgentWorkflowToolSourceAdapter>());
         services.AddAgentToolExecution();
+        services.TryAddSingleton(sp => new VoiceAgentTurnToolCatalogMaterializer(
+            sp.GetServices<IAgentToolSource>(),
+            ResolveVoiceCredentialProviders(sp),
+            sp.GetService<IAgentToolDiscoveryService>(),
+            sp.GetService<ILogger<VoiceAgentTurnToolCatalogMaterializer>>()));
         services.TryAddSingleton<IVoiceToolInvoker>(sp => new AgentToolVoiceInvoker(
-            sp.GetServices<IAgentToolSource>(),
-            sp.GetRequiredService<IAgentToolExecutionPort>(),
-            ResolveVoiceCredentialProviders(sp),
-            sp.GetService<ILogger<AgentToolVoiceInvoker>>()));
+            sp.GetRequiredService<VoiceAgentTurnToolCatalogMaterializer>(),
+            sp.GetRequiredService<IAgentToolExecutionPort>()));
         services.TryAddSingleton<IVoiceToolCatalog>(sp => new AgentToolVoiceCatalog(
-            sp.GetServices<IAgentToolSource>(),
-            ResolveVoiceCredentialProviders(sp),
-            sp.GetService<ILogger<AgentToolVoiceCatalog>>()));
+            sp.GetRequiredService<VoiceAgentTurnToolCatalogMaterializer>()));
         services.TryAddSingleton<IVoicePresenceCapabilityCommandPort, VoicePresenceCapabilityCommandPort>();
         // Zero-config /ws/voice: auto-provision a never-enabled default voice agent on first connect by
         // committing the same enable voice-presence/enable issues. The attach path (ActorOwnedVoiceRealtimeSession)
@@ -207,6 +210,9 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableBindingTools)
             RegisterBindingTools(services);
+
+        if (options.EnableWorkflowExternalCapabilityAuthoringTools)
+            RegisterWorkflowExternalCapabilityAuthoringTools(services);
 
         RegisterVoicePresenceModules(services, configuration, options);
 
@@ -881,7 +887,7 @@ public static class ServiceCollectionExtensions
             {
                 throw new InvalidOperationException(
                     $"NyxID provider '{provider.Name}' requires a gateway endpoint. " +
-                    $"Configure LLMProviders:Providers:{provider.Name}:Endpoint or set Aevatar:NyxId:Authority.");
+                    $"Configure LLMProviders:Providers:{provider.Name}:Endpoint or set Aevatar:NyxId:ApiBaseUrl.");
             }
 
             factory.RegisterGateway(
@@ -1116,10 +1122,9 @@ public static class ServiceCollectionExtensions
     {
         if (options.NyxIdLlmEndpoint != null)
         {
-            var authority = configuration["Cli:App:NyxId:Authority"]
-                ?? configuration["Aevatar:NyxId:Authority"]
-                ?? configuration["Aevatar:Authentication:Authority"];
-            return NyxIdLlmEndpointResolver.ResolveEndpoint(authority, options.NyxIdLlmEndpoint);
+            return NyxIdLlmEndpointResolver.ResolveEndpoint(
+                NyxIdEndpointResolver.ResolvePublicApiBaseUrl(configuration),
+                options.NyxIdLlmEndpoint);
         }
 
         return NyxIdLlmEndpointResolver.ResolveEndpoint(configuration);
@@ -1194,8 +1199,12 @@ public static class ServiceCollectionExtensions
                 {
                     Name = server.Name,
                     Command = server.Command,
+                    Url = server.Url,
                     Arguments = server.Args,
                     Environment = server.Env,
+                    AdditionalHeaders = server.Headers,
+                    InitializationTimeout = TimeSpan.FromMilliseconds(
+                        Math.Clamp(server.TimeoutMs, 100, 300_000)),
                 });
             }
         });
@@ -1273,6 +1282,7 @@ public static class ServiceCollectionExtensions
     {
         services.AddWebTools(o =>
         {
+            o.NyxIdBaseUrl = options.WebSearchNyxIdBaseUrl;
             o.NyxIdSearchSlug = options.WebSearchNyxIdSlug;
             o.SearchApiBaseUrl = options.WebSearchApiBaseUrl;
         });
@@ -1291,6 +1301,11 @@ public static class ServiceCollectionExtensions
     private static void RegisterBindingTools(IServiceCollection services)
     {
         services.AddBindingTools();
+    }
+
+    private static void RegisterWorkflowExternalCapabilityAuthoringTools(IServiceCollection services)
+    {
+        services.AddWorkflowExternalCapabilityAuthoringTools();
     }
 
     private sealed class ServiceProviderAgentToolExecutionPort(IServiceProvider serviceProvider) : IAgentToolExecutionPort

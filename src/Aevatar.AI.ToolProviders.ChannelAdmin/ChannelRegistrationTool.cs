@@ -40,6 +40,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
     public string Description =>
         "Manage Aevatar ChannelRuntime registrations for supported Nyx-backed channel relay flows. " +
         "Actions: list, register_channel_via_nyx, delete. " +
+        "All actions operate only on registrations in the caller's own scope; list never returns " +
+        "other tenants' registrations and delete rejects them as not found. " +
         "Use register_channel_via_nyx with platform=lark or platform=telegram for provisioning. " +
         "Legacy direct callback registration and update_token flows are retired because ChannelRuntime no longer stores channel credentials. " +
         "Do not ask the user for scope_id; it is resolved from the current NyxID request context and should only be supplied explicitly for diagnostics.";
@@ -123,7 +125,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         return action switch
         {
-            "list" => await ListAsync(_queryPort, ct),
+            "list" => await ListAsync(root, ct),
             "register_channel_via_nyx" => await RegisterChannelViaNyxAsync(token, root, ct),
             "delete" => await DeleteAsync(_queryPort, _commandFacade, root, ct),
             "register" => RetiredActionError("Direct callback registration is retired. Use action=register_channel_via_nyx."),
@@ -215,10 +217,19 @@ public sealed class ChannelRegistrationTool : IAgentTool
             note,
         });
 
-    private async Task<string> ListAsync(IChannelBotRegistrationQueryPort queryPort, CancellationToken ct)
+    private async Task<string> ListAsync(JsonElement args, CancellationToken ct)
     {
-        var registrations = await queryPort.QueryAllAsync(ct);
-        var result = registrations.Select(entry => new
+        // Tenant isolation (mirrors GET /api/channels/registrations): the read model holds
+        // every tenant's registrations, so the tool must filter to the caller's scope. The
+        // admin-gated cross-account view stays on the HTTP surface; this tool never offers it.
+        var scopeResolution = ResolveToolScopeId(args, required: true);
+        if (scopeResolution.Error is not null)
+            return SerializeError(scopeResolution.Error);
+
+        var registrations = await _queryPort.QueryAllAsync(ct);
+        var result = registrations
+            .Where(entry => string.Equals(entry.ScopeId, scopeResolution.ScopeId, StringComparison.Ordinal))
+            .Select(entry => new
         {
             id = entry.Id,
             platform = entry.Platform,
@@ -376,9 +387,19 @@ public sealed class ChannelRegistrationTool : IAgentTool
         if (string.IsNullOrWhiteSpace(registrationId))
             return """{"error":"'registration_id' is required for delete"}""";
 
+        var scopeResolution = ResolveToolScopeId(args, required: true);
+        if (scopeResolution.Error is not null)
+            return SerializeError(scopeResolution.Error);
+
+        // Tenant isolation: a registration outside the caller's scope must be indistinguishable
+        // from a nonexistent one (single branch => byte-identical payload), so foreign
+        // registration ids cannot be probed or deleted through this tool.
         var exists = await queryPort.GetAsync(registrationId, ct);
-        if (exists is null)
+        if (exists is null ||
+            !string.Equals(exists.ScopeId, scopeResolution.ScopeId, StringComparison.Ordinal))
+        {
             return JsonSerializer.Serialize(new { error = $"Registration '{registrationId}' not found" });
+        }
 
         var confirm = args.TryGetProperty("confirm", out var confirmValue) && confirmValue.ValueKind == JsonValueKind.True;
         if (!confirm)

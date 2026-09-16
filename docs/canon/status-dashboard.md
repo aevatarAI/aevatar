@@ -222,7 +222,7 @@ actor/backend 重启会把 last outcome、连续失败数和近期 history 重�
 
 凭证门控的 LLM canary（仅当配置了 `Aevatar:Status:Probe:CanaryBearer` 时生成，`severity=canary`）：
 
-1. `llm-catalog`：带 canary bearer 读 `GET /v1/models` → 200 + 合法列表 body，证明 LLM ingress 与 NyxID catalog 聚合端到端可用，无模型调用成本。
+1. `llm-catalog`：带 canary bearer 读 `GET /v1/models` → 200 + 合法列表 body，证明 caller scope 解析、LLM ingress 与 effective policy read model 可用，无模型调用成本；它不探测下游 LLM proxy。
 2. `llm-completion-canary`：带 canary bearer `POST /v1/chat/completions`（最便宜模型、`max_tokens≈8`、prompt `ping`）→ 200 + body 含 `choices`，端到端验证 LLM 真能出结果。默认 15 分钟一次；未配置凭证即不探测（不误报 down）。两者复用 `static_bearer` 认证模式，executor 在探测时从 `Aevatar:Status:Probe:CanaryBearer` 读取密钥。
 
 凭证门控的编排 / observatory 探针（仅当配置了 `Aevatar:Status:Probe:ScopeId` 时生成，`scope_service_token` 认证、断言 200）：

@@ -7,6 +7,14 @@ public interface IAgentToolExecutionPort
     Task<AgentToolExecutionOutcome> ExecuteAsync(
         AgentToolExecutionRequest request,
         CancellationToken ct = default);
+
+    Task<AgentToolCancellationResult> CancelAsync(
+        AgentToolCancellationRequest request,
+        CancellationToken ct = default) =>
+        Task.FromResult(AgentToolCancellationResult.Failed(
+            "tool_cancellation_not_supported",
+            "The configured tool execution port does not support durable cancellation.",
+            retryable: true));
 }
 
 public interface IAgentToolAdmissionLedger
@@ -37,10 +45,106 @@ public sealed record AgentToolExecutionRequest(
     AgentToolExecutionContext ExecutionContext,
     AgentToolApprovalContinuationMode ApprovalContinuationMode,
     AgentToolApprovalGrant? ApprovalGrant,
-    AgentToolExecutionAttemptKind ExecutionAttemptKind = AgentToolExecutionAttemptKind.Initial)
+    AgentToolExecutionAttemptKind ExecutionAttemptKind = AgentToolExecutionAttemptKind.Initial,
+    AgentToolUnattendedExecutionAuthorization? UnattendedAuthorization = null,
+    AgentToolPendingOperation? PendingOperation = null)
 {
     public AgentToolExecutionOwner ExecutionOwner => ExecutionContext.ExecutionOwner;
 }
+
+public sealed record AgentToolCancellationRequest(
+    IAgentTool Tool,
+    string ArgumentsJson,
+    AgentToolExecutionContext ExecutionContext,
+    AgentToolApprovalContinuationMode ApprovalContinuationMode,
+    AgentToolExecutionAttemptKind ExecutionAttemptKind,
+    AgentToolPendingOperation PendingOperation,
+    AgentToolOperationCancellationReason Reason,
+    long DeadlineUnixMs,
+    AgentToolCancellationTerminalIntent? TerminalIntent = null,
+    AgentToolUnattendedExecutionAuthorization? UnattendedAuthorization = null)
+{
+    public AgentToolExecutionOwner ExecutionOwner => ExecutionContext.ExecutionOwner;
+}
+
+public enum AgentToolCancellationDisposition
+{
+    Completed = 1,
+    Pending = 2,
+    Failed = 3,
+}
+
+public sealed record AgentToolCancellationResult(
+    AgentToolCancellationDisposition Disposition,
+    AgentToolExecutionOutcome? CompletedOutcome = null,
+    AgentToolPendingOperation? PendingOperation = null,
+    string FailureCode = "",
+    string SafeMessage = "",
+    bool Retryable = false,
+    AgentToolCancellationTerminalIntent? PendingTerminalIntent = null)
+{
+    public static AgentToolCancellationResult Completed(AgentToolExecutionOutcome outcome) =>
+        new(AgentToolCancellationDisposition.Completed, CompletedOutcome: outcome);
+
+    public static AgentToolCancellationResult Pending(
+        AgentToolPendingOperation operation,
+        string failureCode = "",
+        string safeMessage = "",
+        bool retryable = true,
+        AgentToolCancellationTerminalIntent? terminalIntent = null) =>
+        new(
+            AgentToolCancellationDisposition.Pending,
+            PendingOperation: operation,
+            FailureCode: failureCode,
+            SafeMessage: safeMessage,
+            Retryable: retryable,
+            PendingTerminalIntent: terminalIntent);
+
+    public static AgentToolCancellationResult Failed(
+        string failureCode,
+        string safeMessage,
+        bool retryable = false) =>
+        new(
+            AgentToolCancellationDisposition.Failed,
+            FailureCode: failureCode,
+            SafeMessage: safeMessage,
+            Retryable: retryable);
+}
+
+public sealed record AgentToolCancellationTerminalIntent(
+    AgentToolExecutionOutcomeKind Kind,
+    string ResultJson,
+    AgentToolReceipt Receipt,
+    bool IsMutation,
+    string FailureCode,
+    string SafeMessage,
+    AgentToolExecutionFailureStage FailureStage,
+    bool TerminalInvoked,
+    bool Retryable,
+    AgentToolCallSafety CallSafety,
+    string ArgumentsSha256 = "");
+
+public enum AgentToolUnattendedAuthorizationKind
+{
+    Unspecified = 0,
+    WorkflowWebhookExact = 1,
+}
+
+/// <summary>
+/// Process-local permit produced from actor-owned workflow state after an exact
+/// webhook authorization was validated. It is not a human approval grant and
+/// is never accepted from an external request payload.
+/// </summary>
+public sealed record AgentToolUnattendedExecutionAuthorization(
+    AgentToolUnattendedAuthorizationKind Kind,
+    string AuthorizationId,
+    AgentToolExecutionOwner ExecutionOwner,
+    string RequestId,
+    string ToolName,
+    string ToolCallId,
+    string ArgumentsSha256,
+    string CallSiteId,
+    string OperationSelectorDigest);
 
 public enum AgentToolExecutionAttemptKind
 {
@@ -103,6 +207,7 @@ public enum AgentToolExecutionOutcomeKind
     ApprovalRequired = 2,
     Denied = 3,
     Failed = 4,
+    Pending = 5,
 }
 
 public enum AgentToolExecutionFailureStage
@@ -127,4 +232,6 @@ public sealed record AgentToolExecutionOutcome(
     AgentToolExecutionFailureStage FailureStage,
     bool TerminalInvoked,
     bool Retryable,
-    bool AuditCompleted);
+    bool AuditCompleted,
+    AgentToolPendingOperation? PendingOperation = null,
+    AgentToolCancellationTerminalIntent? CancellationRecoveryIntent = null);

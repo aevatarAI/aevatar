@@ -115,13 +115,16 @@ public sealed class BindStudioMemberWorkflowToolSource : IAgentToolSource
 public sealed class ScheduleStudioMemberWorkflowToolSource : IAgentToolSource
 {
     private readonly IStudioMemberWorkflowSchedulePort? _schedulePort;
+    private readonly IStudioMemberWorkflowDurableAdmissionPort? _durableAdmissionPort;
     private readonly ILoggerFactory? _loggerFactory;
 
     public ScheduleStudioMemberWorkflowToolSource(
         IStudioMemberWorkflowSchedulePort? schedulePort = null,
+        IStudioMemberWorkflowDurableAdmissionPort? durableAdmissionPort = null,
         ILoggerFactory? loggerFactory = null)
     {
         _schedulePort = schedulePort;
+        _durableAdmissionPort = durableAdmissionPort;
         _loggerFactory = loggerFactory;
     }
 
@@ -133,6 +136,7 @@ public sealed class ScheduleStudioMemberWorkflowToolSource : IAgentToolSource
                 ? []
                 : [new ScheduleStudioMemberWorkflowTool(
                     _schedulePort,
-                    _loggerFactory?.CreateLogger<ScheduleStudioMemberWorkflowTool>())]);
+                    _loggerFactory?.CreateLogger<ScheduleStudioMemberWorkflowTool>(),
+                    _durableAdmissionPort)]);
     }
 }

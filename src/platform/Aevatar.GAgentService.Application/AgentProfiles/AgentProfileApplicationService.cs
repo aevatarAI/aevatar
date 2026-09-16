@@ -9,7 +9,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Application.AgentProfiles;
 
-public sealed class AgentProfileApplicationService
+public sealed class AgentProfileApplicationService : IAgentProfileCatalogApplicationService
 {
     public const int MaximumPageSize = 100;
 
@@ -82,7 +82,13 @@ public sealed class AgentProfileApplicationService
         var offset = DecodeCursor(cursor);
         var catalog = await _catalogQuery.GetAsync(owner, ct);
         if (catalog is null)
-            return new AgentProfileListPage([], null, 0, DateTimeOffset.MinValue);
+            return new AgentProfileListPage(
+                [],
+                null,
+                0,
+                DateTimeOffset.MinValue,
+                TotalCount: 0,
+                IsMaterialized: false);
         EnsureOwner(catalog.Owner, owner, "Agent Profile catalog owner does not match the requested owner.");
 
         var candidates = publishedOnly
@@ -102,7 +108,8 @@ public sealed class AgentProfileApplicationService
             nextOffset < ordered.Length ? EncodeCursor(nextOffset) : null,
             catalog.AuthorityStateVersion,
             catalog.UpdatedAt,
-            catalog.LastMutation?.Clone());
+            catalog.LastMutation?.Clone(),
+            ordered.Length);
     }
 
     public async Task<AgentProfileManagementDetail?> GetAsync(
@@ -328,8 +335,12 @@ public sealed class AgentProfileApplicationService
         }
         else
         {
-            if (request.CohortBasisPoints is < 0 or > AgentProfilePolicies.FullCohortBasisPoints)
-                throw new ArgumentOutOfRangeException(nameof(request.CohortBasisPoints));
+            if (!AgentProfilePolicies.IsReviewedRolloutCohort(request.CohortBasisPoints))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(request.CohortBasisPoints),
+                    "System Agent Profile rollout stages are fixed at 5%, 25%, and 100%.");
+            }
             command.System = new AgentProfileSystemBindingAdmission
             {
                 Enabled = request.Enabled,

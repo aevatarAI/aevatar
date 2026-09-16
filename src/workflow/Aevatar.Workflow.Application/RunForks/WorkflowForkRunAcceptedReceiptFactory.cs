@@ -20,6 +20,8 @@ internal sealed class WorkflowForkRunAcceptedReceiptFactory
             true,
             context.CommandId,
             context.CorrelationId,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            target.RunId,
+            target.OriginalRunId);
     }
 }

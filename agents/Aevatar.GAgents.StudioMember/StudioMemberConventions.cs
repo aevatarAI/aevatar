@@ -14,6 +14,7 @@ public static class StudioMemberConventions
     public const string ActorIdPrefix = "studio-member";
     public const string BindingRunActorIdPrefix = "studio-member-binding-run";
     public const string PublishedServiceIdPrefix = "member";
+    public const int PlatformBindingProtocolVersion = 1;
 
     /// <summary>
     /// Builds the actor id used by <see cref="StudioMemberGAgent"/>.

@@ -274,7 +274,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
     {
         var sourceReadableBearerToken = access.NyxIdCallerCredential?.SourceReadableUserBearerToken;
         if (string.IsNullOrWhiteSpace(sourceReadableBearerToken) ||
-            string.IsNullOrWhiteSpace(_options.BaseUrl))
+            string.IsNullOrWhiteSpace(_options.EffectiveTransportBaseUrl))
         {
             return ToSnapshot(NyxIdMcpOperationCatalog.Parse(
                 "{\"error\":true,\"status\":403}",
@@ -400,7 +400,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
     }
 
     private string TrustedLocator() =>
-        string.IsNullOrWhiteSpace(_options.BaseUrl) ? string.Empty : _options.BaseUrl.TrimEnd('/');
+        string.IsNullOrWhiteSpace(_options.EffectiveApiBaseUrl)
+            ? string.Empty
+            : _options.EffectiveApiBaseUrl.TrimEnd('/');
 
     private sealed record NyxIdMcpCatalogSnapshot(
         IReadOnlyList<NyxIdMcpService> Services,

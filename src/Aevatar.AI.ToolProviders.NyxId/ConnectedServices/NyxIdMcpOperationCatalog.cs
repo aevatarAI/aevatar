@@ -25,7 +25,8 @@ internal sealed record NyxIdMcpEndpoint(
     bool RequestBodyRequired,
     string? RequestBodyMediaType,
     IReadOnlyList<string> ResponseMediaTypes,
-    bool? BinaryArtifact)
+    bool? BinaryArtifact,
+    string? PublishedOperationDigest = null)
 {
     public bool IsReadOnly => Method is "GET" or "HEAD" or "OPTIONS";
 
@@ -54,7 +55,7 @@ internal sealed record NyxIdMcpEndpoint(
         }
     }
 
-    public string ContractDigest => ExternalWorkflowCapabilityContractDigest.Compute(
+    public string ContractDigest => PublishedOperationDigest ?? ExternalWorkflowCapabilityContractDigest.Compute(
         "nyxid-mcp-endpoint.v1",
         EndpointId,
         Method,
@@ -101,7 +102,7 @@ internal static class NyxIdMcpOperationCatalog
 
     private static readonly HashSet<string> AllowedHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Accept", "If-Match", "If-None-Match",
+        "If-Match", "If-None-Match",
     };
 
     private static readonly HashSet<string> SupportedParameterKeywords = new(StringComparer.Ordinal)
@@ -366,7 +367,10 @@ internal static class NyxIdMcpOperationCatalog
             body.Required,
             body.MediaType,
             response.MediaTypes,
-            response.BinaryArtifact);
+            response.BinaryArtifact,
+            IsCatalogDigest(ExactString(entry, "operation_digest"))
+                ? ExactString(entry, "operation_digest")
+                : null);
     }
 
     private static IReadOnlyList<ConnectedServiceToolParameter>? ParseParameters(
@@ -400,12 +404,10 @@ internal static class NyxIdMcpOperationCatalog
             if (!TryReadOptionalBool(item, "required", out var required))
                 return UnsupportedParameters(issues, serviceId, endpointId);
             if (location == ParameterLocation.Header &&
-                (required && (!AllowedHeaders.Contains(name) || NyxIdProxyHeaderPolicy.IsSensitive(name))))
+                (!AllowedHeaders.Contains(name) || NyxIdProxyHeaderPolicy.IsSensitive(name)))
             {
                 return UnsupportedParameters(issues, serviceId, endpointId);
             }
-            if (location == ParameterLocation.Header && !AllowedHeaders.Contains(name))
-                continue;
             var identityName = location == ParameterLocation.Header ? name.ToUpperInvariant() : name;
             if (!identities.Add((identityName, location)))
                 return UnsupportedParameters(issues, serviceId, endpointId);

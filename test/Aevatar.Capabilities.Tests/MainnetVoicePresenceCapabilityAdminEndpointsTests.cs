@@ -7,7 +7,9 @@ using Aevatar.AI.Abstractions.Voice;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Aevatar.GAgents.NyxidChat.Voice;
 using Aevatar.Mainnet.Host.Api.Voice;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication;
@@ -81,6 +83,33 @@ public sealed class MainnetVoicePresenceCapabilityAdminEndpointsTests
         commandPort.Calls[0].Command.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.Supported);
         commandPort.Calls[0].Command.VoiceSessionDefaults.SampleRateHz.Should().Be(16000);
         commandPort.Calls[0].Command.VoiceSessionDefaults.Voice.Should().Be("alloy");
+    }
+
+    [Fact]
+    public async Task ProvisionDefaultVoiceAgent_ShouldUseDedicatedKindAndOpenAIRealtimeModule()
+    {
+        var voiceAgentService = new RecordingVoiceAgentCommandService();
+        await using var app = await CreateAppAsync(
+            new RecordingVoicePresenceCommandPort(),
+            new RecordingAdmissionPort(),
+            voiceAgentService: voiceAgentService);
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsync($"/api/scopes/{ScopeId}/voice-agents", content: null);
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted, body);
+        using var document = JsonDocument.Parse(body);
+        document.RootElement.GetProperty("actorId").GetString().Should().Be("nyxid-voice-alpha");
+        document.RootElement.GetProperty("agentKind").GetString().Should().Be(NyxIdVoiceServiceDefaults.GAgentKind);
+        document.RootElement.GetProperty("moduleName").GetString().Should().Be(
+            NyxIdVoiceServiceDefaults.OpenAIRealtimeModuleName);
+        document.RootElement.GetProperty("statusUrl").GetString().Should().Contain(
+            $"agentKind={NyxIdVoiceServiceDefaults.GAgentKind}");
+        voiceAgentService.ProvisionCommands.Should().ContainSingle().Which.Should().Be(
+            new NyxIdVoiceAgentProvisionCommand(
+                ScopeId,
+                NyxIdVoiceServiceDefaults.OpenAIRealtimeModuleName));
     }
 
     [Theory]
@@ -238,6 +267,65 @@ public sealed class MainnetVoicePresenceCapabilityAdminEndpointsTests
         body.Should().Contain("command_dispatch_failed");
     }
 
+    [Fact]
+    public async Task Get_ShouldAuthorizeUseAndReturnMaterializedCapability()
+    {
+        var admissionPort = new RecordingAdmissionPort();
+        var queryPort = new RecordingCapabilityQueryPort
+        {
+            Snapshot = new VoicePresenceCapabilitySnapshot(
+                ActorId,
+                ModuleName,
+                7,
+                "event-voice",
+                DateTimeOffset.Parse("2026-08-09T03:30:00Z"),
+                Initialized: true,
+                TransportAttached: false,
+                PcmSampleRateHz: 24000,
+                ActiveSessionId: null,
+                LeaseExpiresAt: null,
+                VoiceRemoteAudioSupport.Supported),
+        };
+        await using var app = await CreateAppAsync(
+            new RecordingVoicePresenceCommandPort(),
+            admissionPort,
+            queryPort: queryPort);
+        var client = app.GetTestClient();
+
+        var response = await client.GetAsync(
+            $"/api/scopes/{ScopeId}/gagent-actors/{ActorId}/voice-presence" +
+            $"?agentKind={AgentKind}&moduleName={ModuleName}");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var document = JsonDocument.Parse(body);
+        document.RootElement.GetProperty("actorId").GetString().Should().Be(ActorId);
+        document.RootElement.GetProperty("agentKind").GetString().Should().Be(AgentKind);
+        document.RootElement.GetProperty("moduleName").GetString().Should().Be(ModuleName);
+        document.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(7);
+        document.RootElement.GetProperty("initialized").GetBoolean().Should().BeTrue();
+        queryPort.Calls.Should().ContainSingle().Which.Should().Be((ActorId, ModuleName));
+        admissionPort.Targets.Should().ContainSingle().Which.Operation.Should().Be(ScopeResourceOperation.Use);
+    }
+
+    [Fact]
+    public async Task Get_WhenCapabilityIsNotMaterialized_ShouldReturnNotFound()
+    {
+        await using var app = await CreateAppAsync(
+            new RecordingVoicePresenceCommandPort(),
+            new RecordingAdmissionPort(),
+            queryPort: new RecordingCapabilityQueryPort());
+        var client = app.GetTestClient();
+
+        var response = await client.GetAsync(
+            $"/api/scopes/{ScopeId}/gagent-actors/{ActorId}/voice-presence" +
+            $"?agentKind={AgentKind}&moduleName={ModuleName}");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, body);
+        body.Should().Contain("voice_capability_not_materialized");
+    }
+
     [Theory]
     [InlineData("", "empty_body")]
     [InlineData("{", "invalid_body")]
@@ -274,7 +362,9 @@ public sealed class MainnetVoicePresenceCapabilityAdminEndpointsTests
         RecordingVoicePresenceCommandPort commandPort,
         RecordingAdmissionPort admissionPort,
         bool registerVoiceModule = true,
-        bool knownAgentKind = true)
+        bool knownAgentKind = true,
+        RecordingCapabilityQueryPort? queryPort = null,
+        RecordingVoiceAgentCommandService? voiceAgentService = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -289,16 +379,21 @@ public sealed class MainnetVoicePresenceCapabilityAdminEndpointsTests
             .AddScheme<AuthenticationSchemeOptions, AlwaysSucceedAuthHandler>("test", _ => { });
         builder.Services.AddAuthorization();
         builder.Services.AddSingleton<IVoicePresenceCapabilityCommandPort>(commandPort);
+        builder.Services.AddSingleton<IVoicePresenceCapabilityQueryPort>(
+            queryPort ?? new RecordingCapabilityQueryPort());
         builder.Services.AddSingleton<IScopeResourceAdmissionPort>(admissionPort);
         builder.Services.AddSingleton<IAgentKindRegistry>(new StaticAgentKindRegistry(knownAgentKind));
+        builder.Services.AddSingleton<INyxIdVoiceAgentCommandService>(
+            voiceAgentService ?? new RecordingVoiceAgentCommandService());
         if (registerVoiceModule)
         {
             builder.Services.AddSingleton(new VoicePresenceModuleRegistration(
-                [ModuleName],
+                [ModuleName, NyxIdVoiceServiceDefaults.OpenAIRealtimeModuleName],
                 _ => throw new InvalidOperationException("module creation is not part of endpoint admission tests")));
         }
 
         var app = builder.Build();
+        app.MapDefaultVoiceAgentEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
         await app.StartAsync();
         return app;
@@ -341,6 +436,45 @@ public sealed class MainnetVoicePresenceCapabilityAdminEndpointsTests
             Targets.Add(target);
             return Task.FromResult(new ScopeResourceAdmissionResult(Status));
         }
+    }
+
+    private sealed class RecordingCapabilityQueryPort : IVoicePresenceCapabilityQueryPort
+    {
+        public List<(string ActorId, string? ModuleName)> Calls { get; } = [];
+        public VoicePresenceCapabilitySnapshot? Snapshot { get; init; }
+
+        public Task<VoicePresenceCapabilitySnapshot?> GetAsync(
+            string actorId,
+            string? moduleName,
+            CancellationToken ct = default)
+        {
+            Calls.Add((actorId, moduleName));
+            return Task.FromResult(Snapshot);
+        }
+    }
+
+    private sealed class RecordingVoiceAgentCommandService : INyxIdVoiceAgentCommandService
+    {
+        public List<NyxIdVoiceAgentProvisionCommand> ProvisionCommands { get; } = [];
+
+        public Task<NyxIdVoiceAgentProvisionResult> ProvisionAsync(
+            NyxIdVoiceAgentProvisionCommand command,
+            CancellationToken ct = default)
+        {
+            ProvisionCommands.Add(command);
+            return Task.FromResult(new NyxIdVoiceAgentProvisionResult(
+                NyxIdVoiceAgentProvisionStatus.Accepted,
+                "nyxid-voice-alpha",
+                command.ModuleName,
+                "cmd-voice-agent",
+                "corr-voice-agent",
+                "accepted_for_dispatch"));
+        }
+
+        public Task<NyxIdVoiceAgentDeleteResult> DeleteAsync(
+            NyxIdVoiceAgentDeleteCommand command,
+            CancellationToken ct = default) =>
+            Task.FromResult(new NyxIdVoiceAgentDeleteResult(NyxIdVoiceAgentDeleteStatus.Deleted));
     }
 
     private sealed class StaticAgentKindRegistry(bool known) : IAgentKindRegistry

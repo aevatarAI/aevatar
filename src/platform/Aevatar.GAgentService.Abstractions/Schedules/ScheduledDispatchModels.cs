@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
@@ -283,10 +284,17 @@ public sealed record ScheduledServiceInvocationAuth
 public sealed record ScheduledDispatchMutationContext(
     string? AuthenticatedScopeId = null,
     ScheduledServiceInvocationNyxIdSubjectRef? AuthenticatedNyxIdOwnerSubject = null,
-    TeamMemberAutomationOwner? TeamAutomationOwner = null)
+    TeamMemberAutomationOwner? TeamAutomationOwner = null,
+    ScheduledDispatchExpectedServiceTarget? ExpectedServiceTarget = null)
 {
     public static ScheduledDispatchMutationContext None { get; } = new();
 }
+
+public sealed record ScheduledDispatchExpectedServiceTarget(
+    ScheduledDispatchScheduleKind ScheduleKind,
+    ScheduledDispatchTargetKind TargetKind,
+    ServiceIdentity ServiceIdentity,
+    string ServiceEndpointId);
 
 public sealed record ScheduledDispatchCredentialAdmissionRequest(
     ScheduledDispatchMutationContext Context,
@@ -422,6 +430,9 @@ public sealed record ScheduledDispatchSummary(
     string CredentialOwnerKind = "",
     string CredentialOwnerSubject = "")
 {
+    [JsonIgnore]
+    public ServiceIdentity ServiceIdentity { get; init; } = new();
+
     public string OwnerLLMRouteKind { get; init; } = "unspecified";
 
     public string OwnerLLMRoute { get; init; } = string.Empty;
@@ -431,6 +442,8 @@ public sealed record ScheduledDispatchSummary(
     public string OwnerLLMServiceSlug { get; init; } = string.Empty;
 
     public string OwnerLLMModel { get; init; } = string.Empty;
+
+    public string ServiceRevisionId { get; init; } = string.Empty;
 
     public string NyxIdRevocationStatus { get; init; } = string.Empty;
 
@@ -499,7 +512,10 @@ public sealed record ScheduledDispatchListQuery(
     string? TeamAutomationMemberId = null,
     bool ExcludeTeamOwned = false,
     bool IncludeDeleted = false,
-    bool ExcludeCompletedTeamAutomationDeletions = false);
+    bool ExcludeCompletedTeamAutomationDeletions = false,
+    string? ServiceKey = null,
+    string? ServiceId = null,
+    string? ServiceRevisionId = null);
 
 public interface IScheduledDispatchActorPort
 {
@@ -517,6 +533,7 @@ public interface IScheduledDispatchActorPort
         string actorId,
         ScheduledDispatchConfiguration configuration,
         PreparedScheduledDispatchTarget dispatch,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchEnsureAsync(
@@ -528,26 +545,39 @@ public interface IScheduledDispatchActorPort
     Task<DispatchAdmission> DispatchEnableAsync(
         string actorId,
         string reason,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchDisableAsync(
         string actorId,
         string reason,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchDeleteAsync(
         string actorId,
         string reason,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchRunNowAsync(
         string actorId,
         DateTimeOffset scheduledFireAt,
+        ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
         CancellationToken ct = default);
 
     Task<DispatchAdmission> DispatchBeginTeamAutomationCredentialOperationAsync(
         string actorId,
         TeamAutomationCredentialOperation operation,
+        string observationRequestId,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<DispatchAdmission> DispatchRetryTeamAutomationCredentialOperationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
         string observationRequestId,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
@@ -683,13 +713,19 @@ public sealed record ScheduledServiceInvocationDispatchReceipt(
     string TargetActorId,
     string CorrelationId);
 
+public sealed record ScheduledDispatchFireContext(
+    DateTimeOffset FireAtUtc,
+    string Timezone);
+
 public sealed record ScheduledServiceInvocationDispatchRequest(
     ServiceInvocationRequest Request,
     ScheduledServiceInvocationAuth? Auth = null,
     IReadOnlyDictionary<string, string>? Headers = null,
     bool ProjectNyxIdAccessTokenToWorkflowCallerCredential = false,
     string? ScheduleId = null,
-    ScheduledInvocationAuthorizationFact? AuthorizationFact = null);
+    ScheduledInvocationAuthorizationFact? AuthorizationFact = null,
+    ScheduledDispatchFireContext? FireContext = null,
+    string? ScheduleOperationId = null);
 
 public interface IScheduledServiceInvocationDispatchPort
 {
@@ -748,16 +784,19 @@ public interface IScheduledDispatchApplicationService
     Task<ScheduledDispatchMutationReceipt> EnableAsync(
         string scheduleId,
         string reason,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> DisableAsync(
         string scheduleId,
         string reason,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> DeleteAsync(
         string scheduleId,
         string reason,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<ScheduledDispatchMutationReceipt> DeleteTeamAutomationAsync(
@@ -790,10 +829,19 @@ public interface IScheduledDispatchApplicationService
 
     Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
         string scheduleId,
+        ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default);
 
     Task<TeamAutomationCommittedMutationReceipt> BeginTeamAutomationCredentialOperationAsync(
         TeamAutomationCredentialOperation operation,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationCredentialOperationAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string operationId,
+        string idempotencyKey,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 

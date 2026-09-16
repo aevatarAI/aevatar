@@ -96,14 +96,14 @@ public sealed class ActorOwnedVoiceRealtimeSession
                 capability = await _capabilityQueryPort.GetAsync(inbound.ActorId, inbound.ModuleName, ct);
             }
 
-            // The enable committed but the read model has not caught up within the bounded window. This is a
-            // retryable materialization lag (the same shape as a lease-observe timeout), not a genuinely
-            // missing capability — surface the typed retryable 503 so the client re-attaches rather than
-            // getting a permanent 404.
+            // The enable was accepted for dispatch but the read model has not caught up within the bounded
+            // window. This is a retryable materialization gap (the same shape as a lease-observe timeout),
+            // not a genuinely missing capability — surface the typed retryable 503 so the client re-attaches
+            // rather than getting a permanent 404.
             if (capability == null)
             {
                 _logger?.LogInformation(
-                    "voice auto-enable committed for actor {ActorId}/{ModuleName} but capability not yet materialized; returning CapabilityNotReady (retryable)",
+                    "voice auto-enable accepted for actor {ActorId}/{ModuleName} but capability not yet materialized; returning CapabilityNotReady (retryable)",
                     inbound.ActorId,
                     inbound.ModuleName);
                 return Failure(VoiceRealtimeSessionStartError.CapabilityNotReady);

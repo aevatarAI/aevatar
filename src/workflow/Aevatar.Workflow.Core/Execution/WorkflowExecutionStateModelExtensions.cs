@@ -10,9 +10,15 @@ internal static class WorkflowExecutionStateModelExtensions
         {
             Success = evt.Success,
             Output = evt.Output ?? string.Empty,
+            StepId = evt.StepId ?? string.Empty,
+            ExecutionId = evt.ExecutionId ?? string.Empty,
             Error = evt.Error ?? string.Empty,
             Index = index,
             FileRef = fileRef?.Clone(),
+            FailureOutcome = evt.FailureOutcome,
+            RecoveryFailureKind = evt.RecoveryFailureKind,
+            RetryDisposition = evt.RetryDisposition,
+            Outcome = evt.Outcome,
         };
 
     public static MapReduceItemResult ToMapReduceItemResult(this StepCompletedEvent evt) =>
@@ -20,6 +26,8 @@ internal static class WorkflowExecutionStateModelExtensions
         {
             Success = evt.Success,
             Output = evt.Output ?? string.Empty,
+            StepId = evt.StepId ?? string.Empty,
+            ExecutionId = evt.ExecutionId ?? string.Empty,
         };
 
     public static ParallelItemResult ToParallelItemResult(this StepCompletedEvent evt)
@@ -34,6 +42,8 @@ internal static class WorkflowExecutionStateModelExtensions
             BranchKey = evt.BranchKey ?? string.Empty,
             AssignedVariable = evt.AssignedVariable ?? string.Empty,
             AssignedValue = evt.AssignedValue ?? string.Empty,
+            StepId = evt.StepId ?? string.Empty,
+            ExecutionId = evt.ExecutionId ?? string.Empty,
         };
         foreach (var (key, value) in evt.Annotations)
             result.Annotations[key] = value;

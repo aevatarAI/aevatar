@@ -153,8 +153,11 @@ public sealed class StudioMemberServiceBindingTests
         commandPort.OperationsInOrder.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task BindAsync_Workflow_WithExistingPlan_ShouldOnlyRevalidateWithoutFreshConfirmation()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BindAsync_Workflow_WithExistingPlan_ShouldUseCredentialAwareAdmissionPath(
+        bool includeCallerCredential)
     {
         var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
         var plan = await admission.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
@@ -187,11 +190,14 @@ public sealed class StudioMemberServiceBindingTests
                     "wf-alpha",
                     [StudioExplicitRequestAdmissionTestKit.WorkflowYaml]))
             {
-                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(existingPlan: plan),
+                CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                    existingPlan: plan,
+                    includeCallerCredential: includeCallerCredential),
             });
 
         admission.Requests.Should().BeEmpty();
-        admission.PersistedRequests.Should().ContainSingle();
+        admission.RefreshRequests.Should().HaveCount(includeCallerCredential ? 1 : 0);
+        admission.PersistedRequests.Should().HaveCount(includeCallerCredential ? 0 : 1);
         commandPort.StartedRuns.Should().ContainSingle();
     }
 
@@ -737,8 +743,6 @@ public sealed class StudioMemberServiceBindingTests
             PublishServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(PublishRevisionAsync));
         public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(
             RetireServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(RetireRevisionAsync));
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(
-            SetDefaultServingRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(SetDefaultServingRevisionAsync));
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(
             ActivateServiceRevisionCommand command, CancellationToken ct = default) => throw Reject(nameof(ActivateServiceRevisionAsync));
         public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(

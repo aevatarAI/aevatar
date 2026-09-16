@@ -22,6 +22,8 @@ public sealed record RoleModel
 
     public List<string>? AllowedTools { get; init; }
 
+    public List<string>? ToolSets { get; init; }
+
     public string? EventModules { get; init; }
 
     public string? EventRoutes { get; init; }

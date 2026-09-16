@@ -11,6 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />

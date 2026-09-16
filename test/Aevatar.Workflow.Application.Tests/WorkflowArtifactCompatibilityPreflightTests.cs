@@ -226,6 +226,7 @@ public sealed class WorkflowArtifactCompatibilityPreflightTests
             },
         });
 
+        exception.SafeBlockerCode.Should().Be("UNTRUSTED_UPSTREAM_CODE");
         exception.StableCode.Should().Be("WORKFLOW_ADMISSION_REJECTED");
         exception.SafeMessage.Should().Be("Workflow admission was rejected.");
     }

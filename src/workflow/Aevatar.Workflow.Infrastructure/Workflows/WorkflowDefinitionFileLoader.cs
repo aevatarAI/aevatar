@@ -1,11 +1,15 @@
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.Workflows;
 
 public sealed class WorkflowDefinitionFileLoader
 {
+    private const ExternalCapabilityExecutionMode StartupCatalogExecutionMode =
+        ExternalCapabilityExecutionMode.Interactive;
+
     public int LoadInto(
         IWorkflowDefinitionCatalog registry,
         IEnumerable<string> directories,
@@ -58,9 +62,13 @@ public sealed class WorkflowDefinitionFileLoader
 
                 var yaml = File.ReadAllText(file);
                 if (registry is WorkflowDefinitionCatalog concreteCatalog)
-                    concreteCatalog.Register(name, yaml, ResolveSourceKind(directory));
+                    concreteCatalog.Register(
+                        name,
+                        yaml,
+                        StartupCatalogExecutionMode,
+                        ResolveSourceKind(directory));
                 else
-                    registry.Register(name, yaml);
+                    registry.Register(name, yaml, StartupCatalogExecutionMode);
                 loaded++;
             }
         }

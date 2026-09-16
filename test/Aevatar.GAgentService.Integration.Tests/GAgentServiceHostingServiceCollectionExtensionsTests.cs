@@ -34,6 +34,7 @@ using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.Projectors;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Infrastructure.Workflows;
@@ -68,6 +69,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         services.Should().Contain(x => x.ServiceType == typeof(IScopeBindingReadinessQueryPort));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceInvocationPort));
         services.Should().Contain(x => x.ServiceType == typeof(ISkillWorkflowMountPort));
+        services.Should().Contain(x => x.ServiceType == typeof(ISkillWorkflowConfirmationPort));
         services.Should().Contain(x => x.ServiceType == typeof(IStaticGAgentStreamInvocationPort<AGUIEvent>));
         services.Should().NotContain(x => x.ServiceType == typeof(ITeamEntryMemberResolver));
         services.Should().Contain(x => x.ServiceType == typeof(IServiceGovernanceCommandPort));
@@ -127,13 +129,27 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>())
             .Build();
+        services.AddAevatarRuntime();
+        services.AddWorkflowProjectionReadModelProviders(configuration);
         services.AddSkills(_ => { });
 
         services.AddGAgentServiceCapability(configuration);
 
         services.Where(descriptor => descriptor.ServiceType == typeof(ISkillWorkflowMountPort))
             .Should().ContainSingle()
-            .Which.ImplementationType.Should().Be(typeof(SkillWorkflowMountAdapter));
+            .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
+        services.Where(descriptor => descriptor.ServiceType == typeof(ISkillWorkflowConfirmationPort))
+            .Should().ContainSingle()
+            .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
+        services.Where(descriptor =>
+                descriptor.ServiceType == typeof(IWorkflowExplicitRequestPreviewService))
+            .Should().ContainSingle()
+            .Which.Lifetime.Should().Be(ServiceLifetime.Singleton);
+
+        using var provider = services.BuildServiceProvider();
+        var adapter = provider.GetRequiredService<SkillWorkflowMountAdapter>();
+        provider.GetRequiredService<ISkillWorkflowMountPort>().Should().BeSameAs(adapter);
+        provider.GetRequiredService<ISkillWorkflowConfirmationPort>().Should().BeSameAs(adapter);
     }
 
     [Fact]
@@ -461,6 +477,9 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         app.Services.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>()
             .Should()
             .NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>()
+            .Should()
+            .NotBeNull();
         AssertNoWorkflowCapabilitiesStartupArtifactServices(builder.Services);
     }
 
@@ -596,6 +615,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<ServiceRolloutCommandObservationReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<UserConfigCurrentStateDocument, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
         AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
         services.Count(x => x.ServiceType == typeof(IProjectionDocumentReader<ServiceCatalogReadModel, string>)).Should().Be(1);
     }
@@ -649,6 +669,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IProjectionDocumentReader<GAgentRunTerminalReadModel, string>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument>>().Should().NotBeNull();
         provider.GetRequiredService<IProjectionDocumentReader<WorkflowCatalogCurrentStateDocument, string>>().Should().NotBeNull();
+        provider.GetRequiredService<IProjectionDocumentReader<WorkflowActorBindingDocument, string>>().Should().NotBeNull();
         AssertNoWorkflowCapabilitiesStartupArtifactServices(services);
     }
 

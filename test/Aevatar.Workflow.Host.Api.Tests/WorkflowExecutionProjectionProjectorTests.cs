@@ -1,10 +1,12 @@
 using System.Diagnostics.Metrics;
+using System.Text;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Security;
+using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Security;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Projection;
@@ -107,6 +109,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     [Fact]
     public void ApplyReportBase_ShouldPopulateLifecycleFieldsAndPreserveWaitingStatus()
     {
+        var opaqueCredential = new string('B', 48);
         var observedAt = new DateTimeOffset(2026, 3, 18, 3, 0, 0, TimeSpan.Zero);
         var context = CreateContext();
 
@@ -114,6 +117,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         {
             WorkflowName = "existing-name",
             CompletionStatus = WorkflowExecutionCompletionStatus.WaitingForSignal,
+            ReportVersion = "3.0",
         };
         WorkflowExecutionArtifactMaterializationSupport.ApplyReportBase(
             runningReport,
@@ -122,6 +126,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             {
                 LastCommandId = "cmd-running",
                 Status = "running",
+                FinalError = $"provider failed opaque={opaqueCredential}",
             },
             new StateEvent
             {
@@ -133,6 +138,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         runningReport.RootActorId.Should().Be(context.RootActorId);
         runningReport.WorkflowName.Should().Be("existing-name");
         runningReport.CommandId.Should().Be("cmd-running");
+        runningReport.ReportVersion.Should().Be("3.0");
+        runningReport.FinalError.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        runningReport.FinalError.Should().NotContain(opaqueCredential);
         runningReport.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.WaitingForSignal);
         runningReport.Success.Should().BeNull();
         runningReport.CreatedAt.Should().Be(observedAt);
@@ -183,7 +191,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             },
             observedAt);
 
-        report.ReportVersion.Should().Be("3.0");
+        report.ReportVersion.Should().Be("3.1");
         report.ProjectionScope.Should().Be(WorkflowExecutionProjectionScope.RunIsolated);
         report.TopologySource.Should().Be(WorkflowExecutionTopologySource.CommittedProjection);
         report.WorkflowName.Should().BeEmpty();
@@ -194,7 +202,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
-    public void ApplyReportBase_ShouldResolveFailedAndStoppedStatuses()
+    public void ApplyReportBase_ShouldResolveFailedStoppedAndTimedOutStatuses()
     {
         var observedAt = new DateTimeOffset(2026, 3, 18, 3, 45, 0, TimeSpan.Zero);
         var context = CreateContext();
@@ -234,6 +242,23 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             },
             observedAt);
 
+        var timedOutReport = new WorkflowRunInsightReportDocument();
+        WorkflowExecutionArtifactMaterializationSupport.ApplyReportBase(
+            timedOutReport,
+            context,
+            new WorkflowRunState
+            {
+                WorkflowName = "wf-timed-out",
+                Status = "timed_out",
+                FinalError = "deadline exceeded",
+            },
+            new StateEvent
+            {
+                Version = 5,
+                EventId = "evt-timed-out",
+            },
+            observedAt);
+
         failedReport.WorkflowName.Should().Be("wf-failed");
         failedReport.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Failed);
         failedReport.Success.Should().BeFalse();
@@ -243,11 +268,22 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         stoppedReport.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
         stoppedReport.Success.Should().BeFalse();
         stoppedReport.EndedAt.Should().Be(observedAt);
+
+        timedOutReport.WorkflowName.Should().Be("wf-timed-out");
+        timedOutReport.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.TimedOut);
+        timedOutReport.Success.Should().BeFalse();
+        timedOutReport.EndedAt.Should().Be(observedAt);
+        var mappedTimedOutReport = new WorkflowExecutionReadModelMapper().ToRunReport(timedOutReport);
+        mappedTimedOutReport.CompletionStatus.Should().Be(WorkflowRunCompletionStatus.TimedOut);
+        mappedTimedOutReport.Success.Should().BeFalse();
     }
 
     [Fact]
     public void ApplyObservedPayloadToReport_ShouldTrackObservedWorkflowArtifactsAcrossBranches()
     {
+        var parameterCredential = new string('P', 48);
+        var assignedCredential = new string('Q', 48);
+        var annotationCredential = new string('R', 48);
         var context = CreateContext();
         var baselineTimestamp = new DateTimeOffset(2026, 3, 18, 4, 0, 0, TimeSpan.Zero);
         var report = WorkflowExecutionArtifactMaterializationSupport.CreateReportDocument(
@@ -298,6 +334,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     {
                         ["temperature"] = "0.2",
                         ["max_tokens"] = "128",
+                        ["opaque"] = $"value={parameterCredential}",
                     },
                 },
                 4,
@@ -311,16 +348,51 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                 {
                     StepId = "step-1",
                     Success = false,
-                    Output = new string('x', 260),
+                    Output = string.Join(' ', Enumerable.Repeat("step-output", 26)),
                     Error = "tool failed",
                     WorkerId = "worker-1",
                     NextStepId = "step-2",
                     BranchKey = "fallback",
                     AssignedVariable = "answer",
-                    AssignedValue = "42",
+                    AssignedValue = $"value={assignedCredential}",
+                    FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+                    RecoveryFailureKind = WorkflowRecoveryFailureKind.AuthorizationFailure,
+                    RetryDisposition = WorkflowStepRetryDisposition.Forbidden,
+                    FileItemResults = new WorkflowFileItemResultSet
+                    {
+                        Results =
+                        {
+                            new WorkflowFileItemResult
+                            {
+                                Index = 0,
+                                Success = false,
+                                Output = "{\"fooSecret\":\"must-not-persist\",\"detail\":\"partial\"}",
+                                Error = "file failed",
+                                FileRef = new WorkflowFileRef
+                                {
+                                    FileId = "file-alpha",
+                                    FileName = "synthetic.contact@example.test",
+                                },
+                            },
+                        },
+                    },
+                    VoteAgreementDecision = new VoteAgreementDecision
+                    {
+                        Kind = AgreementDecisionKind.Inconclusive,
+                        BranchKey = "manual-review",
+                        WinnerCandidateId = "candidate-alpha",
+                        Output = "{\"service_password\":\"must-not-persist\",\"detail\":\"vote\"}",
+                        Reason = "agreement failed",
+                        LabelCounts =
+                        {
+                            ["approve"] = 1,
+                            ["reject"] = 1,
+                        },
+                    },
                     Annotations =
                     {
                         ["reason"] = "timeout",
+                        ["trace"] = $"value={annotationCredential}",
                     },
                 },
                 5,
@@ -475,16 +547,35 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         step.OutputPreview.Should().EndWith("...");
         step.OutputPreview.Length.Should().Be(243);
         step.Error.Should().Be("tool failed");
+        step.FailureOutput.Should().Be(string.Join(' ', Enumerable.Repeat("step-output", 26)));
+        step.FailureOutputTruncated.Should().BeFalse();
+        step.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        step.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.AuthorizationFailure);
+        step.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+        step.FileItemResults.Should().NotBeNull();
+        step.FileItemResults.Results.Should().ContainSingle();
+        step.FileItemResults.Results[0].Output.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        step.FileItemResults.Results[0].Output.Should().NotContain("must-not-persist");
+        step.FileItemResults.Results[0].FileRef.FileName.Should().Be(WorkflowAuditTextSanitizer.RedactedValue);
+        step.VoteAgreementDecision.Should().NotBeNull();
+        step.VoteAgreementDecision.Output.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        step.VoteAgreementDecision.Output.Should().NotContain("must-not-persist");
+        step.VoteAgreementDecision.LabelCounts.Should().Contain(new KeyValuePair<string, int>("approve", 1));
         step.NextStepId.Should().Be("step-2");
         step.BranchKey.Should().Be("fallback");
         step.AssignedVariable.Should().Be("answer");
-        step.AssignedValue.Should().Be("42");
+        step.AssignedValue.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        step.AssignedValue.Should().NotContain(assignedCredential);
         step.SuspensionType.Should().Be("human_input");
         step.SuspensionPrompt.Should().Be("Need approval");
         step.SuspensionTimeoutSeconds.Should().BeNull();
         step.RequestedVariableName.Should().Be("approval");
         step.RequestParameters.Should().Contain(new KeyValuePair<string, string>("temperature", "0.2"));
+        step.RequestParameters["opaque"].Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        step.RequestParameters["opaque"].Should().NotContain(parameterCredential);
         step.CompletionAnnotations.Should().Contain(new KeyValuePair<string, string>("reason", "timeout"));
+        step.CompletionAnnotations["trace"].Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        step.CompletionAnnotations["trace"].Should().NotContain(annotationCredential);
 
         report.Topology.Should().HaveCount(2);
         report.Topology.Should().Contain(x => x.Parent == "root-actor" && x.Child == "role-actor-1");
@@ -497,7 +588,11 @@ public sealed class WorkflowExecutionProjectionProjectorTests
 
         report.Timeline.Should().Contain(x => x.Stage == "workflow.start" && x.Message == "command=cmd-1");
         report.Timeline.Should().Contain(x => x.Stage == "step.request" && x.StepId == "step-1");
-        report.Timeline.Should().Contain(x => x.Stage == "step.failed" && x.StepId == "step-1");
+        report.Timeline.Should().Contain(x =>
+            x.Stage == "step.failed" &&
+            x.StepId == "step-1" &&
+            x.Message == "tool failed" &&
+            x.Data["error"] == "tool failed");
         var suspendedTimeline = report.Timeline.Single(x => x.Stage == "workflow.suspended" && x.StepId == "step-1");
         suspendedTimeline.Data.Should().ContainKey("channel").WhoseValue.Should().Be("ui");
         suspendedTimeline.Data.Should().ContainKey("variable").WhoseValue.Should().Be("approval");
@@ -507,7 +602,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         report.Timeline.Should().Contain(x => x.Stage == "signal.waiting" && x.Data["timeout_ms"] == "900");
         report.Timeline.Should().Contain(x => x.Stage == "signal.buffered");
         report.Timeline.Count(x => x.Stage == "tool.call").Should().Be(2);
-        report.Timeline.Should().Contain(x => x.Stage == "workflow.failed");
+        report.Timeline.Should().Contain(x =>
+            x.Stage == "workflow.failed" &&
+            x.Message == "failed-hard" &&
+            x.Data["error"] == "failed-hard");
         report.Timeline.Should().Contain(x => x.Stage == "workflow.stopped" && x.Message == string.Empty);
 
         report.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Stopped);
@@ -520,6 +618,504 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         report.Summary.CompletedSteps.Should().Be(1);
         report.Summary.RoleReplyCount.Should().Be(1);
         report.Summary.StepTypeCounts.Should().Contain(new KeyValuePair<string, int>("llm_call", 1));
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldKeepRetryAttemptsSeparateAndClearSnapshotAfterSuccess()
+    {
+        const int maxFailureOutputUtf8Bytes = 64 * 1024;
+        const string secret = "short-secret-value";
+        var opaqueCredential = new string('A', 48);
+        var largeOutput = $"BEGIN token={secret} opaque={opaqueCredential} " +
+                          string.Concat(Enumerable.Repeat("payload-block ", 7000)) +
+                          "END-🙂";
+        var report = new WorkflowRunInsightReportDocument();
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepRequestEvent
+                {
+                    StepId = "retryable-step",
+                    ExecutionId = "execution-first",
+                    DisplayName = "Normalize person",
+                    StepType = "code_execute",
+                    TargetRole = "normalizer",
+                    Parameters =
+                    {
+                        ["language"] = "python",
+                        ["attempt_identity"] = "first",
+                    },
+                },
+                1,
+                "evt-first-requested"),
+            DateTimeOffset.UnixEpoch);
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    StepId = "retryable-step",
+                    SuspensionType = "tool_approval",
+                    Prompt = "Approve first attempt",
+                    Content = "first-attempt-content",
+                    TimeoutSeconds = 30,
+                    VariableName = "approval",
+                    ToolApproval = new WorkflowToolApprovalSuspension
+                    {
+                        ExecutionId = "execution-first",
+                        ToolName = "code_execute",
+                        ToolCallId = "call-first",
+                        ApprovalRequestId = "approval-first",
+                    },
+                },
+                2,
+                "evt-first-suspended"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "retryable-step",
+                    ExecutionId = "execution-first",
+                    Success = false,
+                    Output = largeOutput,
+                    Error = $"provider failed token={secret}",
+                    WorkerId = "worker-first",
+                    NextStepId = "fallback",
+                    BranchKey = "failure",
+                    AssignedVariable = "normalized",
+                    AssignedValue = "unavailable",
+                    Annotations = { ["attempt"] = "first" },
+                    Usage = new WorkflowUsageMetrics { PromptTokens = 3, TotalTokens = 3 },
+                    FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+                    RecoveryFailureKind = WorkflowRecoveryFailureKind.ConfigurationFailure,
+                    RetryDisposition = WorkflowStepRetryDisposition.Forbidden,
+                    FileItemResults = new WorkflowFileItemResultSet
+                    {
+                        Results = { new WorkflowFileItemResult { Index = 0, Error = "file failed" } },
+                    },
+                    VoteAgreementDecision = new VoteAgreementDecision
+                    {
+                        Kind = AgreementDecisionKind.Inconclusive,
+                        Reason = "no valid candidate",
+                    },
+                },
+                3,
+                "evt-failed"),
+            DateTimeOffset.UnixEpoch.AddSeconds(2));
+
+        var failed = report.Steps.Should().ContainSingle().Subject;
+        failed.FailureOutputTruncated.Should().BeTrue();
+        Encoding.UTF8.GetByteCount(failed.FailureOutput).Should().BeLessThanOrEqualTo(maxFailureOutputUtf8Bytes);
+        failed.FailureOutput.Should().StartWith($"BEGIN token={WorkflowAuditTextSanitizer.RedactedValue}");
+        failed.FailureOutput.Should().Contain(WorkflowAuditTextSanitizer.HeadTailTruncationMarker);
+        failed.FailureOutput.Should().EndWith("END-🙂");
+        failed.FailureOutput.Should().NotContain(secret);
+        failed.FailureOutput.Should().NotContain(opaqueCredential);
+        failed.OutputPreview.Should().NotContain(opaqueCredential);
+        failed.OutputPreview.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        failed.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        failed.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.ConfigurationFailure);
+        failed.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+        report.Timeline.Should().ContainSingle(item =>
+            item.Stage == "step.failed" &&
+            item.Message == $"provider failed token={WorkflowAuditTextSanitizer.RedactedValue}" &&
+            item.Data["error"] == item.Message);
+
+        var retainedFailureOutput = failed.FailureOutput;
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepRequestEvent
+                {
+                    StepId = "retryable-step",
+                    ExecutionId = "execution-second",
+                    StepType = "connector_call",
+                    DisplayName = "Send normalized result",
+                    TargetRole = "mailer",
+                    Parameters =
+                    {
+                        ["connector"] = "smtp",
+                        ["attempt_identity"] = "second",
+                    },
+                },
+                4,
+                "evt-retry-requested"),
+            DateTimeOffset.UnixEpoch.AddSeconds(5));
+
+        var waiting = report.Steps.Should().ContainSingle().Subject;
+        waiting.Outcome.Should().Be(WorkflowExecutionStepOutcomeReadModel.Waiting);
+        waiting.StepType.Should().Be("connector_call");
+        waiting.TargetRole.Should().Be("mailer");
+        waiting.RequestParameters.Should().BeEmpty();
+        waiting.RequestEvidenceReference.Should().NotBeNull();
+        waiting.RequestEvidenceReference.ExecutionId.Should().Be("execution-second");
+        waiting.RequestedAt.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(5));
+        waiting.CompletedAt.Should().BeNull();
+        waiting.Success.Should().BeNull();
+        waiting.WorkerId.Should().BeEmpty();
+        waiting.OutputPreview.Should().BeEmpty();
+        waiting.Error.Should().BeEmpty();
+        waiting.FailureOutput.Should().BeEmpty();
+        waiting.FailureOutputTruncated.Should().BeFalse();
+        waiting.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.Unspecified);
+        waiting.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.Unspecified);
+        waiting.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Unspecified);
+        waiting.FileItemResults.Should().BeNull();
+        waiting.VoteAgreementDecision.Should().BeNull();
+        waiting.CompletionAnnotations.Should().BeEmpty();
+        waiting.NextStepId.Should().BeEmpty();
+        waiting.BranchKey.Should().BeEmpty();
+        waiting.AssignedVariable.Should().BeEmpty();
+        waiting.AssignedValue.Should().BeEmpty();
+        waiting.Usage.TotalTokens.Should().Be(0);
+        waiting.SuspensionType.Should().BeEmpty();
+        waiting.SuspensionPrompt.Should().BeEmpty();
+        waiting.SuspensionContent.Should().BeEmpty();
+        waiting.SuspensionTimeoutSeconds.Should().BeNull();
+        waiting.RequestedVariableName.Should().BeEmpty();
+        waiting.ToolApprovalValue.Should().BeNull();
+
+        waiting.LatestFailedAttempt.Should().NotBeNull();
+        var failedAttempt = waiting.LatestFailedAttempt!;
+        failedAttempt.DisplayName.Should().Be("Normalize person");
+        failedAttempt.StepType.Should().Be("code_execute");
+        failedAttempt.TargetRole.Should().Be("normalizer");
+        failedAttempt.RequestParameters.Should().BeEmpty();
+        failedAttempt.RequestEvidenceReference.Should().NotBeNull();
+        failedAttempt.RequestEvidenceReference.ExecutionId.Should().Be("execution-first");
+        failedAttempt.RequestedAt.Should().Be(DateTimeOffset.UnixEpoch);
+        failedAttempt.CompletedAt.Should().Be(DateTimeOffset.UnixEpoch.AddSeconds(2));
+        failedAttempt.DurationMs.Should().Be(2000);
+        failedAttempt.WorkerId.Should().Be("worker-first");
+        failedAttempt.Error.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        failedAttempt.FailureOutput.Should().Be(retainedFailureOutput);
+        failedAttempt.FailureOutputTruncated.Should().BeTrue();
+        failedAttempt.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.OutcomeUncertain);
+        failedAttempt.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.ConfigurationFailure);
+        failedAttempt.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Forbidden);
+        failedAttempt.CompletionAnnotations.Should().Contain("attempt", "first");
+        failedAttempt.NextStepId.Should().Be("fallback");
+        failedAttempt.BranchKey.Should().Be("failure");
+        failedAttempt.AssignedVariable.Should().Be("normalized");
+        failedAttempt.Usage.TotalTokens.Should().Be(3);
+        failedAttempt.FileItemResults.Results.Should().ContainSingle().Which.Error.Should().Be("file failed");
+        failedAttempt.VoteAgreementDecision.Reason.Should().Be("no valid candidate");
+        failedAttempt.SuspensionType.Should().Be("tool_approval");
+        failedAttempt.SuspensionPrompt.Should().Be("Approve first attempt");
+        failedAttempt.SuspensionContent.Should().Be("first-attempt-content");
+        failedAttempt.SuspensionTimeoutSeconds.Should().Be(30);
+        failedAttempt.RequestedVariableName.Should().Be("approval");
+        failedAttempt.ToolApprovalValue.ExecutionId.Should().Be("execution-first");
+
+        report.RequestEvidenceById.Should().HaveCount(2);
+        var firstEvidence = report.RequestEvidenceById[failedAttempt.RequestEvidenceReference.EvidenceId];
+        var secondEvidence = report.RequestEvidenceById[waiting.RequestEvidenceReference.EvidenceId];
+        firstEvidence.ParametersMap.Should().Contain("attempt_identity", "first");
+        secondEvidence.ParametersMap.Should().Contain("attempt_identity", "second");
+        firstEvidence.SourceEventId.Should().Be("evt-first-requested");
+        secondEvidence.SourceEventId.Should().Be("evt-retry-requested");
+
+        var requestTimeline = report.Timeline.Where(item => item.Stage == "step.request").ToArray();
+        requestTimeline.Should().HaveCount(2);
+        requestTimeline[0].Data.Should().BeEmpty();
+        requestTimeline[1].Data.Should().BeEmpty();
+        requestTimeline[0].RequestEvidenceReference.Should().Be(failedAttempt.RequestEvidenceReference);
+        requestTimeline[1].RequestEvidenceReference.Should().Be(waiting.RequestEvidenceReference);
+
+        var mapped = new WorkflowExecutionReadModelMapper().ToRunReport(report);
+        mapped.Steps.Single().RequestParameters.Should().Contain("attempt_identity", "second");
+        mapped.Steps.Single().LatestFailedAttempt!.RequestParameters.Should().Contain("attempt_identity", "first");
+        mapped.Timeline.Where(item => item.Stage == "step.request")
+            .Select(item => item.Data["attempt_identity"])
+            .Should().Equal("first", "second");
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "retryable-step",
+                    ExecutionId = "execution-second",
+                    Success = true,
+                    Output = "recovered",
+                    FailureOutcome = WorkflowStepFailureOutcome.OutcomeUncertain,
+                    RecoveryFailureKind = WorkflowRecoveryFailureKind.AuthorizationFailure,
+                    RetryDisposition = WorkflowStepRetryDisposition.Forbidden,
+                    VoteAgreementDecision = new VoteAgreementDecision
+                    {
+                        Kind = AgreementDecisionKind.Agreed,
+                        Output = "accepted",
+                    },
+                    FileItemResults = new WorkflowFileItemResultSet
+                    {
+                        Results =
+                        {
+                            new WorkflowFileItemResult { Index = 0, Success = true, Output = "ready" },
+                        },
+                    },
+                },
+                5,
+                "evt-recovered"),
+            DateTimeOffset.UnixEpoch.AddSeconds(8));
+
+        var recovered = report.Steps.Should().ContainSingle().Subject;
+        recovered.FailureOutput.Should().BeEmpty();
+        recovered.FailureOutputTruncated.Should().BeFalse();
+        recovered.FailureOutcome.Should().Be(WorkflowStepFailureOutcome.Unspecified);
+        recovered.RecoveryFailureKind.Should().Be(WorkflowRecoveryFailureKind.Unspecified);
+        recovered.RetryDisposition.Should().Be(WorkflowStepRetryDisposition.Unspecified);
+        recovered.LatestFailedAttempt.Should().BeNull();
+        recovered.VoteAgreementDecision.Kind.Should().Be(AgreementDecisionKind.Agreed);
+        recovered.FileItemResults.Results.Should().ContainSingle().Which.Output.Should().Be("ready");
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldRejectDifferentParametersForTheSameExecutionEvidence()
+    {
+        var report = new WorkflowRunInsightReportDocument();
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepRequestEvent
+                {
+                    StepId = "immutable-step",
+                    ExecutionId = "execution-1",
+                    StepType = "assign",
+                    Parameters = { ["value"] = "first" },
+                },
+                1,
+                "evt-first"),
+            DateTimeOffset.UnixEpoch);
+        var beforeConflict = report.Clone();
+
+        var act = () => WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepRequestEvent
+                {
+                    StepId = "immutable-step",
+                    ExecutionId = "execution-1",
+                    StepType = "assign",
+                    Parameters = { ["value"] = "different" },
+                },
+                2,
+                "evt-conflict"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*already bound to different immutable content*");
+        report.Should().Be(beforeConflict, "an immutable-evidence conflict must not partially mutate the report");
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldBoundNestedEvidenceAndPreserveSourceTruncationFlags()
+    {
+        var largeEvidence = "BEGIN-" +
+                            new string('界', WorkflowAuditTextSanitizer.MaxDiagnosticEvidenceUtf8Bytes) +
+                            "-END-🙂";
+        var report = new WorkflowRunInsightReportDocument();
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "locally-bounded",
+                    Success = false,
+                    Output = "failed",
+                    Error = "nested evidence exceeded its bound",
+                    FileItemResults = new WorkflowFileItemResultSet
+                    {
+                        Results =
+                        {
+                            new WorkflowFileItemResult
+                            {
+                                Index = 0,
+                                Success = false,
+                                Output = largeEvidence,
+                                Error = largeEvidence,
+                            },
+                        },
+                    },
+                    VoteAgreementDecision = new VoteAgreementDecision
+                    {
+                        Kind = AgreementDecisionKind.Inconclusive,
+                        Output = largeEvidence,
+                        Reason = largeEvidence,
+                    },
+                },
+                1,
+                "evt-locally-bounded"),
+            DateTimeOffset.UnixEpoch);
+
+        var bounded = report.Steps.Single(step => step.StepId == "locally-bounded");
+        var fileResult = bounded.FileItemResults.Results.Should().ContainSingle().Subject;
+        fileResult.OutputTruncated.Should().BeTrue();
+        fileResult.ErrorTruncated.Should().BeTrue();
+        bounded.VoteAgreementDecision.OutputTruncated.Should().BeTrue();
+        bounded.VoteAgreementDecision.ReasonTruncated.Should().BeTrue();
+        foreach (var text in new[] { fileResult.Output, fileResult.Error })
+        {
+            Encoding.UTF8.GetByteCount(text)
+                .Should().BeLessThanOrEqualTo(WorkflowFileItemResultProjectionContract.MaxEvidenceUtf8Bytes);
+            text.Should().StartWith("BEGIN-");
+            text.Should().Contain(WorkflowAuditTextSanitizer.HeadTailTruncationMarker);
+            text.Should().EndWith("-END-🙂");
+        }
+        foreach (var text in new[]
+                 {
+                     bounded.VoteAgreementDecision.Output,
+                     bounded.VoteAgreementDecision.Reason,
+                 })
+        {
+            Encoding.UTF8.GetByteCount(text)
+                .Should().BeLessThanOrEqualTo(WorkflowAuditTextSanitizer.MaxDiagnosticEvidenceUtf8Bytes);
+            text.Should().StartWith("BEGIN-");
+            text.Should().Contain(WorkflowAuditTextSanitizer.HeadTailTruncationMarker);
+            text.Should().EndWith("-END-🙂");
+        }
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "source-bounded",
+                    Success = false,
+                    Output = "failed",
+                    Error = "source already bounded the nested evidence",
+                    FileItemResults = new WorkflowFileItemResultSet
+                    {
+                        Results =
+                        {
+                            new WorkflowFileItemResult
+                            {
+                                Index = 0,
+                                Success = false,
+                                Output = "short output",
+                                Error = "short error",
+                                OutputTruncated = true,
+                                ErrorTruncated = true,
+                            },
+                        },
+                    },
+                    VoteAgreementDecision = new VoteAgreementDecision
+                    {
+                        Kind = AgreementDecisionKind.Inconclusive,
+                        Output = "short output",
+                        Reason = "short reason",
+                        OutputTruncated = true,
+                        ReasonTruncated = true,
+                    },
+                },
+                2,
+                "evt-source-bounded"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        var sourceBounded = report.Steps.Single(step => step.StepId == "source-bounded");
+        var sourceFileResult = sourceBounded.FileItemResults.Results.Should().ContainSingle().Subject;
+        sourceFileResult.Output.Should().Be("short output");
+        sourceFileResult.Error.Should().Be("short error");
+        sourceFileResult.OutputTruncated.Should().BeTrue();
+        sourceFileResult.ErrorTruncated.Should().BeTrue();
+        sourceBounded.VoteAgreementDecision.Output.Should().Be("short output");
+        sourceBounded.VoteAgreementDecision.Reason.Should().Be("short reason");
+        sourceBounded.VoteAgreementDecision.OutputTruncated.Should().BeTrue();
+        sourceBounded.VoteAgreementDecision.ReasonTruncated.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldBoundFileItemResultCountAndPreserveSourceCount()
+    {
+        var source = new WorkflowFileItemResultSet();
+        source.Results.Add(Enumerable.Range(
+                0,
+                WorkflowFileItemResultProjectionContract.MaxRetainedResults + 5)
+            .Select(index => new WorkflowFileItemResult
+            {
+                Index = index,
+                Success = index % 2 == 0,
+                Output = $"output-{index}",
+            }));
+        var report = new WorkflowRunInsightReportDocument();
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "locally-bounded-items",
+                    Success = false,
+                    Error = "some file items failed",
+                    FileItemResults = source,
+                },
+                1,
+                "evt-locally-bounded-items"),
+            DateTimeOffset.UnixEpoch);
+
+        var locallyBounded = report.Steps.Should().ContainSingle().Subject.FileItemResults;
+        locallyBounded.SourceResultCount.Should().Be(source.Results.Count);
+        locallyBounded.ResultsTruncated.Should().BeTrue();
+        locallyBounded.Results.Should().HaveCount(WorkflowFileItemResultProjectionContract.MaxRetainedResults);
+        locallyBounded.Results.Select(item => item.Index).Should().Equal(
+            Enumerable.Range(0, WorkflowFileItemResultProjectionContract.MaxRetainedResults / 2)
+                .Concat(Enumerable.Range(
+                    source.Results.Count - WorkflowFileItemResultProjectionContract.MaxRetainedResults / 2,
+                    WorkflowFileItemResultProjectionContract.MaxRetainedResults / 2)));
+
+        var upstreamBounded = locallyBounded.Clone();
+        upstreamBounded.SourceResultCount = 100;
+        upstreamBounded.ResultsTruncated = true;
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "upstream-bounded-items",
+                    Success = false,
+                    Error = "upstream bounded file items",
+                    FileItemResults = upstreamBounded,
+                },
+                2,
+                "evt-upstream-bounded-items"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        var reSanitized = report.Steps.Single(step => step.StepId == "upstream-bounded-items").FileItemResults;
+        reSanitized.SourceResultCount.Should().Be(100);
+        reSanitized.ResultsTruncated.Should().BeTrue();
+        reSanitized.Results.Select(item => item.Index)
+            .Should().Equal(locallyBounded.Results.Select(item => item.Index));
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            report,
+            PackStateEvent(
+                new StepCompletedEvent
+                {
+                    StepId = "upstream-bounded-unknown-count",
+                    Success = false,
+                    Error = "upstream source count is unknown",
+                    FileItemResults = new WorkflowFileItemResultSet
+                    {
+                        ResultsTruncated = true,
+                        Results =
+                        {
+                            new WorkflowFileItemResult { Index = 42, Output = "retained" },
+                        },
+                    },
+                },
+                3,
+                "evt-upstream-bounded-unknown-count"),
+            DateTimeOffset.UnixEpoch.AddSeconds(2));
+
+        var unknownCount = report.Steps
+            .Single(step => step.StepId == "upstream-bounded-unknown-count")
+            .FileItemResults;
+        unknownCount.SourceResultCount.Should().Be(0);
+        unknownCount.ResultsTruncated.Should().BeTrue();
+        unknownCount.Results.Should().ContainSingle().Which.Index.Should().Be(42);
     }
 
     [Fact]
@@ -804,6 +1400,82 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     }
 
     [Fact]
+    public void ApplyObservedPayloadToReport_ShouldPreserveTypedToolApprovalIdentity()
+    {
+        var document = new WorkflowRunInsightReportDocument();
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowSuspendedEvent
+                {
+                    RunId = "run-tool",
+                    StepId = "create_approval",
+                    SuspensionType = "tool_approval",
+                    Prompt = "Approve tool execution?",
+                    ToolApproval = new WorkflowToolApprovalSuspension
+                    {
+                        ExecutionId = "exec-alpha",
+                        ToolName = "nyxid_proxy",
+                        ToolCallId = "call-alpha",
+                        ApprovalRequestId = "approval-alpha",
+                    },
+                },
+                1,
+                "evt-tool-approval"),
+            DateTimeOffset.UnixEpoch);
+
+        var approval = new WorkflowExecutionReadModelMapper()
+            .ToRunReport(document)
+            .Steps.Should().ContainSingle().Subject;
+        approval.SuspensionType.Should().Be("tool_approval");
+        approval.ToolApproval.Should().NotBeNull();
+        approval.ToolApproval!.ExecutionId.Should().Be("exec-alpha");
+        approval.ToolApproval.ToolName.Should().Be("nyxid_proxy");
+        approval.ToolApproval.ToolCallId.Should().Be("call-alpha");
+        approval.ToolApproval.ApprovalRequestId.Should().Be("approval-alpha");
+    }
+
+    [Fact]
+    public void ApplyObservedPayloadToReport_ShouldMaterializeToolApprovalResumeRejection()
+    {
+        var document = new WorkflowRunInsightReportDocument
+        {
+            RootActorId = "run-tool",
+        };
+
+        WorkflowExecutionArtifactMaterializationSupport.ApplyObservedPayloadToReport(
+            document,
+            PackStateEvent(
+                new WorkflowToolApprovalResumeRejectedEvent
+                {
+                    RunId = "run-tool",
+                    StepId = "create_approval",
+                    SubmittedApproval = new WorkflowToolApprovalResume
+                    {
+                        ExecutionId = "exec-alpha",
+                        ToolCallId = "call-alpha",
+                        ApprovalRequestId = "approval-stale",
+                    },
+                    Reason = WorkflowToolApprovalResumeRejectionReason.IdentityMismatch,
+                },
+                2,
+                "evt-tool-approval-resume-rejected"),
+            DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        var timeline = new WorkflowExecutionReadModelMapper()
+            .ToRunReport(document)
+            .Timeline.Should().ContainSingle().Subject;
+        timeline.Stage.Should().Be("tool_approval.resume_rejected");
+        timeline.StepId.Should().Be("create_approval");
+        timeline.StepType.Should().Be("tool_call");
+        timeline.Data.Should().ContainKey("reason").WhoseValue.Should().Be("IdentityMismatch");
+        timeline.Data.Should().ContainKey("execution_id").WhoseValue.Should().Be("exec-alpha");
+        timeline.Data.Should().ContainKey("tool_call_id").WhoseValue.Should().Be("call-alpha");
+        timeline.Data.Should().ContainKey("approval_request_id").WhoseValue.Should().Be("approval-stale");
+    }
+
+    [Fact]
     public void ReportArtifact_ShouldOwnTimelineAndGraphMaterializationInputs()
     {
         var report = new WorkflowRunInsightReportDocument
@@ -846,7 +1518,10 @@ public sealed class WorkflowExecutionProjectionProjectorTests
 
         var graph = new WorkflowRunInsightReportGraphMaterializer().Materialize(report);
         graph.Nodes.Should().Contain(x => x.NodeId == "root-actor");
-        graph.Edges.Should().Contain(x => x.ToNodeId == "child-1");
+        graph.Nodes.Should().Contain(x =>
+            x.NodeId == "actor:root-actor:cmd-3:child-1" &&
+            x.Properties["actorId"] == "child-1");
+        graph.Edges.Should().Contain(x => x.ToNodeId == "actor:root-actor:cmd-3:child-1");
     }
 
     [Fact]
@@ -923,6 +1598,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         string status,
         bool? expectedSuccess)
     {
+        var finalErrorCredential = new string('C', 48);
+        var deadLetterCredential = new string('D', 48);
         var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
         var projector = new WorkflowExecutionCurrentStateProjector(
             dispatcher,
@@ -945,14 +1622,16 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                     ScheduleId = "schedule-current",
                     Status = status,
                     Compiled = true,
-                    CompilationError = "none",
+                    CompilationError = "{\"lark_app_token\":\"compile-secret\",\"message\":\"compile failed\"}",
                     Input = "hello",
                     FinalOutput = "done",
-                    FinalError = "err",
+                    FinalError = $"err opaque={finalErrorCredential}",
+                    TerminalValueLifecycleFailureKind =
+                        WorkflowValueLifecycleFailureKind.ReleasedValueAccessed,
                     SagaStatus = WorkflowSagaStatus.CompensationDeadLetter,
                     DeadLetterFailedCompensationStepId = "refund_payment",
                     DeadLetterRemainingUncompensated = 2,
-                    DeadLetterError = "refund failed",
+                    DeadLetterError = $"refund failed opaque={deadLetterCredential}",
                     CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
                     {
                         SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
@@ -981,12 +1660,20 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         document.SagaStatus.Should().Be(WorkflowSagaStatus.CompensationDeadLetter);
         document.DeadLetterFailedCompensationStepId.Should().Be("refund_payment");
         document.DeadLetterRemainingUncompensated.Should().Be(2);
-        document.DeadLetterError.Should().Be("refund failed");
+        document.FinalError.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        document.FinalError.Should().NotContain(finalErrorCredential);
+        document.TerminalValueLifecycleFailureKind.Should().Be(
+            WorkflowValueLifecycleFailureKind.ReleasedValueAccessed);
+        document.DeadLetterError.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        document.DeadLetterError.Should().NotContain(deadLetterCredential);
         document.CapabilityAdmissionPlan.Should().NotBeNull();
         document.CapabilityAdmissionPlan.SchemaVersion.Should().Be(WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion);
         document.CapabilityAdmissionPlan.AdmissionDigest.Should().Be("admission-v3");
         document.StateVersion.Should().Be(1);
         document.Compiled.Should().BeTrue();
+        document.CompilationError.Should().Contain("compile failed");
+        document.CompilationError.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        document.CompilationError.Should().NotContain("compile-secret");
         document.ExecutionStateCount.Should().Be(1);
         document.Success.Should().Be(expectedSuccess);
         document.UpdatedAt.Should().Be(new DateTimeOffset(2026, 3, 18, 7, 0, 0, TimeSpan.Zero));
@@ -1004,6 +1691,304 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
         fileRef.OwnerRunId.Should().Be("run-owner");
         fileRef.OwnerScopeId.Should().Be("scope-owner");
+    }
+
+    [Theory]
+    [InlineData("running", "awaiting_tool_approval", WorkflowRunCompletionStatus.AwaitingToolApproval, null)]
+    [InlineData("timed_out", "timed_out", WorkflowRunCompletionStatus.TimedOut, false)]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldPreserveTerminalStatusOverPendingToolApproval(
+        string stateStatus,
+        string expectedStatus,
+        WorkflowRunCompletionStatus expectedCompletionStatus,
+        bool? expectedSuccess)
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-04T09:00:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-approval",
+            Status = stateStatus,
+        };
+        state.ExecutionStates["tool_call"] = Any.Pack(new ToolCallModuleState
+        {
+            PendingApprovals =
+            {
+                ["approval-key"] = new PendingToolCallApprovalState
+                {
+                    RunId = "run-approval",
+                    StepId = "write_record",
+                    ExecutionId = "exec-alpha",
+                    ToolName = "nyxid_proxy",
+                    ToolCallId = "call-alpha",
+                    ApprovalRequestId = "approval-alpha",
+                },
+            },
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowSuspendedEvent
+                {
+                    RunId = "run-approval",
+                    StepId = "write_record",
+                    SuspensionType = "tool_approval",
+                },
+                state));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.Status.Should().Be(expectedStatus);
+        document.Success.Should().Be(expectedSuccess);
+        new WorkflowExecutionReadModelMapper()
+            .ToActorSnapshot(document)
+            .CompletionStatus.Should().Be(expectedCompletionStatus);
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldExposeActivityFailureAndDelayStepIds()
+    {
+        var opaqueCredential = new string('E', 48);
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-10T09:00:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-activity",
+            ScopeId = "scope-activity",
+            Status = "failed",
+            FinalError = $"step failed opaque={opaqueCredential}",
+        };
+        state.ExecutionStates["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
+        {
+            CurrentStepId = "ordinary_failed_step",
+        });
+        state.ExecutionStates["delay"] = Any.Pack(new DelayModuleState
+        {
+            Pending =
+            {
+                ["run-activity:delay_step"] = new PendingDelayState
+                {
+                    StepId = "delay_step",
+                    CallbackId = "delay-step:run-activity:delay_step:envelope-alpha",
+                    Input = "wait before retry",
+                },
+            },
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent
+                {
+                    Success = false,
+                },
+                state));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.ActivityFirstFailure.Availability.Should().Be("available");
+        document.ActivityFirstFailure.StepId.Should().Be("ordinary_failed_step");
+        document.ActivityFirstFailure.Message.Should().Contain(WorkflowAuditTextSanitizer.RedactedValue);
+        document.ActivityFirstFailure.Message.Should().NotContain(opaqueCredential);
+        document.ActivityWaiting.Availability.Should().Be("available");
+        document.ActivityWaiting.WaitingKind.Should().Be("delay");
+        document.ActivityWaiting.StepId.Should().Be("delay_step");
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldResolveLegacyDelayStepIdFromPendingKey()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-10T09:00:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-legacy-delay",
+            ScopeId = "scope-activity",
+            Status = "running",
+        };
+        state.ExecutionStates["delay"] = Any.Pack(new DelayModuleState
+        {
+            Pending =
+            {
+                ["run-legacy-delay:delay_step"] = new PendingDelayState
+                {
+                    CallbackId = "delay-step:run-legacy-delay:delay_step:envelope-alpha",
+                    Input = "legacy wait",
+                },
+            },
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent
+                {
+                    Success = false,
+                },
+                state));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.ActivityWaiting.Availability.Should().Be("available");
+        document.ActivityWaiting.WaitingKind.Should().Be("delay");
+        document.ActivityWaiting.StepId.Should().Be("delay_step");
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldMaterializeEligibleRecoveryCapability()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-07T03:00:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-retry",
+            Status = "failed",
+            WorkflowYaml = CurrentStateWorkflowYaml("wf-retry"),
+            RevisionId = "rev-source",
+            DefinitionVersion = 17,
+            FinalError = "tool timeout",
+        };
+        state.ExecutionStates["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
+        {
+            CurrentStepId = "step-b",
+            Variables =
+            {
+                ["input"] = "original input",
+                ["step-a"] = "prior output",
+            },
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent { Success = false, Error = "tool timeout" },
+                state));
+
+        var capability = dispatcher.Upserts.Should().ContainSingle().Subject.RecoveryCapability;
+        capability.WorkflowDefinitionRevisionId.Should().Be("rev-source");
+        capability.WorkflowDefinitionVersion.Should().Be(17);
+        capability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibilityReadModel.Eligible);
+        capability.RetryFailedStep.UnavailableReasonCode.Should().Be(WorkflowRecoveryUnavailableReasonCodeReadModel.None);
+        capability.RetryFailedStep.StartingStepId.Should().Be("step-b");
+        capability.RetryFailedStep.ReusesPriorStepOutputs.Should().BeTrue();
+        capability.RetryFailedStep.MayIncurModelOrToolCost.Should().BeTrue();
+        capability.RetryFailedStep.RecommendedActions.Should().ContainSingle()
+            .Which.Should().Be(WorkflowRecoveryRecommendedActionReadModel.Retry);
+        capability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibilityReadModel.Eligible);
+        capability.RunAgain.StartingStepId.Should().Be("step-a");
+        capability.RunAgain.ReusesPriorStepOutputs.Should().BeFalse();
+        capability.RunAgain.MayIncurModelOrToolCost.Should().BeTrue();
+        capability.RunAgain.RecommendedActions.Should().ContainSingle()
+            .Which.Should().Be(WorkflowRecoveryRecommendedActionReadModel.RunAgain);
+    }
+
+    [Theory]
+    [InlineData(WorkflowRecoveryFailureKind.AuthorizationFailure, WorkflowRecoveryUnavailableReasonCodeReadModel.AuthorizationFailure, WorkflowRecoveryRecommendedActionReadModel.FixAccess)]
+    [InlineData(WorkflowRecoveryFailureKind.ConfigurationFailure, WorkflowRecoveryUnavailableReasonCodeReadModel.ConfigurationFailure, WorkflowRecoveryRecommendedActionReadModel.ChangeConfiguration)]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldNotAdvertiseRetryForTypedBackendClassifiedFailures(
+        WorkflowRecoveryFailureKind recoveryFailureKind,
+        WorkflowRecoveryUnavailableReasonCodeReadModel expectedReason,
+        WorkflowRecoveryRecommendedActionReadModel expectedAction)
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-07T03:10:00+00:00")));
+        var state = new WorkflowRunState
+        {
+            RunId = "run-classified",
+            Status = "failed",
+            WorkflowYaml = CurrentStateWorkflowYaml("wf-classified"),
+            FinalError = "diagnostic text without recovery control meaning",
+            TerminalRecoveryFailureKind = recoveryFailureKind,
+        };
+        state.ExecutionStates["workflow_execution_kernel"] = Any.Pack(new WorkflowExecutionKernelState
+        {
+            CurrentStepId = "step-b",
+        });
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent
+                {
+                    Success = false,
+                    Error = "diagnostic text without recovery control meaning",
+                    RecoveryFailureKind = recoveryFailureKind,
+                },
+                state));
+
+        var capability = dispatcher.Upserts.Should().ContainSingle().Subject.RecoveryCapability;
+        capability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibilityReadModel.Ineligible);
+        capability.RetryFailedStep.UnavailableReasonCode.Should().Be(expectedReason);
+        capability.RetryFailedStep.UnavailableReason.Should().NotBeNullOrWhiteSpace();
+        capability.RetryFailedStep.RecommendedActions.Should().ContainSingle()
+            .Which.Should().Be(expectedAction);
+        capability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibilityReadModel.Ineligible);
+        capability.RunAgain.UnavailableReasonCode.Should().Be(expectedReason);
+        capability.RunAgain.RecommendedActions.Should().ContainSingle()
+            .Which.Should().Be(expectedAction);
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldExposeUnavailableRecoveryReasonsForMissingFacts()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-07T03:20:00+00:00")));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent { Success = false, Error = "boom" },
+                new WorkflowRunState
+                {
+                    RunId = "run-missing-definition",
+                    Status = "failed",
+                    FinalError = "boom",
+                }));
+
+        var capability = dispatcher.Upserts.Should().ContainSingle().Subject.RecoveryCapability;
+        capability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibilityReadModel.Unavailable);
+        capability.RetryFailedStep.UnavailableReasonCode.Should().Be(WorkflowRecoveryUnavailableReasonCodeReadModel.MissingSourceFact);
+        capability.RetryFailedStep.RecommendedActions.Should().ContainSingle()
+            .Which.Should().Be(WorkflowRecoveryRecommendedActionReadModel.EditWorkflow);
+        capability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibilityReadModel.Unavailable);
+        capability.RunAgain.UnavailableReasonCode.Should().Be(WorkflowRecoveryUnavailableReasonCodeReadModel.WorkflowDefinitionUnavailable);
+    }
+
+    [Fact]
+    public async Task WorkflowExecutionCurrentStateProjector_ShouldExposeLegacyUnavailableWhenFailedStepWasNotMaterialized()
+    {
+        var dispatcher = new RecordingWriteDispatcher<WorkflowExecutionCurrentStateDocument>();
+        var projector = new WorkflowExecutionCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-08-07T03:30:00+00:00")));
+
+        await projector.ProjectAsync(
+            CreateContext(),
+            WrapCommitted(
+                new WorkflowCompletedEvent { Success = false, Error = "boom" },
+                new WorkflowRunState
+                {
+                    RunId = "run-legacy-failed-step",
+                    Status = "failed",
+                    WorkflowYaml = CurrentStateWorkflowYaml("wf-legacy"),
+                    FinalError = "boom",
+                }));
+
+        var capability = dispatcher.Upserts.Should().ContainSingle().Subject.RecoveryCapability;
+        capability.RetryFailedStep.Eligibility.Should().Be(WorkflowRecoveryEligibilityReadModel.Unavailable);
+        capability.RetryFailedStep.UnavailableReasonCode.Should().Be(WorkflowRecoveryUnavailableReasonCodeReadModel.LegacyUnavailable);
+        capability.RetryFailedStep.RecommendedActions.Should().ContainSingle()
+            .Which.Should().Be(WorkflowRecoveryRecommendedActionReadModel.TechnicalDetails);
+        capability.RunAgain.Eligibility.Should().Be(WorkflowRecoveryEligibilityReadModel.Eligible);
     }
 
     [Fact]
@@ -1201,7 +2186,9 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         materialization.Nodes.Should().Contain(x => x.NodeId == "unknown" && x.NodeType == WorkflowExecutionGraphConstants.ActorNodeType);
         materialization.Nodes.Should().Contain(x => x.NodeId == "run:unknown:unknown" && x.NodeType == WorkflowExecutionGraphConstants.RunNodeType);
         materialization.Nodes.Should().Contain(x => x.NodeId == "step:unknown:unknown:unknown" && x.NodeType == WorkflowExecutionGraphConstants.StepNodeType);
-        materialization.Nodes.Should().Contain(x => x.NodeId == "child-1");
+        materialization.Nodes.Should().Contain(x =>
+            x.NodeId == "actor:unknown:unknown:child-1" &&
+            x.Properties["actorId"] == "child-1");
 
         materialization.Edges.Should().Contain(x =>
             x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeOwns &&
@@ -1213,7 +2200,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         materialization.Edges.Count(x =>
                 x.EdgeType == WorkflowExecutionGraphConstants.EdgeTypeChildOf &&
                 x.FromNodeId == "unknown" &&
-                x.ToNodeId == "child-1")
+                x.ToNodeId == "actor:unknown:unknown:child-1")
             .Should()
             .Be(1);
     }
@@ -1373,6 +2360,16 @@ public sealed class WorkflowExecutionProjectionProjectorTests
                         NodeId = "node-1",
                         NodeType = "Actor",
                     },
+                    new ProjectionGraphNode
+                    {
+                        NodeId = "run:node-1:cmd-1",
+                        NodeType = WorkflowExecutionGraphConstants.RunNodeType,
+                        Properties =
+                        {
+                            [WorkflowExecutionGraphConstants.RootActorIdPropertyKey] = "node-1",
+                            [WorkflowExecutionGraphConstants.SourceStateVersionPropertyKey] = "12",
+                        },
+                    },
                 ],
                 Edges =
                 [
@@ -1402,7 +2399,8 @@ public sealed class WorkflowExecutionProjectionProjectorTests
         node.Properties.Should().Contain(new KeyValuePair<string, string>("key", "value"));
         edge.Properties.Should().Contain(new KeyValuePair<string, string>("kind", "runtime"));
         subgraph.RootNodeId.Should().Be("node-1");
-        subgraph.Nodes.Should().ContainSingle();
+        subgraph.SourceStateVersion.Should().Be(12);
+        subgraph.Nodes.Should().HaveCount(2);
         subgraph.Edges.Should().ContainSingle();
 
         var mappedReport = mapper.ToRunReport(report);
@@ -1435,6 +2433,7 @@ public sealed class WorkflowExecutionProjectionProjectorTests
     public static IEnumerable<object?[]> CurrentStateStatusCases()
     {
         yield return ["completed", true];
+        yield return ["timed_out", false];
         yield return ["failed", false];
         yield return ["running", null];
         yield return ["unknown", null];
@@ -1446,6 +2445,17 @@ public sealed class WorkflowExecutionProjectionProjectorTests
             RootActorId = "root-actor",
             ProjectionKind = "workflow",
         };
+
+    private static string CurrentStateWorkflowYaml(string name) =>
+        $$"""
+        name: {{name}}
+        roles: []
+        steps:
+          - id: step-a
+            type: transform
+          - id: step-b
+            type: transform
+        """;
 
     private static StateEvent PackStateEvent(
         IMessage payload,

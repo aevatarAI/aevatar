@@ -18,6 +18,7 @@ public static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.WorkflowBindingMismatch => StatusCodes.Status409Conflict,
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => StatusCodes.Status409Conflict,
             WorkflowChatRunStartError.InvalidWorkflowYaml => StatusCodes.Status400BadRequest,
+            WorkflowChatRunStartError.ExternalCapabilityNotReady => StatusCodes.Status409Conflict,
             WorkflowChatRunStartError.WorkflowNameMismatch => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.PromptRequired => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.InvalidCallerCredential => StatusCodes.Status400BadRequest,
@@ -43,6 +44,8 @@ public static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.WorkflowBindingMismatch => ("WORKFLOW_BINDING_MISMATCH", "Actor is bound to a different workflow."),
             WorkflowChatRunStartError.AgentWorkflowNotConfigured => ("AGENT_WORKFLOW_NOT_CONFIGURED", "Actor has no bound workflow."),
             WorkflowChatRunStartError.InvalidWorkflowYaml => ("INVALID_WORKFLOW_YAML", "Workflow YAML is invalid."),
+            WorkflowChatRunStartError.ExternalCapabilityNotReady =>
+                ("EXTERNAL_WORKFLOW_CAPABILITY_NOT_READY", "External workflow capability admission failed."),
             WorkflowChatRunStartError.WorkflowNameMismatch => ("WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             WorkflowChatRunStartError.PromptRequired => ("PROMPT_REQUIRED", "Prompt is required."),
             WorkflowChatRunStartError.InvalidCallerCredential => ("INVALID_CALLER_CREDENTIAL", "Caller credential is invalid."),
@@ -153,6 +156,14 @@ public static class ChatRunStartErrorMapper
                         operationId = (string?)readiness.SelectedSelector.HostConnector.OperationId,
                         connectorCapabilityRef = readiness.SelectedSelector.HostConnector.ConnectorCapabilityRef,
                     };
+                case ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution:
+                    return new
+                    {
+                        userServiceId = (string?)readiness.SelectedCapability?.CodeExecution?.UserServiceId,
+                        endpointId = (string?)null,
+                        operationId = (string?)null,
+                        connectorCapabilityRef = (string?)null,
+                    };
             }
         }
 
@@ -180,6 +191,13 @@ public static class ChatRunStartErrorMapper
                 endpointId = (string?)null,
                 operationId = (string?)readiness.SelectedCapability.HostConnector.OperationId,
                 connectorCapabilityRef = (string?)readiness.SelectedCapability.HostConnector.ConnectorCapabilityRef,
+            },
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.CodeExecution => new
+            {
+                userServiceId = (string?)readiness.SelectedCapability.CodeExecution.UserServiceId,
+                endpointId = (string?)null,
+                operationId = (string?)null,
+                connectorCapabilityRef = (string?)null,
             },
             _ => null,
         };

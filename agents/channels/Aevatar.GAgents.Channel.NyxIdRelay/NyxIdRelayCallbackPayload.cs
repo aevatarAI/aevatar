@@ -101,6 +101,15 @@ public sealed class NyxIdRelayAttachmentPayload
     [JsonPropertyName("url")]
     public string? Url { get; set; }
 
+    [JsonPropertyName("platform_message_id")]
+    public string? PlatformMessageId { get; set; }
+
+    [JsonPropertyName("file_key")]
+    public string? FileKey { get; set; }
+
+    [JsonPropertyName("image_key")]
+    public string? ImageKey { get; set; }
+
     [JsonPropertyName("filename")]
     public string? Filename { get; set; }
 

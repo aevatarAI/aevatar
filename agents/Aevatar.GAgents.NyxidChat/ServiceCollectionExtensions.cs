@@ -25,14 +25,16 @@ using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
+using Aevatar.GAgents.NyxidChat.Voice;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Configuration;
@@ -51,6 +53,7 @@ public static class ServiceCollectionExtensions
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatConversationGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatTurnGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
+        RuntimeHelpers.RunClassConstructor(typeof(NyxIdVoiceGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(ChannelWorkflowDraftRunGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(WorkflowRunDeliveryGAgent).TypeHandle);
@@ -65,12 +68,18 @@ public static class ServiceCollectionExtensions
             services.AddNyxIdApiAccess(configuration);
         var assistantActionsOptions = BindAssistantActionsOptions(configuration);
         services.TryAddSingleton(assistantActionsOptions);
+        services.TryAddSingleton(BindCanaryEffectFaultOptions(configuration));
+        services.TryAddSingleton<INyxIdChatCanaryEffectFaultAuthorizationPolicy,
+            NyxIdChatCanaryEffectFaultAuthorizationPolicy>();
         if (assistantActionsOptions.Enabled)
         {
             services.TryAddSingleton<NyxIdAssistantActionRegistrySnapshot>();
             services.TryAddSingleton<INyxIdAssistantActionRegistrySource,
                 NyxIdAssistantActionRegistryHttpSource>();
-            services.TryAddSingleton<NyxIdAssistantActionRegistry>(sp =>
+            // Transient on purpose: a failed startup pins a disabled fallback
+            // that background recovery may upgrade, so consumers must observe
+            // the snapshot's current registry instead of a captured instance.
+            services.TryAddTransient<NyxIdAssistantActionRegistry>(sp =>
                 sp.GetRequiredService<NyxIdAssistantActionRegistrySnapshot>().GetRequired());
             services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService,
                 NyxIdAssistantActionRegistryStartupService>());
@@ -90,27 +99,50 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<StreamingAgentProfileTurnClassifier>();
         services.TryAddSingleton<IAgentProfileTurnClassifier>(sp =>
             sp.GetRequiredService<StreamingAgentProfileTurnClassifier>());
-        services.TryAddSingleton(sp => new AgentProfileTurnCatalogMaterializer(
+        services.TryAddSingleton<StreamingAgentProfileConnectedOperationSelector>();
+        services.TryAddSingleton<IAgentProfileConnectedOperationSelector>(sp =>
+            sp.GetRequiredService<StreamingAgentProfileConnectedOperationSelector>());
+        services.TryAddSingleton<INyxIdChatTurnIntentClassifier, NyxIdChatTurnIntentClassifier>();
+        services.TryAddSingleton(sp => new AgentTurnToolCatalogMaterializer(
             sp.GetRequiredService<IToolSetRegistry>(),
             sp.GetRequiredService<IAgentProfileTurnClassifier>(),
             sp.GetService<IExactRemoteSkillFetcher>(),
             sp.GetRequiredService<SkillFrontmatterParser>(),
-            sp.GetService<ILogger<AgentProfileTurnCatalogMaterializer>>()));
+            sp.GetService<ILogger<AgentTurnToolCatalogMaterializer>>(),
+            toolDiscoveryService: sp.GetRequiredService<IAgentToolDiscoveryService>(),
+            connectedOperationSelector:
+                sp.GetRequiredService<IAgentProfileConnectedOperationSelector>()));
+        services.TryAddSingleton<IAgentProfileTurnToolCatalogPlanner>(sp =>
+            sp.GetRequiredService<AgentTurnToolCatalogMaterializer>());
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
         services.TryAddSingleton<INyxIdChatControlCommandPort, NyxIdChatControlCommandPort>();
+        services.TryAddSingleton<INyxIdVoiceAgentCommandService, NyxIdVoiceAgentCommandService>();
         AddNyxIdLifecycleCommands(services);
 
         // ─── Channel LLM reply run dispatch ───
         services.TryAddSingleton<IChannelLlmReplyRunDispatcher, AgentRunDispatcher>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>());
+        services.TryAddSingleton<IAgentRunToolApprovalDecisionDispatcher, AgentRunToolApprovalDecisionDispatcher>();
+        services.TryAddSingleton<IChannelWorkflowAuthorizedScopeResolver>(sp =>
+            new ChannelWorkflowAuthorizedScopeResolver(
+                sp.GetService<Aevatar.GAgents.Channel.Identity.Abstractions.IOwnerScopeResolver>(),
+                sp.GetService<ILogger<ChannelWorkflowAuthorizedScopeResolver>>()));
+        // The two-generic overload keeps the concrete implementation type visible to
+        // TryAddEnumerable; a Func<IServiceProvider, IChannelSlashCommandHandler> factory
+        // would be indistinguishable from every other handler registered for this service.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IChannelSlashCommandHandler, ChannelWorkflowDraftRunSlashCommandHandler>(sp =>
+                new ChannelWorkflowDraftRunSlashCommandHandler(
+                    sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>(),
+                    sp.GetRequiredService<IChannelWorkflowAuthorizedScopeResolver>())));
         services.TryAddSingleton<ChannelSlashCommandRegistry>();
         services.TryAddSingleton<ChannelWorkflowDraftRunIntentParser>();
         services.TryAddSingleton<ChannelWorkflowDraftRunAdmission>(sp =>
             new ChannelWorkflowDraftRunAdmission(
                 sp.GetRequiredService<ChannelWorkflowDraftRunIntentParser>(),
-                sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>()));
+                sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IScopeWorkflowQueryPort>(),
+                sp.GetRequiredService<IChannelWorkflowAuthorizedScopeResolver>()));
         services.TryAddSingleton<WorkflowDraftRunReplyRenderer>();
         services.TryAddSingleton<IChannelWorkflowDraftRunInteractionPort>(sp =>
             new ChannelWorkflowDraftRunInteractionPort(
@@ -150,6 +182,9 @@ public static class ServiceCollectionExtensions
                     // the reply activity's TransportExtras) instead of the process-wide default, so a DM
                     // to one bot is answered by that bot's app and not a sibling under the same account.
                     sp.GetService<ILarkOutboundClientFactory>(),
+                    // Inbound turns bind the card through their single-use channel reply authority.
+                    // Proactive turns still use the scoped Lark proxy client above.
+                    sp.GetRequiredService<NyxIdApiClient>(),
                     sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
             }));
         }
@@ -184,16 +219,23 @@ public static class ServiceCollectionExtensions
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>(),
                 toolExecutionPort: sp.GetRequiredService<IAgentToolExecutionPort>(),
-                remoteSkillAccessTokenResolver: sp.GetService<IRemoteSkillAccessTokenResolver>()));
+                remoteSkillAccessTokenResolver: sp.GetService<IRemoteSkillAccessTokenResolver>(),
+                nyxIdChatToolSources: ResolveNyxIdChatToolSources(sp)));
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>
-            sp.GetService<INyxIdAuthorizationCatalogQueryPort>() is { } catalogQueryPort
-                ? new NyxIdActionPostconditionPort(
-                    catalogQueryPort,
-                    sp.GetRequiredService<TimeProvider>())
-                : new UnavailableNyxIdActionPostconditionPort());
+            new NyxIdActionPostconditionPort(
+                sp.GetService<INyxIdAuthorizationCatalogQueryPort>(),
+                sp.GetService<INyxIdActionEvidenceReadPort>(),
+                sp.GetRequiredService<TimeProvider>()));
+        services.TryAddSingleton<INyxIdChatDelegationCredentialLifecyclePort,
+            NyxIdChatDelegationCredentialLifecyclePort>();
         services.TryAddSingleton<INyxIdChatTurnOperationExecutor, NyxIdChatTurnOperationExecutor>();
+        services.TryAddSingleton<INyxIdChatToolVerificationPort, NyxIdChatToolVerificationPort>();
+        services.TryAddSingleton<INyxIdChatTurnOperationReconciliationPort,
+            AdmittedNyxIdChatTurnOperationReconciliationPort>();
+        services.TryAddSingleton<INyxIdChatTurnOperationDispatchPort,
+            NyxIdChatTurnOperationDispatchPort>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
@@ -256,12 +298,26 @@ public static class ServiceCollectionExtensions
 
     private static IEnumerable<IAgentToolSource> ResolveChannelToolSources(IServiceProvider serviceProvider)
     {
-        foreach (var source in serviceProvider.GetServices<IAgentToolSource>())
+        var workspace = serviceProvider.GetRequiredService<IToolSetRegistry>()
+            .Resolve(ToolSetNames.WorkspaceDefault);
+        var sources = workspace.IsSuccess
+            ? workspace.Sources
+            : serviceProvider.GetServices<IAgentToolSource>();
+        foreach (var source in sources)
             yield return source;
 
         var inventory = serviceProvider.GetService<ChannelNyxIdConnectedServiceInventoryToolSource>();
         if (inventory is not null)
             yield return inventory;
+    }
+
+    private static IReadOnlyList<IAgentToolSource> ResolveNyxIdChatToolSources(
+        IServiceProvider serviceProvider)
+    {
+        var result = serviceProvider
+            .GetRequiredService<IToolSetRegistry>()
+            .Resolve(ToolSetNames.NyxIdChatDefault);
+        return result.IsSuccess ? result.Sources : [];
     }
 
     private static void AddNyxIdStreamingInteractions(IServiceCollection services)
@@ -383,4 +439,13 @@ public static class ServiceCollectionExtensions
         configuration?.GetSection(NyxIdAssistantActionsOptions.ConfigSection).Bind(options);
         return options;
     }
+
+    private static NyxIdChatCanaryEffectFaultOptions BindCanaryEffectFaultOptions(
+        IConfiguration? configuration)
+    {
+        var enabled = configuration?.GetValue<bool>(
+            $"{NyxIdChatCanaryEffectFaultOptions.ConfigSection}:Enabled") == true;
+        return new NyxIdChatCanaryEffectFaultOptions { Enabled = enabled };
+    }
+
 }

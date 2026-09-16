@@ -730,6 +730,9 @@ public sealed partial class ConnectorCallModule
             Success = continueOnError,
             Output = continueOnError ? material?.Input ?? string.Empty : string.Empty,
             Error = continueOnError ? string.Empty : DescribeApprovalFailure(reasonCode),
+            OutputProvenance = continueOnError
+                ? WorkflowStepOutputProvenance.ForwardedInput
+                : WorkflowStepOutputProvenance.Produced,
         };
         completed.Annotations["connector.name"] = plan.ConnectorName;
         completed.Annotations["connector.type"] = plan.ConnectorType;

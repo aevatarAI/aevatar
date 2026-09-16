@@ -1,4 +1,7 @@
 # Approved polling waits for external/distributed eventual-consistency probes.
+# Agent tool admission ledger tests launch an external redis-server process; the bounded
+# readiness timeout prevents a missing ready signal from hanging the test process indefinitely.
+test/Aevatar.Capabilities.Tests/AgentToolAdmissionLedgerTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedClusterConsistencyIntegrationTests.cs
 test/Aevatar.Integration.Tests/ScriptAutonomousEvolutionOrleans3ClusterConsistencyTests.cs
 test/Aevatar.Integration.Tests/ScriptEvolutionIntegrationTestKit.cs

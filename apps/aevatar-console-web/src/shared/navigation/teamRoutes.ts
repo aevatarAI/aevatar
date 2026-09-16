@@ -3,7 +3,8 @@ import { buildStudioRoute } from '@/shared/studio/navigation';
 type TeamDetailTab =
   | 'overview'
   | 'automations'
-  | 'members';
+  | 'members'
+  | 'work-orders';
 
 type TeamToStudioMode = 'create-member' | 'edit-member' | 'build-member';
 
@@ -18,6 +19,12 @@ type TeamDetailRouteState = {
   readonly teamId: string;
   readonly testTeam: boolean;
   readonly workflowId: string;
+};
+
+type TeamWorkOrderRouteState = {
+  readonly scopeId: string;
+  readonly teamId: string;
+  readonly workOrderId: string;
 };
 
 function trimOptional(value: string | null | undefined): string {
@@ -40,6 +47,7 @@ function parseTeamTab(
     case 'overview':
     case 'automations':
     case 'members':
+    case 'work-orders':
       return trimOptional(value).toLowerCase() as TeamDetailTab;
     default:
       return fallback;
@@ -283,6 +291,41 @@ export function buildTeamMemberAutomationsHref(options: {
   return `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/automations`;
 }
 
+export function buildTeamWorkOrderDetailHref(options: {
+  scopeId: string;
+  teamId: string;
+  workOrderId: string;
+}): string {
+  const scopeId = trimOptional(options.scopeId);
+  const teamId = trimOptional(options.teamId);
+  const workOrderId = trimOptional(options.workOrderId);
+  if (!scopeId || !teamId) {
+    return buildTeamsHref();
+  }
+  if (!workOrderId) {
+    return buildTeamDetailHref({ scopeId, teamId, tab: 'work-orders' });
+  }
+
+  return `/scopes/${encodeURIComponent(scopeId)}/teams/${encodeURIComponent(teamId)}/work-orders/${encodeURIComponent(workOrderId)}`;
+}
+
+export function readTeamWorkOrderRouteState(
+  pathname = typeof window === 'undefined' ? '' : window.location.pathname,
+): TeamWorkOrderRouteState {
+  const segments = pathname.split('/').filter(Boolean);
+  const hasCanonicalRoute =
+    segments[0] === 'scopes' &&
+    segments[2] === 'teams' &&
+    segments[4] === 'work-orders';
+
+  return {
+    scopeId: hasCanonicalRoute && segments[1] ? decodePathSegment(segments[1]) : '',
+    teamId: hasCanonicalRoute && segments[3] ? decodePathSegment(segments[3]) : '',
+    workOrderId:
+      hasCanonicalRoute && segments[5] ? decodePathSegment(segments[5]) : '',
+  };
+}
+
 export function readTeamDetailRouteState(
   search = typeof window === 'undefined' ? '' : window.location.search,
   pathname = typeof window === 'undefined' ? '' : window.location.pathname,
@@ -334,4 +377,4 @@ export function readTeamDetailRouteState(
   };
 }
 
-export type { TeamDetailRouteState, TeamDetailTab };
+export type { TeamDetailRouteState, TeamDetailTab, TeamWorkOrderRouteState };

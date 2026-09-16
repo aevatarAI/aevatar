@@ -8,9 +8,9 @@ namespace Aevatar.AI.Tests;
 public sealed class ToolOutcomeReplyConstraintBuilderTests
 {
     [Fact]
-    public void BuildFinalNoToolsConstraints_WhenOnlyReadOnlyToolSucceeded_ShouldReturnConstraint()
+    public void BuildMutationClaimConstraints_WhenOnlyReadOnlyToolSucceeded_ShouldReturnConstraint()
     {
-        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(
             [Succeeded(new StubTool("read", isReadOnly: true))],
             toolReceipts: null);
 
@@ -20,26 +20,30 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
     }
 
     [Fact]
-    public void BuildFinalNoToolsConstraints_WhenMutatingToolSucceeded_ShouldReturnNone()
+    public void BuildMutationClaimConstraints_WhenMutatingToolSucceeded_ShouldReturnGroundingConstraint()
     {
-        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(
             [Succeeded(new StubTool("write"))],
             toolReceipts: null);
 
-        constraints.Should().BeEmpty();
+        constraints.Should().ContainSingle();
+        constraints[0].Content.Should().Contain("whose tool, side effect, and subject match that exact action");
+        constraints[0].Content.Should().NotContain("no successful mutating tool execution");
     }
 
     [Fact]
-    public void BuildFinalNoToolsConstraints_WhenReadOnlyAndMutatingSuccessAreMixed_ShouldReturnNone()
+    public void BuildMutationClaimConstraints_WhenReadOnlyAndMutatingSuccessAreMixed_ShouldReturnGroundingConstraint()
     {
-        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(
             [
                 Succeeded(new StubTool("read", isReadOnly: true)),
                 Succeeded(new StubTool("write")),
             ],
             toolReceipts: null);
 
-        constraints.Should().BeEmpty();
+        constraints.Should().ContainSingle();
+        constraints[0].Content.Should().Contain("different action");
+        constraints[0].Content.Should().NotContain("no successful mutating tool execution");
     }
 
     [Theory]
@@ -47,10 +51,10 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
     [InlineData(AgentToolReceiptStatus.Denied)]
     [InlineData(AgentToolReceiptStatus.ApprovalRequired)]
     [InlineData(AgentToolReceiptStatus.Unspecified)]
-    public void BuildFinalNoToolsConstraints_WhenMutatingToolDidNotSucceed_ShouldReturnConstraint(
+    public void BuildMutationClaimConstraints_WhenMutatingToolDidNotSucceed_ShouldReturnConstraint(
         AgentToolReceiptStatus status)
     {
-        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(
             [
                 new ToolOutcomeReplyFact(
                     new StubTool("write"),
@@ -64,22 +68,46 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
     }
 
     [Fact]
-    public void BuildFinalNoToolsConstraints_WhenSuccessfulMutatingReceiptExists_ShouldReturnNone()
+    public void BuildMutationClaimConstraints_WhenSuccessfulMutatingReceiptExists_ShouldReturnGroundingConstraint()
     {
-        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(
             toolOutcomes: null,
             toolReceipts:
             [
-                Receipt(AgentToolReceiptStatus.Success, sideEffectKind: "definition.update"),
+                Receipt(
+                    AgentToolReceiptStatus.Success,
+                    sideEffectKind: "definition.update",
+                    effect: AgentToolReceiptEffect.Mutating),
             ]);
 
-        constraints.Should().BeEmpty();
+        constraints.Should().ContainSingle();
+        constraints[0].Content.Should().Contain("match that exact action");
+        constraints[0].Content.Should().NotContain("no successful mutating tool execution");
     }
 
     [Fact]
-    public void BuildFinalNoToolsConstraints_WhenOnlyFailedMutatingReceiptsExist_ShouldReturnConstraint()
+    public void BuildMutationClaimConstraints_WhenLegacyMutatingSuccessHasUnspecifiedEffect_ShouldKeepNoSuccessConstraint()
     {
-        var constraints = ToolOutcomeReplyConstraintBuilder.BuildFinalNoToolsConstraints(
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(
+            [
+                new ToolOutcomeReplyFact(
+                    new StubTool("write"),
+                    "{}",
+                    Succeeded: true,
+                    Receipt(
+                        AgentToolReceiptStatus.Success,
+                        sideEffectKind: "definition.update")),
+            ],
+            toolReceipts: null);
+
+        constraints.Should().ContainSingle();
+        constraints[0].Content.Should().Contain("no successful mutating tool execution");
+    }
+
+    [Fact]
+    public void BuildMutationClaimConstraints_WhenOnlyFailedMutatingReceiptsExist_ShouldReturnConstraint()
+    {
+        var constraints = ToolOutcomeReplyConstraintBuilder.BuildMutationClaimConstraints(
             toolOutcomes: null,
             toolReceipts:
             [
@@ -91,7 +119,7 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
     }
 
     [Fact]
-    public void IsMutatingTool_ShouldUseReadOnlyDestructiveSideEffectAndApprovalPredicate()
+    public void IsMutatingTool_ShouldKeepApprovalSeparateFromExternalEffect()
     {
         ToolOutcomeReplyConstraintBuilder.IsMutatingTool(new StubTool("read", isReadOnly: true), "{}")
             .Should().BeFalse();
@@ -102,7 +130,7 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
         ToolOutcomeReplyConstraintBuilder.IsMutatingTool(new StubTool("side-effect", isReadOnly: true, sideEffectKind: "publish"), "{}")
             .Should().BeTrue();
         ToolOutcomeReplyConstraintBuilder.IsMutatingTool(new StubTool("approval", isReadOnly: true, requiresApproval: true), "{}")
-            .Should().BeTrue();
+            .Should().BeFalse();
         ToolOutcomeReplyConstraintBuilder.IsMutatingTool(
                 new StubTool(
                     "dynamic-read",
@@ -112,18 +140,28 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
     }
 
     private static ToolOutcomeReplyFact Succeeded(IAgentTool tool) =>
-        new(tool, "{}", Succeeded: true, Receipt(AgentToolReceiptStatus.Success));
+        new(
+            tool,
+            "{}",
+            Succeeded: true,
+            Receipt(
+                AgentToolReceiptStatus.Success,
+                effect: ToolOutcomeReplyConstraintBuilder.IsMutatingTool(tool, "{}")
+                    ? AgentToolReceiptEffect.Mutating
+                    : AgentToolReceiptEffect.ReadOnly));
 
     private static AgentToolReceipt Receipt(
         AgentToolReceiptStatus status,
         bool isDestructive = false,
-        string sideEffectKind = "") =>
+        string sideEffectKind = "",
+        AgentToolReceiptEffect effect = AgentToolReceiptEffect.Unspecified) =>
         new()
         {
             ToolName = "tool",
             Status = status,
             IsDestructive = isDestructive,
             SideEffectKind = sideEffectKind,
+            Effect = effect,
         };
 
     private sealed class StubTool(

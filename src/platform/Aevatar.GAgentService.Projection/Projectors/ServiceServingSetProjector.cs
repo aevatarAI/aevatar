@@ -58,7 +58,13 @@ public sealed class ServiceServingSetProjector
                 .ThenBy(x => x.RevisionId, StringComparer.Ordinal)
                 .ToList(),
         };
-        await _storeDispatcher.UpsertAsync(readModel, ct);
+        var result = await _storeDispatcher.UpsertAsync(readModel, ct);
+        if (result.IsRejected)
+        {
+            throw new InvalidOperationException(
+                $"Service serving-set projection '{serviceKey}' rejected state version " +
+                $"{stateVersion}: {result.Disposition}.");
+        }
     }
 
 }

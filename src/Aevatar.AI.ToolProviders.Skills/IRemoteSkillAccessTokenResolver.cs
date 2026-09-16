@@ -7,8 +7,9 @@ namespace Aevatar.AI.ToolProviders.Skills;
 public interface IRemoteSkillAccessTokenResolver
 {
     /// <summary>
-    /// Returns a transient token for the current caller, or <see langword="null"/>
-    /// when remote-skill access is unavailable for this request.
+    /// Returns a transient token resolution for the current caller. A failed
+    /// resolution carries a typed <see cref="RemoteSkillAccessTokenFailureKind"/>
+    /// so callers can surface actionable guidance instead of a generic error.
     /// </summary>
-    Task<string?> ResolveAsync(string skillName, CancellationToken ct = default);
+    Task<RemoteSkillAccessTokenResolution> ResolveAsync(string skillName, CancellationToken ct = default);
 }

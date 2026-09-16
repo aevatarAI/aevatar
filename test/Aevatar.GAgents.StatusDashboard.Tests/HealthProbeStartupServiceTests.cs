@@ -3,6 +3,7 @@ using Aevatar.GAgents.StatusDashboard.Configuration;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -140,12 +141,13 @@ public sealed class HealthProbeStartupServiceTests
     }
 
     [Fact]
-    public void Source_ShouldNotOwnProjectionActivationOrSleepRetry()
+    public void Source_ShouldNotOwnProjectionLifecycleOrSleepRetry()
     {
         var source = StripLineComments(File.ReadAllText(GetProductionSourcePath()));
 
         source.Should().NotContain("EnsureProjectionForActorAsync");
         source.Should().NotContain("HealthProbeProjectionPort");
+        source.Should().NotContain("ProjectionScope");
         source.Should().NotContain(string.Concat("Task", ".Delay"));
     }
 
@@ -177,6 +179,7 @@ public sealed class HealthProbeStartupServiceTests
         TimeProvider? timeProvider = null) =>
         new(
             Options.Create(options ?? BuildOptions()),
+            new ConfigurationBuilder().Build(),
             runtime,
             dispatchPort,
             registry ?? new HealthProbeExecutorRegistry([new TestHealthProbeExecutor()]),

@@ -132,6 +132,191 @@ public sealed class WorkflowRoleGAgentMappingTests
     }
 
     [Fact]
+    public async Task WorkflowRoleGAgent_WithWebhookBindingCredential_ShouldResolveExactAgentKeyForInitialTurn()
+    {
+        const string agentKey = "nyxid_ag_exact_webhook_binding_key";
+        var vault = new InMemorySecretVault();
+        var durable = await StoreWebhookBindingCredentialAsync(vault, agentKey);
+        var provider = new RecordingLlmProvider();
+        var publisher = new RecordingEventPublisher();
+        var (agent, _) = CreateAgent(provider, publisher, secretVault: vault);
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-webhook-initial",
+            StepId = "reply",
+            SessionId = "session-webhook-initial",
+            Prompt = "hello",
+            CallerCredential = WebhookBindingCallerCredential(durable),
+        });
+
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.ToolContext.Should().NotBeNull();
+        provider.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be(agentKey);
+        provider.LastRequest.ToolContext.Credentials.NyxIdCredentialKind.Should()
+            .Be(AgentToolNyxIdCredentialKind.AgentKey);
+        provider.LastRequest.LlmControl.Should().NotBeNull();
+        provider.LastRequest.LlmControl!.NyxIdAccessToken.Should().BeNull(
+            "the durable Agent Key should only enter the ephemeral tool context");
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WithWebhookBindingCredential_ShouldResolveExactAgentKeyForRecovery()
+    {
+        const string agentKey = "nyxid_ag_exact_webhook_recovery_key";
+        var vault = new InMemorySecretVault();
+        var durable = await StoreWebhookBindingCredentialAsync(vault, agentKey);
+        var (agent, _) = CreateAgent(
+            new RecordingLlmProvider(),
+            new RecordingEventPublisher(),
+            secretVault: vault);
+
+        var resolved = await agent.ResolveRecoveryContextForTestAsync(new RoleChatRecoveryCheckpoint
+        {
+            RequiresRuntimeCredential = true,
+            CallerDurableCredential = durable,
+            RecoveryContext = AgentToolExecutionContext.Empty.ToRecoveryPayload(),
+        });
+
+        resolved.Should().NotBeNull();
+        resolved!.Credentials.NyxIdAccessToken.Should().Be(agentKey);
+        resolved.Credentials.NyxIdCredentialKind.Should()
+            .Be(AgentToolNyxIdCredentialKind.AgentKey);
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WithScheduledCredential_ShouldResolveExactAgentKeyForInitialTurn()
+    {
+        const string agentKey = "nyxid_ag_exact_scheduled_key";
+        var vault = new InMemorySecretVault();
+        var durable = await StoreScheduledAgentKeyAsync(vault, agentKey);
+        var provider = new RecordingLlmProvider();
+        var (agent, _) = CreateAgent(
+            provider,
+            new RecordingEventPublisher(),
+            secretVault: vault);
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-scheduled-initial",
+            StepId = "reply",
+            SessionId = "session-scheduled-initial",
+            Prompt = "hello",
+            CallerCredential = new WorkflowCallerCredential
+            {
+                DurableCallerCredential = durable.Clone(),
+                Kind = NyxIdCallerCredentialKind.AgentKey,
+            },
+        });
+
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.ToolContext.Should().NotBeNull();
+        provider.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be(agentKey);
+        provider.LastRequest.ToolContext.Credentials.NyxIdCredentialKind.Should()
+            .Be(AgentToolNyxIdCredentialKind.AgentKey);
+        provider.LastRequest.LlmControl.Should().NotBeNull();
+        provider.LastRequest.LlmControl!.NyxIdAccessToken.Should().BeNull(
+            "the durable Agent Key should only enter the ephemeral tool context");
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WithScheduledCredential_ShouldPreserveAgentKeyForRecovery()
+    {
+        const string agentKey = "nyxid_ag_exact_scheduled_recovery_key";
+        var vault = new InMemorySecretVault();
+        var durable = await StoreScheduledAgentKeyAsync(vault, agentKey);
+        var (agent, _) = CreateAgent(
+            new RecordingLlmProvider(),
+            new RecordingEventPublisher(),
+            secretVault: vault);
+
+        var resolved = await agent.ResolveRecoveryContextForTestAsync(new RoleChatRecoveryCheckpoint
+        {
+            RequiresRuntimeCredential = true,
+            CallerDurableCredential = durable,
+            RecoveryContext = AgentToolExecutionContext.Empty.ToRecoveryPayload(),
+        });
+
+        resolved.Should().NotBeNull();
+        resolved!.Credentials.NyxIdAccessToken.Should().Be(agentKey);
+        resolved.Credentials.NyxIdCredentialKind.Should()
+            .Be(AgentToolNyxIdCredentialKind.AgentKey);
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WhenWebhookBindingDescriptorDrifts_ShouldFailClosed()
+    {
+        var vault = new InMemorySecretVault();
+        var durable = await StoreWebhookBindingCredentialAsync(
+            vault,
+            "nyxid_ag_webhook_before_rotation");
+        await vault.RotateAsync(new RotateSecretRequest(
+            durable.Ref,
+            durable.Purpose,
+            durable.OwnerScopeKey,
+            durable.SubjectId,
+            "nyxid_ag_webhook_after_rotation",
+            "test-rotation"));
+        var (agent, _) = CreateAgent(
+            new RecordingLlmProvider(),
+            new RecordingEventPublisher(),
+            secretVault: vault);
+
+        var resolved = await agent.ResolveRecoveryContextForTestAsync(new RoleChatRecoveryCheckpoint
+        {
+            RequiresRuntimeCredential = true,
+            CallerDurableCredential = durable,
+            RecoveryContext = AgentToolExecutionContext.Empty.ToRecoveryPayload(),
+        });
+
+        resolved.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_ChannelApprovalContinuation_ShouldResolveAgentKeyInsteadOfUserToken()
+    {
+        const string agentKey = "nyxid_ag_channel_approval_key";
+        var vault = new InMemorySecretVault();
+        var durable = await StoreChannelAgentKeyAsync(vault, agentKey);
+        var provider = new RecordingLlmProvider();
+        var publisher = new RecordingEventPublisher();
+        var (agent, _) = CreateAgent(provider, publisher, secretVault: vault);
+        var context = AgentToolExecutionContext.Empty with
+        {
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+            DurableNyxIdCredential = durable.Clone(),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-alpha",
+                "user-alpha",
+                "proxy"),
+        };
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-channel-approval",
+            Prompt = "continue after approval",
+            ToolContext = context.ToPayload(),
+            WorkflowLlmToolApprovalContinuation = new WorkflowLlmToolApprovalContinuation
+            {
+                RunId = "run-channel-approval",
+                StepId = "reply",
+                SessionId = "session-channel-approval",
+            },
+        });
+
+        provider.LastRequest.Should().NotBeNull();
+        provider.LastRequest!.ToolContext.Should().NotBeNull();
+        provider.LastRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be(agentKey);
+        provider.LastRequest.ToolContext.Credentials.NyxIdCredentialKind.Should()
+            .Be(AgentToolNyxIdCredentialKind.AgentKey);
+        provider.LastRequest.ToolContext.CredentialSource.Should()
+            .Be(AgentToolCredentialSource.ChannelRegistration);
+        provider.LastRequest.LlmControl.Should().NotBeNull();
+        provider.LastRequest.LlmControl!.NyxIdAccessToken.Should().Be(agentKey);
+    }
+
+    [Fact]
     public async Task WorkflowRoleGAgent_WhenToolReceiptCarriesManagedHandoff_ShouldPublishHandoffCompletion()
     {
         var provider = new RecordingLlmProvider
@@ -198,7 +383,9 @@ public sealed class WorkflowRoleGAgentMappingTests
         await agent.HandleWorkflowLlmExecutionIntent(intent);
 
         provider.LastRequest.Should().NotBeNull();
-        var user = provider.LastRequest!.Messages.Should().ContainSingle().Subject;
+        var user = provider.LastRequest!.Messages.Should()
+            .ContainSingle(message => message.Role == "user")
+            .Which;
         user.ContentParts.Should().NotBeNull();
         user.ContentParts!.Should().HaveCount(2);
         user.ContentParts[0].Kind.Should().Be(ContentPartKind.Text);
@@ -221,10 +408,24 @@ public sealed class WorkflowRoleGAgentMappingTests
         fileRef.Sha256.Should().Be("sha-file-role");
         fileRef.CreatedAtUnixMs.Should().Be(1710000000000);
         fileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
+
+        provider.LastRequest.ToolContext.Should().NotBeNull();
+        var toolContextFileRef = provider.LastRequest.ToolContext!.InputFileRefs.Should().ContainSingle().Subject;
+        toolContextFileRef.FileId.Should().Be("file-role");
+        toolContextFileRef.ArtifactId.Should().Be("workflow-file://file-role");
+        toolContextFileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource);
+        toolContextFileRef.SourceMessageId.Should().Be("om_1");
+        toolContextFileRef.SourceResourceKey.Should().Be("image_key_1");
+        toolContextFileRef.FileName.Should().Be("file-role.png");
+        toolContextFileRef.MediaType.Should().Be("image/png");
+        toolContextFileRef.SizeBytes.Should().Be(3);
+        toolContextFileRef.Sha256.Should().Be("sha-file-role");
+        toolContextFileRef.CreatedAtUnixMs.Should().Be(1710000000000);
+        toolContextFileRef.ExpiresAtUnixMs.Should().Be(1710003600000);
     }
 
     [Fact]
-    public async Task WorkflowRoleGAgent_ShouldMapWorkflowToolScopeToAiVisibility()
+    public async Task WorkflowRoleGAgent_ShouldExcludeUnavailableAllowedToolFromExactCatalog()
     {
         var provider = new RecordingLlmProvider();
         var publisher = new RecordingEventPublisher();
@@ -236,8 +437,10 @@ public sealed class WorkflowRoleGAgentMappingTests
             StepId = "reply",
             SessionId = "session-1",
             Prompt = "hello",
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             AgentToolScope = new WorkflowAgentToolScope
             {
+                RestrictAllowedToolNames = true,
                 AllowedToolNames = { "search" },
             },
         });
@@ -245,8 +448,11 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.ToolContext.Should().NotBeNull();
         provider.LastRequest.ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue();
-        provider.LastRequest.ToolContext.ToolVisibility.Allows("search").Should().BeTrue();
+        provider.LastRequest.ToolContext.ToolVisibility.Allows("search").Should().BeFalse();
         provider.LastRequest.ToolContext.ToolVisibility.Allows("calendar").Should().BeFalse();
+        provider.LastRequest.Tools.Should().BeNull();
+        provider.LastRequest.ToolCatalogProof.Should().NotBeNull();
+        provider.LastRequest.ToolCatalogProof!.ToolCount.Should().Be(0);
     }
 
     [Fact]
@@ -254,7 +460,8 @@ public sealed class WorkflowRoleGAgentMappingTests
     {
         var provider = new RecordingLlmProvider();
         var publisher = new RecordingEventPublisher();
-        var source = new RecordingToolSource(new StaticAgentTool("nyxid_calendar_create_event"));
+        var exactTool = new StaticAgentTool("nyxid_calendar_create_event");
+        var source = new RecordingToolSource(exactTool);
         var registry = new RecordingToolSetRegistry(source);
         var (agent, _) = CreateAgent(provider, publisher, registry);
         agent.AddTool(new StaticAgentTool("nyxid_proxy"));
@@ -263,14 +470,68 @@ public sealed class WorkflowRoleGAgentMappingTests
 
         provider.LastRequest.Should().NotBeNull();
         provider.LastRequest!.Tools.Should().ContainSingle(tool => tool.Name == "nyxid_calendar_create_event");
+        provider.LastRequest.Tools!.Should().ContainSingle().Which.Should().BeSameAs(exactTool);
         provider.LastRequest.Tools.Should().NotContain(tool => tool.Name == "nyxid_proxy");
         provider.LastRequest.ToolContext!.InvocationSurface.Should().Be(AgentToolInvocationSurface.WorkflowLlmToolLoop);
+        provider.LastRequest.ToolCatalogProof.Should().NotBeNull();
+        provider.LastRequest.ToolCatalogProof!.Budget.Should().Be(AgentTurnToolCatalogBudget.WorkflowOrAdmin);
+        provider.LastRequest.ToolCatalogProof.ToolDescriptors.Should().ContainSingle()
+            .Which.Origin.Should().Be(AgentTurnToolOrigin.Workflow);
+        provider.LastRequest.ToolCatalogProof.CatalogDigest.Should().NotBeNullOrWhiteSpace();
 
         await agent.HandleWorkflowLlmExecutionIntent(BuildConnectedServiceIntent("token-b", "session-b"));
 
         source.AccessTokens.Should().Equal("token-a", "token-b");
         source.InvocationSurfaces.Should().OnlyContain(surface => surface == AgentToolInvocationSurface.WorkflowLlmToolLoop);
         registry.ResolvedNames.Should().Equal("nyxid.connected_services", "nyxid.connected_services");
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_CurrentPolicyWithoutExplicitToolScope_ShouldFailBeforeModelInvocation()
+    {
+        var provider = new RecordingLlmProvider();
+        var (agent, _) = CreateAgent(provider, new RecordingEventPublisher());
+        agent.AddTool(new StaticAgentTool("legacy_static_tool"));
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-no-scope",
+            StepId = "reply",
+            SessionId = "session-no-scope",
+            Prompt = "hello",
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+        });
+
+        provider.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowRoleGAgent_WhenRequestSourcesCollide_ShouldFailBeforeModelInvocation()
+    {
+        var provider = new RecordingLlmProvider();
+        var registry = new FixedSourcesToolSetRegistry(
+        [
+            new RecordingToolSource(new StaticAgentTool("duplicate_tool")),
+            new RecordingToolSource(new StaticAgentTool("duplicate_tool")),
+        ]);
+        var (agent, _) = CreateAgent(provider, new RecordingEventPublisher(), registry);
+
+        await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
+        {
+            RunId = "run-collision",
+            StepId = "reply",
+            SessionId = "session-collision",
+            Prompt = "run",
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+            AgentToolScope = new WorkflowAgentToolScope
+            {
+                RestrictAllowedToolNames = true,
+                RestrictToolSets = true,
+                ToolSetRefs = { "nyxid.connected_services" },
+            },
+        });
+
+        provider.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -318,6 +579,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             StepId = "reply",
             SessionId = "session-empty-static",
             Prompt = "schedule only",
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             AgentToolScope = new WorkflowAgentToolScope
             {
                 RestrictAllowedToolNames = true,
@@ -338,6 +600,7 @@ public sealed class WorkflowRoleGAgentMappingTests
             StepId = "reply",
             SessionId = sessionId,
             Prompt = "create an event",
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
             CallerCredential = new WorkflowCallerCredential { BearerToken = token },
             WorkflowRuntimeContext = new WorkflowToolRuntimeContextPayload
             {
@@ -347,6 +610,8 @@ public sealed class WorkflowRoleGAgentMappingTests
             },
             AgentToolScope = new WorkflowAgentToolScope
             {
+                RestrictAllowedToolNames = true,
+                RestrictToolSets = true,
                 AllowedToolNames = { "search" },
                 ToolSetRefs = { "nyxid.connected_services" },
             },
@@ -444,13 +709,22 @@ public sealed class WorkflowRoleGAgentMappingTests
         }
     }
 
+    private sealed class FixedSourcesToolSetRegistry(IReadOnlyList<IAgentToolSource> sources) : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => ["nyxid.connected_services"];
+
+        public ToolSetResolveResult Resolve(string? name) =>
+            ToolSetResolveResult.Success(name ?? "nyxid.connected_services", sources);
+    }
+
     private static (TestWorkflowRoleGAgent Agent, InMemoryEventStore EventStore) CreateAgent(
         ILLMProviderFactory provider,
         RecordingEventPublisher publisher,
-        IToolSetRegistry? registry = null)
+        IToolSetRegistry? registry = null,
+        ISecretVault? secretVault = null)
     {
         var eventStore = new InMemoryEventStore();
-        var vault = new InMemorySecretVault();
+        var vault = secretVault ?? new InMemorySecretVault();
         var services = new ServiceCollection()
             .AddSingleton<IEventStore>(eventStore)
             .AddSingleton<ISecretVault>(vault)
@@ -484,7 +758,98 @@ public sealed class WorkflowRoleGAgentMappingTests
             chatToolRecoverySecretVault: chatToolRecoverySecretVault)
     {
         public void AddTool(IAgentTool tool) => RegisterTool(tool);
+
+        public Task<AgentToolExecutionContext?> ResolveRecoveryContextForTestAsync(
+            RoleChatRecoveryCheckpoint checkpoint) =>
+            TryResolveRecoveryExecutionContextAsync(checkpoint, CancellationToken.None);
     }
+
+    private static async Task<DurableCallerCredentialRef> StoreWebhookBindingCredentialAsync(
+        ISecretVault vault,
+        string agentKey)
+    {
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+            "scope-owner-alpha",
+            "owner-alpha",
+            agentKey,
+            "test-webhook-binding"));
+        return new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = stored.Reference.Purpose,
+            OwnerScopeKey = stored.Reference.OwnerScopeKey,
+            SubjectId = "owner-alpha",
+            SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+            SecretReference = stored.Reference.Clone(),
+            ProviderCredentialId = "provider-key-1",
+        };
+    }
+
+    private static async Task<DurableCallerCredentialRef> StoreChannelAgentKeyAsync(
+        ISecretVault vault,
+        string agentKey)
+    {
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-channel-alpha",
+            "channel-agent-alpha",
+            agentKey,
+            "test-channel-agent-key"));
+        return new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = stored.Reference.Purpose,
+            OwnerScopeKey = stored.Reference.OwnerScopeKey,
+            SubjectId = "channel-agent-alpha",
+            SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+            SecretReference = stored.Reference.Clone(),
+        };
+    }
+
+    private static async Task<DurableCallerCredentialRef> StoreScheduledAgentKeyAsync(
+        ISecretVault vault,
+        string agentKey)
+    {
+        var stored = await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            "scope-scheduled-alpha",
+            "scheduled-agent-alpha",
+            agentKey,
+            "test-scheduled-agent-key"));
+        return new DurableCallerCredentialRef
+        {
+            Ref = stored.Reference.Ref,
+            Purpose = stored.Reference.Purpose,
+            OwnerScopeKey = stored.Reference.OwnerScopeKey,
+            SubjectId = "scheduled-agent-alpha",
+            SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+            ScheduledCallerNyxIdAuthority = new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "user-alpha",
+                Scope = "proxy",
+                BindingId = "binding-alpha",
+            },
+            SecretReference = stored.Reference.Clone(),
+        };
+    }
+
+    private static WorkflowCallerCredential WebhookBindingCallerCredential(
+        DurableCallerCredentialRef durable) =>
+        new()
+        {
+            DurableCallerCredential = durable.Clone(),
+            NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+            {
+                Platform = "nyxid",
+                ExternalUserId = "owner-alpha",
+                Scope = "proxy",
+                BindingId = "binding-owner-alpha",
+            },
+            Kind = NyxIdCallerCredentialKind.AgentKey,
+        };
 
     private sealed class RecordingToolSource(IAgentTool tool) : IAgentToolSource
     {

@@ -151,6 +151,56 @@ internal sealed class NyxIdChatSseWriter
             },
         }, sequence, ct);
 
+    public ValueTask WriteModelCallStartAsync(
+        ModelCallStartEvent modelCall,
+        long sequence,
+        CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "MODEL_CALL_START",
+            modelCallStart = new
+            {
+                operationId = modelCall.OperationId,
+                sessionId = modelCall.SessionId,
+                round = modelCall.Round,
+                model = modelCall.Model,
+                provider = modelCall.Provider,
+                inputSummary = modelCall.InputSummary,
+                availableToolNames = modelCall.AvailableToolNames,
+            },
+        }, sequence, ct);
+
+    public ValueTask WriteModelCallEndAsync(
+        ModelCallEndEvent modelCall,
+        long sequence,
+        CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "MODEL_CALL_END",
+            modelCallEnd = new
+            {
+                operationId = modelCall.OperationId,
+                sessionId = modelCall.SessionId,
+                round = modelCall.Round,
+                model = modelCall.Model,
+                content = modelCall.Content,
+                reasoningContent = modelCall.ReasoningContent,
+                usage = modelCall.Usage is null
+                    ? null
+                    : new
+                    {
+                        available = modelCall.Usage.Available,
+                        promptTokens = modelCall.Usage.PromptTokens,
+                        completionTokens = modelCall.Usage.CompletionTokens,
+                        totalTokens = modelCall.Usage.TotalTokens,
+                        model = modelCall.Usage.Model,
+                    },
+                finishReason = modelCall.FinishReason,
+                success = modelCall.Success,
+                error = modelCall.Error,
+            },
+        }, sequence, ct);
+
     public ValueTask WriteToolCallStartAsync(
         string toolName,
         string callId,
@@ -226,9 +276,9 @@ internal sealed class NyxIdChatSseWriter
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(payload);
-        var node = JsonNode.Parse(JsonFormatter.Default.Format(payload))
-                   ?? throw new InvalidOperationException("Typed custom payload must serialize to JSON.");
-        NormalizeNyxIdEnumValues(node);
+        var node = payload is NyxIdChatTaskPlan or NyxIdChatTaskPlanStepChanged
+            ? NyxIdChatTaskPlanJsonFormatter.FormatTaskPlan(payload)
+            : NyxIdChatTaskPlanJsonFormatter.FormatProtobuf(payload);
         return WriteFrameAsync(new
         {
             type = "CUSTOM",
@@ -254,80 +304,6 @@ internal sealed class NyxIdChatSseWriter
                 timeoutSeconds,
             }
         }, sequence, ct);
-
-    private static void NormalizeNyxIdEnumValues(JsonNode node)
-    {
-        switch (node)
-        {
-            case JsonObject obj:
-                foreach (var property in obj.ToArray())
-                {
-                    if (property.Value is JsonValue value &&
-                        value.TryGetValue<string>(out var text) &&
-                        TryNormalizeNyxIdEnumValue(text, out var normalized))
-                    {
-                        obj[property.Key] = normalized;
-                    }
-                    else if (property.Value is not null)
-                    {
-                        NormalizeNyxIdEnumValues(property.Value);
-                    }
-                }
-                break;
-            case JsonArray array:
-                for (var index = 0; index < array.Count; index++)
-                {
-                    if (array[index] is JsonValue value &&
-                        value.TryGetValue<string>(out var text) &&
-                        TryNormalizeNyxIdEnumValue(text, out var normalized))
-                    {
-                        array[index] = normalized;
-                    }
-                    else if (array[index] is not null)
-                    {
-                        NormalizeNyxIdEnumValues(array[index]!);
-                    }
-                }
-                break;
-        }
-    }
-
-    private static bool TryNormalizeNyxIdEnumValue(string value, out string normalized)
-    {
-        string[] prefixes =
-        [
-            "NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_",
-            "NYX_ID_CHAT_STEP_CONTROL_KIND_",
-            "NYX_ID_CHAT_ACTION_DISPOSITION_",
-            "NYX_ID_CHAT_OPERATION_PHASE_",
-            "NYX_ID_CHAT_EFFECT_EVIDENCE_",
-            "NYX_ID_CHAT_TRANSITION_OUTCOME_",
-            "NYX_ID_CHAT_CONTINUATION_KIND_",
-            "NYX_ID_CHAT_CONTROL_OUTCOME_",
-            "NYX_ID_ASSISTANT_ACTION_RISK_",
-            "NYX_ID_ASSISTANT_ACTION_TIER_",
-            "NYX_ID_ASSISTANT_ACTION_KIND_",
-            "NYX_ID_CHAT_CONTROL_KIND_",
-            "NYX_ID_CHAT_TURN_STATUS_",
-            "NYX_ID_CHAT_TASK_STATUS_",
-            "NYX_ID_CHAT_STEP_STATUS_",
-            "NYX_ID_CHAT_STEP_KIND_",
-            "NYX_ID_CHAT_ATTENTION_KIND_",
-            "NYX_ID_CHAT_APPROVAL_REVERSIBILITY_",
-            "NYX_ID_CHAT_NEEDS_YOU_RESOLUTION_OUTCOME_",
-        ];
-        foreach (var prefix in prefixes)
-        {
-            if (!value.StartsWith(prefix, StringComparison.Ordinal))
-                continue;
-
-            normalized = value[prefix.Length..].ToLowerInvariant();
-            return true;
-        }
-
-        normalized = value;
-        return false;
-    }
 
     private static object BuildPresentationPayload(
         ToolPresentationDescriptor? presentation,
@@ -376,6 +352,11 @@ internal sealed class NyxIdChatSseWriter
                     connectedServiceId = descriptor.NyxIdOperation.ConnectedServiceId,
                     serviceSlug = descriptor.NyxIdOperation.ServiceSlug,
                     catalogServiceSlug = descriptor.NyxIdOperation.CatalogServiceSlug,
+                    readinessCapabilityId = descriptor.NyxIdOperation.HasReadinessCapabilityId &&
+                                            !string.IsNullOrWhiteSpace(
+                                                descriptor.NyxIdOperation.ReadinessCapabilityId)
+                        ? descriptor.NyxIdOperation.ReadinessCapabilityId
+                        : null,
                     connectionLabel = descriptor.NyxIdOperation.ConnectionLabel,
                     connectorDisplayName = descriptor.NyxIdOperation.ConnectorDisplayName,
                     operationId = descriptor.NyxIdOperation.OperationId,

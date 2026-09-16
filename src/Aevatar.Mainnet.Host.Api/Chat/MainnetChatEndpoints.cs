@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Aevatar.GAgents.NyxidChat;
-using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -10,7 +9,7 @@ namespace Aevatar.Mainnet.Host.Api.Chat;
 
 internal enum MainnetChatRequestKind
 {
-    Workflow,
+    ExternalWorkflowCompatibility,
     Assistant,
     Unsupported,
 }
@@ -46,8 +45,8 @@ public static class MainnetChatEndpoints
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (request.HasFormContentType)
-            return new MainnetChatRequestClassification(MainnetChatRequestKind.Workflow);
+        if (ExternalWorkflowChatCompatibilityAdapter.AcceptsForm(request))
+            return new MainnetChatRequestClassification(MainnetChatRequestKind.ExternalWorkflowCompatibility);
         if (!IsJson(request.ContentType))
             return new MainnetChatRequestClassification(MainnetChatRequestKind.Unsupported);
 
@@ -59,8 +58,11 @@ public static class MainnetChatEndpoints
                 return new MainnetChatRequestClassification(MainnetChatRequestKind.Unsupported);
 
             var body = document.RootElement.Clone();
+            if (ExternalWorkflowChatCompatibilityAdapter.AcceptsJson(body))
+                return new MainnetChatRequestClassification(MainnetChatRequestKind.ExternalWorkflowCompatibility);
             if (!body.TryGetProperty("type", out var type))
-                return new MainnetChatRequestClassification(MainnetChatRequestKind.Workflow);
+                return new MainnetChatRequestClassification(MainnetChatRequestKind.Unsupported);
+
             if (type.ValueKind != JsonValueKind.String ||
                 !AssistantTypes.Contains(type.GetString()?.Trim() ?? string.Empty))
             {
@@ -85,8 +87,8 @@ public static class MainnetChatEndpoints
         var classification = await ClassifyRequestAsync(http.Request, ct);
         switch (classification.Kind)
         {
-            case MainnetChatRequestKind.Workflow:
-                await WorkflowCapabilityEndpoints.HandleChatPostAsync(http, ct);
+            case MainnetChatRequestKind.ExternalWorkflowCompatibility:
+                await ExternalWorkflowChatCompatibilityAdapter.HandleAsync(http, ct);
                 return;
             case MainnetChatRequestKind.Assistant:
                 await NyxIdChatEndpoints.HandlePublicChatAsync(http, classification.Body!.Value, ct);

@@ -31,6 +31,17 @@ message ProjectionScopeStatusDocument {
   int64 failure_diagnostic_dropped_total = 23;
   repeated ProjectionSourceVersionStatus source_versions = 24;
   int32 retry_exhausted_failure_count = 25;
+  repeated ProjectionSourceCoordinate last_successful_source_coordinates = 26;
+  ProjectionSourceCoordinate in_flight_source = 27;
+  ProjectionMaterializationRouteFingerprint active_materialization_route = 28;
+  ProjectionMaterializationCutoverState materialization_cutover = 29;
+  // The source scope's committed status route at the time of this write. Its route_epoch is
+  // the write fence for this read model: at the same source version a write may take over an
+  // existing document only under a strictly higher route epoch (epoch-fenced same-version
+  // takeover, evaluated atomically with the document write); equal epochs must be
+  // byte-identical (duplicate) or are conflicts; a lower epoch is stale. Documents written by
+  // binaries that did not carry the route have epoch 0.
+  ProjectionScopeStatusRoute status_route = 30;
 }
 
 message ProjectionSourceVersionStatus {

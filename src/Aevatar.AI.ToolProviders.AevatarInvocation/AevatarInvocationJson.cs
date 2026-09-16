@@ -79,6 +79,7 @@ internal static class AevatarInvocationJson
             endpoint_id = EmptyToNull(result.EndpointId),
             wait = ToWaitText(result.Wait),
             workflow_run_delivery = ToWorkflowRunDeliveryJson(result.WorkflowRunDelivery),
+            mutation_stage = ToMutationStageText(result.MutationStage),
             error = result.Error == null
                 ? null
                 : new
@@ -135,6 +136,14 @@ internal static class AevatarInvocationJson
             InvocationWaitMode.Ack => "ack",
             InvocationWaitMode.Complete => "complete",
             _ => "stream",
+        };
+
+    private static string? ToMutationStageText(AgentToolReceiptMutationStage mutationStage) =>
+        mutationStage switch
+        {
+            AgentToolReceiptMutationStage.Accepted => "accepted",
+            AgentToolReceiptMutationStage.ReadModelObserved => "read_model_observed",
+            _ => null,
         };
 
     private static object? ToWorkflowRunDeliveryJson(WorkflowRunBackgroundDeliveryReceipt? receipt) =>

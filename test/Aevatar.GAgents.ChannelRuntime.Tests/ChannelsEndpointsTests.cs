@@ -151,8 +151,10 @@ public sealed class ChannelsEndpointsTests
         html.Should().Contain("client-example");
         html.Should().Contain("console:test");
         html.Should().Contain("https://api.example.test/api/v1/proxy/s/aevatar");
-        html.Should().Contain("searchParams.append(\"resource\"");
-        html.Should().Contain("form.append(\"resource\"");
+        // ADR-0018: the shared console session uses the consented grant instead of
+        // narrowing both authorization and token exchange to explicit resources.
+        html.Should().NotContain("searchParams.append(\"resource\"");
+        html.Should().NotContain("form.append(\"resource\"");
         html.Should().NotContain("__BACKEND_CONSOLE_CONFIG__");
     }
 }

@@ -319,7 +319,7 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
   const chatConversations = useQuery({
     queryKey: ['studio-files-chat-histories', scopeId],
     enabled: Boolean(scopeId),
-    queryFn: () => chatHistoryApi.listConversationMetas(scopeId),
+    queryFn: () => chatHistoryApi.listConversationMetas(),
     retry: false,
   });
 

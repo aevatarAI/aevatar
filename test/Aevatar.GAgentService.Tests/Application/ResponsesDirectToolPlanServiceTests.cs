@@ -10,7 +10,7 @@ namespace Aevatar.GAgentService.Tests.Application;
 public sealed class ResponsesDirectToolPlanServiceTests
 {
     [Fact]
-    public async Task ToolSetProvider_WhenSourceDiscoveryFails_ShouldContinueWithOtherSources()
+    public async Task ToolSetProvider_WhenSourceDiscoveryFails_ShouldFailClosedWithoutPartialCatalog()
     {
         var service = new ResponsesDirectToolPlanService(new StaticToolSetRegistry(
             [
@@ -28,10 +28,13 @@ public sealed class ResponsesDirectToolPlanServiceTests
 
         plan.Error.Should().BeNull();
         var provider = plan.AdditionalToolProviders.Should().ContainSingle().Subject;
-        var tools = await provider.GetAdditiveToolsAsync(
-            new ResponsesToolProviderContext(AgentToolExecutionContext.Empty));
+        var action = () => provider.GetAdditiveToolsAsync(
+                new ResponsesToolProviderContext(AgentToolExecutionContext.Empty))
+            .AsTask();
 
-        tools.Select(static tool => tool.Name).Should().ContainSingle("use_skill");
+        var exception = await action.Should().ThrowAsync<AgentToolDiscoveryException>();
+        exception.Which.Failure.Code.Should().Be(AgentToolDiscoveryFailureCode.SourceFailed);
+        exception.Which.Failure.SourceType.Should().Contain(nameof(FaultingToolSource));
     }
 
     [Fact]

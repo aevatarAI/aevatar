@@ -10,6 +10,7 @@ using Aevatar.Capabilities;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Mainnet.Host.Api.Responses;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
@@ -97,18 +98,41 @@ public sealed class NyxIdIdentityAssertionAuthenticationTests
     }
 
     [Fact]
-    public async Task BearerShouldRemainAuthoritativeWhenBothCredentialsArePresent()
+    public async Task IdentityAssertionShouldAuthenticateWhileBearerRemainsAvailableToWorkflow()
     {
         using var tokens = new TokenFixture();
         await using var app = await CreateAppAsync(tokens);
-        using var request = ScopedRequest("caller-1", "not-a-jwt");
+        using var request = ScopedRequest(
+            "identity-caller",
+            tokens.CreateIdentityToken("identity-caller"));
         request.Headers.Authorization = new AuthenticationHeaderValue(
             "Bearer",
-            tokens.CreateBearerToken("caller-1"));
+            tokens.CreateBearerToken("bearer-caller"));
 
         using var response = await app.GetTestClient().SendAsync(request);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("subject").GetString().Should().Be("identity-caller");
+        body.GetProperty("authenticationType").GetString().Should().Be(
+            NyxIdIdentityAssertionAuthentication.Scheme);
+        body.GetProperty("workflowAuthoritySubject").GetString().Should().Be("identity-caller");
+        body.GetProperty("workflowBearerPreserved").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task InvalidIdentityAssertionWithValidBearer_ShouldReturnUnauthorized()
+    {
+        using var tokens = new TokenFixture();
+        await using var app = await CreateAppAsync(tokens);
+        using var request = ScopedRequest("bearer-caller", "not-a-jwt");
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            tokens.CreateBearerToken("bearer-caller"));
+
+        using var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]
@@ -188,10 +212,15 @@ public sealed class NyxIdIdentityAssertionAuthenticationTests
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
+        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http).Credential;
+
         return Results.Json(new
         {
             scopeId,
             subject = http.User.FindFirstValue(JwtRegisteredClaimNames.Sub),
+            authenticationType = http.User.Identity?.AuthenticationType,
+            workflowAuthoritySubject = callerCredential?.NyxIdAuthority?.ExternalUserId,
+            workflowBearerPreserved = !string.IsNullOrWhiteSpace(callerCredential?.BearerToken),
         });
     }
 

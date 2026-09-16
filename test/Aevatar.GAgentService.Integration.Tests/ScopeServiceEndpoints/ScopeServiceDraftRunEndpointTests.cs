@@ -407,6 +407,53 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
     }
 
     [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldNotMisclassifyAdmissionFailureAsInvalidYaml()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            SelectedSelector = new ExternalWorkflowCapabilitySelector
+            {
+                CodeExecution = new CodeExecutionSelector(),
+            },
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = readiness.Status,
+            Code = "CODE_EXECUTION_ROUTE_POLICY_MISMATCH",
+            SafeMessage = "The code execution route requires convergence.",
+        });
+        host.InteractionService.ResultFactory = (_, _, _, _) => Task.FromResult(
+            WorkflowChatRunInteractionResult.Failure(
+                WorkflowChatRunStartError.ExternalCapabilityNotReady,
+                WorkflowChatRunStartFailureDetail.Create(
+                    WorkflowChatRunStartError.ExternalCapabilityNotReady,
+                    externalCapabilityReadiness: readiness)));
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/scopes/scope-a/workflow/draft-run",
+            new
+            {
+                prompt = "run the draft",
+                workflowYamls = new[]
+                {
+                    "name: main\nsteps:\n  - id: run-code\n    type: tool_call\n    parameters:\n      tool: code_execute",
+                },
+            });
+        using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        body.RootElement.GetProperty("code").GetString().Should()
+            .Be("EXTERNAL_WORKFLOW_CAPABILITY_NOT_READY");
+        body.RootElement.GetProperty("externalCapabilityReadiness")
+            .GetProperty("blockers")[0]
+            .GetProperty("code").GetString().Should()
+            .Be("CODE_EXECUTION_ROUTE_POLICY_MISMATCH");
+    }
+
+    [Fact]
     public async Task ScopeDraftRunEndpoint_ShouldReturnInvalidCallerCredential_WhenBearerIsMalformed()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

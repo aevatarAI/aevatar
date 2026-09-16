@@ -1,5 +1,6 @@
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -76,8 +77,8 @@ public sealed partial class ConversationGAgent :
     private const int RecentAttachmentActivityCap = 5;
     private const int RecentDeliveriesCap = 100;
     private const int MaxNyxRelayInterimUpdateRetryCount = 2;
-    private const string RelayReplyTokenSecretPurpose = "channel-relay-reply-token";
-    private const string RelayUserAccessTokenSecretPurpose = "channel-relay-user-access-token";
+    private const string RelayReplyTokenSecretPurpose = ChannelRelayRuntimeSecretPurposes.ReplyToken;
+    private const string RelayUserAccessTokenSecretPurpose = ChannelRelayRuntimeSecretPurposes.UserAccessToken;
     private static readonly TimeSpan RecentAttachmentActivityWindow = TimeSpan.FromMinutes(10);
     private const int RuntimeCredentialLocalOccRetryCount = 3;
 
@@ -101,6 +102,7 @@ public sealed partial class ConversationGAgent :
         StateTransitionMatcher
             .Match(current, evt)
             .On<ConversationTurnCompletedEvent>(ApplyTurnCompleted)
+            .On<ConversationAgentProfilePinnedEvent>(ApplyAgentProfilePinned)
             .On<NeedsLlmReplyEvent>(ApplyLlmReplyRequested)
             .On<NeedsWorkflowDraftRunEvent>(ApplyWorkflowDraftRunRequested)
             .On<ConversationContinueRejectedEvent>(ApplyContinueRejected)
@@ -340,13 +342,15 @@ public sealed partial class ConversationGAgent :
             var runCopy = result.LlmReplyRequest.Clone();
             runCopy.TargetActorId = Id;
             runCopy.TargetRef = targetRef.Clone();
+            runCopy.AgentProfile = State.AgentProfile?.Clone();
             // Refactor (iter98/cluster-002): Old=ConversationGAgent filled run_id from correlation_id; New=producer must supply run_id before this handoff.
             runCopy.RunId = NormalizeOptional(runCopy.RunId)!;
             ApplyRuntimeReplyToken(runCopy, runtimeContext);
             RestoreRuntimeTransportCredentials(runCopy.Activity, runtimeContext);
             await AttachRelayRuntimeSecretReferencesAsync(runCopy, runtimeContext, CancellationToken.None);
             runCopy.PriorHistory.Clear();
-            runCopy.PriorHistory.AddRange(State.RetainedHistory.Select(entry => entry.Clone()));
+            if (!ShouldIsolatePriorConversationHistory(runCopy))
+                runCopy.PriorHistory.AddRange(State.RetainedHistory.Select(entry => entry.Clone()));
             runCopy.RecentAttachmentActivities.Clear();
             runCopy.RecentAttachmentActivities.AddRange(SelectRecentAttachmentActivities(State, nowMs));
             var persistedCopy = runCopy.Clone();
@@ -481,10 +485,17 @@ public sealed partial class ConversationGAgent :
         context.ExternalMetadata.Count > 0 ||
         context.SkillRecovery.RequireInitialOrnnSearch ||
         context.SkillRecovery.RequireOrnnSearchOnBlocker ||
+        context.SkillRecovery.IsolatePriorConversationHistory ||
         !string.IsNullOrWhiteSpace(context.SkillRecovery.CommandName) ||
         !string.IsNullOrWhiteSpace(context.SkillRecovery.OriginalCommand) ||
         !string.IsNullOrWhiteSpace(context.SkillRecovery.PrimarySkillName) ||
         context.SkillRecovery.MaxOrnnSearchAttempts > 0;
+
+    private static bool ShouldIsolatePriorConversationHistory(NeedsLlmReplyEvent request) =>
+        AgentToolExecutionContextMapper
+            .FromPayload(request.ToolContext)
+            .SkillRecovery
+            .IsolatePriorConversationHistory;
 
     private async Task<ChatRouteAction> ResolveInboundTargetRefAsync(
         ChatActivity activity,
@@ -966,7 +977,37 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
-        var referenceActivity = pendingRequest?.Activity ?? pendingWorkflowRequest?.Activity ?? evt.Activity;
+        if (!await EnsureAgentProfilePinnedAsync(evt.AgentProfile, evt.RunId))
+        {
+            Logger.LogError(
+                "Rejected LLM reply produced with a different Agent Profile snapshot. correlation={CorrelationId} runId={RunId}",
+                evt.CorrelationId,
+                evt.RunId);
+            evt = evt.Clone();
+            evt.TerminalState = LlmReplyTerminalState.Failed;
+            evt.ErrorCode = "agent_profile_pin_mismatch";
+            evt.ErrorSummary = "The LLM run profile does not match the conversation profile pin.";
+            evt.Outbound = new MessageContent
+            {
+                Text = "Sorry, the conversation profile changed unexpectedly. Please start a new conversation and try again.",
+            };
+            evt.AppendedHistory.Clear();
+            evt.AgentProfile = null;
+        }
+
+        if (IsWorkflowRunDeliveryDelegation(evt.WorkflowRunDelivery))
+        {
+            await CompleteWorkflowRunDeliveryDelegationAsync(
+                evt,
+                commandId,
+                pendingRequest,
+                pendingWorkflowRequest);
+            return;
+        }
+
+        var referenceActivity = evt.UseSourceActivityDeliveryContext
+            ? evt.Activity
+            : pendingRequest?.Activity ?? pendingWorkflowRequest?.Activity ?? evt.Activity;
         var runtimeContext = await BuildNyxRelayRuntimeContextForReplyAsync(
             evt,
             referenceActivity,
@@ -1099,6 +1140,52 @@ public sealed partial class ConversationGAgent :
             result.FailureKind);
     }
 
+    private async Task CompleteWorkflowRunDeliveryDelegationAsync(
+        LlmReplyReadyEvent evt,
+        string commandId,
+        NeedsLlmReplyEvent? pendingRequest,
+        NeedsWorkflowDraftRunEvent? pendingWorkflowRequest)
+    {
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var referenceActivity = pendingRequest?.Activity ?? pendingWorkflowRequest?.Activity ?? evt.Activity;
+        var completed = new ConversationTurnCompletedEvent
+        {
+            ProcessedActivityId = string.Empty,
+            CausationCommandId = commandId,
+            SentActivityId = string.Empty,
+            AuthPrincipal = "workflow-run-delivery",
+            Conversation = referenceActivity?.Conversation?.Clone()
+                           ?? State.Conversation?.Clone()
+                           ?? new ConversationReference(),
+            CompletedAtUnixMs = nowMs,
+            WorkflowRunDelivery = evt.WorkflowRunDelivery.Clone(),
+        };
+        completed.AppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
+
+        await PersistReplyReadyEventsWithLocalRetryAsync(
+            evt.CorrelationId,
+            "workflow-run-delivery-delegated",
+            [completed],
+            CancellationToken.None);
+        await ClearReplyLifecyclesAsync(
+            evt.CorrelationId,
+            pendingRequest?.Activity ?? evt.Activity,
+            "workflow_run_delivery_delegated");
+        Logger.LogInformation(
+            "Completed deferred LLM turn by transferring visible reply ownership: correlation={CorrelationId} deliveryActorId={DeliveryActorId} workflowCommandId={WorkflowCommandId} conversation={Key}",
+            evt.CorrelationId,
+            evt.WorkflowRunDelivery.DeliveryActorId,
+            evt.WorkflowRunDelivery.WorkflowCommandId,
+            completed.Conversation?.CanonicalKey);
+    }
+
+    private static bool IsWorkflowRunDeliveryDelegation(
+        Aevatar.AI.Abstractions.WorkflowRunBackgroundDeliveryReceipt? delivery) =>
+        delivery is not null &&
+        !string.IsNullOrWhiteSpace(delivery.DeliveryActorId) &&
+        !string.IsNullOrWhiteSpace(delivery.WorkflowActorId) &&
+        !string.IsNullOrWhiteSpace(delivery.WorkflowCommandId);
+
     [EventHandler]
     public async Task HandleLarkCardDeliveryCompletedAsync(LarkCardDeliveryCompletedEvent evt)
     {
@@ -1110,6 +1197,25 @@ public sealed partial class ConversationGAgent :
                 evt.CorrelationId,
                 State.Conversation?.CanonicalKey);
             return;
+        }
+
+        if (!await EnsureAgentProfilePinnedAsync(evt.AgentProfile, evt.RunId))
+        {
+            Logger.LogError(
+                "Rejected Lark card completion produced with a different Agent Profile snapshot. correlation={CorrelationId} runId={RunId}",
+                evt.CorrelationId,
+                evt.RunId);
+            evt = evt.Clone();
+            evt.AppendedHistory.Clear();
+            evt.AgentProfile = null;
+            evt.DeliveryFailure = new LlmReplyDeliveryFailedEvent
+            {
+                CorrelationId = evt.CorrelationId ?? string.Empty,
+                RunId = evt.RunId ?? string.Empty,
+                ErrorCode = "agent_profile_pin_mismatch",
+                ErrorMessage = "The LLM run profile does not match the conversation profile pin.",
+                FailedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
         }
 
         var nowMs = evt.CompletedAtUnixMs > 0
@@ -3056,6 +3162,38 @@ public sealed partial class ConversationGAgent :
         NormalizeRecentAttachmentActivities(next.RecentAttachmentActivities, evt.CompletedAtUnixMs);
         next.LastUpdatedUnixMs = evt.CompletedAtUnixMs;
         return next;
+    }
+
+    private static ConversationGAgentState ApplyAgentProfilePinned(
+        ConversationGAgentState current,
+        ConversationAgentProfilePinnedEvent evt)
+    {
+        var next = current.Clone();
+        if (next.AgentProfile is null && evt.Profile is not null)
+            next.AgentProfile = evt.Profile.Clone();
+        if (evt.PinnedAtUnixMs > next.LastUpdatedUnixMs)
+            next.LastUpdatedUnixMs = evt.PinnedAtUnixMs;
+        return next;
+    }
+
+    private async Task<bool> EnsureAgentProfilePinnedAsync(
+        AgentProfileSnapshot? profile,
+        string? sourceRunId)
+    {
+        if (profile is null)
+            return true;
+        if (State.AgentProfile is not null)
+            return State.AgentProfile.Equals(profile);
+        if (profile.DeterministicPolicySha256.Length != 32)
+            return false;
+
+        await PersistDomainEventAsync(new ConversationAgentProfilePinnedEvent
+        {
+            Profile = profile.Clone(),
+            SourceRunId = sourceRunId?.Trim() ?? string.Empty,
+            PinnedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+        return true;
     }
 
     // /clear semantics: the retained transcript window and the recent attachment

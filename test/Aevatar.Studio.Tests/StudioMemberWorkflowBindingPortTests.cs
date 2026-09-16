@@ -157,8 +157,11 @@ public sealed class StudioMemberWorkflowBindingPortTests
         memberCommandPort.LastRecordPublishedBinding.RevisionId.Should().Be("revision-new");
     }
 
-    [Fact]
-    public async Task BindAsync_WithExistingPlan_ShouldOnlyRevalidateWithoutFreshConfirmation()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BindAsync_WithExistingPlan_ShouldUseCredentialAwareAdmissionPath(
+        bool includeCallerCredential)
     {
         var admission = StudioExplicitRequestAdmissionTestKit.CreateAdmissionService();
         var plan = await admission.AdmitAsync(new WorkflowExternalCapabilityAdmissionRequest(
@@ -190,11 +193,14 @@ public sealed class StudioMemberWorkflowBindingPortTests
         {
             WorkflowId = "wf-alpha",
             RevisionId = "rev-alpha",
-            CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(existingPlan: plan),
+            CapabilityAdmission = StudioExplicitRequestAdmissionTestKit.Context(
+                existingPlan: plan,
+                includeCallerCredential: includeCallerCredential),
         });
 
         admission.Requests.Should().BeEmpty();
-        admission.PersistedRequests.Should().ContainSingle();
+        admission.RefreshRequests.Should().HaveCount(includeCallerCredential ? 1 : 0);
+        admission.PersistedRequests.Should().HaveCount(includeCallerCredential ? 0 : 1);
         memberService.LastRequest.Should().NotBeNull();
     }
 
@@ -221,6 +227,33 @@ public sealed class StudioMemberWorkflowBindingPortTests
         memberService.LastRequest.Workflow.WorkflowYamls.Should().ContainSingle()
             .Which.Should().Contain("name: demo");
         memberService.LastRequest.Workflow.CapabilityAdmissionPlan.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task BindAsync_WithInlineWorkflowYamls_ShouldAdmitAndBindCompleteDefinitionSet()
+    {
+        var memberService = new RecordingMemberService { ThrowMemberNotFoundOnGet = true };
+        var admission = new StudioWorkflowCapabilityAdmissionTestService();
+        var port = new StudioMemberWorkflowBindingPort(
+            memberService,
+            admission,
+            new RecordingSaveAndBindPort(),
+            new RecordingMemberCommandPort());
+        const string rootYaml = "name: root\nsteps: []\n";
+        const string childYaml = "name: child\nsteps: []\n";
+
+        await port.BindAsync(new StudioMemberWorkflowBindingRequest(
+            "scope-1",
+            "member-1",
+            rootYaml)
+        {
+            WorkflowId = "workflow-root",
+            InlineWorkflowYamls = new Dictionary<string, string> { ["child"] = childYaml },
+        });
+
+        admission.Requests.Should().ContainSingle().Which.InlineWorkflowYamls
+            .Should().Contain("child", childYaml);
+        memberService.LastRequest!.Workflow!.WorkflowYamls.Should().Equal(rootYaml, childYaml);
     }
 
     [Fact]
@@ -468,6 +501,10 @@ public sealed class StudioMemberWorkflowBindingPortTests
             WorkflowYaml: "name: demo\nsteps: []\n")
         {
             WorkflowId = " workflow-explicit ",
+            InlineWorkflowYamls = new Dictionary<string, string>
+            {
+                ["child"] = "name: child\nsteps: []\n",
+            },
         });
 
         result.Success.Should().BeTrue();
@@ -485,6 +522,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
         saveAndBindPort.LastRequest.ExposureDesired.Should().BeTrue();
         saveAndBindPort.LastRequest.DisplayName.Should().Be("Member One");
         saveAndBindPort.LastRequest.WorkflowId.Should().Be("workflow-explicit");
+        saveAndBindPort.LastRequest.WorkflowName.Should().BeNull();
+        saveAndBindPort.LastRequest.InlineWorkflowYamls.Should()
+            .Contain("child", "name: child\nsteps: []\n");
         saveAndBindPort.LastRequest.CapabilityAdmission.Should().NotBeNull();
         saveAndBindPort.LastRequest.CapabilityAdmission!.ExistingPlan.Should().NotBeNull();
         memberCommandPort.LastRecordPublishedBinding.Should().NotBeNull();

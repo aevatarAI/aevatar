@@ -10,6 +10,7 @@ public enum ScopeBindingReadinessStatus
     Ready = 5,
     TrafficViewTargetMissing = 6,
     PreparedArtifactMissing = 7,
+    InvocationCatalogNotReady = 8,
 }
 
 public sealed record ScopeBindingReadinessRequest(
@@ -18,7 +19,8 @@ public sealed record ScopeBindingReadinessRequest(
     string? AppId = null,
     string? ExpectedRevisionId = null,
     string? ExpectedDeploymentId = null,
-    IReadOnlyList<string>? ExpectedEndpointIds = null);
+    IReadOnlyList<string>? ExpectedEndpointIds = null,
+    string? ExpectedActivationAttemptId = null);
 
 public sealed record ScopeBindingReadinessSnapshot(
     string ScopeId,
@@ -30,4 +32,5 @@ public sealed record ScopeBindingReadinessSnapshot(
     bool InvokeReady,
     string? RevisionId = null,
     string? DeploymentId = null,
-    DateTimeOffset? ObservedAtUtc = null);
+    DateTimeOffset? ObservedAtUtc = null,
+    ServiceDeploymentActivationFailureCode? TerminalActivationFailureCode = null);

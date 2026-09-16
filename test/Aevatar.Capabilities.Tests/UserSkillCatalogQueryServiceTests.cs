@@ -31,6 +31,7 @@ public sealed class UserSkillCatalogQueryServiceTests
                 PublisherId = "aevatar-platform",
                 SkillSha256 = ByteString.CopyFrom(
                     Enumerable.Range(0, 32).Select(static value => (byte)value).ToArray()),
+                SkillMarkdownUtf8Bytes = 128,
                 DeclaredToolNames = ["aevatar_write", "", " aevatar_read ", "aevatar_write"],
             }));
         var service = NewService(resolver);

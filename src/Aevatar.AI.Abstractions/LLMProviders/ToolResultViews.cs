@@ -32,7 +32,10 @@ public sealed record SkillLoadToolResultView(
     bool Loaded,
     string? Error,
     int? HttpStatus,
-    string DisplayText);
+    string DisplayText,
+    string? WorkflowMountStatus = null,
+    bool WorkflowMounted = false,
+    string? WorkflowMountConfirmationToken = null);
 
 public sealed record ToolFailureResultView(
     AgentToolReceiptStatus Status,

@@ -1,9 +1,16 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Serialization;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.ProjectionRecovery;
 using Aevatar.Studio.Application.Studio.ProjectionRecovery;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Mainnet.Host.Api.ProjectionRecovery;
 
@@ -13,6 +20,8 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
         "/api/admin/scheduled-agent-key/projection-repair/workspace";
     private const string CatalogRoute =
         "/api/admin/scheduled-agent-key/projection-repair/nyxid-catalog";
+    private const string OAuthClientRoute =
+        "/api/admin/identity/projection-repair/aevatar-oauth-client";
 
     public static IEndpointRouteBuilder MapProjectionVersionRegressionRepairAdminEndpoints(
         this IEndpointRouteBuilder app)
@@ -21,6 +30,17 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
             .WithTags("ScheduledAgentKeyProjectionRepairAdmin");
         app.MapPost(CatalogRoute, HandleCatalogRouteAsync)
             .WithTags("ScheduledAgentKeyProjectionRepairAdmin");
+        app.MapPost(OAuthClientRoute, HandleOAuthClientRouteAsync)
+            .WithTags("IdentityProjectionRepairAdmin")
+            .WithEndpointAudit(
+                "identity.oauth-client.projection-repair",
+                AuditSensitivityLevel.Restricted,
+                "identity-client-projection",
+                EndpointAuditTargetResolvers.Static(
+                    "identity-client-projection",
+                    "cluster-singleton"),
+                requestSanitizer: SanitizeOAuthClientRepairRequest)
+            .RequireAuthorization();
         return app;
     }
 
@@ -160,6 +180,78 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
             ct);
     }
 
+    internal static async Task<IResult> HandleOAuthClientAsync(
+        HttpContext http,
+        OAuthClientRepairRequest? request,
+        IPlatformAdminAuthorizer? authorizer,
+        IAevatarOAuthClientVersionRegressionRepairService? service,
+        CancellationToken ct,
+        ILogger? logger = null)
+    {
+        var authorization = await AuthorizeAsync(http, authorizer, ct);
+        if (authorization.Error is not null)
+            return authorization.Error;
+        if (service is null)
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        if (request is null)
+            return InvalidRequest();
+
+        if (!request.Apply)
+        {
+            return await ExecuteDownstreamAsync(
+                async () =>
+                {
+                    var inspection = await service.InspectAsync(ct);
+                    return Results.Json(ToInspectionResponse(inspection));
+                },
+                ct,
+                logger,
+                "OAuth client projection inspection");
+        }
+
+        if (!IsValidApplyManifest(
+                request.ExpectedActorId,
+                request.ExpectedSourceStateVersion,
+                request.ExpectedDocumentStateVersion,
+                request.ExpectedDocumentLastEventId,
+                request.RepairRequestId,
+                request.RepairReason) ||
+            !IsValidRepairRequestId(request.RepairRequestId) ||
+            !IsValidRepairReason(request.RepairReason))
+        {
+            return InvalidRequest();
+        }
+
+        return await ExecuteDownstreamAsync(
+            async () =>
+            {
+                var result = await service.RepairAsync(
+                    new AevatarOAuthClientVersionRegressionRepairRequest(
+                        request.ExpectedActorId,
+                        request.ExpectedSourceStateVersion,
+                        request.ExpectedDocumentStateVersion,
+                        request.ExpectedDocumentLastEventId,
+                        request.RepairRequestId,
+                        request.RepairReason,
+                        authorization.Caller!.UserId),
+                    ct);
+                var response = ToOAuthClientRepairResponse(result);
+                return result.Status switch
+                {
+                    AevatarOAuthClientVersionRegressionRepairStatus.Accepted =>
+                        Results.Json(response, statusCode: StatusCodes.Status202Accepted),
+                    AevatarOAuthClientVersionRegressionRepairStatus.Conflict =>
+                        Results.Json(response, statusCode: StatusCodes.Status409Conflict),
+                    _ => Results.Json(
+                        response,
+                        statusCode: StatusCodes.Status503ServiceUnavailable),
+                };
+            },
+            ct,
+            logger,
+            "OAuth client projection repair");
+    }
+
     private static Task<IResult> HandleWorkspaceRouteAsync(
         HttpContext http,
         [FromBody] WorkspaceRepairRequest? request,
@@ -181,6 +273,19 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
             http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
             http.RequestServices.GetService<INyxIdAuthorizationCatalogVersionRegressionRepairService>(),
             ct);
+
+    private static Task<IResult> HandleOAuthClientRouteAsync(
+        HttpContext http,
+        [FromBody] OAuthClientRepairRequest? request,
+        CancellationToken ct) =>
+        HandleOAuthClientAsync(
+            http,
+            request,
+            http.RequestServices.GetService<IPlatformAdminAuthorizer>(),
+            http.RequestServices.GetService<IAevatarOAuthClientVersionRegressionRepairService>(),
+            ct,
+            http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(
+                typeof(ProjectionVersionRegressionRepairAdminEndpoints).FullName!));
 
     private static async Task<AuthorizationResult> AuthorizeAsync(
         HttpContext http,
@@ -224,7 +329,9 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
 
     private static async Task<IResult> ExecuteDownstreamAsync(
         Func<Task<IResult>> execute,
-        CancellationToken ct)
+        CancellationToken ct,
+        ILogger? logger = null,
+        string operation = "Projection version regression repair")
     {
         try
         {
@@ -234,10 +341,46 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
+            logger?.LogError(
+                "{Operation} failed. exception_type={ExceptionType}",
+                operation,
+                ex.GetType().Name);
             return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         }
+    }
+
+    private static ValueTask<string> SanitizeOAuthClientRepairRequest(
+        EndpointAuditSanitizationContext context)
+    {
+        var request = context.Arguments.OfType<OAuthClientRepairRequest>().FirstOrDefault();
+        if (request is null)
+        {
+            return ValueTask.FromResult(
+                $"{context.HttpContext.Request.Method} identity-client-projection-repair");
+        }
+
+        var requestIdDigest = IsValidRepairRequestId(request.RepairRequestId)
+            ? BuildRepairRequestAuditDigest(request.RepairRequestId)
+            : "invalid";
+        var reason = IsValidRepairReason(request.RepairReason)
+            ? EndpointAuditSanitizers.SanitizeValue(request.RepairReason)
+            : "invalid";
+        return ValueTask.FromResult(
+            $"{context.HttpContext.Request.Method} identity-client-projection-repair " +
+            $"apply={request.Apply.ToString().ToLowerInvariant()} " +
+            $"source_version={request.ExpectedSourceStateVersion} " +
+            $"document_version={request.ExpectedDocumentStateVersion} " +
+            $"repair_request_sha256={requestIdDigest} " +
+            $"reason={reason}");
+    }
+
+    private static string BuildRepairRequestAuditDigest(string repairRequestId)
+    {
+        var normalized = repairRequestId.Trim();
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
+        return Convert.ToHexString(digest.AsSpan(0, 16)).ToLowerInvariant();
     }
 
     private static bool IsValidApplyManifest(
@@ -253,6 +396,24 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
         !string.IsNullOrWhiteSpace(expectedDocumentLastEventId) &&
         !string.IsNullOrWhiteSpace(repairRequestId) &&
         !string.IsNullOrWhiteSpace(repairReason);
+
+    private static bool IsValidRepairRequestId(string value)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        return normalized.Length is > 0 and <= 128 &&
+               normalized.All(static character =>
+                   char.IsAsciiLetterOrDigit(character) ||
+                   character is '.' or '_' or ':' or '-');
+    }
+
+    private static bool IsValidRepairReason(string value)
+    {
+        var normalized = value?.Trim() ?? string.Empty;
+        return normalized.Length is > 0 and <= 256 &&
+               normalized.All(static character =>
+                   !char.IsControl(character) &&
+                   character is not '\r' and not '\n' and not '\u2028' and not '\u2029');
+    }
 
     private static IResult InvalidRequest() =>
         Results.BadRequest(new ErrorResponse("invalid_repair_request"));
@@ -270,6 +431,17 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
 
     private static InspectionResponse ToInspectionResponse(
         NyxIdAuthorizationCatalogVersionRegressionInspection inspection) =>
+        new(
+            "inspection",
+            inspection.ActorId,
+            inspection.SourceStateVersion,
+            inspection.DocumentStateVersion,
+            inspection.DocumentLastEventId,
+            inspection.DocumentActorId,
+            inspection.Repairable);
+
+    private static InspectionResponse ToInspectionResponse(
+        AevatarOAuthClientVersionRegressionInspection inspection) =>
         new(
             "inspection",
             inspection.ActorId,
@@ -306,6 +478,18 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
             VisibilityStatus(result.Visibility?.Status),
             result.Visibility?.RequiredStateVersion,
             result.Visibility?.VisibleStateVersion);
+
+    private static OAuthClientRepairResponse ToOAuthClientRepairResponse(
+        AevatarOAuthClientVersionRegressionRepairResult result) =>
+        new(
+            OAuthClientStatus(result.Status),
+            result.Inspection.ActorId,
+            result.Inspection.SourceStateVersion,
+            result.Inspection.DocumentStateVersion,
+            result.Inspection.DocumentLastEventId,
+            result.RepairRequestId,
+            result.CommandId,
+            OAuthClientDeleteStatus(result.DeleteDisposition));
 
     private static string WorkspaceStatus(
         StudioWorkspaceVersionRegressionRepairStatus status) =>
@@ -352,6 +536,27 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
             _ => string.Empty,
         };
 
+    private static string OAuthClientStatus(
+        AevatarOAuthClientVersionRegressionRepairStatus status) =>
+        status switch
+        {
+            AevatarOAuthClientVersionRegressionRepairStatus.Accepted => "accepted",
+            AevatarOAuthClientVersionRegressionRepairStatus.Conflict => "conflict",
+            _ => "unavailable",
+        };
+
+    private static string OAuthClientDeleteStatus(
+        AevatarOAuthClientReplicaDeleteDisposition? status) =>
+        status switch
+        {
+            AevatarOAuthClientReplicaDeleteDisposition.Deleted => "deleted",
+            AevatarOAuthClientReplicaDeleteDisposition.AlreadyAbsent => "already_absent",
+            AevatarOAuthClientReplicaDeleteDisposition.SourceChanged => "source_changed",
+            AevatarOAuthClientReplicaDeleteDisposition.DocumentChanged => "document_changed",
+            AevatarOAuthClientReplicaDeleteDisposition.RevisionConflict => "revision_conflict",
+            _ => string.Empty,
+        };
+
     private static string RefreshStatus(NyxIdAuthorizationCatalogRefreshStatus? status) =>
         status switch
         {
@@ -389,6 +594,15 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
         [property: JsonPropertyName("repair_reason")] string RepairReason);
 
     internal sealed record CatalogRepairRequest(
+        [property: JsonPropertyName("apply")] bool Apply,
+        [property: JsonPropertyName("expected_actor_id")] string ExpectedActorId,
+        [property: JsonPropertyName("expected_source_state_version")] long ExpectedSourceStateVersion,
+        [property: JsonPropertyName("expected_document_state_version")] long ExpectedDocumentStateVersion,
+        [property: JsonPropertyName("expected_document_last_event_id")] string ExpectedDocumentLastEventId,
+        [property: JsonPropertyName("repair_request_id")] string RepairRequestId,
+        [property: JsonPropertyName("repair_reason")] string RepairReason);
+
+    internal sealed record OAuthClientRepairRequest(
         [property: JsonPropertyName("apply")] bool Apply,
         [property: JsonPropertyName("expected_actor_id")] string ExpectedActorId,
         [property: JsonPropertyName("expected_source_state_version")] long ExpectedSourceStateVersion,
@@ -451,4 +665,14 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
         [property: JsonPropertyName("visibility_status")] string VisibilityStatus,
         [property: JsonPropertyName("required_state_version")] long? RequiredStateVersion,
         [property: JsonPropertyName("visible_state_version")] long? VisibleStateVersion);
+
+    private sealed record OAuthClientRepairResponse(
+        [property: JsonPropertyName("status")] string Status,
+        [property: JsonPropertyName("actor_id")] string ActorId,
+        [property: JsonPropertyName("source_state_version")] long SourceStateVersion,
+        [property: JsonPropertyName("document_state_version")] long? DocumentStateVersion,
+        [property: JsonPropertyName("document_last_event_id")] string DocumentLastEventId,
+        [property: JsonPropertyName("repair_request_id")] string RepairRequestId,
+        [property: JsonPropertyName("command_id")] string CommandId,
+        [property: JsonPropertyName("delete_status")] string DeleteStatus);
 }

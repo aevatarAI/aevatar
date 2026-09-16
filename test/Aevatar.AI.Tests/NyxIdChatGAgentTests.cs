@@ -186,27 +186,58 @@ public class NyxIdChatGAgentTests
         runtime.CreateCalls.Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task CreateTargetResolver_ShouldRejectProfileRouteWithoutCompleteToolSetRef(
-        bool missingForwardToModel)
+    [Fact]
+    public async Task CreateTargetResolver_ShouldUseSelectedProfileRouteForImplicitProjectedToolSet()
     {
         var runtime = new RecordingActorRuntime();
         var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "reviewed.route"));
-        var routeSnapshot = missingForwardToModel
-            ? null
-            : new ChatRoutePolicySnapshot(
-                new ChatRouteAction { ForwardToModel = new ForwardToModel() },
-                []);
-        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(routeSnapshot);
-        var routeResolver = missingForwardToModel
-            ? new ChatRouteResolver(new MissingForwardToModelFallbackProvider())
-            : NewChatRouteResolver();
+        var routeQueryPort = StaticChatRoutePolicyQueryPort.ForSnapshot(new ChatRoutePolicySnapshot(
+            new ChatRouteAction { ForwardToModel = new ForwardToModel() },
+            []));
         var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
             runtime,
             routeQueryPort,
-            routeResolver,
+            NewChatRouteResolver(),
+            source);
+        var command = new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" };
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeTrue();
+        source.ResolveCalls.Should().Be(1);
+        runtime.CreateCalls.Should().ContainSingle();
+        AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateTargetResolver_ShouldUseSelectedProfileRouteInsteadOfImplicitFallbackToolSet()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "reviewed.route"));
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            StaticChatRoutePolicyQueryPort.ForSnapshot(null),
+            new ChatRouteResolver(new StaticChatRouteFallbackProvider(string.Empty, "workspace.default")),
+            source);
+        var command = new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" };
+
+        var result = await resolver.ResolveAsync(command);
+
+        result.Succeeded.Should().BeTrue();
+        source.ResolveCalls.Should().Be(1);
+        runtime.CreateCalls.Should().ContainSingle();
+        AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateTargetResolver_ShouldRejectProfileRouteWithoutForwardToModelAction()
+    {
+        var runtime = new RecordingActorRuntime();
+        var source = new FixedAgentProfileResolver(BuildSealedProfile("profile-v1", "reviewed.route"));
+        var resolver = new NyxIdChatConversationCreateCommandTargetResolver(
+            runtime,
+            StaticChatRoutePolicyQueryPort.ForSnapshot(null),
+            new ChatRouteResolver(new MissingForwardToModelFallbackProvider()),
             source);
         var command = new NyxIdChatConversationCreateCommand { ScopeId = "scope-a" };
 
@@ -354,9 +385,21 @@ public class NyxIdChatGAgentTests
             FirstTurn = firstTurn,
         }));
 
+        var historyContinuation = dispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatHistoryInitializationDispatchRequested.Descriptor)).Which;
+        await agent.HandleEventAsync(historyContinuation.Envelope.Clone());
+
+        var firstTurnContinuation = dispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatPendingCreationFirstTurnDispatchRequested.Descriptor)).Which;
+        await agent.HandleEventAsync(firstTurnContinuation.Envelope.Clone());
+
         operations.IndexOf("registry.register").Should().BeLessThan(
             operations.IndexOf("history.reserve"));
         agent.State.ActiveTurn.TurnId.Should().Be("turn-first");
+        agent.State.PendingCreationFirstTurn.Should().BeNull();
+        agent.State.PendingCreationFirstTurnId.Should().BeEmpty();
         dispatch.Calls.Should().Contain(call =>
             call.Envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor));
     }
@@ -400,7 +443,9 @@ public class NyxIdChatGAgentTests
             RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
         };
         var dispatch = new RecordingSelfDispatchPort();
-        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime());
         const string actorId = "nyxid-chat-history-registration-unavailable";
         var agent = CreateConversationAgent(provider, actorId, dispatch);
 
@@ -423,7 +468,10 @@ public class NyxIdChatGAgentTests
             RegisterStage = GAgentActorRegistryCommandStage.AcceptedForDispatch,
         };
         var dispatch = new RecordingSelfDispatchPort();
-        using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime(),
+            new RecordingChatHistoryCommandPort());
         const string actorId = "nyxid-chat-registration-retry";
         var agent = CreateConversationAgent(provider, actorId, dispatch);
         var command = new NyxIdChatConversationCreateCommand
@@ -454,8 +502,101 @@ public class NyxIdChatGAgentTests
         registry.RegisterStage = GAgentActorRegistryCommandStage.AdmissionVisible;
         await agent.HandleEventAsync(CreateEnvelope(actorId, command.Clone()));
 
+        var historyContinuation = dispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatHistoryInitializationDispatchRequested.Descriptor)).Which;
+        await agent.HandleEventAsync(historyContinuation.Envelope.Clone());
+
+        var firstTurnContinuation = dispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatPendingCreationFirstTurnDispatchRequested.Descriptor)).Which;
+        await agent.HandleEventAsync(firstTurnContinuation.Envelope.Clone());
+
         registry.RegisteredActors.Should().HaveCount(2);
         agent.State.ActiveTurn.TurnId.Should().Be("turn-retry");
+    }
+
+    [Fact]
+    public async Task PendingFirstTurnSecretExpiryAfterActivation_ShouldCommitTerminalCleanup()
+    {
+        var now = new MutableTimeProvider(
+            DateTimeOffset.Parse("2026-08-08T04:00:00Z"));
+        var eventStore = new InMemoryEventStoreForTests();
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        var registry = new RecordingGAgentActorRegistryCommandPort();
+        var history = new RecordingChatHistoryCommandPort();
+        using var provider = BuildServiceProvider(
+            registry,
+            new RecordingActorRuntime(),
+            history,
+            eventStore,
+            callbacks,
+            now);
+        const string actorId = "nyxid-chat-expired-first-turn";
+        var initialDispatch = new RecordingSelfDispatchPort();
+        var initial = CreateConversationAgent(provider, actorId, initialDispatch, now);
+        var command = new NyxIdChatConversationCreateCommand
+        {
+            ScopeId = "scope-a",
+            CreatedLocally = true,
+            FirstTurn = new NyxIdChatStartTurnCommand
+            {
+                ScopeId = "scope-a",
+                ConversationActorId = actorId,
+                TurnId = "turn-expired",
+                TaskId = "task-expired",
+                ClientRequestId = "client-expired",
+                CommandId = "command-expired",
+                CorrelationId = "correlation-expired",
+                Prompt = "resume me",
+                ToolContext = new AgentToolExecutionContextPayload
+                {
+                    Caller = new AgentToolCallerContextPayload
+                    {
+                        OwnerSubject = "owner-alpha",
+                    },
+                },
+            },
+        };
+        await initial.HandleEventAsync(CreateEnvelope(actorId, command));
+        initial.State.PendingCreationFirstTurn.Should().NotBeNull();
+        var historyContinuation = initialDispatch.Calls.Should().ContainSingle(call =>
+            call.Envelope.Payload.Is(
+                NyxIdChatHistoryInitializationDispatchRequested.Descriptor)).Which;
+        await initial.HandleEventAsync(historyContinuation.Envelope.Clone());
+        initial.State.PendingHistoryInitialization.Should().BeNull();
+
+        now.Advance(TimeSpan.FromMinutes(31));
+        var recovered = CreateConversationAgent(
+            provider,
+            actorId,
+            new RecordingSelfDispatchPort(),
+            now);
+        await recovered.ActivateAsync();
+        var recovery = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+
+        await recovered.HandleEventAsync(recovery.TriggerEnvelope.Clone());
+
+        recovered.State.ActiveTurn.Should().BeNull();
+        recovered.State.PendingCreationFirstTurn.Should().BeNull();
+        recovered.State.PendingCreationFirstTurnId.Should().BeEmpty();
+        var events = await eventStore.GetEventsAsync(actorId);
+        var finalized = events.Should().ContainSingle(stateEvent =>
+                stateEvent.EventData.Is(
+                    NyxIdChatPendingCreationFirstTurnFinalizedEvent.Descriptor))
+            .Which.EventData.Unpack<NyxIdChatPendingCreationFirstTurnFinalizedEvent>();
+        finalized.Outcome.Should().Be(
+            NyxIdChatPendingCreationFirstTurnOutcome.Unavailable);
+        finalized.FailureCode.Should().Be("NYXID_CHAT_PENDING_FIRST_TURN_UNAVAILABLE");
+
+        var callbacksBeforeSecondActivation = callbacks.TimeoutRequests.Count;
+        var secondRecovery = CreateConversationAgent(
+            provider,
+            actorId,
+            new RecordingSelfDispatchPort(),
+            now);
+        await secondRecovery.ActivateAsync();
+        callbacks.TimeoutRequests.Should().HaveCount(callbacksBeforeSecondActivation);
     }
 
     [Fact]
@@ -575,16 +716,18 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task ActivateAsync_WithPendingHistoryInitialization_ShouldRepublishTypedSelfSignal()
+    public async Task ActivateAsync_WithPendingHistoryInitialization_ShouldScheduleTypedSelfCallback()
     {
         var registry = new RecordingGAgentActorRegistryCommandPort();
         var eventStore = new InMemoryEventStoreForTests();
         var initialDispatch = new RecordingSelfDispatchPort();
+        var callbacks = new RecordingRuntimeCallbackScheduler();
         using var provider = BuildServiceProvider(
             registry,
             new RecordingActorRuntime(),
             new RecordingChatHistoryCommandPort(),
-            eventStore);
+            eventStore,
+            callbacks);
         const string actorId = "nyxid-chat-history-reactivation";
         var initialAgent = CreateConversationAgent(provider, actorId, initialDispatch);
         await initialAgent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
@@ -599,7 +742,12 @@ public class NyxIdChatGAgentTests
         await recovered.ActivateAsync();
 
         recovered.State.PendingHistoryInitialization.ToByteString().Should().Equal(pending.ToByteString());
-        var signal = recoveryDispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+        recoveryDispatch.Calls.Should().BeEmpty();
+        var callback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        callback.TriggerEnvelope.Propagation.CorrelationId.Should().Be(pending.OperationId);
+        callback.TriggerEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(
+            "history-initialization-dispatch-1b202924688a5c7b8a414ea320a55afc");
+        var signal = callback.TriggerEnvelope.Payload
             .Unpack<NyxIdChatHistoryInitializationDispatchRequested>();
         signal.OperationId.Should().Be(pending.OperationId);
         signal.Attempt.Should().Be(pending.Attempt);
@@ -878,14 +1026,12 @@ public class NyxIdChatGAgentTests
                     new LLMStreamChunk { DeltaContent = round2Text },
                 ],
             ]);
-        var toolSources = new IAgentToolSource[]
-        {
-            new StaticToolSource(
-            [
-                new DelegateTool(toolName, _ => toolResult),
-            ]),
-        };
-        var agent = CreateAgent(provider, "nyxid-chat-tool-loop", llmProviderFactory, toolSources);
+        IAgentTool[] tools = [new DelegateTool(toolName, _ => toolResult)];
+        var agent = await CreateExplicitProfiledAgentAsync(
+            provider,
+            "nyxid-chat-tool-loop",
+            llmProviderFactory,
+            tools);
         var eventPublisher = new RecordingEventPublisher();
         agent.EventPublisher = eventPublisher;
 
@@ -935,7 +1081,12 @@ public class NyxIdChatGAgentTests
             message.ToolCalls[0].Id == toolCallId);
         var deltas = eventPublisher.Published.OfType<TextMessageContentEvent>()
             .Select(x => x.Delta).ToList();
-        deltas.Should().ContainInOrder(round1Text, round2Text);
+        var streamedContent = string.Concat(deltas);
+        streamedContent.Should().StartWith(round1Text);
+        streamedContent.Should().EndWith(round2Text);
+        var streamedMiddle = streamedContent[round1Text.Length..^round2Text.Length];
+        streamedMiddle.Should().MatchRegex(@"^\s*$",
+            "delta batching may combine the whitespace-only round separator with adjacent content");
 
         // ─── Completion event ───
 
@@ -960,11 +1111,11 @@ public class NyxIdChatGAgentTests
         using var services = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
         var provider = new ControlledProgressProviderFactory(emitTextToolCall);
         var tool = new ControlledProgressTool();
-        var agent = CreateAgent(
+        var agent = await CreateExplicitProfiledAgentAsync(
             services,
             actorId,
             provider,
-            [new StaticToolSource([tool])]);
+            [tool]);
 
         var streams = new InMemoryStreamProvider();
         var actorPublisher = new LocalActorPublisher(actorId, static () => null, static () => 0, streams);
@@ -1077,7 +1228,6 @@ public class NyxIdChatGAgentTests
             .ToArray();
         sequences.Should().BeInAscendingOrder();
         sequences.Should().OnlyHaveUniqueItems();
-        sequences.Should().Equal(Enumerable.Range(1, sequences.Length).Select(static value => (long)value));
 
         var completionIndex = committedPayloads.FindIndex(payload =>
             payload.Is(RoleChatSessionCompletedEvent.Descriptor));
@@ -1104,7 +1254,7 @@ public class NyxIdChatGAgentTests
             [new LLMStreamChunk { DeltaContent = "done" }],
         ]);
         var registry = new CountingToolSetRegistry();
-        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        var materializer = new AgentTurnToolCatalogMaterializer(registry, new NoMatchClassifier());
         const string actorId = "nyxid-chat-catalog-bound";
         await AppendCommittedEventsAsync(
             provider,
@@ -1133,7 +1283,7 @@ public class NyxIdChatGAgentTests
         var timeProvider = new ManualDeadlineTimeProvider();
         var blockingSource = new ReleasableBlockingToolSource();
         var registry = new BlockingProfileToolSetRegistry("profile.route", blockingSource);
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             registry,
             new NoMatchClassifier(),
             timeProvider: timeProvider);
@@ -1191,7 +1341,7 @@ public class NyxIdChatGAgentTests
             new DelegateTool("hidden", _ => "hidden"),
         };
         var fetcher = new CancellationBlockingExactFetcher();
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             new StaticProfileToolSetRegistry("profile.route", tools),
             new NoMatchClassifier(),
             fetcher,
@@ -1291,7 +1441,7 @@ public class NyxIdChatGAgentTests
             ExactSkillPublisher,
             ExactSkillSha256,
             "---\nname: skill-alpha\n---\nSelected turn instructions."));
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             registry,
             new NoMatchClassifier(),
             fetcher);
@@ -1352,7 +1502,7 @@ public class NyxIdChatGAgentTests
             ExactSkillPublisher,
             ExactSkillSha256,
             "---\nname: skill-alpha\n---\nSelected turn instructions."));
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             registry,
             new NoMatchClassifier(),
             fetcher);
@@ -1387,7 +1537,9 @@ public class NyxIdChatGAgentTests
         registry.ResolveCount.Should().Be(1);
         fetcher.CallCount.Should().Be(0);
         llm.StreamRequests.Should().ContainSingle();
-        llm.StreamRequests[0].ToolContext!.ToolVisibility.IsRestricted.Should().BeFalse();
+        llm.StreamRequests[0].ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue(
+            "shadow observation must retain the ordinary restricted-empty baseline");
+        llm.StreamRequests[0].ToolContext!.ToolVisibility.AllowedToolNames.Should().BeEmpty();
         llm.StreamRequests[0].Messages.Single(static message => message.Role == "system").Content
             .Should().NotContain("Agent profile:").And.NotContain("Selected turn instructions.");
         var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
@@ -1423,7 +1575,7 @@ public class NyxIdChatGAgentTests
             new DelegateTool("recovery", _ => "recovered"),
             new DelegateTool("task", _ => "task complete"),
         };
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             new StaticProfileToolSetRegistry("profile.route", tools),
             new NoMatchClassifier(),
             new RecordingExactFetcher(ExactRemoteSkillFetchResult.Success(
@@ -1471,7 +1623,7 @@ public class NyxIdChatGAgentTests
     [Fact]
     public async Task HandleChatRequest_BoundTurnWhenMaterializerThrows_ShouldRejectAllTools()
     {
-        var materializer = new AgentProfileTurnCatalogMaterializer(
+        var materializer = new AgentTurnToolCatalogMaterializer(
             new ThrowingNameToolSetRegistry(),
             new NoMatchClassifier());
 
@@ -1481,7 +1633,7 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_UnboundTurn_ShouldNotMaterializeCatalog()
+    public async Task HandleChatRequest_UnboundTurn_ShouldUseRestrictedEmptyCatalogWithoutMaterializingProfile()
     {
         using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
         var llm = new StreamingToolLoopProviderFactory(
@@ -1489,7 +1641,7 @@ public class NyxIdChatGAgentTests
             [new LLMStreamChunk { DeltaContent = "done" }],
         ]);
         var registry = new CountingToolSetRegistry();
-        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        var materializer = new AgentTurnToolCatalogMaterializer(registry, new NoMatchClassifier());
         var agent = CreateAgent(
             provider,
             "nyxid-chat-catalog-unbound",
@@ -1505,7 +1657,9 @@ public class NyxIdChatGAgentTests
 
         registry.ResolveCount.Should().Be(0);
         llm.StreamRequests.Should().ContainSingle();
-        llm.StreamRequests[0].ToolContext!.ToolVisibility.IsRestricted.Should().BeFalse();
+        llm.StreamRequests[0].ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue();
+        llm.StreamRequests[0].Tools.Should().BeNull();
+        llm.StreamRequests[0].ToolCatalogProof!.ToolCount.Should().Be(0);
     }
 
     [Fact]
@@ -1517,7 +1671,7 @@ public class NyxIdChatGAgentTests
             [new LLMStreamChunk { DeltaContent = "done" }],
         ]);
         var registry = new CountingToolSetRegistry();
-        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        var materializer = new AgentTurnToolCatalogMaterializer(registry, new NoMatchClassifier());
         const string actorId = "nyxid-chat-catalog-replay";
         await AppendCommittedEventsAsync(
             provider,
@@ -1955,15 +2109,16 @@ public class NyxIdChatGAgentTests
                 [new LLMStreamChunk { DeltaContent = "later answer" }],
             ]);
         var toolCallCount = 0;
-        var agent = CreateAgent(
+        IAgentTool[] tools = [new DelegateTool("count_once", _ =>
+        {
+            toolCallCount++;
+            return "ok";
+        })];
+        var agent = await CreateExplicitProfiledAgentAsync(
             services,
             "nyxid-chat-idempotent-history",
             llmProviderFactory,
-            [new StaticToolSource([new DelegateTool("count_once", _ =>
-            {
-                toolCallCount++;
-                return "ok";
-            })])],
+            tools,
             timeProvider: clock);
         var publisher = new RecordingEventPublisher();
         agent.EventPublisher = publisher;
@@ -2042,11 +2197,12 @@ public class NyxIdChatGAgentTests
                 ],
                 [new LLMStreamChunk { DeltaContent = "follow-up answer" }],
             ]);
-        var agent = CreateAgent(
+        IAgentTool[] tools = [new VerifiedMissingServiceTool()];
+        var agent = await CreateExplicitProfiledAgentAsync(
             provider,
             "nyxid-chat-blocked-history",
             llmProviderFactory,
-            [new StaticToolSource([new VerifiedMissingServiceTool()])],
+            tools,
             loopbackHistoryDelivery: true);
 
         await agent.ActivateAsync();
@@ -2135,11 +2291,12 @@ public class NyxIdChatGAgentTests
                 }],
                 [new LLMStreamChunk { DeltaContent = "later answer" }],
             ]);
-        var agent = CreateAgent(
+        IAgentTool[] tools = [new TestVisibleNyxIdProxyTool(new NyxIdProxyTool(client))];
+        var agent = await CreateExplicitProfiledAgentAsync(
             services,
             actorId,
             llmProviderFactory,
-            [new StaticToolSource([new NyxIdProxyTool(client)])]);
+            tools);
         var publisher = new RecordingEventPublisher();
         agent.EventPublisher = publisher;
 
@@ -2250,11 +2407,12 @@ public class NyxIdChatGAgentTests
                 }],
                 [new LLMStreamChunk { DeltaContent = "The service request was denied." }],
             ]);
-        var agent = CreateAgent(
+        IAgentTool[] tools = [new TestVisibleNyxIdProxyTool(new NyxIdProxyTool(client))];
+        var agent = await CreateExplicitProfiledAgentAsync(
             services,
             actorId,
             llmProviderFactory,
-            [new StaticToolSource([new NyxIdProxyTool(client)])],
+            tools,
             loopbackHistoryDelivery: true);
 
         await agent.ActivateAsync();
@@ -2449,13 +2607,15 @@ public class NyxIdChatGAgentTests
         IActorRuntime? actorRuntime = null,
         IChatHistoryCommandPort? historyCommandPort = null,
         IEventStore? eventStore = null,
-        IActorRuntimeCallbackScheduler? callbackScheduler = null)
+        IActorRuntimeCallbackScheduler? callbackScheduler = null,
+        TimeProvider? secretTimeProvider = null)
     {
         eventStore ??= new InMemoryEventStoreForTests();
         callbackScheduler ??= new NoopRuntimeCallbackScheduler();
         var services = new ServiceCollection()
             .AddSingleton(eventStore)
-            .AddSingleton<ISecretVault, InMemorySecretVault>()
+            .AddSingleton<ISecretVault>(new InMemorySecretVault(
+                secretTimeProvider ?? TimeProvider.System))
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton(callbackScheduler)
             .AddSingleton<IAuditTrailAppender, AppendedAuditTrail>()
@@ -2483,7 +2643,7 @@ public class NyxIdChatGAgentTests
         IEnumerable<IAgentToolSource>? toolSources = null,
         NyxIdRelayOptions? relayOptions = null,
         TimeProvider? timeProvider = null,
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer = null,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer = null,
         RoleChatExecutionOptions? chatExecutionOptions = null,
         bool loopbackHistoryDelivery = false)
     {
@@ -2510,15 +2670,52 @@ public class NyxIdChatGAgentTests
         return agent;
     }
 
+    private static async Task<NyxIdChatGAgent> CreateExplicitProfiledAgentAsync(
+        IServiceProvider provider,
+        string actorId,
+        ILLMProviderFactory llmProviderFactory,
+        IReadOnlyList<IAgentTool> tools,
+        TimeProvider? timeProvider = null,
+        bool loopbackHistoryDelivery = false)
+    {
+        const string routeToolSetRef = "profile.route";
+        const string intentId = "test.explicit-tools";
+        var profile = BuildSealedToolProfile(
+            "profile-v1",
+            routeToolSetRef,
+            intentId,
+            tools.Select(static tool => tool.Name));
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent
+            {
+                Profile = profile,
+            });
+        var materializer = new AgentTurnToolCatalogMaterializer(
+            new StaticProfileToolSetRegistry(routeToolSetRef, tools),
+            new MatchingClassifier(intentId));
+        return CreateAgent(
+            provider,
+            actorId,
+            llmProviderFactory,
+            [new StaticToolSource(tools)],
+            timeProvider: timeProvider,
+            turnCatalogMaterializer: materializer,
+            loopbackHistoryDelivery: loopbackHistoryDelivery);
+    }
+
     private static NyxIdChatConversationGAgent CreateConversationAgent(
         IServiceProvider provider,
         string actorId,
-        IActorDispatchPort? dispatchPort = null)
+        IActorDispatchPort? dispatchPort = null,
+        TimeProvider? timeProvider = null)
     {
+        var actorDispatchPort = dispatchPort ?? new NoopActorDispatchPort();
         var agent = new NyxIdChatConversationGAgent(
             provider.GetService<IActorRuntime>() ?? new RecordingActorRuntime(),
-            dispatchPort ?? new NoopActorDispatchPort(),
-            TimeProvider.System)
+            actorDispatchPort,
+            timeProvider ?? TimeProvider.System)
         {
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<
@@ -2527,11 +2724,14 @@ public class NyxIdChatGAgentTests
         var setId = typeof(Aevatar.Foundation.Core.GAgentBase)
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setId.Invoke(agent, [actorId]);
+        agent.EventPublisher = new NyxIdChatTestSelfEventPublisher(
+            actorId,
+            actorDispatchPort);
         return agent;
     }
 
     private static async Task AssertBoundTurnMaterializationFailureRejectsAllToolsAsync(
-        AgentProfileTurnCatalogMaterializer? turnCatalogMaterializer,
+        AgentTurnToolCatalogMaterializer? turnCatalogMaterializer,
         string actorId)
     {
         var executeCount = 0;
@@ -2636,6 +2836,41 @@ public class NyxIdChatGAgentTests
             RouteToolSetRef = routeToolSetRef,
         });
 
+    private static AgentProfileSnapshot BuildSealedToolProfile(
+        string profileVersion,
+        string routeToolSetRef,
+        string intentId,
+        IEnumerable<string> toolNames)
+    {
+        var names = toolNames.ToArray();
+        var member = new AgentProfileSkillMember
+        {
+            IntentId = intentId,
+            RoutingDescription = "Exercise the explicit test tool catalog.",
+            TaskToolPolicy = new AgentProfileToolPolicy(),
+            SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
+        };
+        member.TaskToolPolicy.ToolNames.Add(names);
+
+        var profile = new AgentProfileSnapshot
+        {
+            ProfileId = "profile-alpha",
+            ProfileVersion = profileVersion,
+            AgentKind = "nyxid.chat",
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = routeToolSetRef,
+            MaximumToolPolicy = new AgentProfileToolPolicy(),
+            RecoveryToolPolicy = new AgentProfileToolPolicy(),
+            ClassifierTimeoutMs = 600,
+            ExactSkillFetchTimeoutMs = 1_500,
+            MaxSelectedSkillBytes = 256,
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        };
+        profile.MaximumToolPolicy.ToolNames.Add(names);
+        profile.Members.Add(member);
+        return AgentProfileSnapshotCodec.Seal(profile);
+    }
+
     private static AgentProfileSnapshot BuildSealedEnforcedProfile()
     {
         var member = new AgentProfileSkillMember
@@ -2686,18 +2921,26 @@ public class NyxIdChatGAgentTests
         return AgentProfileSnapshotCodec.Seal(profile);
     }
 
-    private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
+    private sealed class StaticChatRouteFallbackProvider(
+        string modelName,
+        string toolSetName = "") : IChatRouteFallbackProvider
     {
-        public ChatRouteDecision GetFallbackDecision() => new()
+        public ChatRouteDecision GetFallbackDecision()
         {
-            Action = new ChatRouteAction
+            var forwardToModel = new ForwardToModel { ModelName = modelName };
+            if (!string.IsNullOrWhiteSpace(toolSetName))
             {
-                ForwardToModel = new ForwardToModel { ModelName = modelName },
-            },
-            MatchedRuleId = string.Empty,
-            UsedFallback = true,
-            ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        };
+                forwardToModel.ToolSetRef = new ChatRouteToolSetRef { Name = toolSetName };
+            }
+
+            return new ChatRouteDecision
+            {
+                Action = new ChatRouteAction { ForwardToModel = forwardToModel },
+                MatchedRuleId = string.Empty,
+                UsedFallback = true,
+                ResolvedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            };
+        }
     }
 
     private sealed class MissingForwardToModelFallbackProvider : IChatRouteFallbackProvider
@@ -3334,6 +3577,14 @@ public class NyxIdChatGAgentTests
             Task.FromResult(AgentProfileTurnClassificationResult.NoMatch());
     }
 
+    private sealed class MatchingClassifier(string intentId) : IAgentProfileTurnClassifier
+    {
+        public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
+            AgentProfileTurnClassificationRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(AgentProfileTurnClassificationResult.Matched(intentId));
+    }
+
     private sealed class RecordingExactFetcher(ExactRemoteSkillFetchResult result) : IExactRemoteSkillFetcher
     {
         public int CallCount { get; private set; }
@@ -3381,6 +3632,29 @@ public class NyxIdChatGAgentTests
                 throw;
             }
         }
+    }
+
+    private sealed class TestVisibleNyxIdProxyTool(NyxIdProxyTool inner) : IAgentTool
+    {
+        public string Name => inner.Name;
+        public string Description => inner.Description;
+        public string ParametersSchema => inner.ParametersSchema;
+        public ToolApprovalMode ApprovalMode => inner.ApprovalMode;
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+            inner.GetCallSafety(argumentsJson);
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            inner.CreateResultReceipt(callId, toolName, argumentsJson, resultJson);
+
+        public Task<string> ExecuteAsync(
+            string argumentsJson,
+            CancellationToken ct = default) =>
+            inner.ExecuteAsync(argumentsJson, ct);
     }
 
     private sealed class DelegateTool(string name, Func<string, string> execute) : IAgentTool

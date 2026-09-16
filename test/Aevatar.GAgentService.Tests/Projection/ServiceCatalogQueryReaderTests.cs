@@ -23,6 +23,7 @@ public sealed class ServiceCatalogQueryReaderTests
             ServiceId = "svc",
             DisplayName = "Service",
             StateVersion = 42,
+            LastEventId = "event-42",
             Endpoints =
             {
                 new ServiceCatalogEndpointReadModel
@@ -46,6 +47,8 @@ public sealed class ServiceCatalogQueryReaderTests
 
         snapshot.Should().NotBeNull();
         snapshot!.ServiceKey.Should().Be("tenant:app:default:svc");
+        snapshot.StateVersion.Should().Be(42);
+        snapshot.LastEventId.Should().Be("event-42");
         snapshot.Endpoints.Should().ContainSingle(x => x.EndpointId == "run");
         snapshot.ExternalExposure.Should().NotBeNull();
         snapshot.ExternalExposure.NyxidSlug.Should().Be("aevatar-orders");

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -12,6 +13,10 @@ public sealed class NyxIdChatEndpointsHelperCoverageTests
     private static readonly MethodInfo ExtractNyxIdAccessTokenMethod = typeof(NyxIdChatEndpoints)
         .GetMethod("ExtractNyxIdAccessToken", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ExtractNyxIdAccessToken not found.");
+
+    private static readonly MethodInfo ExtractNyxIdCredentialsMethod = typeof(NyxIdChatEndpoints)
+        .GetMethod("ExtractNyxIdCredentials", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("ExtractNyxIdCredentials not found.");
 
     private static readonly MethodInfo TryExtractJwtSubjectMethod = typeof(NyxIdChatEndpoints)
         .GetMethod("TryExtractJwtSubject", BindingFlags.NonPublic | BindingFlags.Static)
@@ -56,6 +61,34 @@ public sealed class NyxIdChatEndpointsHelperCoverageTests
         var bearer = new DefaultHttpContext();
         bearer.Request.Headers.Authorization = "Bearer token-123";
         InvokePrivateStatic<string?>(ExtractNyxIdAccessTokenMethod, bearer).Should().Be("token-123");
+    }
+
+    [Fact]
+    public void ExtractNyxIdCredentials_ShouldClassifyDelegatedAuthorizationBearer()
+    {
+        var delegatedToken = BuildJwt(
+            "{\"delegated\":true,\"act\":{\"sub\":\"aevatar\"},\"exp\":2000000000}");
+        var delegated = new DefaultHttpContext();
+        delegated.Request.Headers.Authorization = $"Bearer {delegatedToken}";
+
+        var delegatedCredentials = InvokePrivateStatic<AgentToolCredentials?>(
+            ExtractNyxIdCredentialsMethod,
+            delegated);
+
+        delegatedCredentials.Should().NotBeNull();
+        delegatedCredentials!.NyxIdAccessToken.Should().Be(delegatedToken);
+        delegatedCredentials.NyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKind.ProxyDelegation);
+
+        var ordinary = new DefaultHttpContext();
+        ordinary.Request.Headers.Authorization = $"Bearer {BuildJwt("{\"sub\":\"user-1\"}")}";
+        InvokePrivateStatic<AgentToolCredentials?>(ExtractNyxIdCredentialsMethod, ordinary)!
+            .NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+
+        var nonObject = new DefaultHttpContext();
+        nonObject.Request.Headers.Authorization = $"Bearer {BuildJwt("[]")}";
+        InvokePrivateStatic<AgentToolCredentials?>(ExtractNyxIdCredentialsMethod, nonObject)!
+            .NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
     }
 
     [Fact]

@@ -125,6 +125,7 @@ message AgentProfileScopeBindingAdmission {}
 message AgentProfileSystemBindingAdmission {
   bool enabled = 1;
   int32 cohort_basis_points = 2;
+  AgentProfileBindingTarget previous_reviewed_target = 3;
 }
 
 message AgentProfileDefaultBinding {

@@ -55,6 +55,23 @@ public sealed class NyxIdLLMProviderErrorClassificationTests
     }
 
     [Fact]
+    public void ClassifyUpstreamFailure_ShouldExplainServiceScopeForbidden403_AsAuthorizationGap()
+    {
+        var route = CreateRoute("/api/v1/proxy/s/chrono-llm-public", "gpt-5.5");
+        var body = "{\"error\":\"api_key_scope_forbidden\",\"error_code\":9000," +
+            "\"message\":\"API key scope forbidden: API key does not have access to this service\"}";
+
+        var ex = NyxIdLLMProvider.ClassifyUpstreamFailure(new Exception("boom"), 403, body, route);
+
+        ex.Kind.Should().Be(NyxIdUpstreamFailureKind.AuthenticationFailed);
+        ex.Message.Should().Contain("api_key_scope_forbidden");
+        ex.Message.Should().Contain("does not cover this service");
+        ex.Message.Should().Contain("Sign out and sign in again");
+        ex.Message.Should().Contain("default service selection");
+        ex.Message.Should().NotContain("session may have expired");
+    }
+
+    [Fact]
     public void ClassifyUpstreamFailure_ShouldReportUpstreamServerError_ForOther5xx()
     {
         var route = CreateRoute("gateway", "gpt-4");

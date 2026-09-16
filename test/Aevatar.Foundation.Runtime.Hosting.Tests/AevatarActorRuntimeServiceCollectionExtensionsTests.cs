@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -19,6 +20,8 @@ using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
+using Orleans;
 using Orleans.Streams;
 
 namespace Aevatar.Foundation.Runtime.Hosting.Tests;
@@ -73,10 +76,13 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
         });
 
         services.AddAevatarActorRuntime(configuration);
+        services.AddSingleton(Substitute.For<IGrainFactory>());
+        using var provider = services.BuildServiceProvider();
 
-        var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IActorRuntimeCallbackScheduler));
-        descriptor.Should().NotBeNull();
-        descriptor!.ImplementationType.Should().Be(typeof(OrleansActorRuntimeDurableCallbackScheduler));
+        var scheduler = provider.GetRequiredService<IActorRuntimeCallbackScheduler>();
+        scheduler.Should().BeOfType<OrleansActorRuntimeDurableCallbackScheduler>();
+        provider.GetRequiredService<IRuntimeFleetReconcileScheduleOwner>().Should().BeSameAs(scheduler);
+        provider.GetRequiredService<IRuntimeFleetReconcileDeliveryVerifier>().Should().BeSameAs(scheduler);
     }
 
     [Fact]
@@ -90,10 +96,15 @@ public class AevatarActorRuntimeServiceCollectionExtensionsTests
 
         services.AddAevatarActorRuntime(configuration);
 
-        var descriptor = services.LastOrDefault(x => x.ServiceType == typeof(IStreamForwardingRegistry));
-        descriptor.Should().NotBeNull();
-        descriptor!.ImplementationType.Should().Be(typeof(OrleansDistributedStreamForwardingRegistry));
-        descriptor.ImplementationType.Should().NotBe(typeof(InMemoryStreamForwardingRegistry));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(OrleansDistributedStreamForwardingRegistry) &&
+            x.ImplementationType == typeof(OrleansDistributedStreamForwardingRegistry));
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IStreamForwardingRegistry) &&
+            x.ImplementationFactory != null);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IStreamForwardingBindingAuthority) &&
+            x.ImplementationFactory != null);
     }
 
     [Fact]

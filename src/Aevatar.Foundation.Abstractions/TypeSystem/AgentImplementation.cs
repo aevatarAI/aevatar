@@ -17,4 +17,5 @@ namespace Aevatar.Foundation.Abstractions.TypeSystem;
 public sealed record AgentImplementation(
     Func<IServiceProvider, IAgent> Factory,
     Type StateContractType,
-    AgentImplementationMetadata Metadata);
+    AgentImplementationMetadata Metadata,
+    IReadOnlyList<ActorStateMigrationStep>? StateMigrations = null);

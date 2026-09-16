@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -38,6 +39,13 @@ public sealed class ScopeWorkflowsGetTool : IAgentTool
         """;
 
     public bool IsReadOnly => true;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        BindingToolResultReceipts.CreateScopeWorkflowGet(Name, callId, toolName, resultJson);
 
     private static string BuildUnavailableMessage(
         string scopeId,

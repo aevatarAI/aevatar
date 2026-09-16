@@ -534,3 +534,6 @@ FIX_REPORT.md
 # misrouted per-PR quality reviewer artifacts (should land in runs/, not docs/audit-scorecard/)
 /docs/audit-scorecard/[0-9]*-*.md
 .alma-snapshots/
+
+# Reasonix local runtime state
+.reasonix/

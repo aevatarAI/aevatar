@@ -174,6 +174,27 @@ internal static class WorkflowRunExecutionContextStateAccess
         return TryGetLegacyCallerCredential(callerCredential, out credential);
     }
 
+    public static bool TryGetDurableCallerCredential(
+        IWorkflowExecutionContext ctx,
+        out WorkflowCallerCredential credential)
+    {
+        ArgumentNullException.ThrowIfNull(ctx);
+        var callerCredential = Get(ctx).CallerCredential;
+        if (!HasDurableCallerCredential(callerCredential?.DurableCallerCredential))
+        {
+            credential = new WorkflowCallerCredential();
+            return false;
+        }
+
+        credential = new WorkflowCallerCredential
+        {
+            DurableCallerCredential = callerCredential!.DurableCallerCredential.Clone(),
+            NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
+            Kind = callerCredential.Kind,
+        };
+        return true;
+    }
+
     public static async Task<(bool Found, WorkflowCallerCredential Credential)> TryGetCallerCredentialAsync(
         IWorkflowExecutionContext ctx,
         CancellationToken ct = default)
@@ -214,6 +235,7 @@ internal static class WorkflowRunExecutionContextStateAccess
                 ? (true, new WorkflowCallerCredential
                 {
                     BearerToken = resolved.Secret,
+                    DurableCallerCredential = callerCredential.DurableCallerCredential.Clone(),
                     NyxIdAuthority = callerCredential.NyxIdAuthority?.Clone(),
                     Kind = callerCredential.Kind,
                 })
@@ -334,7 +356,21 @@ internal static class WorkflowRunExecutionContextStateAccess
         if (!HasDurableCallerCredential(reference) ||
             string.IsNullOrWhiteSpace(reference!.Purpose) ||
             string.IsNullOrWhiteSpace(reference.OwnerScopeKey) ||
-            string.IsNullOrWhiteSpace(reference.SubjectId))
+            string.IsNullOrWhiteSpace(reference.SubjectId) ||
+            reference.SourceKind == DurableCallerCredentialSourceKind.WebhookBinding &&
+            (!string.Equals(
+                 reference.Purpose,
+                 CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+                 StringComparison.Ordinal) ||
+             reference.SecretReference == null ||
+             string.IsNullOrWhiteSpace(reference.SecretReference.Ref)) ||
+            reference.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration &&
+            (!string.Equals(
+                 reference.Purpose,
+                 CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                 StringComparison.Ordinal) ||
+             reference.SecretReference == null ||
+             string.IsNullOrWhiteSpace(reference.SecretReference.Ref)))
         {
             return (false, string.Empty);
         }
@@ -350,7 +386,13 @@ internal static class WorkflowRunExecutionContextStateAccess
             reference.SubjectId,
             "workflow-durable-caller-resolve"), ct);
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(result.Secret);
-        if (!result.Resolved || parsed.IsInvalid || parsed.IsMissing)
+        if (!result.Resolved ||
+            parsed.IsInvalid ||
+            parsed.IsMissing ||
+            (reference.SourceKind is
+                DurableCallerCredentialSourceKind.WebhookBinding or
+                DurableCallerCredentialSourceKind.ChannelRegistration) &&
+            !MatchesResolvedReference(reference, result.Reference))
             return (false, string.Empty);
 
         return (true, parsed.NormalizedBearerToken!);
@@ -358,6 +400,33 @@ internal static class WorkflowRunExecutionContextStateAccess
 
     private static bool HasDurableCallerCredential(DurableCallerCredentialRef? reference) =>
         reference != null && !string.IsNullOrWhiteSpace(reference.Ref);
+
+    private static bool MatchesResolvedReference(
+        DurableCallerCredentialRef expected,
+        SecretReference? actual)
+    {
+        if (actual == null ||
+            !string.Equals(actual.Ref, expected.Ref, StringComparison.Ordinal) ||
+            !string.Equals(actual.Purpose, expected.Purpose, StringComparison.Ordinal) ||
+            !string.Equals(actual.OwnerScopeKey, expected.OwnerScopeKey, StringComparison.Ordinal) ||
+            actual.Version <= 0 ||
+            string.IsNullOrWhiteSpace(actual.Fingerprint) ||
+            actual.CreatedAtUnixMs <= 0 ||
+            actual.ExpiresAtUnixMs > 0 && actual.ExpiresAtUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+        {
+            return false;
+        }
+
+        var descriptor = expected.SecretReference;
+        return descriptor == null || string.IsNullOrWhiteSpace(descriptor.Ref) ||
+               string.Equals(descriptor.Ref, actual.Ref, StringComparison.Ordinal) &&
+               string.Equals(descriptor.Purpose, actual.Purpose, StringComparison.Ordinal) &&
+               string.Equals(descriptor.OwnerScopeKey, actual.OwnerScopeKey, StringComparison.Ordinal) &&
+               string.Equals(descriptor.Fingerprint, actual.Fingerprint, StringComparison.Ordinal) &&
+               descriptor.Version == actual.Version &&
+               descriptor.CreatedAtUnixMs == actual.CreatedAtUnixMs &&
+               descriptor.ExpiresAtUnixMs == actual.ExpiresAtUnixMs;
+    }
 
     private static bool HasRuntimeSecretReference(RuntimeSecretReference? reference) =>
         reference != null && !string.IsNullOrWhiteSpace(reference.Ref);
@@ -475,6 +544,7 @@ internal static class WorkflowRunExecutionContextStateAccess
             clone.CallerCredential.DurableCallerCredential = null;
         if (clone.CallerCredential?.NyxIdAuthority != null)
             clone.CallerCredential.NyxIdAuthority = null;
+        clone.UnattendedEffectAuthorization = null;
         return clone;
     }
 

@@ -1,7 +1,7 @@
 # Admin Observatory UI Design
 
 - **Date:** 2026-07-24
-- **Status:** Implemented; immersive mode and position restoration restored on 2026-08-01
+- **Status:** Implemented; operation-ledger semantics clarified on 2026-08-14
 - **Surface:** `/admin#/observatory`
 - **Owner:** Aevatar Mainnet Backend Console
 
@@ -27,6 +27,15 @@ the caller's role badge.
 
 ## Goals
 
+- Present every accepted workflow request/run as one independently selectable
+  trace container. The display number is a reading aid; `runId` remains the
+  stable container identity used for selection, refresh, and detail lookup.
+- Inside the selected container, present an ordered operation ledger in which
+  each Input, model response, and tool call is independently selectable, with a
+  three-lane `Input / Model / Tools` duration overview over the same records.
+- Preserve the original Timeline as the complete workflow-event view and add
+  Trajectory as a separate detail tab; operation presentation must not replace
+  or reduce Timeline information.
 - Default every caller, including an admin, to their own scope.
 - Make all-scope observation an explicit and continuously visible admin mode.
 - Give the selected run substantially more space without losing fast run
@@ -38,7 +47,9 @@ the caller's role badge.
 
 ## Non-Goals
 
-- No new observatory API or read model.
+- No parallel observatory API or browser-owned durable read model. Typed
+  Model/Tool operations extend the existing run-report/detail projection path;
+  facts absent from that contract remain explicitly unavailable.
 - No change to authorization or the `__all__` backend sentinel.
 - No migration to `apps/aevatar-console-web` or a new frontend build chain.
 - No redesign of unrelated `/admin` modules.
@@ -102,7 +113,7 @@ Observatory state is encoded in the existing hash query:
   &from=<ISO-8601>
   &to=<ISO-8601>
   &run=<runId>
-  &tab=timeline|steps|diagnostics|logs|artifacts|graph
+  &tab=timeline|trajectory|steps|diagnostics|logs|artifacts|graph
 ```
 
 Empty/default values are omitted from generated links. Parsing accepts only
@@ -147,14 +158,20 @@ The compact filter bar contains:
 - active filter chips with individual removal and one clear-all action.
 
 `status`, `origin`, `definition`, `schedule`, `from`, and `to` are sent to the
-existing list endpoint. The status UI uses the backend values
+activity-run feed endpoint. The status UI uses the backend values
 `running/completed/failed/stopped`, with localized display labels. Local search
-only filters the already loaded maximum of 100 summaries and displays the
-visible/loaded count so it cannot be mistaken for a server-wide search.
+only filters the summaries already loaded into the rail and displays the
+visible/loaded count so it cannot be mistaken for a server-wide search. The
+first page contains the newest 100 trace containers; when `hasMore` and
+`nextCursor` are present, the rail offers an explicit “load earlier” action and
+keeps the loaded/total coverage visible.
 
 Changing a server filter updates the URL and starts a new list request. A
 monotonic request ID prevents an older response from overwriting a newer scope
-or filter selection. Polling reuses the current URL-derived query.
+or filter selection. Polling reuses the current URL-derived query. Cursor
+loading is serialized against polling; a refreshed newest window overwrites
+matching `runId` rows but retains every already loaded older identity, so new
+head insertions cannot create a gap at the server's 500-row page boundary.
 
 ## Layout
 
@@ -172,8 +189,8 @@ The approved direction is **collapsible run rail plus large detail canvas**.
 - The rail can be collapsed independently. Its collapsed state is a local UI
   preference and does not affect the URL.
 - The detail canvas owns the remaining width. Run identity and source facts
-  are compact; the Timeline/Steps/Diagnostics/Logs/Artifacts/Graph content is
-  the primary visual surface.
+  are compact; the Timeline/Trajectory/Steps/Diagnostics/Logs/Artifacts/Graph
+  content is the primary visual surface.
 
 ### Immersive Mode
 
@@ -199,6 +216,85 @@ mobile.
 
 ## Run Detail Behavior
 
+The run rail lists request/run trace containers. Each row represents one
+authoritative workflow run and exposes enough request context to distinguish
+nearby calls without opening them: workflow, safe input summary when available,
+status, origin, update time, duration/current step, and a shortened run ID. The
+row is not an atomic trajectory event. Selecting it opens the container's
+detail workspace; timeline events, trajectory operations, steps, diagnostics,
+logs, artifacts, and graph remain children of the selected container rather
+than parallel top-level records.
+
+Timeline and Trajectory are sibling tabs with different owners. Timeline is the
+default and keeps the original complete materialized workflow-event
+presentation: timestamp, stage, message, actor/agent, step, event type, and
+event data remain available. This does not imply that every runtime-specific
+step output is duplicated into Timeline. Adding Trajectory must not filter,
+summarize, replace, or otherwise reduce that event view.
+
+The Trajectory tab owns the chronological operation ledger. It emits a distinct
+selectable record for the captured run input, each model response, and each tool
+call; nested tool work may remain linked beneath its owning tool operation. A
+fixed overview above the ledger has three aligned lanes: `Input`, `Model`, and
+`Tools`. Every overview marker/bar and ledger row refers to the same stable
+operation identity. The run/request identity is used only to own and group those
+operations; it must not collapse a multi-step model/tool exchange into one
+summary row.
+
+Clicking an operation opens a local inspector rather than replacing the run
+detail route. Input records expose captured content and source. Model records
+expose output, provider/model, usage, and timing when recorded. Tool records
+expose payload, result, call-time schema, and timing when recorded. Status and
+error state remain separate from the operation kind. Request-level status,
+options, cumulative usage, and navigation remain a container summary, not a
+substitute for operation details.
+
+The overview renders duration bars only from real operation timestamps. A
+recorded start without a recorded completion is a start marker or running
+record, not a growing duration bar. When either timing fact is absent, Duration
+is `unavailable`; the UI must not derive it from `updatedAtUtc`, polling time,
+adjacent event timestamps, list order, or the parent run duration.
+
+### Current Operation Contract And Gaps
+
+The activity-run projection provides the request/run container list. Separately,
+committed role progress is copied into run-owned
+`WorkflowRuntimeOperationRecordedEvent` facts and materialized into the existing
+run-report operation read model. The Observatory detail response exposes those
+typed Model/Tool operations with stable operation/session identity, progress
+sequence, kind, actual start/completion timestamps, and captured operation facts:
+model/provider, input summary, model-visible tool names, output/reasoning,
+finish reason, usage and errors for Model; tool call/name, arguments, result and
+errors for Tool. The Trajectory tab consumes this operation collection directly;
+it does not classify Timeline prose. Workflow steps remain in their dedicated
+workflow-oriented view and do not become Model or Tool operations.
+
+The remaining DSH-equivalence gaps are explicit:
+
+- Input comes from the committed run input but has no independent typed
+  start/completion lifecycle, so it has no operation Duration bar;
+- a Model or Tool duration is available only when both typed lifecycle timestamps
+  were recorded for that exact operation;
+- the contract carries model-visible tool names but not the request-time tools
+  catalog with per-tool schemas;
+- the contract does not expose separate TTFT and decoding timestamps.
+
+Missing Duration, model, usage, tools-catalog, or schema values are shown as
+`unavailable`. The UI must not parse Timeline/step prose, actor IDs, current-step
+summaries, `updatedAtUtc`, or generic-bag key spellings to fill those fields.
+Query-time event replay or browser-side durable reconstruction remains outside
+this design.
+
+The rail reads the paged activity-run projection, while Timeline and Trajectory
+both arrive in the selected run detail response and graph keeps using its
+existing endpoint. The page polls the current rail and only the selected detail
+approximately every three seconds while visible. The live indicator describes
+this near-live projection refresh honestly; it does not
+claim that a transport ACK is committed or that the read model is strongly
+consistent. Incoming rows do not change an explicit selection. A selected run
+that is briefly absent from the eventually consistent detail projection remains
+eligible for later polling, so it can recover without a manual page refresh.
+
 The detail header shows workflow name, honest status, full run ID, scope,
 definition, origin, optional schedule ID, state version, and last update.
 Copy and overflow actions use familiar icons with accessible labels/tooltips.
@@ -217,6 +313,64 @@ Detail and graph endpoints follow the resolved observation intent:
   graph endpoints.
 
 Admin authority alone is not a reason to use the admin detail endpoint.
+
+### Failure Evidence Contract
+
+Failure evidence belongs to the selected run's committed current-state and
+run-report projections. The browser does not reconstruct failures from prose,
+and the query service does not replay events or prime projections. For a failed
+run, the first detail viewport summarizes every available failure source while
+the Diagnostics, Steps, Trajectory, Timeline, and Logs tabs retain their native
+detail:
+
+- compilation and current-state terminal errors;
+- the activity projection's committed failure summary (not proof of the first failed attempt);
+- run-report final error and failed-step error/output;
+- failed model/tool operations and their captured result;
+- recovery eligibility blockers; and
+- unavailable or version-mismatched detail sections.
+
+Failed-step output is a dedicated typed run-report field because native workflow
+steps do not necessarily emit a role reply or tool-call Timeline record. It is
+sanitized before persistence and bounded to 64 KiB of UTF-8, preserving both the
+beginning and end so terminal stderr remains useful. A typed truncation flag is
+the only authority for telling the operator that middle content was omitted.
+Each per-file result `output`/`error` is independently sanitized and bounded to
+8 KiB of UTF-8; vote-agreement decision `output`/`reason` keeps the 64 KiB
+UTF-8 limit. Every bounded field has its own typed truncation flag; an upstream
+`true` flag remains `true` across projection materialization and report export.
+Failure outcome, recovery failure kind, retry disposition, per-file results,
+and vote-agreement decisions remain typed fields rather than Timeline metadata
+keys. A per-file result collection retains at most 32 entries using a
+deterministic head/tail subset (first 16 and last 16). Its typed
+`source_result_count` and `results_truncated` fields distinguish a complete
+collection from a bounded one. When an upstream producer reports truncation but
+does not know the original count, `source_result_count = 0` means unknown; the
+query and browser must not present it as an exact count.
+
+A retry request moves the complete previous failed attempt into the typed
+`latest_failed_attempt` sub-message before resetting every current-attempt
+completion, failure, branch, suspension, approval, and usage field. The
+snapshot retains the failed request's own type, target role, parameters,
+requested/completed timestamps, and evidence. A step whose current `outcome`
+is `waiting` reads failure details only from that snapshot, so a retry's request
+identity is never attributed to the previous failure. The snapshot is cleared
+when the current attempt completes; a subsequent retry snapshots that newer
+failure in turn.
+
+The detail contract exposes the run-report `reportVersion`. Failed, timed-out,
+and stopped runs whose report version is missing or older than `3.1` receive a
+separate `failure_evidence_schema_legacy` diagnostic. The warning says that
+dedicated failure fields may be unavailable and that background repair or
+reprojection is required; the query path does not replay or silently upgrade a
+legacy `3.0` report. This schema warning is independent of section state-version
+availability or mismatch diagnostics.
+
+All failure text and nested structured details are redacted before they cross
+the projection boundary. Credential-shaped field names, including compound
+names ending in singular `token`, `secret`, `password`, `credential`, or
+`api_key`, are treated as sensitive. The console may expose all safely captured
+diagnostic evidence; it must never offer a raw/unredacted fallback.
 
 ## Accessibility
 
@@ -258,6 +412,29 @@ Static asset tests must fail before implementation and cover:
   with Escape;
 - stale list responses cannot replace a newer scope/filter result;
 - cached detail remains visible during polling.
+- the original Timeline remains the default, retains its complete event detail,
+  and is not replaced by the Trajectory renderer;
+- `tab=trajectory` selects the independent Trajectory tab and survives route
+  restoration;
+- a run/request row is treated as a container while Input, Model, and Tool
+  operations remain independently selectable;
+- the three overview lanes and ledger rows share operation identities;
+- typed Model/Tool operation facts are consumed from the detail contract rather
+  than reconstructed from Timeline or workflow-step prose;
+- Input and other missing operation timing or tools-catalog facts render as
+  unavailable and are never inferred from refresh or update timestamps;
+- failed native-step output is read from the typed step failure field, not
+  assumed to exist in Timeline;
+- failure output truncation is visible and follows the projection's typed flag;
+- waiting retries preserve and label the latest failed-attempt evidence without
+  being classified as current failed steps;
+- bounded per-file collections expose both source count and collection-level
+  truncation, including the explicit unknown-count case;
+- legacy report schema warnings and `reportVersion` remain present in the
+  copied issue payload;
+- compilation, activity-failure-summary, failed-operation, recovery-blocker, and section
+  version diagnostics remain present in the copied issue payload and Logs; and
+- credential-shaped nested failure fields are redacted before display.
 
 Visual verification covers `1440x900`, `1920x1080`, `1024x768`, and `390x844`.
 It checks normal and immersive modes, expanded filters, long run IDs, long log

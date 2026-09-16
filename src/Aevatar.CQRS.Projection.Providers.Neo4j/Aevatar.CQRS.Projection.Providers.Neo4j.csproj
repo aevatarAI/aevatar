@@ -16,4 +16,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Neo4j.Driver" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.CQRS.Projection.Core.Tests" />
+  </ItemGroup>
 </Project>

@@ -2,8 +2,10 @@ using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.ExternalCapabilities;
 using Aevatar.Workflow.Application.RunForks;
 using Aevatar.Workflow.Application.Runs;
 using FluentAssertions;
@@ -210,15 +212,22 @@ public sealed class WorkflowForkRunCommandDispatchTests
         var sourceYaml = WorkflowYaml("source");
         var editedYaml = WorkflowYaml("edited");
         var childYaml = WorkflowYaml("child");
+        var sourceSubYamls = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["source-child"] = WorkflowYaml("source-child"),
+        };
+        var sourcePlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            sourceYaml,
+            sourceSubYamls,
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
         var seedPort = new RecordingSeedQueryPort
         {
             View = CreateSeedView(
                 "completed",
                 workflowYaml: sourceYaml,
-                inlineWorkflowYamls: new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["source-child"] = WorkflowYaml("source-child"),
-                },
+                inlineWorkflowYamls: sourceSubYamls,
                 variables: new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["step-a"] = "alpha",
@@ -228,11 +237,18 @@ public sealed class WorkflowForkRunCommandDispatchTests
                 {
                     ["step-b"] = new("source-run", "step-b", 2, "source-run:step-b:2"),
                 },
-                scopeId: "scope-1"),
+                scopeId: "scope-1",
+                revisionId: "rev-source",
+                definitionVersion: 23,
+                capabilityAdmissionPlan: sourcePlan),
         };
-        var runPort = new RecordingRunProvisioningPort();
+        var runPort = new RecordingRunProvisioningPort
+        {
+            ValidateArtifactOnCreate = true,
+        };
         var dispatchPort = new RecordingActorDispatchPort();
-        var service = CreateDispatchService(seedPort, runPort, dispatchPort);
+        var lineagePort = new RecordingWorkflowRunLineageRecordingPort();
+        var service = CreateDispatchService(seedPort, runPort, dispatchPort, lineagePort);
 
         var result = await service.DispatchAsync(new WorkflowForkRunCommand(
             SourceRunId: "source-run",
@@ -258,6 +274,7 @@ public sealed class WorkflowForkRunCommandDispatchTests
         {
             SourceRunId = "source-run",
             NewRunActorId = "run-created",
+            NewRunId = "run-routable",
             WorkflowName = "edited",
             Accepted = true,
             CommandId = "cmd-1857",
@@ -271,10 +288,14 @@ public sealed class WorkflowForkRunCommandDispatchTests
         binding.WorkflowYaml.Should().Be(editedYaml);
         binding.ScopeId.Should().Be("scope-1");
         binding.InlineWorkflowYamls.Should().Contain("child", childYaml);
+        binding.CapabilityAdmissionPlan.Should().BeNull();
+        binding.RevisionId.Should().BeEmpty();
+        binding.DefinitionVersion.Should().Be(0);
 
         dispatchPort.Dispatches.Should().ContainSingle();
-        dispatchPort.Dispatches.Single().ActorId.Should().Be("run-created");
-        var envelope = dispatchPort.Dispatches.Single().Envelope;
+        var runDispatch = dispatchPort.Dispatches[0];
+        runDispatch.ActorId.Should().Be("run-created");
+        var envelope = runDispatch.Envelope;
         envelope.Id.Should().Be("cmd-1857");
         envelope.Propagation!.CorrelationId.Should().Be("corr-1857");
         envelope.Route.GetTargetActorId().Should().Be("run-created");
@@ -292,6 +313,176 @@ public sealed class WorkflowForkRunCommandDispatchTests
         request.ForkSeed.Variables.Should().Contain("step-a", "alpha");
         request.ForkSeed.Variables.Should().Contain("topic", "seed-topic");
         request.ForkSeed.Variables.Should().Contain("input", "override-input");
+
+        lineagePort.Records.Should().ContainSingle().Which.Should().Be(new RecordedForkChild(
+            "source-run",
+            "run-routable",
+            "run-created",
+            "source-run",
+            "step-b",
+            0));
+    }
+
+    [Fact]
+    public async Task DispatchAsync_WhenCreationReceiptOmitsRunId_ShouldUseActorIdAsReceiptRunId()
+    {
+        var seedPort = new RecordingSeedQueryPort
+        {
+            View = CreateSeedView("failed", scopeId: "scope-1"),
+        };
+        var runPort = new RecordingRunProvisioningPort
+        {
+            CreationRunId = string.Empty,
+        };
+        var dispatchPort = new RecordingActorDispatchPort();
+        var service = CreateDispatchService(seedPort, runPort, dispatchPort);
+
+        var result = await service.DispatchAsync(new WorkflowForkRunCommand(
+            SourceRunId: "source-run",
+            StartAtStepId: "step-b",
+            CommandId: "cmd-fork",
+            CorrelationId: "corr-fork",
+            ScopeId: "scope-1"));
+
+        result.Succeeded.Should().BeTrue();
+        result.Receipt!.NewRunActorId.Should().Be("run-created");
+        result.Receipt.NewRunId.Should().Be("run-created");
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WhenForkUsesSourceArtifacts_ShouldPreserveDefinitionIdentityFacts()
+    {
+        var sourceYaml = WorkflowYaml("source");
+        var sourceSubYamls = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["source-child"] = WorkflowYaml("source-child"),
+        };
+        var sourcePlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            sourceYaml,
+            sourceSubYamls,
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var seedPort = new RecordingSeedQueryPort
+        {
+            View = CreateSeedView(
+                "completed",
+                workflowYaml: sourceYaml,
+                inlineWorkflowYamls: sourceSubYamls,
+                workflowId: "wf-source",
+                revisionId: "rev-source",
+                definitionVersion: 23,
+                capabilityAdmissionPlan: sourcePlan),
+        };
+        var runPort = new RecordingRunProvisioningPort();
+        var resolver = CreateResolver(seedPort, runPort);
+
+        var result = await resolver.ResolveAsync(new WorkflowForkRunCommand(
+            SourceRunId: "source-run",
+            StartAtStepId: "step-b",
+            InlineYaml: sourceYaml,
+            InlineSubYamls: sourceSubYamls));
+
+        result.Succeeded.Should().BeTrue();
+        runPort.CreateRunBindings.Should().ContainSingle();
+        var binding = runPort.CreateRunBindings.Single();
+        binding.WorkflowId.Should().Be("wf-source");
+        binding.RevisionId.Should().Be("rev-source");
+        binding.DefinitionVersion.Should().Be(23);
+        binding.CapabilityAdmissionPlan.Should().NotBeSameAs(sourcePlan);
+        binding.CapabilityAdmissionPlan.Should().BeEquivalentTo(sourcePlan);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WhenEditedArtifactInvalidatesSourceAdmission_ShouldDropPlanAndPassPreflight()
+    {
+        var sourceYaml = WorkflowYaml("source");
+        var editedYaml = WorkflowYaml("edited");
+        var sourcePlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            sourceYaml,
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var seedPort = new RecordingSeedQueryPort
+        {
+            View = CreateSeedView(
+                "completed",
+                workflowYaml: sourceYaml,
+                workflowId: "wf-source",
+                revisionId: "rev-source",
+                definitionVersion: 23,
+                capabilityAdmissionPlan: sourcePlan),
+        };
+        var runPort = new RecordingRunProvisioningPort
+        {
+            ValidateArtifactOnCreate = true,
+        };
+        var resolver = CreateResolver(seedPort, runPort);
+
+        var result = await resolver.ResolveAsync(new WorkflowForkRunCommand(
+            SourceRunId: "source-run",
+            StartAtStepId: "step-b",
+            InlineYaml: editedYaml));
+
+        result.Succeeded.Should().BeTrue();
+        var binding = runPort.CreateRunBindings.Should().ContainSingle().Which;
+        binding.WorkflowId.Should().BeEmpty();
+        binding.RevisionId.Should().BeEmpty();
+        binding.DefinitionVersion.Should().Be(0);
+        binding.CapabilityAdmissionPlan.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveAsync_WhenEditedInlineYamlAddsExternalInvocation_ShouldFailClosedWithoutSourcePlan()
+    {
+        var sourceYaml = WorkflowYaml("source");
+        var editedYaml = WorkflowYaml("edited");
+        var sourcePlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            sourceYaml,
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var dependencies = new WorkflowAuthorizationDependencies();
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "edited/send",
+            ToolName = "connector_call",
+            Selector = new ExternalWorkflowCapabilitySelector
+            {
+                HostConnector = new HostConnectorCapabilityRef
+                {
+                    ConnectorCapabilityRef = "connector-alpha",
+                    OperationId = "send-summary",
+                    ContractDigest = "connector-contract-alpha",
+                },
+            },
+        });
+        var seedPort = new RecordingSeedQueryPort
+        {
+            View = CreateSeedView(
+                "completed",
+                workflowYaml: sourceYaml,
+                capabilityAdmissionPlan: sourcePlan),
+        };
+        var runPort = new RecordingRunProvisioningPort
+        {
+            ParseResult = WorkflowYamlParseResult.Success("edited", dependencies),
+            ValidateArtifactOnCreate = true,
+        };
+        var resolver = CreateResolver(seedPort, runPort);
+
+        var result = await resolver.ResolveAsync(new WorkflowForkRunCommand(
+            SourceRunId: "source-run",
+            StartAtStepId: "step-b",
+            InlineYaml: editedYaml));
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Code.Should().Be(WorkflowForkRunStartErrorCode.RunCreationFailed);
+        result.Error.Reason.Should().Contain(WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode);
+        runPort.CreateRunBindings.Should().ContainSingle()
+            .Which.CapabilityAdmissionPlan.Should().BeNull();
     }
 
     [Fact]
@@ -377,7 +568,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
     private static WorkflowForkRunCommandDispatchService CreateDispatchService(
         RecordingSeedQueryPort seedPort,
         RecordingRunProvisioningPort runPort,
-        RecordingActorDispatchPort dispatchPort)
+        RecordingActorDispatchPort dispatchPort,
+        RecordingWorkflowRunLineageRecordingPort? lineagePort = null)
     {
         var pipeline = new DefaultCommandDispatchPipeline<WorkflowForkRunCommand, WorkflowForkRunCommandTarget, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>(
             CreateResolver(seedPort, runPort),
@@ -385,7 +577,9 @@ public sealed class WorkflowForkRunCommandDispatchTests
             new WorkflowForkRunCommandEnvelopeFactory(new WorkflowChatRequestEnvelopeFactory()),
             new ActorCommandTargetDispatcher<WorkflowForkRunCommandTarget>(dispatchPort),
             new WorkflowForkRunAcceptedReceiptFactory());
-        return new WorkflowForkRunCommandDispatchService(pipeline);
+        return new WorkflowForkRunCommandDispatchService(
+            pipeline,
+            lineagePort ?? new RecordingWorkflowRunLineageRecordingPort());
     }
 
     private static WorkflowRunForkSeedView CreateSeedView(
@@ -394,7 +588,11 @@ public sealed class WorkflowForkRunCommandDispatchTests
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         IReadOnlyDictionary<string, string>? variables = null,
         string scopeId = "",
-        IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? idempotencyByStepId = null) =>
+        IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? idempotencyByStepId = null,
+        string workflowId = "",
+        string revisionId = "",
+        long definitionVersion = 0,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null) =>
         new WorkflowRunForkSeedView(
             SourceRunId: "source-run",
             Status: status,
@@ -410,7 +608,11 @@ public sealed class WorkflowForkRunCommandDispatchTests
             LastFailedStepId: "step-b",
             FinalError: status.Equals("failed", StringComparison.OrdinalIgnoreCase) ? "boom" : string.Empty,
             ScopeId: scopeId,
-            IdempotencyByStepId: idempotencyByStepId ?? new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal));
+            IdempotencyByStepId: idempotencyByStepId ?? new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal),
+            WorkflowId: workflowId,
+            RevisionId: revisionId,
+            DefinitionVersion: definitionVersion,
+            CapabilityAdmissionPlan: capabilityAdmissionPlan);
 
     private static string WorkflowYaml(string name) =>
         $$"""
@@ -445,11 +647,13 @@ public sealed class WorkflowForkRunCommandDispatchTests
     {
         public WorkflowYamlParseResult? ParseResult { get; set; }
         public Exception? CreateRunException { get; set; }
+        public bool ValidateArtifactOnCreate { get; set; }
+        public string CreationRunId { get; set; } = "run-routable";
         public List<string> ParseRequests { get; } = [];
         public List<WorkflowDefinitionBinding> CreateRunBindings { get; } = [];
         public List<string> DestroyedActorIds { get; } = [];
 
-        public Task<WorkflowRunCreationReceipt> CreateRunAsync(
+        public async Task<WorkflowRunCreationReceipt> CreateRunAsync(
             WorkflowDefinitionBinding definition,
             CancellationToken ct = default)
         {
@@ -458,10 +662,24 @@ public sealed class WorkflowForkRunCommandDispatchTests
             if (CreateRunException != null)
                 throw CreateRunException;
 
-            return Task.FromResult(new WorkflowRunCreationReceipt(
+            if (ValidateArtifactOnCreate)
+            {
+                await new WorkflowArtifactCompatibilityPreflight(this).ValidateAsync(
+                    new WorkflowArtifactCompatibilityRequest(
+                        definition.WorkflowYaml,
+                        definition.InlineWorkflowYamls,
+                        definition.CapabilityAdmissionPlan,
+                        definition.ExpectedExecutionMode,
+                        definition.WorkflowId,
+                        definition.RevisionId),
+                    ct);
+            }
+
+            return new WorkflowRunCreationReceipt(
                 "run-created",
                 "definition-created",
-                ["definition-created", "run-created"]));
+                ["definition-created", "run-created"],
+                CreationRunId);
         }
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default)
@@ -520,6 +738,39 @@ public sealed class WorkflowForkRunCommandDispatchTests
         }
     }
 
+    private sealed class RecordingWorkflowRunLineageRecordingPort : IWorkflowRunLineageRecordingPort
+    {
+        public List<RecordedForkChild> Records { get; } = [];
+
+        public Task RecordForkChildAsync(
+            string sourceRunId,
+            string childRunId,
+            string childActorId,
+            string originalRunId,
+            string startAtStepId,
+            int attempt,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Records.Add(new RecordedForkChild(
+                sourceRunId,
+                childRunId,
+                childActorId,
+                originalRunId,
+                startAtStepId,
+                attempt));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record RecordedForkChild(
+        string SourceRunId,
+        string ChildRunId,
+        string ChildActorId,
+        string OriginalRunId,
+        string StartAtStepId,
+        int Attempt);
+
     private sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
         public List<RecordedDispatch> Dispatches { get; } = [];
@@ -539,7 +790,8 @@ public sealed class WorkflowForkRunCommandDispatchTests
         }
 
         public WorkflowChatRequestEvent DispatchedRequest() =>
-            Dispatches.Single().Envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+            Dispatches.Single(dispatch => dispatch.Envelope.Payload.Is(WorkflowChatRequestEvent.Descriptor))
+                .Envelope.Payload.Unpack<WorkflowChatRequestEvent>();
     }
 
     private sealed record RecordedDispatch(string ActorId, EventEnvelope Envelope);

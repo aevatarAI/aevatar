@@ -1,6 +1,9 @@
 using System.Reflection;
 using System.Text;
+using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
@@ -28,31 +31,151 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
     private static readonly DateTimeOffset FixedNow =
         new(2026, 7, 24, 8, 0, 0, TimeSpan.Zero);
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ToolVerification_ArrayContainsEquals_EvaluatesEveryBoundedListItem(bool includeMatch)
+    {
+        var readBack = ExactReadBack();
+        readBack.Assertion.Match = AgentToolReadBackMatchPayload.ArrayContainsEquals;
+        readBack.Assertion.JsonPointer = "/data/items";
+        readBack.Assertion.ElementJsonPointer = "/body/content";
+        readBack.Assertion.ExpectedValue = Google.Protobuf.WellKnownTypes.Value.ForString(
+            "{\"text\":\"m40-alpha\"}");
+        var readAdmission = AgentToolOperationAdmissionPayloadMapper.FromPayload(readBack.ReadOperation)!;
+        var matchingItem = includeMatch
+            ? """{"body":{"content":"{\"text\":\"m40-alpha\"}"}}"""
+            : """{"body":{"content":"{\"text\":\"different\"}"}}""";
+        var projection = new JsonObject
+        {
+            ["kind"] = "connected_service_read_projection",
+            ["status"] = "succeeded",
+            ["provenance"] = new JsonObject
+            {
+                ["source_kind"] = "nyxid_connected_service",
+                ["operation_selector_digest"] = AgentToolOperationSelector.ComputeDigest(readAdmission),
+            },
+            ["data"] = new JsonObject
+            {
+                ["code"] = 0,
+                ["data"] = new JsonObject
+                {
+                    ["items"] = new JsonArray(
+                        JsonNode.Parse("""{"body":{"content":"other"}}"""),
+                        JsonNode.Parse(matchingItem)),
+                },
+            },
+        }.ToJsonString();
+
+        NyxIdChatToolVerificationPort.TryEvaluate(
+                projection,
+                readBack.ReadOperation,
+                readBack.Assertion,
+                out var matched)
+            .Should().BeTrue();
+        matched.Should().Be(includeMatch);
+    }
+
+    [Fact]
+    public void ToolVerification_ProviderResourceIdentity_DoesNotMatchOlderEqualContent()
+    {
+        var readBack = ExactReadBack();
+        readBack.Assertion.Match = AgentToolReadBackMatchPayload.ArrayContainsEquals;
+        readBack.Assertion.JsonPointer = "/data/items";
+        readBack.Assertion.ElementJsonPointer = "/message_id";
+        readBack.Assertion.ExpectedValue = null;
+        readBack.Assertion.ExpectedValueSource =
+            AgentToolReadBackExpectedValueSourcePayload.ProviderResourceId;
+        var readAdmission = AgentToolOperationAdmissionPayloadMapper.FromPayload(readBack.ReadOperation)!;
+        var projection = new JsonObject
+        {
+            ["kind"] = "connected_service_read_projection",
+            ["status"] = "succeeded",
+            ["provenance"] = new JsonObject
+            {
+                ["source_kind"] = "nyxid_connected_service",
+                ["operation_selector_digest"] = AgentToolOperationSelector.ComputeDigest(readAdmission),
+            },
+            ["data"] = new JsonObject
+            {
+                ["data"] = new JsonObject
+                {
+                    ["items"] = new JsonArray(
+                        JsonNode.Parse("""{"message_id":"om_old","body":{"content":"same"}}"""),
+                        JsonNode.Parse("""{"message_id":"om_expected","body":{"content":"different"}}""")),
+                },
+            },
+        }.ToJsonString();
+
+        NyxIdChatToolVerificationPort.TryEvaluate(
+                projection,
+                readBack.ReadOperation,
+                readBack.Assertion,
+                "om_expected",
+                out var matched)
+            .Should().BeTrue();
+        matched.Should().BeTrue();
+
+        NyxIdChatToolVerificationPort.TryEvaluate(
+                projection,
+                readBack.ReadOperation,
+                readBack.Assertion,
+                "om_missing",
+                out matched)
+            .Should().BeTrue();
+        matched.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ToolVerificationPort_WhenAdmittedReadCannotBeMaterialized_ShouldReturnUnavailable()
+    {
+        var readBack = ExactReadBack();
+        var result = await new NyxIdChatToolVerificationPort().VerifyAsync(
+            CreateOperationKey(),
+            new NyxIdChatToolVerificationInput
+            {
+                EffectStepId = "step-effect-alpha",
+                ReadBack = readBack,
+                ToolContext = new AgentToolExecutionContextPayload(),
+            },
+            CancellationToken.None);
+
+        result.Disposition.Should().Be(NyxIdChatToolVerificationDisposition.Unavailable);
+        result.FailureCode.Should().Be(NyxIdChatToolVerificationPort.UnavailableCode);
+        result.EffectStepId.Should().Be("step-effect-alpha");
+        result.ReadOperation.Should().BeEquivalentTo(readBack.ReadOperation);
+        result.CheckName.Should().Be(readBack.CheckName);
+    }
+
     [Fact]
     public async Task Activation_WithRequestedPostcondition_ShouldOnlySignalSelfForRecovery()
     {
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateRequestedPostconditionState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = CreateController(services, actorId, runtime, dispatch);
+        var publisher = new RecoveryRecordingEventPublisher();
+        var agent = CreateController(services, actorId, runtime, dispatch, publisher);
 
         await agent.ActivateAsync();
 
         runtime.CreateCalls.Should().BeEmpty(
             "activation recovery must first re-enter the conversation inbox");
         runtime.LinkCalls.Should().BeEmpty();
-        var recovery = dispatch.Calls.Should().ContainSingle().Which;
-        recovery.ActorId.Should().Be(actorId);
-        recovery.Envelope.Route.PublisherActorId.Should().Be(actorId);
-        recovery.Envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
-        recovery.Envelope.Payload.TypeUrl.Should().EndWith(
-            "/aevatar.gagents.nyxid_chat.NyxIdChatRecoveryRequestedSignal");
-        recovery.Envelope.Payload.TypeUrl.Should().NotEndWith(
-            "/aevatar.gagents.nyxid_chat.NyxIdChatOperationDispatchCommand");
-        var signal = recovery.Envelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use a durable self callback");
+        publisher.PublishCalls.Should().BeEmpty();
+        var callback = GetSingleRecoveryCallback(callbacks, actorId);
+        callback.CallbackId.Should().NotBeNullOrWhiteSpace();
+        callback.TriggerEnvelope.Propagation.CorrelationId.Should().Be(
+            "operation-postcondition-alpha");
+        callback.TriggerEnvelope.Runtime.DeliveryIdentity.OperationId.Should().Be(
+            "operation-postcondition-alpha:recovery:1");
+        var signal = callback.TriggerEnvelope.Payload
+            .Unpack<NyxIdChatRecoveryRequestedSignal>();
         signal.Kind.Should().Be(NyxIdChatRecoveryKind.PostconditionRedispatch);
         signal.ExpectedStateVersion.Should().Be(1);
         signal.Key.Should().BeEquivalentTo(
@@ -65,15 +188,20 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateRequestedPostconditionState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = CreateController(services, actorId, runtime, dispatch);
+        var publisher = new RecoveryRecordingEventPublisher();
+        var agent = CreateController(services, actorId, runtime, dispatch, publisher);
         await agent.ActivateAsync();
-        var recoveryEnvelope = dispatch.Calls.Single().Envelope.Clone();
+        var recoveryEnvelope = GetSingleRecoveryCallback(callbacks, actorId)
+            .TriggerEnvelope.Clone();
         var recovery = recoveryEnvelope.Payload
             .Unpack<NyxIdChatRecoveryRequestedSignal>();
-        dispatch.Calls.Clear();
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use a durable self callback");
+        publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
 
@@ -105,19 +233,22 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateInterruptedLlmState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = CreateController(services, actorId, runtime, dispatch);
+        var publisher = new RecoveryRecordingEventPublisher();
+        var agent = CreateController(services, actorId, runtime, dispatch, publisher);
 
         await agent.ActivateAsync();
 
         runtime.CreateCalls.Should().BeEmpty();
         runtime.LinkCalls.Should().BeEmpty();
-        var recovery = dispatch.Calls.Should().ContainSingle().Which;
-        recovery.ActorId.Should().Be(actorId);
-        recovery.Envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
-        var signal = recovery.Envelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use a durable self callback");
+        publisher.PublishCalls.Should().BeEmpty();
+        var signal = GetSingleRecoveryCallback(callbacks, actorId).TriggerEnvelope.Payload
+            .Unpack<NyxIdChatRecoveryRequestedSignal>();
         signal.Kind.Should().Be(
             NyxIdChatRecoveryKind.InterruptedOperationReconciliation);
         signal.ExpectedStateVersion.Should().Be(1);
@@ -131,19 +262,25 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateInterruptedLlmState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = CreateController(services, actorId, runtime, dispatch);
+        var publisher = new RecoveryRecordingEventPublisher();
+        var agent = CreateController(services, actorId, runtime, dispatch, publisher);
         await agent.ActivateAsync();
-        var recoveryEnvelope = dispatch.Calls.Single().Envelope.Clone();
-        dispatch.Calls.Clear();
+        var recoveryEnvelope = GetSingleRecoveryCallback(callbacks, actorId)
+            .TriggerEnvelope.Clone();
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use a durable self callback");
+        publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
 
         runtime.CreateCalls.Should().BeEmpty();
         runtime.LinkCalls.Should().BeEmpty();
         dispatch.Calls.Should().BeEmpty("recovery must not replay model I/O");
+        publisher.PublishCalls.Should().BeEmpty();
         var step = agent.State.ActiveTask.Steps.Should().ContainSingle().Which;
         step.Status.Should().Be(NyxIdChatStepStatus.Failed);
         step.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Failed);
@@ -164,13 +301,18 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateInterruptedToolState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = CreateController(services, actorId, runtime, dispatch);
+        var publisher = new RecoveryRecordingEventPublisher();
+        var agent = CreateController(services, actorId, runtime, dispatch, publisher);
         await agent.ActivateAsync();
-        var recoveryEnvelope = dispatch.Calls.Single().Envelope.Clone();
-        dispatch.Calls.Clear();
+        var recoveryEnvelope = GetSingleRecoveryCallback(callbacks, actorId)
+            .TriggerEnvelope.Clone();
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use a durable self callback");
+        publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
 
@@ -179,8 +321,8 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         dispatch.Calls.Should().NotContain(call =>
             call.Envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor),
             "recovery must not repeat an effect-capable tool");
-        dispatch.Calls.Should().ContainSingle(call =>
-            call.Envelope.Payload.Is(NyxIdChatHistoryTerminalDispatchRequested.Descriptor),
+        publisher.PublishCalls.Should().ContainSingle(call =>
+            call.Event is NyxIdChatHistoryTerminalDispatchRequested,
             "the committed failed turn must continue to transcript delivery");
         var step = agent.State.ActiveTask.Steps.Should().ContainSingle().Which;
         step.Status.Should().Be(NyxIdChatStepStatus.Uncertain);
@@ -190,6 +332,47 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Failed);
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Failed);
         (await eventStore.GetEventsAsync(actorId)).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task InterruptedAdmittedEffectRecovery_ShouldDispatchOnlyFrozenReadBack()
+    {
+        const string actorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        await PersistStateAsync(eventStore, actorId, CreateInterruptedAdmittedToolState());
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = CreateController(services, actorId, runtime, dispatch);
+        await agent.ActivateAsync();
+        var recoveryEnvelope = GetSingleRecoveryCallback(callbacks, actorId)
+            .TriggerEnvelope.Clone();
+
+        await agent.HandleEventAsync(recoveryEnvelope);
+
+        runtime.CreateCalls.Should().BeEmpty();
+        runtime.LinkCalls.Should().BeEmpty();
+        var recovery = dispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        recovery.InputCase.Should().Be(
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ToolVerification);
+        recovery.ToolVerification.EffectStepId.Should().Be("step-postcondition-alpha");
+        recovery.ToolVerification.ReadBack.Should().BeEquivalentTo(ExactReadBack());
+        recovery.Tool.Should().BeNull("recovery must never replay the effect operation");
+        agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+        agent.State.ActiveTask.Steps.Single(step => step.StepId == "step-postcondition-alpha")
+            .ExternalEffect.Should().Be(NyxIdChatEffectEvidence.MayHaveChanged);
+        var reconciliation = agent.State.ActiveTask.Steps.Single(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition &&
+            step.Status == NyxIdChatStepStatus.Running);
+        reconciliation.Status.Should().Be(NyxIdChatStepStatus.Running);
+        reconciliation.Operation.Key.Should().BeEquivalentTo(recovery.Key);
+        agent.State.ActiveTask.PlanRevisions[^1].RevisionCause.Should().Be(
+            NyxIdChatPlanRevisionCause.FailureRecovery);
+        var events = await eventStore.GetEventsAsync(actorId);
+        events[^2].EventData.Is(NyxIdChatOperationReconciledEvent.Descriptor).Should().BeTrue();
+        events[^1].EventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor).Should().BeTrue();
     }
 
     [Theory]
@@ -202,25 +385,30 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateInterruptedToolState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = CreateController(services, actorId, runtime, dispatch);
+        var publisher = new RecoveryRecordingEventPublisher();
+        var agent = CreateController(services, actorId, runtime, dispatch, publisher);
         await agent.ActivateAsync();
-        var envelope = dispatch.Calls.Single().Envelope.Clone();
+        var envelope = GetSingleRecoveryCallback(callbacks, actorId).TriggerEnvelope.Clone();
         var signal = envelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
         if (staleVersion)
             signal.ExpectedStateVersion++;
         if (staleKey)
             signal.Key.OperationGeneration++;
         envelope.Payload = Any.Pack(signal);
-        dispatch.Calls.Clear();
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use a durable self callback");
+        publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(envelope);
 
         runtime.CreateCalls.Should().BeEmpty();
         runtime.LinkCalls.Should().BeEmpty();
         dispatch.Calls.Should().BeEmpty();
+        publisher.PublishCalls.Should().BeEmpty();
         agent.State.ActiveTask.Steps.Single().Status.Should().Be(
             NyxIdChatStepStatus.Running);
         (await eventStore.GetEventsAsync(actorId)).Should().ContainSingle();
@@ -232,16 +420,20 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateBlockedBrowserActionState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = CreateController(services, actorId, runtime, dispatch);
+        var publisher = new RecoveryRecordingEventPublisher();
+        var agent = CreateController(services, actorId, runtime, dispatch, publisher);
 
         await agent.ActivateAsync();
 
         runtime.CreateCalls.Should().BeEmpty();
         runtime.LinkCalls.Should().BeEmpty();
         dispatch.Calls.Should().BeEmpty();
+        publisher.PublishCalls.Should().BeEmpty();
+        callbacks.TimeoutRequests.Should().BeEmpty();
         agent.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
         (await eventStore.GetEventsAsync(actorId)).Should().ContainSingle();
@@ -255,37 +447,109 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         NyxIdChatTurnOperationAdmittedEvent.Descriptor
             .FindFieldByName("may_change_external_state")
             .Should().NotBeNull();
+        NyxIdChatTurnGAgentState.Descriptor.FindFieldByName("effect_dispatch_waterline")
+            .Should().NotBeNull();
+        NyxIdChatTurnEffectDispatchStartedEvent.Descriptor.FindFieldByName("started_at")
+            .Should().NotBeNull();
     }
 
     [Theory]
-    [InlineData(NyxIdChatStepKind.Llm, NyxIdChatEffectEvidence.NotApplied)]
-    [InlineData(NyxIdChatStepKind.Tool, NyxIdChatEffectEvidence.MayHaveChanged)]
+    [InlineData(
+        NyxIdChatStepKind.Llm,
+        NyxIdChatEffectEvidence.NotApplied,
+        NyxIdChatEffectEvidence.NotApplied,
+        1)]
+    [InlineData(
+        NyxIdChatStepKind.Tool,
+        NyxIdChatEffectEvidence.NotStarted,
+        NyxIdChatEffectEvidence.NotApplied,
+        1)]
+    [InlineData(
+        NyxIdChatStepKind.Tool,
+        NyxIdChatEffectEvidence.MayHaveChanged,
+        NyxIdChatEffectEvidence.MayHaveChanged,
+        2)]
+    [InlineData(
+        NyxIdChatStepKind.Tool,
+        NyxIdChatEffectEvidence.Unspecified,
+        NyxIdChatEffectEvidence.MayHaveChanged,
+        1)]
     public async Task TurnActivation_WithAdmittedOperation_ShouldReconcileWithoutExecutingAgain(
         NyxIdChatStepKind operationKind,
-        NyxIdChatEffectEvidence expectedEffect)
+        NyxIdChatEffectEvidence dispatchWaterline,
+        NyxIdChatEffectEvidence expectedEffect,
+        int admittedEventCount)
     {
         const string turnActorId = "turn-actor-alpha";
         var eventStore = new InMemoryEventStoreForTests();
-        await PersistTurnAdmissionAsync(eventStore, turnActorId, operationKind);
+        await PersistTurnAdmissionAsync(
+            eventStore,
+            turnActorId,
+            operationKind,
+            dispatchWaterline);
         using var services = BuildEventSourcingServices(eventStore);
-        var executor = new RecordingTurnOperationExecutor();
+        var operationDispatch = new RecordingTurnOperationDispatchPort();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = CreateTurnActor(services, turnActorId, executor, dispatch);
+        var publisher = new RecoveryRecordingEventPublisher();
+        var agent = CreateTurnActor(
+            services,
+            turnActorId,
+            operationDispatch,
+            dispatch,
+            publisher);
 
         await agent.ActivateAsync();
 
-        executor.Commands.Should().BeEmpty("activation must never replay provider or tool I/O");
-        var recoveryEnvelope = dispatch.Calls.Should().ContainSingle().Which.Envelope.Clone();
-        recoveryEnvelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        operationDispatch.Executions.Should().BeEmpty(
+            "activation must never replay provider or tool I/O");
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use the current actor publisher");
+        var publication = publisher.PublishCalls.Should().ContainSingle().Which;
+        publication.Audience.Should().Be(TopologyAudience.Self);
+        publication.Options!.Propagation!.CorrelationId.Should().Be("operation-alpha");
+        publication.Options.Delivery!.OperationId.Should().Be(
+            $"operation-alpha:turn-recovery:{admittedEventCount}");
+        var recoveryEnvelope = CreateSelfEnvelope(turnActorId, publication);
         var recovery = recoveryEnvelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
         recovery.Kind.Should().Be(
             NyxIdChatRecoveryKind.InterruptedOperationReconciliation);
-        recovery.ExpectedStateVersion.Should().Be(1);
-        dispatch.Calls.Clear();
+        recovery.ExpectedStateVersion.Should().Be(admittedEventCount);
+        publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
 
-        executor.Commands.Should().BeEmpty();
+        operationDispatch.Executions.Should().BeEmpty();
+        if (expectedEffect == NyxIdChatEffectEvidence.MayHaveChanged)
+        {
+            var reconciliation = operationDispatch.Reconciliations
+                .Should().ContainSingle().Which;
+            reconciliation.Input.Key.Should().BeEquivalentTo(recovery.Key);
+            agent.State.ReconciliationStartedAt.Should().NotBeNull();
+            agent.State.ResultDelivered.Should().BeFalse();
+            dispatch.Calls.Should().BeEmpty();
+
+            await agent.HandleEventAsync(CreateEnvelope(
+                turnActorId,
+                new NyxIdChatTurnOperationExecutionCompletedSignal
+                {
+                    Source = NyxIdChatTurnOperationCompletionSource.Reconciliation,
+                    Result = new NyxIdChatOperationResultSignal
+                    {
+                        Key = recovery.Key.Clone(),
+                        Failure = new NyxIdChatOperationFailure
+                        {
+                            FailureCode = "NYXID_CHAT_OPERATION_OUTCOME_UNCERTAIN",
+                            SafeMessage = "The external operation could not be reconciled.",
+                            ExternalEffect = NyxIdChatEffectEvidence.MayHaveChanged,
+                        },
+                    },
+                }));
+        }
+        else
+        {
+            operationDispatch.Reconciliations.Should().BeEmpty();
+        }
+
         var delivery = dispatch.Calls.Should().ContainSingle().Which;
         delivery.ActorId.Should().Be("conversation-alpha");
         var result = delivery.Envelope.Payload.Unpack<NyxIdChatOperationResultSignal>();
@@ -297,7 +561,9 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         agent.State.Phase.Should().Be(expectedEffect == NyxIdChatEffectEvidence.MayHaveChanged
             ? NyxIdChatOperationPhase.Uncertain
             : NyxIdChatOperationPhase.Failed);
-        (await eventStore.GetEventsAsync(turnActorId)).Should().HaveCount(3);
+        (await eventStore.GetEventsAsync(turnActorId)).Should().HaveCount(
+            admittedEventCount +
+            (expectedEffect == NyxIdChatEffectEvidence.MayHaveChanged ? 3 : 2));
     }
 
     [Fact]
@@ -307,21 +573,33 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         var eventStore = new InMemoryEventStoreForTests();
         await PersistCompletedUndeliveredTurnAsync(eventStore, turnActorId);
         using var services = BuildEventSourcingServices(eventStore);
-        var executor = new RecordingTurnOperationExecutor();
+        var operationDispatch = new RecordingTurnOperationDispatchPort();
         var dispatch = new RecordingActorDispatchPort();
-        var agent = CreateTurnActor(services, turnActorId, executor, dispatch);
+        var publisher = new RecoveryRecordingEventPublisher();
+        var agent = CreateTurnActor(
+            services,
+            turnActorId,
+            operationDispatch,
+            dispatch,
+            publisher);
 
         await agent.ActivateAsync();
 
-        executor.Commands.Should().BeEmpty("recovery cannot reconstruct or repeat the original I/O");
-        var recoveryEnvelope = dispatch.Calls.Should().ContainSingle().Which.Envelope.Clone();
+        operationDispatch.Executions.Should().BeEmpty(
+            "recovery cannot reconstruct or repeat the original I/O");
+        dispatch.Calls.Should().BeEmpty(
+            "activation recovery must use the current actor publisher");
+        var recoveryEnvelope = CreateSelfEnvelope(
+            turnActorId,
+            publisher.PublishCalls.Should().ContainSingle().Which);
         var recovery = recoveryEnvelope.Payload.Unpack<NyxIdChatRecoveryRequestedSignal>();
         recovery.ExpectedStateVersion.Should().Be(2);
-        dispatch.Calls.Clear();
+        publisher.PublishCalls.Clear();
 
         await agent.HandleEventAsync(recoveryEnvelope);
 
-        executor.Commands.Should().BeEmpty();
+        operationDispatch.Executions.Should().BeEmpty();
+        operationDispatch.Reconciliations.Should().BeEmpty();
         var result = dispatch.Calls.Should().ContainSingle().Which.Envelope.Payload
             .Unpack<NyxIdChatOperationResultSignal>();
         result.ResultCase.Should().Be(
@@ -343,25 +621,36 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         const string actorId = "conversation-alpha";
         var eventStore = new InMemoryEventStoreForTests();
         await PersistStateAsync(eventStore, actorId, CreateRequestedPostconditionState());
-        using var services = BuildEventSourcingServices(eventStore);
+        var callbacks = new RecordingRuntimeCallbackScheduler();
+        using var services = BuildEventSourcingServices(eventStore, callbacks);
         var firstRuntime = new RecordingActorRuntime();
         var firstDispatch = new RecordingActorDispatchPort();
-        var first = CreateController(services, actorId, firstRuntime, firstDispatch);
+        var firstPublisher = new RecoveryRecordingEventPublisher();
+        var first = CreateController(
+            services, actorId, firstRuntime, firstDispatch, firstPublisher);
         await first.ActivateAsync();
         var firstSnapshot = first.State.ToByteString();
+        var firstCallback = GetSingleRecoveryCallback(callbacks, actorId);
+        callbacks.TimeoutRequests.Clear();
 
         var secondRuntime = new RecordingActorRuntime();
         var secondDispatch = new RecordingActorDispatchPort();
-        var second = CreateController(services, actorId, secondRuntime, secondDispatch);
+        var secondPublisher = new RecoveryRecordingEventPublisher();
+        var second = CreateController(
+            services, actorId, secondRuntime, secondDispatch, secondPublisher);
         await second.ActivateAsync();
 
         second.State.ToByteString().Should().Equal(firstSnapshot);
         firstRuntime.CreateCalls.Should().BeEmpty();
         secondRuntime.CreateCalls.Should().BeEmpty();
-        firstDispatch.Calls.Should().ContainSingle(call =>
-            call.Envelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor));
-        secondDispatch.Calls.Should().ContainSingle(call =>
-            call.Envelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor));
+        firstDispatch.Calls.Should().BeEmpty();
+        secondDispatch.Calls.Should().BeEmpty();
+        firstPublisher.PublishCalls.Should().BeEmpty();
+        secondPublisher.PublishCalls.Should().BeEmpty();
+        var secondCallback = GetSingleRecoveryCallback(callbacks, actorId);
+        secondCallback.CallbackId.Should().Be(firstCallback.CallbackId);
+        secondCallback.TriggerEnvelope.Payload.ToByteString().Should().Equal(
+            firstCallback.TriggerEnvelope.Payload.ToByteString());
         (await eventStore.GetEventsAsync(actorId)).Should().ContainSingle(
             "activation recovery signals are not committed product facts");
     }
@@ -480,8 +769,8 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         var key = new NyxIdChatOperationKey
         {
             ConversationActorId = "conversation-alpha",
-            TurnId = "turn-continuation-alpha",
-            TaskId = "task-continuation-alpha",
+            TurnId = "turn-origin-alpha",
+            TaskId = "task-alpha",
             StepId = "step-postcondition-alpha",
             OperationId = "operation-postcondition-alpha",
             OperationGeneration = 1,
@@ -492,7 +781,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             ScopeId = "scope-alpha",
             ActiveTurn = new NyxIdChatTurnState
             {
-                TurnId = key.TurnId,
+                TurnId = "turn-continuation-alpha",
                 TaskId = key.TaskId,
                 ClientRequestId = "client-action-alpha",
                 Status = NyxIdChatTurnStatus.Active,
@@ -500,7 +789,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             },
             ActiveTask = new NyxIdChatTaskState
             {
-                TurnId = key.TurnId,
+                TurnId = "turn-continuation-alpha",
                 TaskId = key.TaskId,
                 Status = NyxIdChatTaskStatus.Active,
                 ActiveStepId = key.StepId,
@@ -514,7 +803,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
                 RequestId = "command-action-alpha",
                 ClientRequestId = "client-action-alpha",
                 OriginTurnId = "turn-origin-alpha",
-                ContinuationTurnId = key.TurnId,
+                ContinuationTurnId = "turn-continuation-alpha",
                 Status = NyxIdChatContinuationAdmissionStatus.Accepted,
                 OwnerSubject = "owner-alpha",
                 CommittedAt = Timestamp.FromDateTimeOffset(FixedNow),
@@ -526,7 +815,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
                 DeliveryId = "delivery-continuation-alpha",
                 ScopeId = "scope-alpha",
                 ConversationId = "conversation-alpha",
-                TurnId = key.TurnId,
+                TurnId = "turn-continuation-alpha",
                 UserText = "Continue after the approved action.",
                 SourceActorId = "conversation-alpha",
                 SourceCommandId = "command-action-alpha",
@@ -551,7 +840,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
                 Postcondition = new NyxIdChatPostconditionStepSource
                 {
                     ActionRequestId = "action-alpha",
-                    PostconditionKind = nameof(NyxIdAssistantActionKind.ServiceConnect),
+                    Check = nameof(NyxIdAssistantActionKind.ServiceConnect),
                 },
             },
             ActionRequestId = "action-alpha",
@@ -583,10 +872,10 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         state.PendingActions.Add(new NyxIdChatActionRequestState
         {
             SchemaVersion = 4,
-            RegistryRevision = "nyxid-assistant-actions.v4",
+            RegistryRevision = "nyxid-assistant-actions.v5",
             ConversationActorId = state.ConversationActorId,
             OriginTurnId = report.OriginTurnId,
-            TaskId = "task-origin-alpha",
+            TaskId = key.TaskId,
             StepId = "step-browser-action-alpha",
             ActionRequestId = report.ActionRequestId,
             Action = NyxIdAssistantActionKind.ServiceConnect,
@@ -609,6 +898,7 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         state.ContinuationAdmission = null;
         state.PendingActions.Clear();
         var step = state.ActiveTask.Steps.Single();
+        step.Operation.Key.TurnId = state.ActiveTurn.TurnId;
         step.Kind = NyxIdChatStepKind.Llm;
         step.Source = new NyxIdChatStepSource
         {
@@ -638,6 +928,120 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         step.Operation.MayChangeExternalState = true;
         return state;
     }
+
+    private static NyxIdChatConversationGAgentState CreateInterruptedAdmittedToolState()
+    {
+        var state = CreateInterruptedToolState();
+        var step = state.ActiveTask.Steps.Single();
+        step.RetryInputRebuildable = true;
+        step.Source.Tool.OperationAdmission = ExactWriteAdmission();
+        step.RetryToolInput = new NyxIdChatRetryToolInputState
+        {
+            CallId = "call-alpha",
+            ToolName = "tool-alpha",
+            Arguments = JsonParser.Default.Parse<Struct>("{\"body\":{\"id\":\"resource-alpha\"}}"),
+            OperationAdmission = ExactWriteAdmission(),
+        };
+        state.ActiveTask.Steps.Add(new NyxIdChatTaskStepState
+        {
+            StepId = "step-verification-alpha",
+            Order = 2,
+            Kind = NyxIdChatStepKind.Postcondition,
+            Status = NyxIdChatStepStatus.Planned,
+            Required = true,
+            Description = "Verify the external effect through its admitted read-back.",
+            Source = new NyxIdChatStepSource
+            {
+                Postcondition = new NyxIdChatPostconditionStepSource
+                {
+                    EffectStepId = step.StepId,
+                    Check = ExactReadBack().CheckName,
+                    ToolReadBack = ExactReadBack(),
+                },
+            },
+            DependsOn = { step.StepId },
+            ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = state.ConversationActorId,
+                    TurnId = state.ActiveTurn.TurnId,
+                    TaskId = state.ActiveTask.TaskId,
+                    StepId = "step-verification-alpha",
+                    OperationId = "operation-verification-alpha",
+                    OperationGeneration = 1,
+                },
+                Kind = NyxIdChatStepKind.Postcondition,
+                Phase = NyxIdChatOperationPhase.Requested,
+                RequestedAt = Timestamp.FromDateTimeOffset(FixedNow),
+            },
+            UpdatedAt = Timestamp.FromDateTimeOffset(FixedNow),
+        });
+        return state;
+    }
+
+    private static AgentToolOperationAdmissionPayload ExactWriteAdmission() => new()
+    {
+        ServiceInstanceId = "connected-service-alpha",
+        ServiceSlug = "service-alpha",
+        PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+        {
+            EndpointId = "endpoint-write-alpha",
+        },
+        AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
+        HttpMethod = "PATCH",
+        PathTemplate = "/resources/{resourceId}",
+        ContractDigest = new string('b', 64),
+        CatalogDigest = $"sha256:{new string('a', 64)}",
+        ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
+        {
+            Risk = AgentToolOperationRiskPayload.Write,
+            Approval = AgentToolOperationApprovalPayload.Required,
+            EnforcementOwner = AgentToolOperationEnforcementOwnerPayload.Aevatar,
+            AllowedExecutionModes =
+            {
+                AgentToolOperationExecutionModePayload.Interactive,
+            },
+        },
+        ReadBack = ExactReadBack(),
+    };
+
+    private static AgentToolOperationReadBackPayload ExactReadBack() => new()
+    {
+        ReadOperation = new AgentToolOperationAdmissionPayload
+        {
+            ServiceInstanceId = "connected-service-alpha",
+            ServiceSlug = "service-alpha",
+            PublishedEndpoint = new AgentToolPublishedEndpointIdentityPayload
+            {
+                EndpointId = "endpoint-read-alpha",
+            },
+            AuthorizationBasis = AgentToolOperationAuthorizationBasisPayload.PublishedContract,
+            HttpMethod = "GET",
+            PathTemplate = "/resources/{resourceId}",
+            ContractDigest = new string('c', 64),
+            CatalogDigest = $"sha256:{new string('a', 64)}",
+            ExecutionPolicy = new AgentToolOperationExecutionPolicyPayload
+            {
+                Risk = AgentToolOperationRiskPayload.ReadOnly,
+                Approval = AgentToolOperationApprovalPayload.None,
+                EnforcementOwner = AgentToolOperationEnforcementOwnerPayload.Aevatar,
+                AllowedExecutionModes =
+                {
+                    AgentToolOperationExecutionModePayload.Interactive,
+                },
+            },
+        },
+        Arguments = JsonParser.Default.Parse<Struct>("{\"path_params\":{\"resourceId\":\"resource-alpha\"}}"),
+        Assertion = new AgentToolReadBackAssertionPayload
+        {
+            Match = AgentToolReadBackMatchPayload.Equals,
+            JsonPointer = "/id",
+            ExpectedValue = Google.Protobuf.WellKnownTypes.Value.ForString("resource-alpha"),
+        },
+        CheckName = "resource_exists",
+    };
 
     private static NyxIdChatConversationGAgentState CreateBlockedBrowserActionState()
     {
@@ -690,27 +1094,53 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
     private static Task PersistTurnAdmissionAsync(
         IEventStore eventStore,
         string actorId,
-        NyxIdChatStepKind operationKind) =>
-        eventStore.AppendAsync(
-            actorId,
-            [
-                new StateEvent
+        NyxIdChatStepKind operationKind,
+        NyxIdChatEffectEvidence dispatchWaterline)
+    {
+        var key = CreateOperationKey();
+        var events = new List<StateEvent>
+        {
+            new()
+            {
+                EventId = "turn-admission-alpha",
+                AgentId = actorId,
+                Version = 1,
+                Timestamp = Timestamp.FromDateTimeOffset(FixedNow),
+                EventType = NyxIdChatTurnOperationAdmittedEvent.Descriptor.FullName,
+                EventData = Any.Pack(new NyxIdChatTurnOperationAdmittedEvent
                 {
-                    EventId = "turn-admission-alpha",
-                    AgentId = actorId,
-                    Version = 1,
-                    Timestamp = Timestamp.FromDateTimeOffset(FixedNow),
-                    EventType = NyxIdChatTurnOperationAdmittedEvent.Descriptor.FullName,
-                    EventData = Any.Pack(new NyxIdChatTurnOperationAdmittedEvent
-                    {
-                        Key = CreateOperationKey(),
-                        OperationKind = operationKind,
-                        MayChangeExternalState = operationKind == NyxIdChatStepKind.Tool,
-                        AdmittedAt = Timestamp.FromDateTimeOffset(FixedNow),
-                    }),
-                },
-            ],
+                    Key = key.Clone(),
+                    OperationKind = operationKind,
+                    MayChangeExternalState = operationKind == NyxIdChatStepKind.Tool,
+                    EffectDispatchWaterline = dispatchWaterline == NyxIdChatEffectEvidence.MayHaveChanged
+                        ? NyxIdChatEffectEvidence.NotStarted
+                        : dispatchWaterline,
+                    AdmittedAt = Timestamp.FromDateTimeOffset(FixedNow),
+                }),
+            },
+        };
+        if (dispatchWaterline == NyxIdChatEffectEvidence.MayHaveChanged)
+        {
+            events.Add(new StateEvent
+            {
+                EventId = "turn-effect-dispatch-alpha",
+                AgentId = actorId,
+                Version = 2,
+                Timestamp = Timestamp.FromDateTimeOffset(FixedNow),
+                EventType = NyxIdChatTurnEffectDispatchStartedEvent.Descriptor.FullName,
+                EventData = Any.Pack(new NyxIdChatTurnEffectDispatchStartedEvent
+                {
+                    Key = key.Clone(),
+                    StartedAt = Timestamp.FromDateTimeOffset(FixedNow),
+                }),
+            });
+        }
+
+        return eventStore.AppendAsync(
+            actorId,
+            events,
             expectedVersion: 0);
+    }
 
     private static Task PersistCompletedUndeliveredTurnAsync(
         IEventStore eventStore,
@@ -779,6 +1209,36 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         },
     };
 
+    private static EventEnvelope CreateSelfEnvelope(
+        string actorId,
+        (IMessage Event, TopologyAudience Audience, EventEnvelopePublishOptions? Options) publication) =>
+        new()
+        {
+            Id = publication.Options?.Delivery?.OperationId ?? "recovery-self-alpha",
+            Timestamp = Timestamp.FromDateTimeOffset(FixedNow),
+            Payload = Any.Pack(publication.Event),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                actorId,
+                publication.Audience),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = publication.Options?.Propagation?.CorrelationId ?? string.Empty,
+            },
+        };
+
+    private static RuntimeCallbackTimeoutRequest GetSingleRecoveryCallback(
+        RecordingRuntimeCallbackScheduler callbacks,
+        string actorId)
+    {
+        var callback = callbacks.TimeoutRequests.Should().ContainSingle().Which;
+        callback.ActorId.Should().Be(actorId);
+        callback.TriggerEnvelope.Route.GetTopologyAudience().Should().Be(
+            TopologyAudience.Self);
+        callback.TriggerEnvelope.Payload
+            .Is(NyxIdChatRecoveryRequestedSignal.Descriptor).Should().BeTrue();
+        return callback;
+    }
+
     private static EventEnvelope WrapCommittedState(
         NyxIdChatConversationGAgentState state,
         long stateVersion) => new()
@@ -817,7 +1277,8 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         ServiceProvider services,
         string actorId,
         IActorRuntime runtime,
-        IActorDispatchPort dispatch)
+        IActorDispatchPort dispatch,
+        IEventPublisher? publisher = null)
     {
         var agent = new NyxIdChatConversationGAgent(
             runtime,
@@ -828,6 +1289,8 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
             EventSourcingBehaviorFactory = services.GetRequiredService<
                 IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
         };
+        if (publisher is not null)
+            agent.EventPublisher = publisher;
         typeof(GAgentBase)
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(agent, [actorId]);
@@ -837,29 +1300,36 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
     private static NyxIdChatTurnGAgent CreateTurnActor(
         ServiceProvider services,
         string actorId,
-        INyxIdChatTurnOperationExecutor executor,
-        IActorDispatchPort dispatch)
+        INyxIdChatTurnOperationDispatchPort operationDispatch,
+        IActorDispatchPort dispatch,
+        IEventPublisher? publisher = null)
     {
         var agent = new NyxIdChatTurnGAgent(
-            executor,
+            operationDispatch,
             dispatch,
+            new NyxIdToolOptions(),
             new FixedTimeProvider(FixedNow))
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<
                 IEventSourcingBehaviorFactory<NyxIdChatTurnGAgentState>>(),
         };
+        if (publisher is not null)
+            agent.EventPublisher = publisher;
         typeof(GAgentBase)
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(agent, [actorId]);
         return agent;
     }
 
-    private static ServiceProvider BuildEventSourcingServices(IEventStore eventStore) =>
+    private static ServiceProvider BuildEventSourcingServices(
+        IEventStore eventStore,
+        IActorRuntimeCallbackScheduler? callbackScheduler = null) =>
         new ServiceCollection()
             .AddSingleton(eventStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
-            .AddSingleton<IActorRuntimeCallbackScheduler, NoopRuntimeCallbackScheduler>()
+            .AddSingleton<IActorRuntimeCallbackScheduler>(
+                callbackScheduler ?? new NoopRuntimeCallbackScheduler())
             .AddSingleton<IChatHistoryCommandPort, NoopChatHistoryCommandPort>()
             .AddTransient(
                 typeof(IEventSourcingBehaviorFactory<>),
@@ -951,26 +1421,82 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
         }
     }
 
-    private sealed class RecordingTurnOperationExecutor : INyxIdChatTurnOperationExecutor
+    private sealed class RecoveryRecordingEventPublisher : IEventPublisher
     {
-        public List<NyxIdChatOperationDispatchCommand> Commands { get; } = [];
+        public List<(IMessage Event, TopologyAudience Audience, EventEnvelopePublishOptions? Options)>
+            PublishCalls { get; } = [];
 
-        public Task<NyxIdChatTurnOperationExecution> ExecuteAsync(
+        public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)>
+            SendCalls { get; } = [];
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            PublishCalls.Add((evt, audience, options?.DeepClone()));
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            SendCalls.Add((targetActorId, evt, options?.DeepClone()));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingTurnOperationDispatchPort
+        : INyxIdChatTurnOperationDispatchPort,
+            INyxIdChatTurnOperationDispatchSession
+    {
+        public List<NyxIdChatOperationDispatchCommand> Executions { get; } = [];
+        public List<(string ActorId, NyxIdChatTurnOperationReconciliationInput Input)>
+            Reconciliations { get; } = [];
+        public List<NyxIdChatOperationKey> Cancellations { get; } = [];
+
+        public Task DispatchExecutionAsync(
+            string turnActorId,
             NyxIdChatOperationDispatchCommand command,
-            NyxIdChatTransientExecutionSession session,
-            Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
+            string correlationId,
             CancellationToken ct)
         {
-            _ = session;
-            _ = reportProgressAsync;
+            _ = turnActorId;
+            _ = correlationId;
             ct.ThrowIfCancellationRequested();
-            Commands.Add(command.Clone());
-            return Task.FromResult(new NyxIdChatTurnOperationExecution(
-                new NyxIdChatOperationResultSignal
-                {
-                    Key = command.Key.Clone(),
-                    Llm = new NyxIdChatLLMOperationResult(),
-                }));
+            Executions.Add(command.Clone());
+            return Task.CompletedTask;
+        }
+
+        public INyxIdChatTurnOperationDispatchSession OpenSession() => this;
+
+        public Task DispatchReconciliationAsync(
+            string turnActorId,
+            NyxIdChatTurnOperationReconciliationInput input,
+            string correlationId,
+            CancellationToken ct)
+        {
+            _ = correlationId;
+            ct.ThrowIfCancellationRequested();
+            Reconciliations.Add((turnActorId, input.Clone()));
+            return Task.CompletedTask;
+        }
+
+        public Task CancelExecutionAsync(NyxIdChatOperationKey key, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Cancellations.Add(key.Clone());
+            return Task.CompletedTask;
         }
     }
 
@@ -1043,6 +1569,41 @@ public sealed class NyxIdChatRecoveryAndSecurityTests
                 request.CallbackId,
                 0,
                 RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            TimeoutRequests.Add(new RuntimeCallbackTimeoutRequest
+            {
+                ActorId = request.ActorId,
+                CallbackId = request.CallbackId,
+                TriggerEnvelope = request.TriggerEnvelope.Clone(),
+                DueTime = request.DueTime,
+                DeliveryMode = request.DeliveryMode,
+            });
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                TimeoutRequests.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
             Task.CompletedTask;

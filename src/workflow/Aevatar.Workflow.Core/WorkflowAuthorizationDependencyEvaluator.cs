@@ -11,6 +11,8 @@ public static class WorkflowAuthorizationDependencyEvaluator
     /// <summary>The workflow tool whose every call site must carry a committed admission proof.</summary>
     public const string NyxIdProxyToolName = "nyxid_proxy";
 
+    public const string CodeExecuteToolName = "code_execute";
+
     private static readonly HashSet<string> NyxIdRuntimeArgumentNames = new(StringComparer.Ordinal)
     {
         "path_params",
@@ -33,6 +35,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
         "http_method",
         "path",
         "path_template",
+        "risk",
         "schema",
         "contract_digest",
         "source_stamp",
@@ -40,7 +43,8 @@ public static class WorkflowAuthorizationDependencyEvaluator
 
     /// <summary>True when a dispatched tool may only run against a committed call-site proof.</summary>
     public static bool RequiresExternalCapabilityAdmission(string? toolName) =>
-        string.Equals(toolName?.Trim(), NyxIdProxyToolName, StringComparison.OrdinalIgnoreCase);
+        string.Equals(toolName?.Trim(), NyxIdProxyToolName, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(toolName?.Trim(), CodeExecuteToolName, StringComparison.OrdinalIgnoreCase);
 
     public static WorkflowAuthorizationDependencies Evaluate(WorkflowDefinition workflow)
     {
@@ -81,7 +85,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
     }
 
     /// <summary>
-    /// Compiles the external invocation for the sub-step a looping primitive synthesizes at runtime.
+    /// Compiles the external invocation for a sub-step a composite primitive synthesizes at runtime.
     /// The call-site identity is the owner step's, never the dynamic per-item or per-iteration id.
     /// </summary>
     public static ExternalToolInvocationSpec? TryCompileSynthesizedSubStepInvocation(
@@ -110,7 +114,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
         if (!invocation.Step.Parameters.TryGetValue("tool", out var rawToolName) ||
             string.IsNullOrWhiteSpace(rawToolName))
         {
-            if (invocation.IsSynthesized)
+            if (invocation.IsSynthesized || invocation.Step.ResponseProjection is not null)
                 throw Invalid(invocation.Step, "indirect tool_call requires one static tool name.");
             return null;
         }
@@ -127,12 +131,37 @@ public static class WorkflowAuthorizationDependencyEvaluator
 
         if (!RequiresExternalCapabilityAdmission(toolName))
         {
-            if (invocation.Step.Capability is not null)
-                throw Invalid(invocation.Step, "step capability is only valid for its matching external tool invocation.");
+            if (invocation.Step.Capability is not null || invocation.Step.ResponseProjection is not null)
+            {
+                throw Invalid(
+                    invocation.Step,
+                    "step capability and response_projection are only valid for their matching external tool invocation.");
+            }
             return null;
         }
 
+        if (string.Equals(toolName, CodeExecuteToolName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (invocation.Step.Capability is not null || invocation.Step.ResponseProjection is not null)
+            {
+                throw Invalid(
+                    invocation.Step,
+                    "code_execute uses the canonical platform route and does not accept an authored capability selector or response_projection.");
+            }
+
+            return new ExternalToolInvocationSpec
+            {
+                CallSiteId = invocation.CallSiteId,
+                ToolName = CodeExecuteToolName,
+                Selector = new ExternalWorkflowCapabilitySelector
+                {
+                    CodeExecution = new CodeExecutionSelector(),
+                },
+            };
+        }
+
         ValidateNyxIdRuntimeArguments(invocation.Step);
+        var responseProjection = ValidateResponseProjection(invocation.Step);
         var selector = invocation.Step.Capability?.Clone() ?? new ExternalWorkflowCapabilitySelector();
         if (selector.SelectorCase is not (
                 ExternalWorkflowCapabilitySelector.SelectorOneofCase.None or
@@ -152,11 +181,18 @@ public static class WorkflowAuthorizationDependencyEvaluator
             CallSiteId = invocation.CallSiteId,
             ToolName = NyxIdProxyToolName,
             Selector = selector,
+            ResponseProjection = responseProjection,
         };
     }
 
     private static ExternalToolInvocationSpec CompileConnectorInvocation(InvocationStep invocation)
     {
+        if (invocation.Step.ResponseProjection is not null)
+        {
+            throw Invalid(
+                invocation.Step,
+                "response_projection is currently supported only by admitted nyxid_proxy tool_call steps.");
+        }
         var connectorRef = ReadStaticStepParameter(invocation.Step, "connector", required: true);
         var operationId = ReadFirstStaticStepParameter(invocation.Step, ["operation", "action"])
                           ?? DefaultConnectorOperationId;
@@ -238,6 +274,22 @@ public static class WorkflowAuthorizationDependencyEvaluator
         }
     }
 
+    private static WorkflowToolResponseProjection? ValidateResponseProjection(StepDefinition step)
+    {
+        if (step.ResponseProjection is null)
+            return null;
+
+        try
+        {
+            WorkflowToolResponseProjectionContract.ValidateOrThrow(step.ResponseProjection);
+            return step.ResponseProjection.Clone();
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw Invalid(step, exception.Message);
+        }
+    }
+
     private static void ValidateObjectSlot(StepDefinition step, JsonElement arguments, string propertyName)
     {
         if (arguments.TryGetProperty(propertyName, out var value) &&
@@ -302,11 +354,16 @@ public static class WorkflowAuthorizationDependencyEvaluator
     private static StepDefinition? TryBuildSynthesizedSubStep(StepDefinition owner)
     {
         var ownerType = WorkflowPrimitiveCatalog.ToCanonicalType(owner.Type);
-        if (ownerType is not ("foreach" or "while"))
+        var (subStepTypeKey, defaultSubStepType, targetRoleKey) = ownerType switch
+        {
+            "foreach" => ("sub_step_type", "parallel", "sub_target_role"),
+            "while" => ("step", "llm_call", "sub_target_role"),
+            "cache" => ("child_step_type", "llm_call", "child_target_role"),
+            _ => (null, null, null),
+        };
+        if (subStepTypeKey is null)
             return null;
 
-        var subStepTypeKey = ownerType == "foreach" ? "sub_step_type" : "step";
-        var defaultSubStepType = ownerType == "foreach" ? "parallel" : "llm_call";
         var subStepType = owner.Parameters.GetValueOrDefault(subStepTypeKey, defaultSubStepType);
         var canonicalSubStepType = WorkflowPrimitiveCatalog.ToCanonicalType(subStepType);
         var subParameters = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -320,9 +377,10 @@ public static class WorkflowAuthorizationDependencyEvaluator
         {
             Id = $"{owner.Id}/sub-step",
             Type = canonicalSubStepType,
-            TargetRole = owner.Parameters.GetValueOrDefault("sub_target_role"),
+            TargetRole = owner.Parameters.GetValueOrDefault(targetRoleKey),
             Parameters = subParameters,
             Capability = owner.Capability?.Clone(),
+            ResponseProjection = owner.ResponseProjection?.Clone(),
         };
     }
 

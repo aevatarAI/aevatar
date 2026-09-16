@@ -119,10 +119,32 @@ message ChatRouteVoiceAttachTarget {
   aevatar.voice.VoiceSessionOverrides session_overrides = 3;
 }
 
+// Server-owned Agent Profile kind selected by the route. This is a business
+// identity, not a tool-set alias.
+enum ChatRouteAgentProfileKind {
+  CHAT_ROUTE_AGENT_PROFILE_KIND_UNSPECIFIED = 0;
+  CHAT_ROUTE_AGENT_PROFILE_KIND_WORKSPACE_CHAT = 1;
+  CHAT_ROUTE_AGENT_PROFILE_KIND_CHANNEL_REPLY = 2;
+  CHAT_ROUTE_AGENT_PROFILE_KIND_NYXID_CHAT = 3;
+}
+
+enum ChatRouteAgentProfileReferenceOwnerKind {
+  CHAT_ROUTE_AGENT_PROFILE_REFERENCE_OWNER_KIND_UNSPECIFIED = 0;
+  CHAT_ROUTE_AGENT_PROFILE_REFERENCE_OWNER_KIND_CALLER = 1;
+  CHAT_ROUTE_AGENT_PROFILE_REFERENCE_OWNER_KIND_SYSTEM = 2;
+}
+
+message ChatRouteAgentProfileRef {
+  ChatRouteAgentProfileReferenceOwnerKind owner_kind = 1;
+  string profile_slug = 2;
+}
+
 message ForwardToModel {
   string model_name = 1;
   ChatRouteToolSetRef tool_set_ref = 2;
   ChatRouteToolChoiceHint tool_choice_hint = 3;
+  ChatRouteAgentProfileKind profile_kind = 4;
+  ChatRouteAgentProfileRef profile_ref = 5;
 }
 
 message Reject {

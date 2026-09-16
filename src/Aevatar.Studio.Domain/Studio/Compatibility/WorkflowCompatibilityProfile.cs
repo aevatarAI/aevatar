@@ -188,6 +188,7 @@ public sealed class WorkflowCompatibilityProfile
                 "max_tool_rounds",
                 "max_history_messages",
                 "allowed_tools",
+                "tool_sets",
                 "event_modules",
                 "event_routes",
                 "connectors",
@@ -195,7 +196,7 @@ public sealed class WorkflowCompatibilityProfile
             AllowedRoleExtensionFields = ImmutableHashSet.Create(comparer, "event_modules", "event_routes"),
             AllowedStepFields = ImmutableHashSet.Create(
                 comparer,
-                ["id", "type", "target_role", "role", "allowed_tools", "capability", "parameters", "next", "branches", "children", "retry", "on_error", "timeout_ms", .. rootParameterFields]),
+                ["id", "type", "target_role", "role", "allowed_tools", "tool_sets", "capability", "parameters", "next", "branches", "children", "retry", "on_error", "timeout_ms", .. rootParameterFields]),
             AllowedRetryFields = ImmutableHashSet.Create(comparer, "max_attempts", "backoff", "delay_ms"),
             AllowedOnErrorFields = ImmutableHashSet.Create(comparer, "strategy", "fallback_step", "default_output"),
             AllowedBranchListFields = ImmutableHashSet.Create(comparer, "condition", "when", "case", "label", "if", "next", "to", "target", "step"),

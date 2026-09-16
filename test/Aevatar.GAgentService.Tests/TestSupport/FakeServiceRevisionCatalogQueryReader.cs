@@ -33,7 +33,7 @@ internal sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCa
             .Select(artifact => new ServiceRevisionSnapshot(
                 artifact.RevisionId,
                 artifact.ImplementationKind.ToString(),
-                ServiceRevisionStatus.Prepared.ToString(),
+                ServiceRevisionStatus.Published.ToString(),
                 artifact.ArtifactHash,
                 string.Empty,
                 artifact.Endpoints.Select(endpoint => new ServiceEndpointSnapshot(
@@ -45,7 +45,7 @@ internal sealed class FakeServiceRevisionCatalogQueryReader : IServiceRevisionCa
                     endpoint.Description)).ToList(),
                 DateTimeOffset.UtcNow,
                 DateTimeOffset.UtcNow,
-                null,
+                DateTimeOffset.UtcNow,
                 null,
                 null,
                 artifact.Clone()))

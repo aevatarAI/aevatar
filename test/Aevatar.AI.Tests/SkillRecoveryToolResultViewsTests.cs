@@ -208,6 +208,31 @@ public sealed class SkillRecoveryToolResultViewsTests
     }
 
     [Fact]
+    public void Parse_StructuredLoad_MountPreview_MapsTypedConfirmationState()
+    {
+        const string raw = """
+        {
+          "result_type": "skill_load",
+          "status": "success",
+          "skill_name": "project-summary",
+          "loaded": true,
+          "text": "loaded body",
+          "workflow_mount": {
+            "status": "confirmation_required",
+            "mounted": false,
+            "confirmation_token": "sha256:preview-alpha"
+          }
+        }
+        """;
+
+        var load = SkillRecoveryToolResultViews.Parse(LoadTool, raw)!.SkillLoad!;
+
+        load.WorkflowMountStatus.Should().Be("confirmation_required");
+        load.WorkflowMounted.Should().BeFalse();
+        load.WorkflowMountConfirmationToken.Should().Be("sha256:preview-alpha");
+    }
+
+    [Fact]
     public void Parse_StructuredLoad_NotLoadedWithoutStatus_IsUnknown()
     {
         const string raw = """{ "result_type": "skill_load", "loaded": false }""";

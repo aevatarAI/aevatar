@@ -87,7 +87,9 @@ owner: eanzhao
 - `cli`：
   - `command`、`fixedArguments`、`allowedOperations`、`allowedInputKeys`、`workingDirectory`、`environment`
 - `mcp`：
-  - `serverName`、`command`、`arguments`、`environment`、`defaultTool`、`allowedTools`、`allowedInputKeys`
+  - stdio：`serverName`、`command`、`arguments`、`environment`
+  - Streamable HTTP：`serverName`、`url`、`additionalHeaders`、`auth`
+  - 调用约束：`defaultTool`、`allowedTools`、`allowedInputKeys`
 - `host_callback`：
   - `handler`、`allowedOperations`、`allowedInputKeys`
 
@@ -105,7 +107,8 @@ Builder 当前行为：
 
 - `HttpConnectorBuilder`：`http.baseUrl` 必填；
 - `CliConnectorBuilder`：`cli.command` 必填，且不能包含 `://`；
-- `MCPConnectorBuilder`：`mcp.command` 必填。
+- `MCPConnectorBuilder`：`mcp.command` 与 `mcp.url` 必须且只能选择一个传输目标；两者同时为空或
+  同时非空都 fail closed。
 
 注意：
 
@@ -283,12 +286,20 @@ Actor audit facts. Recovery then revokes both protected request and completion m
 ### MCP Connector
 
 - 首次调用时连接 MCP Server 并发现工具；
+- 使用官方 C# SDK 2.1，默认通过 `server/discover` 协商 MCP `2026-07-28` 无状态协议；
+- 若服务端只支持 `2025-11-25` 或更早版本，由 SDK 自动回退到 `initialize` 握手，Host 不维护平行兼容链路；
+- stdio 使用子进程 transport；`url` 使用 Streamable HTTP，SDK 负责 `MCP-Protocol-Version`、
+  `Mcp-Method`、`Mcp-Name` 等协议头；
+- `tools/list` 缓存按所有分页结果中的最短 `ttlMs` 失效；会话内缓存兼容 `private` scope，
+  不把带身份上下文的工具目录提升为共享缓存；
 - 工具名解析优先级：
   1) `operation`
   2) 参数 `tool`
   3) `defaultTool`
 - 可通过 `allowedTools` 做工具白名单；
 - 可通过 `allowedInputKeys` 做 payload key 白名单；
+- 工具结果按完整 `CallToolResult` JSON 返回，保留 `content`、任意 JSON 值的
+  `structuredContent` 与 `isError`；
 - 返回 server/tool/耗时元数据。
 
 ### Host Callback Connector

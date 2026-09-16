@@ -36,6 +36,10 @@ internal interface INyxIdChatControlCommandPort
     Task<NyxIdChatControlAcceptedReceipt> DispatchApprovalResolveAsync(
         NyxIdChatApprovalResolveCommand command,
         CancellationToken ct = default);
+
+    Task<NyxIdChatControlAcceptedReceipt> DispatchCanaryEffectFaultArmAsync(
+        NyxIdChatCanaryEffectFaultArmCommand command,
+        CancellationToken ct = default);
 }
 
 internal sealed class NyxIdChatControlCommandPort : INyxIdChatControlCommandPort
@@ -81,6 +85,12 @@ internal sealed class NyxIdChatControlCommandPort : INyxIdChatControlCommandPort
         NyxIdChatApprovalResolveCommand command,
         CancellationToken ct = default) =>
         DispatchAsync(command, command?.RequestId, command?.ConversationActorId, command?.CommandId,
+            command?.CorrelationId, ct);
+
+    public Task<NyxIdChatControlAcceptedReceipt> DispatchCanaryEffectFaultArmAsync(
+        NyxIdChatCanaryEffectFaultArmCommand command,
+        CancellationToken ct = default) =>
+        DispatchAsync(command, command?.ArmId, command?.ConversationActorId, command?.CommandId,
             command?.CorrelationId, ct);
 
     private async Task<NyxIdChatControlAcceptedReceipt> DispatchAsync(

@@ -12,6 +12,8 @@ public sealed record StudioMemberWorkflowBindingRequest(
 
     public string? RevisionId { get; init; }
 
+    public IReadOnlyDictionary<string, string>? InlineWorkflowYamls { get; init; }
+
     [JsonIgnore]
     public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 }
