@@ -5,12 +5,13 @@ import {
   ExportOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { Button, Modal, Tooltip } from 'antd';
+import { Button, Modal } from 'antd';
 import * as React from 'react';
 import { channelsApi } from '@/shared/api/channelsApi';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import {
   buildChannelEditHref,
@@ -206,7 +207,7 @@ export default function ChannelDetailsPage({
                       ? t('channels.name.loading', 'Loading name…')
                       : t('channels.name.unavailable', 'Name unavailable'))}
                   {registration.botId && !channelName && !bots.isPending ? (
-                    <Tooltip
+                    <AevatarTooltip
                       title={t('channels.name.retry', 'Reload channel name')}
                     >
                       <Button
@@ -219,7 +220,7 @@ export default function ChannelDetailsPage({
                         loading={bots.isFetching}
                         onClick={() => void bots.refetch()}
                       />
-                    </Tooltip>
+                    </AevatarTooltip>
                   ) : null}
                 </h1>
                 <p className="channels__identifier">
