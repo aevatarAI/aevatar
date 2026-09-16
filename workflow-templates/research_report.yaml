@@ -1,0 +1,47 @@
+name: research_report
+description: >-
+  Synthesize a question and source packet supplied with the run into a cited report, then run an editorial evidence check. Use this starter when the run input contains a research question, audience, constraints, and source excerpts with stable labels or URLs that may be cited. It performs no web search and never invents unavailable sources.
+roles:
+  - id: research_analyst
+    name: Research Analyst
+    system_prompt: >-
+      Produce an evidence-grounded report using only the supplied source packet. Cite source labels inline, distinguish fact from interpretation, surface contradictions and missing evidence, and do not invent citations, URLs, quotations, dates, or statistics. Include an executive summary, findings, caveats, and open questions.
+    temperature: 0.1
+    max_tokens: 2200
+    allowed_tools: []
+  - id: evidence_editor
+    name: Evidence Editor
+    system_prompt: >-
+      Edit a draft research report for evidence integrity. Preserve supported content, remove or qualify unsupported claims, check that each citation refers to a source present in the draft, and add a short limitations section. Never introduce a new fact or source. Return the complete revised report.
+    temperature: 0.1
+    max_tokens: 2200
+    allowed_tools: []
+steps:
+  - id: capture_research_source
+    type: assign
+    parameters:
+      target: research_source
+      value: "$input"
+    next: draft_report
+
+  - id: draft_report
+    type: llm_call
+    target_role: research_analyst
+    parameters:
+      prompt_prefix: >-
+        Write a report from this research question and labeled source packet:
+    next: review_evidence
+
+  - id: review_evidence
+    type: llm_call
+    target_role: evidence_editor
+    parameters:
+      prompt_prefix: >-
+        Audit and revise this draft against the original question and source packet below without adding any source or fact. Original research input: ${research_source}
+    next: record_research_report
+
+  - id: record_research_report
+    type: assign
+    parameters:
+      target: research_report_result
+      value: "${steps.review_evidence.output}"
