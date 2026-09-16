@@ -83,25 +83,27 @@ afterEach(() => {
   global.fetch = originalFetch;
 });
 
-it('confirms the exact submitted channel with fresh reads and retries only GET without automatic refresh', async () => {
+it('automatically confirms a token-only submission after delayed, failed and unrelated reads without repeating creation', async () => {
   jest.useFakeTimers();
   try {
-    let attempts = 0;
     let reads = 0;
+    telegramFetch.mockResolvedValue(
+      response({
+        ok: true,
+        result: { is_bot: true, first_name: 'Token-only bot' },
+      }),
+    );
     fetchMock.mockImplementation(async (input, init) => {
-      if (init?.method === 'POST') {
-        attempts += 1;
-        return attempts === 1
-          ? response({}, 504)
-          : response(
-              { status: 'accepted', registration_id: 'registration-new' },
-              202,
-            );
-      }
+      if (init?.method === 'POST')
+        return response(
+          { status: 'accepted', registration_id: 'registration-new' },
+          202,
+        );
       if (input === listPath) {
         reads += 1;
         if (reads === 1) return response({}, 503);
-        if (reads === 2)
+        if (reads === 2) return response([]);
+        if (reads === 3)
           return response([
             {
               ...createdRegistration,
@@ -113,6 +115,7 @@ it('confirms the exact submitted channel with fresh reads and retries only GET w
               id: 'registration-new',
               platform: 'lark',
             },
+            { ...createdRegistration, id: 'registration-new', owned: false },
             createdRegistration,
           ]);
         return response([{ ...createdRegistration, id: 'registration-new' }]);
@@ -138,48 +141,53 @@ it('confirms the exact submitted channel with fresh reads and retries only GET w
     await screen.findByText(/No services are available/);
     await idleAndReturn();
     expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([servicePath]);
-    enterBotDetails();
+    fireEvent.change(screen.getByLabelText(/^Bot token/), {
+      target: { value: telegramToken },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
-    await screen.findByText(
-      'Could not confirm the connection. Please try again.',
-    );
-    await idleAndReturn();
-    expect(history.replace).not.toHaveBeenCalled();
-    expect(attempts).toBe(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
-    await screen.findByText(
-      'Could not check your channel. Please check again.',
-    );
+    await act(async () => jest.advanceTimersByTimeAsync(1));
+    expect(reads).toBe(1);
     expect(history.replace).not.toHaveBeenCalled();
     expect(
       screen.queryByText('Telegram channel created.'),
     ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Connecting/ })).toBeDisabled();
     expect(
-      screen.getByRole('button', { name: 'Request submitted' }),
-    ).toBeDisabled();
+      screen.queryByRole('button', { name: 'Check again' }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Your request was submitted/),
+    ).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^Bot token/)).toHaveValue('');
     const leaving = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(leaving);
     expect(leaving.defaultPrevented).toBe(false);
     fireEvent.submit(screen.getByRole('form', { name: 'Connect Telegram' }));
-    await idleAndReturn();
-    expect(history.replace).not.toHaveBeenCalled();
-    expect(attempts).toBe(2);
-    expect(reads).toBe(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled(),
-    );
-    await idleAndReturn();
+    await act(async () => jest.advanceTimersByTimeAsync(1000));
     expect(reads).toBe(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(history.replace).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
-    await screen.findByText('Telegram channel created.');
+    await act(async () => jest.advanceTimersByTimeAsync(1000));
+    expect(reads).toBe(3);
+    expect(history.replace).not.toHaveBeenCalled();
+    await act(async () => jest.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText('Telegram channel created.')).toBeInTheDocument();
     expect(history.replace).toHaveBeenCalledWith(
       '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-new',
     );
-    expect(attempts).toBe(2);
-    expect(reads).toBe(3);
+    const posts = fetchMock.mock.calls.filter(
+      ([, init]) => init?.method === 'POST',
+    );
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String(posts[0][1]?.body))).toMatchObject({
+      bot_token: telegramToken,
+      label: expect.stringMatching(/^Token-only bot-[1-9]\d{5}$/),
+      default_skill_name: 'Token-only bot',
+      service_ids: [],
+    });
+    await idleAndReturn();
+    expect(reads).toBe(4);
+    expect(history.replace).toHaveBeenCalledTimes(1);
     view.unmount();
   } finally {
     focusManager.setFocused(undefined);
@@ -187,6 +195,105 @@ it('confirms the exact submitted channel with fresh reads and retries only GET w
     await act(async () => {
       await jest.runOnlyPendingTimersAsync();
     });
+    jest.useRealTimers();
+  }
+});
+
+it('bounds confirmation even when a read stalls and keeps the accepted form from being resubmitted', async () => {
+  jest.useFakeTimers();
+  try {
+    let resolveRead!: (value: Response) => void;
+    const pendingRead = new Promise<Response>((resolve) => {
+      resolveRead = resolve;
+    });
+    fetchMock.mockImplementation(async (input, init) => {
+      if (init?.method === 'POST')
+        return response(
+          { status: 'accepted', registration_id: createdRegistration.id },
+          202,
+        );
+      if (input === listPath) return pendingRead;
+      return response({ services: [] });
+    });
+    const view = renderWithQueryClient(
+      <TelegramConnectionPage scopeId="scope-alpha" />,
+    );
+    await screen.findByText(/No services are available/);
+    enterBotDetails();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+    await act(async () => jest.advanceTimersByTimeAsync(1));
+    await act(async () => jest.advanceTimersByTimeAsync(30_000));
+    expect(
+      screen.getByRole('button', { name: 'Connection pending' }),
+    ).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Your request was submitted, but confirmation is taking longer than expected.',
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Check again' }),
+    ).not.toBeInTheDocument();
+    fireEvent.submit(screen.getByRole('form', { name: 'Connect Telegram' }));
+    await act(async () => resolveRead(response([createdRegistration])));
+    await act(async () => jest.advanceTimersByTimeAsync(60_000));
+    expect(history.replace).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText('Telegram channel created.'),
+    ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.filter(([input]) => input === listPath),
+    ).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to channels' }));
+    expect(history.push).toHaveBeenCalledWith(
+      '/scopes/scope-alpha/workflow-activity-vnext/channels',
+    );
+    view.unmount();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+it.each([
+  'pending read',
+  'retry delay',
+])('stops confirmation after leaving during a %s', async (phase) => {
+  jest.useFakeTimers();
+  try {
+    let resolveRead!: (value: Response) => void;
+    const pendingRead = new Promise<Response>((resolve) => {
+      resolveRead = resolve;
+    });
+    fetchMock.mockImplementation(async (input, init) => {
+      if (init?.method === 'POST')
+        return response(
+          { status: 'accepted', registration_id: createdRegistration.id },
+          202,
+        );
+      if (input === listPath) return pendingRead;
+      return response({ services: [] });
+    });
+    const view = renderWithQueryClient(
+      <TelegramConnectionPage scopeId="scope-alpha" />,
+    );
+    await screen.findByText(/No services are available/);
+    enterBotDetails();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
+    await act(async () => jest.advanceTimersByTimeAsync(1));
+    if (phase === 'retry delay')
+      await act(async () => resolveRead(response([])));
+    view.unmount();
+    await act(async () => resolveRead(response([createdRegistration])));
+    await act(async () => jest.advanceTimersByTimeAsync(60_000));
+    expect(history.replace).not.toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.filter(([input]) => input === listPath),
+    ).toHaveLength(2);
+    expect(
+      screen.queryByText('Telegram channel created.'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/confirmation is taking longer/),
+    ).not.toBeInTheDocument();
+  } finally {
     jest.useRealTimers();
   }
 });
@@ -496,7 +603,9 @@ it('shows a name-lookup toast and retries with the current token and custom fiel
         { status: 'accepted', registration_id: 'registration-lookup' },
         202,
       );
-    return input === servicePath ? response({ services: [] }) : response([]);
+    return input === servicePath
+      ? response({ services: [] })
+      : response([{ ...createdRegistration, id: 'registration-lookup' }]);
   });
   renderWithQueryClient(<TelegramConnectionPage scopeId="scope-alpha" />);
   await screen.findByText(/No services are available/);
@@ -525,7 +634,7 @@ it('shows a name-lookup toast and retries with the current token and custom fiel
     target: { value: 'custom-skill' },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
-  await screen.findByText(/Your request was submitted/);
+  await screen.findByText('Telegram channel created.');
   expect(telegramFetch.mock.calls.map(([url]) => url)).toEqual([
     `https://api.telegram.org/bot${telegramToken}/getMe`,
   ]);

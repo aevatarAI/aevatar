@@ -155,13 +155,11 @@ export default {
     'Only selected services will be available to this bot.',
   'channels.connect.selectionChanged':
     'Some selected services are no longer available. Deselect them before connecting.',
-  'channels.connect.pending':
-    'Your request was submitted. Check again to open your channel when it is ready.',
-  'channels.connect.check': 'Check again',
+  'channels.connect.connecting': 'Connecting...',
+  'channels.connect.awaitingConfirmation': 'Connection pending',
+  'channels.connect.delayed':
+    'Your request was submitted, but confirmation is taking longer than expected. You can return to Channels.',
   'channels.connect.success': 'Telegram channel created.',
-  'channels.connect.error.confirmation':
-    'Could not check your channel. Please check again.',
-  'channels.connect.submitted': 'Request submitted',
   'channels.connect.error.token':
     'Check the bot token from BotFather and try again.',
   'channels.connect.error.botName':

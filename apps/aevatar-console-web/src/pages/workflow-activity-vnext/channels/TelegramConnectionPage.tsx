@@ -82,18 +82,22 @@ export default function TelegramConnectionPage({
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
   const [submittedId, setSubmittedId] = React.useState<string | null>(null);
+  const [confirmationDelayed, setConfirmationDelayed] = React.useState(false);
   const [validationAttempted, setValidationAttempted] = React.useState(false);
   const [leaveTarget, setLeaveTarget] = React.useState<string | null>(null);
   const inFlight = React.useRef(false);
-  const checking = React.useRef(false);
   const completed = React.useRef(false);
   const mounted = React.useRef(true);
   const toast = useConsoleToast();
   const webhookBaseUrl = getChannelWebhookBaseUrl();
   const listHref = buildWorkflowActivitySectionHref(scopeId, 'channels');
   const services = useChannelServiceChoices(scopeId);
-  const registrations = useChannelRegistrations(scopeId, false);
+  const { refetch: refetchRegistrations } = useChannelRegistrations(
+    scopeId,
+    false,
+  );
   const submissionAccepted = submittedId !== null;
+  const confirming = submissionAccepted && !confirmationDelayed;
   const invalidSelection = selectedIds.some(
     (id) =>
       !services.data?.some(
@@ -136,38 +140,56 @@ export default function TelegramConnectionPage({
     else history.push(target);
   }
 
-  async function checkRegistration(registrationId: string) {
-    if (checking.current || completed.current) return;
-    checking.current = true;
-    try {
+  React.useEffect(() => {
+    if (!submittedId || confirmationDelayed || completed.current) return;
+    const registrationId = submittedId;
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    // Bound the whole confirmation window, including slow or stalled reads.
+    const deadlineTimer = setTimeout(() => {
+      active = false;
+      clearTimeout(retryTimer);
+      setConfirmationDelayed(true);
+      toast.warning(
+        t(
+          'channels.connect.delayed',
+          'Your request was submitted, but confirmation is taking longer than expected. You can return to Channels.',
+        ),
+      );
+    }, 30_000);
+
+    async function confirmRegistration() {
       // Only a successful fresh read can confirm this submission, not cached data.
-      const result = await registrations.refetch();
-      if (!mounted.current) return;
-      if (result.isError) {
-        toast.error(
-          t(
-            'channels.connect.error.confirmation',
-            'Could not check your channel. Please check again.',
-          ),
-        );
-        return;
-      }
+      const result = await refetchRegistrations();
+      if (!active) return;
       if (
-        !result.data?.some(
+        result.isSuccess &&
+        result.data.some(
           (row) =>
             row.id === registrationId &&
             row.scopeId === scopeId &&
             row.platform === 'telegram',
         )
-      )
+      ) {
+        active = false;
+        completed.current = true;
+        clearTimeout(deadlineTimer);
+        toast.success(
+          t('channels.connect.success', 'Telegram channel created.'),
+        );
+        history.replace(buildChannelDetailsHref(scopeId, registrationId));
         return;
-      completed.current = true;
-      toast.success(t('channels.connect.success', 'Telegram channel created.'));
-      history.replace(buildChannelDetailsHref(scopeId, registrationId));
-    } finally {
-      checking.current = false;
+      }
+      retryTimer = setTimeout(() => void confirmRegistration(), 1000);
     }
-  }
+
+    void confirmRegistration();
+    return () => {
+      active = false;
+      clearTimeout(retryTimer);
+      clearTimeout(deadlineTimer);
+    };
+  }, [submittedId, scopeId, confirmationDelayed, refetchRegistrations, toast]);
 
   async function connect(event: React.FormEvent) {
     event.preventDefault();
@@ -194,7 +216,6 @@ export default function TelegramConnectionPage({
       if (!mounted.current) return;
       setBotToken('');
       setSubmittedId(receipt.registrationId);
-      void checkRegistration(receipt.registrationId);
     } catch (failure) {
       if (!mounted.current) return;
       const reason =
@@ -364,22 +385,6 @@ export default function TelegramConnectionPage({
             {registrationErrorMessage('configuration')}
           </p>
         ) : null}
-        {submittedId ? (
-          <div className="channels__connection-status" role="status">
-            <p>
-              {t(
-                'channels.connect.pending',
-                'Your request was submitted. Check again to open your channel when it is ready.',
-              )}
-            </p>
-            <Button
-              loading={registrations.isFetching}
-              onClick={() => void checkRegistration(submittedId)}
-            >
-              {t('channels.connect.check', 'Check again')}
-            </Button>
-          </div>
-        ) : null}
         <div className="channels__form-actions">
           <Button disabled={submitting} onClick={() => navigate(listHref)}>
             {submissionAccepted
@@ -389,7 +394,7 @@ export default function TelegramConnectionPage({
           <Button
             type="primary"
             htmlType="submit"
-            loading={submitting}
+            loading={submitting || confirming}
             disabled={
               locked ||
               !webhookBaseUrl ||
@@ -398,9 +403,11 @@ export default function TelegramConnectionPage({
               invalidSelection
             }
           >
-            {submissionAccepted
-              ? t('channels.connect.submitted', 'Request submitted')
-              : t('channels.connect.title', 'Connect Telegram')}
+            {confirmationDelayed
+              ? t('channels.connect.awaitingConfirmation', 'Connection pending')
+              : submitting || confirming
+                ? t('channels.connect.connecting', 'Connecting...')
+                : t('channels.connect.title', 'Connect Telegram')}
           </Button>
         </div>
       </form>

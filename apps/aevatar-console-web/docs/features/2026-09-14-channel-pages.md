@@ -10,8 +10,9 @@ links to the editor documented in
 [Channel Runtime Editor](../2026-09-15-channel-runtime-editor.md); its edit form
 now exposes only Label and Skill name, preserving existing service authorization.
 
-Channel refresh is explicitly user driven. Do not add background polling or
-refresh on focus/reconnection to these pages.
+Channel browsing refresh is explicitly user driven, with no refresh on
+focus/reconnection. The Telegram creation form alone automatically confirms
+its accepted registration within a bounded window, as described below.
 
 Manual Refresh keeps the connected table mounted and displays the shared
 loading overlay over that table while the registration list, bot names, and
@@ -131,16 +132,24 @@ Registration uses existing `POST /api/channels/registrations` with
 `platform`, `bot_token`, `label`, `default_skill_name`, `webhook_base_url`, and
 the explicit selection above. A `202`/`status: accepted` response must contain
 the registration ID. After admission, the form clears its token, retains only
-the safe returned ID, and explicitly refreshes registrations once. A successful
+the safe returned ID, and immediately refreshes registrations. A successful
 fresh read must contain that exact ID, route scope and Telegram platform before
 the success toast and navigation to the newly created channel's existing detail
 page. The form does not return to the collection automatically or infer success
-from cached rows after a failed read. Until confirmation, it preserves the
-submitted choices and shows a pending state with Check again. This action only
-repeats the GET, never the create POST; failed confirmation reads show a safe
-error toast and remain retryable. No polling, window-focus refresh, or reconnect
-refresh runs. Inbound activity continues to use its real status, independently
-of registration creation.
+from cached rows after a failed read. Nyx provisioning completes before admission,
+but the local registration list becomes visible asynchronously; a single read
+can miss a successfully created channel, including a token-only submission.
+Until confirmation, the form preserves submitted choices and shows Connecting
+in the existing submit button. There is no separate pending panel or Check again
+button. An absent row or failed read automatically retries only the GET after
+one second, without overlapping requests or repeating the POST. The entire
+confirmation window, including stalled reads, is limited to 30 seconds.
+Completion or unmount stops the timers and ignores late responses. On timeout,
+the disabled submit button shows Connection pending, one warning explains the
+delay, and Back to channels remains available. No success is claimed and the
+accepted registration cannot be submitted again. Window focus and reconnection
+do not start confirmation. Inbound activity continues to use its real status,
+independently of registration creation.
 Registration failures, including
 504 and network errors, show a shared error toast and restore editable fields and Connect
 Telegram. Inputs and still-authorized selections are preserved for an explicit manual
