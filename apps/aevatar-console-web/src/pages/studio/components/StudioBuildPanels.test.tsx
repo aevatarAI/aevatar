@@ -1721,6 +1721,62 @@ describe('StudioWorkflowBuildPanel', () => {
     ).toBeInTheDocument();
   });
 
+  it('hands the operator-selected GAgent kind from Build to Bind', async () => {
+    const GAgentSelectionHarness = () => {
+      const [selectedAgentKind, setSelectedAgentKind] = React.useState(
+        'Tests.OrdersGAgent',
+      );
+      const [handoffAgentKind, setHandoffAgentKind] = React.useState('');
+
+      return (
+        <>
+          <StudioGAgentBuildPanel
+            scopeId="scope-1"
+            currentMemberLabel="orders-gagent"
+            gAgentKinds={[
+              {
+                agentKind: 'Tests.OrdersGAgent',
+                displayName: 'Orders Assistant',
+                diagnosticClrTypeName: 'Tests.OrdersGAgent',
+                endpoints: [],
+              },
+              {
+                agentKind: 'Tests.BillingGAgent',
+                displayName: 'Billing Assistant',
+                diagnosticClrTypeName: 'Tests.BillingGAgent',
+                endpoints: [],
+              },
+            ]}
+            gAgentKindsError={null}
+            gAgentKindsLoading={false}
+            selectedAgentKind={selectedAgentKind}
+            onContinueToBind={(state) => setHandoffAgentKind(state.agentKind)}
+            onSelectAgentKind={setSelectedAgentKind}
+          />
+          <output aria-label="Selected GAgent kind">{selectedAgentKind}</output>
+          <output aria-label="GAgent Bind handoff">{handoffAgentKind}</output>
+        </>
+      );
+    };
+
+    render(<GAgentSelectionHarness />);
+
+    fireEvent.mouseDown(
+      screen.getByRole('combobox', { name: /GAgent (type|kind)/ }),
+    );
+    fireEvent.click(await screen.findByText('Billing Assistant'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Selected GAgent kind')).toHaveTextContent(
+        'Tests.BillingGAgent',
+      );
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to Bind' }));
+
+    expect(screen.getByLabelText('GAgent Bind handoff')).toHaveTextContent(
+      'Tests.BillingGAgent',
+    );
+  });
+
   it('keeps a GAgent draft-run failure inside Build with a recovery path', async () => {
     mockedRuntimeGAgentApi.streamDraftRun.mockRejectedValueOnce(
       new Error('GAgent draft run timed out before the backend returned any event.'),
