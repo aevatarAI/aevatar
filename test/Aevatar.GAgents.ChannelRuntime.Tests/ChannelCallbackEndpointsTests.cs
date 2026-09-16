@@ -2169,8 +2169,8 @@ public sealed class ChannelCallbackEndpointsTests
         };
     }
 
-    private static IOptions<NyxIdRelayOptions> RegistrationOptions(string webhookBaseUrl = "https://aevatar.example.com") =>
-        Options.Create(new NyxIdRelayOptions { WebhookBaseUrl = webhookBaseUrl });
+    private static NyxIdRelayOptions RegistrationOptions(string webhookBaseUrl = "https://aevatar.example.com") =>
+        new() { WebhookBaseUrl = webhookBaseUrl };
 
     private static HttpContext CreateJsonHttpContext(string json, string? scopeId = null)
     {

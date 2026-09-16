@@ -110,7 +110,7 @@ public static class ChannelCallbackEndpoints
     private static async Task<IResult> HandleRegisterAsync(
         HttpContext http,
         [FromServices] ChannelRegistrationAdoptionFacade adoptionFacade,
-        [FromServices] IOptions<NyxIdRelayOptions> relayOptions,
+        [FromServices] NyxIdRelayOptions relayOptions,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -157,7 +157,7 @@ public static class ChannelCallbackEndpoints
                 statusCode: StatusCodes.Status401Unauthorized);
         }
 
-        var webhookBaseUrl = ResolveWebhookBaseUrl(http, relayOptions.Value.WebhookBaseUrl);
+        var webhookBaseUrl = ResolveWebhookBaseUrl(http, relayOptions.WebhookBaseUrl);
         if (!NyxRelayCallbackUrl.IsSecureBaseUrl(webhookBaseUrl))
             return Results.BadRequest(new { error = "insecure_webhook_base_url" });
 
