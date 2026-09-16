@@ -159,7 +159,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.NyxUserId),
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.SenderTenant)),
             FromRoutingPayload(payload.Routing),
-            new AgentToolConnectedServicesContext(AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
+            new AgentToolConnectedServicesContext(
+                AgentToolExecutionContext.Normalize(payload.ConnectedServices?.ContextJson)),
             FromWorkflowRuntimePayload(payload.WorkflowRuntime),
             new AgentToolScheduleContext(AgentToolExecutionContext.Normalize(payload.Schedule?.ScheduleId)),
             FromCredentialSourcePayload(payload.CredentialSource),

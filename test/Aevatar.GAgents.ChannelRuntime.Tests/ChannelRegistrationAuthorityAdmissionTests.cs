@@ -201,6 +201,72 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
     }
 
     [Fact]
+    public async Task AdmitAsync_ExplicitGrantedConnectedServiceTarget_ShouldAllowWithoutRegistrationAllowlist()
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RegistrationServiceAllowlist.ServiceIds.Clear();
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var result = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "svc-business",
+            serviceSlug: "api-google-workspace",
+            endpointId: "readDiningProfileContext",
+            catalogServiceSlug: "api-google-workspace"));
+
+        result.Allowed.Should().BeTrue();
+        result.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.Allowed);
+        await fixture.Resolver.DidNotReceiveWithAnyArgs().IsAuthorizedDependencyAsync(
+            default!,
+            default!,
+            default!,
+            default);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_ExplicitConnectedServiceSelectors_ShouldAllowAnyMatchingEndpointAndDenyUnselectedEndpoint()
+    {
+        var registration = CreateExplicitRegistration();
+        registration.RegistrationServiceAllowlist.ServiceIds.Clear();
+        registration.RuntimeConfig = new ChannelBotRuntimeConfig();
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "readDiningProfileContext" },
+        });
+        registration.RuntimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+        {
+            ServiceSlug = "api-google-workspace",
+            EndpointNames = { "writeDiningProfileContext" },
+        });
+        var fixture = CreateAdmissionFixture([registration]);
+
+        var readAllowed = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "svc-business",
+            serviceSlug: "api-google-workspace",
+            endpointId: "readDiningProfileContext",
+            catalogServiceSlug: "api-google-workspace"));
+        var writeAllowed = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "svc-business",
+            serviceSlug: "api-google-workspace",
+            endpointId: "writeDiningProfileContext",
+            catalogServiceSlug: "api-google-workspace"));
+        var denied = await fixture.Port.AdmitAsync(CreateRequest(
+            registration,
+            serviceInstanceId: "svc-business",
+            serviceSlug: "api-google-workspace",
+            endpointId: "deleteDiningProfileContext",
+            catalogServiceSlug: "api-google-workspace"));
+
+        readAllowed.Allowed.Should().BeTrue();
+        writeAllowed.Allowed.Should().BeTrue();
+        denied.Allowed.Should().BeFalse();
+        denied.Reason.Should().Be(ChannelRegistrationAuthorityAdmissionReason.TargetNotAuthorized);
+    }
+
+    [Fact]
     public async Task AdmitAsync_UsesVersionedRegistrationSnapshotForDecision()
     {
         var registration = CreateExplicitRegistration();
@@ -696,10 +762,11 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
         string serviceInstanceId,
         string? callSiteId = "",
         string serviceSlug = "service-alpha",
-        string endpointId = "endpoint-alpha") =>
+        string endpointId = "endpoint-alpha",
+        string catalogServiceSlug = "") =>
         new(
             CreateCredential(registration),
-            CreateOperation(serviceInstanceId, callSiteId, serviceSlug, endpointId));
+            CreateOperation(serviceInstanceId, callSiteId, serviceSlug, endpointId, catalogServiceSlug));
 
     private static DurableCallerCredentialRef CreateCredential(
         ChannelBotRegistrationEntry registration)
@@ -722,7 +789,8 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
         string serviceInstanceId,
         string? callSiteId = "",
         string serviceSlug = "service-alpha",
-        string endpointId = "endpoint-alpha") =>
+        string endpointId = "endpoint-alpha",
+        string catalogServiceSlug = "") =>
         new(
             serviceInstanceId,
             serviceSlug,
@@ -735,6 +803,7 @@ public sealed class ChannelRegistrationAuthorityAdmissionTests
             null,
             AgentToolOperationResponsePolicy.TextOnly,
             AgentToolOperationExecutionPolicy.Unspecified,
+            CatalogServiceSlug: catalogServiceSlug,
             CallSiteId: callSiteId!);
 
     private static void MutateSecretReference(SecretReference reference, string field)
