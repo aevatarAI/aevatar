@@ -1,5 +1,8 @@
 import { authFetch } from '@/shared/auth/fetch';
-import { listChannelBotIdentities } from './channelBotsApi';
+import {
+  listChannelBotIdentities,
+  updateChannelBotLabel,
+} from './channelBotsApi';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
 jest.mock('@/shared/auth/config', () => ({
@@ -54,5 +57,63 @@ it('rejects ambiguous identities and HTTP failures without retaining error bodie
     json,
   } as unknown as Response);
   await expect(listChannelBotIdentities()).rejects.toThrow('403');
+  expect(json).not.toHaveBeenCalled();
+});
+
+it('PATCHes only a trimmed label with an encoded bot ID and retains only verified identity fields', async () => {
+  const bot = { id: 'bot/a', platform: 'telegram', label: 'Original label' };
+  fetchMock.mockResolvedValue(
+    response({
+      ...bot,
+      label: 'Updated label',
+      webhook_secret: 'TEST_ONLY_SECRET',
+    }),
+  );
+  expect(await updateChannelBotLabel(bot, ' Updated label ')).toEqual({
+    ...bot,
+    label: 'Updated label',
+  });
+  expect(fetchMock).toHaveBeenCalledWith(
+    'https://nyx.example.test/api/v1/channel-bots/bot%2Fa',
+    {
+      method: 'PATCH',
+      credentials: 'omit',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ label: 'Updated label' }),
+    },
+  );
+});
+
+it.each([
+  { id: 'other-bot', platform: 'telegram', label: 'Updated' },
+  { id: 'bot-alpha', platform: 'lark', label: 'Updated' },
+  { id: 'bot-alpha', platform: 'telegram', label: 'Original' },
+])('rejects mismatched label update acknowledgements: %j', async (result) => {
+  fetchMock.mockResolvedValue(response(result));
+  await expect(
+    updateChannelBotLabel(
+      { id: 'bot-alpha', platform: 'telegram', label: 'Original' },
+      'Updated',
+    ),
+  ).rejects.toThrow('not confirmed');
+});
+
+it('does not retain upstream label error bodies', async () => {
+  const json = jest.fn().mockResolvedValue({ token: 'TEST_ONLY_SECRET' });
+  fetchMock.mockResolvedValue({
+    ok: false,
+    status: 403,
+    json,
+  } as unknown as Response);
+  await expect(
+    updateChannelBotLabel(
+      { id: 'bot-alpha', platform: 'telegram', label: 'Original' },
+      'Updated',
+    ),
+  ).rejects.toThrow('403');
   expect(json).not.toHaveBeenCalled();
 });
