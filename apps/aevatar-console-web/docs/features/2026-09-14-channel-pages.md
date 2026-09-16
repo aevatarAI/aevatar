@@ -4,9 +4,11 @@ Channels is a first-level destination in the Workflow Activity vNext sidebar.
 It lets the signed-in owner view their connected bots and inspect a connection.
 
 The three pages follow the latest simplified [Figma design](https://www.figma.com/design/FaVJx5IZeQX9jHcUi55ndB?node-id=7-226)
-(list frame `7:2`, detail frame `6:131`, Telegram form `7:226`). The current design intentionally keeps
-channel details read-only with Remove as the sole resource action. The earlier
-runtime-configuration editor is outside this iteration of issue #3617.
+(list frame `7:2`, detail frame `6:131`, Telegram form `7:226`). The initial detail
+design used Remove as its sole resource action. The current detail page also
+links to the editor documented in
+[Channel Runtime Editor](../2026-09-15-channel-runtime-editor.md); its edit form
+now exposes only Label and Skill name, preserving existing service authorization.
 
 Channel refresh is explicitly user driven. Do not add background polling or
 refresh on focus/reconnection to these pages.

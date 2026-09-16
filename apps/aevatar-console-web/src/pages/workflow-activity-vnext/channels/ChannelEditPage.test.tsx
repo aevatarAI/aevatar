@@ -41,13 +41,24 @@ const response = (value: unknown, status = 200) =>
     status,
     json: async () => value,
   }) as Response;
-const service = {
-  id: 'user-service-github',
-  slug: 'api-github',
-  label: 'GitHub work',
-  is_active: true,
-  credential_source: { type: 'personal' },
+const botsPath = 'https://nyx.example.test/api/v1/channel-bots';
+const bot = {
+  id: 'bot-nyx-alpha',
+  platform: 'telegram',
+  label: 'Team channel',
 };
+const registration = {
+  id: 'registration-alpha',
+  scope_id: 'scope-alpha',
+  platform: 'telegram',
+  nyx_channel_bot_id: bot.id,
+  owned: true,
+};
+function identityResponse(input: unknown) {
+  if (input === botsPath) return response({ bots: [bot] });
+  if (input === '/api/channels/registrations') return response([registration]);
+  return undefined;
+}
 const receipt = {
   status: 'accepted',
   registration_id: 'registration-alpha',
@@ -56,6 +67,10 @@ const receipt = {
 const posts = () =>
   fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST');
 const postBody = () => JSON.parse(String(posts().at(-1)?.[1]?.body));
+const patches = () =>
+  fetchMock.mock.calls.filter(([, init]) => init?.method === 'PATCH');
+const editLabel = (value: string) =>
+  fireEvent.change(screen.getByLabelText('Label'), { target: { value } });
 const editSkill = (value: string) =>
   fireEvent.change(screen.getByLabelText(/^Skill name/), { target: { value } });
 const save = () =>
@@ -75,9 +90,7 @@ beforeEach(() => {
   fetchMock.mockImplementation(async (input, init) =>
     init?.method === 'POST'
       ? response(receipt, 202)
-      : input === servicePath
-        ? response({ services: [service] })
-        : response(fixture),
+      : (identityResponse(input) ?? response(fixture)),
   );
 });
 
@@ -89,16 +102,8 @@ it('opens Edit from channel details and saves once, preserving hidden config and
   let current = fixture;
   fetchMock.mockImplementation(async (input, init) => {
     if (init?.method === 'POST') return pendingPost;
-    if (input === servicePath) return response({ services: [service] });
-    if (input === '/api/channels/registrations')
-      return response([
-        {
-          id: 'registration-alpha',
-          scope_id: 'scope-alpha',
-          platform: 'telegram',
-          owned: true,
-        },
-      ]);
+    const identity = identityResponse(input);
+    if (identity) return identity;
     if (String(input).endsWith('/status'))
       return response({
         registration_id: 'registration-alpha',
@@ -127,9 +132,12 @@ it('opens Edit from channel details and saves once, preserving hidden config and
   expect(await screen.findByLabelText(/^Skill name/)).toHaveValue(
     'team-helper',
   );
-  expect(
-    await screen.findByRole('checkbox', { name: /GitHub work/ }),
-  ).toBeChecked();
+  expect(await screen.findByLabelText('Label')).toHaveValue('Team channel');
+  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  expect(screen.queryByText('Services')).not.toBeInTheDocument();
+  expect(fetchMock.mock.calls.some(([input]) => input === servicePath)).toBe(
+    false,
+  );
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
   expect(screen.queryByText('Advanced settings')).not.toBeInTheDocument();
   expect(
@@ -143,8 +151,6 @@ it('opens Edit from channel details and saves once, preserving hidden config and
   expect(posts()).toHaveLength(1);
   expect(posts()[0][0]).toBe(path);
   expect(postBody()).toEqual({
-    authorization_mode: 'explicit_service_allowlist',
-    service_ids: ['user-service-github'],
     runtime_config: {
       ...fixture.runtime_config,
       default_skill: { name: 'changed-helper', version: '2.1' },
@@ -177,7 +183,7 @@ it('opens Edit from channel details and saves once, preserving hidden config and
 
 it('returns to details when an accepted change is still delayed, without requiring another confirmation or resubmitting', async () => {
   renderEditor();
-  fireEvent.click(await screen.findByRole('checkbox', { name: /GitHub work/ }));
+  await screen.findByLabelText('Label');
   editSkill('');
   save();
   await screen.findByText(
@@ -196,20 +202,18 @@ it('returns to details when an accepted change is still delayed, without requiri
     3,
   );
   expect(postBody()).toEqual({
-    authorization_mode: 'explicit_service_allowlist',
-    service_ids: [],
     runtime_config: {
       ...fixture.runtime_config,
       default_skill: { name: '', version: '' },
-      nyxid_service_selectors: [],
     },
   });
 });
 
-it('keeps unavailable saved services visible until explicitly deselected and handles rejected fields without leaking diagnostics', async () => {
+it('does not fetch service choices and handles rejected skill fields without leaking diagnostics', async () => {
   let rejected = false;
   fetchMock.mockImplementation(async (input, init) => {
-    if (input === servicePath) return response({ services: [] });
+    const identity = identityResponse(input);
+    if (identity) return identity;
     if (init?.method === 'POST') {
       rejected = true;
       return response(
@@ -229,14 +233,12 @@ it('keeps unavailable saved services visible until explicitly deselected and han
     return response(fixture);
   });
   renderEditor();
-  expect(
-    await screen.findByRole('checkbox', { name: /Unavailable service/ }),
-  ).toBeChecked();
-  editSkill('changed-helper');
-  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
-  fireEvent.click(
-    screen.getByRole('checkbox', { name: /Unavailable service/ }),
+  await screen.findByLabelText('Label');
+  expect(fetchMock.mock.calls.some(([input]) => input === servicePath)).toBe(
+    false,
   );
+  editSkill('changed-helper');
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
   save();
   await screen.findByText(
     'Check the skill name. Use no more than 128 characters.',
@@ -305,7 +307,8 @@ it('preserves legacy default authorization and returns to details with accurate 
     runtime_config: { ...fixture.runtime_config, nyxid_service_selectors: [] },
   };
   fetchMock.mockImplementation(async (input, init) => {
-    if (input === servicePath) return response({ services: [] });
+    const identity = identityResponse(input);
+    if (identity) return identity;
     if (init?.method === 'POST') {
       submitted = true;
       return response(receipt, 202);
@@ -314,18 +317,16 @@ it('preserves legacy default authorization and returns to details with accurate 
     return response(legacy);
   });
   renderEditor();
-  expect(
-    await screen.findByRole('checkbox', { name: 'Use NyxID defaults' }),
-  ).toBeChecked();
+  await screen.findByLabelText('Label');
+  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
   editSkill('updated');
   save();
   await screen.findByText(
     'Changes submitted, but the latest configuration could not be loaded. Refresh the channel details to view it.',
   );
-  expect(postBody()).toMatchObject({
-    authorization_mode: 'nyxid_default',
-    service_ids: [],
-  });
+  expect(postBody()).not.toHaveProperty('authorization_mode');
+  expect(postBody()).not.toHaveProperty('service_ids');
+  expect(postBody().runtime_config.nyxid_service_selectors).toEqual([]);
   expect(history.replace).toHaveBeenCalledWith(
     '/scopes/scope-alpha/channels/registration-alpha',
   );
@@ -345,12 +346,13 @@ it('keeps Save pending through readback and ignores its result after leaving the
     resolveRead = resolve;
   });
   fetchMock.mockImplementation(async (input, init) => {
-    if (input === servicePath) return response({ services: [service] });
+    const identity = identityResponse(input);
+    if (identity) return identity;
     if (init?.method === 'POST') return response(receipt, 202);
     return posts().length ? pendingRead : response(fixture);
   });
   const view = renderEditor();
-  await screen.findByRole('checkbox', { name: /GitHub work/ });
+  await screen.findByLabelText('Label');
   editSkill('updated');
   save();
   await waitFor(() =>
@@ -387,21 +389,17 @@ it('protects unsaved navigation and ignores a response after the editor unmounts
   fetchMock.mockImplementation(async (input, init) =>
     init?.method === 'POST'
       ? deferred
-      : input === servicePath
-        ? response({ services: [] })
-        : response({
-            ...fixture,
-            service_ids: [],
-            runtime_config: {
-              ...fixture.runtime_config,
-              nyxid_service_selectors: [],
-            },
-          }),
+      : (identityResponse(input) ??
+        response({
+          ...fixture,
+          service_ids: [],
+          runtime_config: {
+            ...fixture.runtime_config,
+          },
+        })),
   );
   const view = renderEditor();
-  await screen.findByText(
-    'No services are available with your current authorization.',
-  );
+  await screen.findByLabelText('Label');
   editSkill('unsaved');
   const unload = new Event('beforeunload', { cancelable: true });
   window.dispatchEvent(unload);
@@ -421,4 +419,124 @@ it('protects unsaved navigation and ignores a response after the editor unmounts
   expect(fetchMock.mock.calls.filter(([input]) => input === path)).toHaveLength(
     2,
   );
+});
+
+it('updates only the label using the exact NyxID bot ID and refreshes the safe identity cache', async () => {
+  fetchMock.mockImplementation(async (input, init) => {
+    if (init?.method === 'PATCH')
+      return response({
+        ...bot,
+        label: 'New label',
+        access_token: 'TEST_ONLY_SECRET',
+      });
+    return identityResponse(input) ?? response(fixture);
+  });
+  const view = renderEditor();
+  await screen.findByLabelText('Label');
+  editLabel('  New label  ');
+  save();
+  await screen.findByText('Channel changes saved.');
+  expect(patches()).toHaveLength(1);
+  expect(patches()[0][0]).toBe(`${botsPath}/bot-nyx-alpha`);
+  expect(JSON.parse(String(patches()[0][1]?.body))).toEqual({
+    label: 'New label',
+  });
+  expect(posts()).toHaveLength(0);
+  expect(fetchMock.mock.calls.filter(([input]) => input === path)).toHaveLength(
+    1,
+  );
+  expect(
+    view.queryClient.getQueryData(channelKeys.bots('scope-alpha')),
+  ).toEqual([{ ...bot, label: 'New label' }]);
+  expect(
+    JSON.stringify(
+      view.queryClient.getQueryData(channelKeys.bots('scope-alpha')),
+    ),
+  ).not.toContain('TEST_ONLY_SECRET');
+  expect(history.replace).toHaveBeenCalledWith(
+    '/scopes/scope-alpha/channels/registration-alpha',
+  );
+});
+
+it('reports a partial save and retries only the failed skill update without changing authorization', async () => {
+  let attempts = 0;
+  fetchMock.mockImplementation(async (input, init) => {
+    if (init?.method === 'PATCH')
+      return response({ ...bot, label: 'New label' });
+    if (init?.method === 'POST')
+      return ++attempts === 1 ? response({}, 503) : response(receipt, 202);
+    return identityResponse(input) ?? response(fixture);
+  });
+  renderEditor();
+  await screen.findByLabelText('Label');
+  editLabel('New label');
+  editSkill('new-skill');
+  save();
+  await screen.findByText(
+    'Label saved, but the skill name could not be updated. Try saving again.',
+  );
+  expect(history.replace).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('Label')).toHaveValue('New label');
+  expect(screen.getByLabelText(/^Skill name/)).toHaveValue('new-skill');
+  save();
+  await screen.findByText(
+    'Changes submitted. They may take a moment to appear in channel details.',
+  );
+  expect(patches()).toHaveLength(1);
+  expect(posts()).toHaveLength(2);
+  expect(postBody()).toEqual({
+    runtime_config: {
+      ...fixture.runtime_config,
+      default_skill: { name: 'new-skill', version: '2.1' },
+    },
+  });
+});
+
+it('validates the label before either write and keeps both values when the label request fails', async () => {
+  fetchMock.mockImplementation(async (input, init) => {
+    if (init?.method === 'PATCH')
+      return response({ token: 'TEST_ONLY_SECRET' }, 503);
+    return identityResponse(input) ?? response(fixture);
+  });
+  renderEditor();
+  await screen.findByLabelText('Label');
+  editSkill('new-skill');
+  for (const value of [' ', '界'.repeat(43)]) {
+    editLabel(value);
+    save();
+    expect(screen.getByLabelText('Label')).toHaveAttribute(
+      'aria-invalid',
+      'true',
+    );
+    expect(patches()).toHaveLength(0);
+    expect(posts()).toHaveLength(0);
+  }
+  editLabel('Valid label');
+  save();
+  await screen.findByText('Could not save the label. Check it and try again.');
+  expect(screen.getByLabelText('Label')).toHaveValue('Valid label');
+  expect(screen.getByLabelText(/^Skill name/)).toHaveValue('new-skill');
+  expect(posts()).toHaveLength(0);
+  expect(history.replace).not.toHaveBeenCalled();
+  expect(document.body).not.toHaveTextContent('TEST_ONLY_SECRET');
+});
+
+it.each([
+  { ...registration, owned: false },
+  { ...registration, scope_id: 'other-scope' },
+  { ...registration, nyx_channel_bot_id: 'unrelated-bot' },
+  { ...registration, platform: 'lark' },
+])('does not expose an editor without an exact owned bot mapping: %j', async (row) => {
+  fetchMock.mockImplementation(async (input) =>
+    input === '/api/channels/registrations'
+      ? response([row])
+      : (identityResponse(input) ?? response(fixture)),
+  );
+  renderEditor();
+  await screen.findByText(
+    'This channel is unavailable or you do not have access.',
+  );
+  expect(screen.queryByRole('form')).not.toBeInTheDocument();
+  expect(patches()).toHaveLength(0);
+  expect(posts()).toHaveLength(0);
 });

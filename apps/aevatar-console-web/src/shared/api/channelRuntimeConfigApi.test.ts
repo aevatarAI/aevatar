@@ -68,6 +68,6 @@ it('rejects an unrecognized config or receipt instead of replacing it with defau
     }),
   );
   await expect(
-    channelRuntimeConfigApi.update('registration-alpha', detail),
+    channelRuntimeConfigApi.update('registration-alpha', detail.runtimeConfig),
   ).rejects.toThrow('not acknowledged');
 });
