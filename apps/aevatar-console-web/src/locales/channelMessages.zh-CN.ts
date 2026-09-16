@@ -133,12 +133,11 @@ export default {
   'channels.connect.selectionHelp': '此机器人只能使用选中的服务。',
   'channels.connect.selectionChanged':
     '部分选中服务已不可用，请取消勾选后再连接。',
-  'channels.connect.pending':
-    '请求已提交。可点击再次检查，准备完成后将打开你的渠道详情。',
-  'channels.connect.check': '再次检查',
+  'channels.connect.connecting': '连接中...',
+  'channels.connect.awaitingConfirmation': '连接待确认',
+  'channels.connect.delayed':
+    '请求已提交，但确认所需时间较长。你可以返回渠道列表。',
   'channels.connect.success': 'Telegram 渠道已创建。',
-  'channels.connect.error.confirmation': '暂时无法查看渠道，请再次检查。',
-  'channels.connect.submitted': '请求已提交',
   'channels.connect.error.token': '请检查 BotFather 提供的令牌后重试。',
   'channels.connect.error.botName':
     '暂时无法获取 Telegram 机器人名称，请重试。',
