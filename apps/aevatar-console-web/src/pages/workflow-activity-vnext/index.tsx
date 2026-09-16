@@ -3,6 +3,7 @@ import { t } from '@/shared/i18n/messages';
 import ActivityPage from './activity/ActivityPage';
 import RunDetailPage from './activity/RunDetailPage';
 import ChannelDetailsPage from './channels/ChannelDetailsPage';
+import ChannelEditPage from './channels/ChannelEditPage';
 import ChannelsPage from './channels/ChannelsPage';
 import TelegramConnectionPage from './channels/TelegramConnectionPage';
 import { useConsoleLocation } from './hooks/useConsoleLocation';
@@ -59,6 +60,16 @@ const WorkflowActivityVNextPage: React.FC = () => {
 
   if (pathname.endsWith('/channels/connect/telegram')) {
     return <TelegramConnectionPage key={scopeId} scopeId={scopeId} />;
+  }
+  const channelEditMatch = /\/channels\/([^/]+)\/edit$/.exec(pathname);
+  if (channelEditMatch) {
+    return (
+      <ChannelEditPage
+        key={`${scopeId}:${channelEditMatch[1]}`}
+        scopeId={scopeId}
+        registrationId={decodeURIComponent(channelEditMatch[1])}
+      />
+    );
   }
   const channelMatch = /\/channels\/([^/]+)$/.exec(pathname);
   if (channelMatch) {

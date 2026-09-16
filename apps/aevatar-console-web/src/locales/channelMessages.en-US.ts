@@ -1,4 +1,32 @@
 export default {
+  'channels.edit': 'Edit',
+  'channels.edit.title': 'Edit {platform}',
+  'channels.edit.loadingTitle': 'Edit channel',
+  'channels.edit.loading': 'Loading channel configuration',
+  'channels.edit.configuration': 'Configuration',
+  'channels.edit.save': 'Save changes',
+  'channels.edit.defaults': 'NyxID defaults',
+  'channels.edit.useDefaults': 'Use NyxID defaults',
+  'channels.edit.unavailableService': 'Unavailable service',
+  'channels.edit.servicesError':
+    'Could not load your services. Try again before saving.',
+  'channels.edit.servicesEmpty':
+    'No services are available with your current authorization.',
+  'channels.edit.missingServices':
+    'Some saved services are no longer available. Deselect them before saving.',
+  'channels.edit.selectionError':
+    'Review your selected services and try again.',
+  'channels.edit.skillError':
+    'Check the skill name. Use no more than 128 characters.',
+  'channels.edit.failed':
+    'Could not save channel changes. Review your choices and try again.',
+  'channels.edit.saved': 'Channel changes saved.',
+  'channels.edit.confirming': 'Changes submitted. Waiting for confirmation.',
+  'channels.edit.checkFailed':
+    'Changes were submitted, but could not be confirmed. Check again.',
+  'channels.edit.check': 'Check again',
+  'channels.edit.discardTitle': 'Discard your changes?',
+  'channels.edit.discardHelp': 'Your unsaved channel changes will be lost.',
   'workflowActivityVNext.nav.channels': 'Channels',
   'channels.title': 'Connect your channels to your agent',
   'channels.description':

@@ -4,10 +4,8 @@ import {
   EyeInvisibleOutlined,
   EyeOutlined,
 } from '@ant-design/icons';
-import { useQuery } from '@tanstack/react-query';
 import { Button, Input, Modal } from 'antd';
 import * as React from 'react';
-import { listChannelServices } from '@/shared/api/channelServicesApi';
 import {
   ChannelRegistrationError,
   type ChannelRegistrationFailure,
@@ -19,8 +17,10 @@ import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { buildWorkflowActivitySectionHref } from '../navigation';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import ChannelServicePicker from './ChannelServicePicker';
+import ChannelSkillField from './ChannelSkillField';
 import { getChannelWebhookBaseUrl } from './config';
 import { channelConnectionCss } from './connectionStyles';
+import { useChannelServiceChoices } from './queries';
 import { channelsCss } from './styles';
 
 function registrationErrorMessage(reason: ChannelRegistrationFailure) {
@@ -86,15 +86,7 @@ export default function TelegramConnectionPage({
   const toast = useConsoleToast();
   const webhookBaseUrl = getChannelWebhookBaseUrl();
   const listHref = buildWorkflowActivitySectionHref(scopeId, 'channels');
-  const services = useQuery({
-    queryKey: ['channels', scopeId, 'service-choices'],
-    queryFn: ({ signal }) => listChannelServices(signal),
-    enabled: Boolean(scopeId),
-    retry: false,
-    staleTime: 0,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  });
+  const services = useChannelServiceChoices(scopeId);
   const invalidSelection = selectedIds.some(
     (id) =>
       !services.data?.some(
@@ -307,24 +299,15 @@ export default function TelegramConnectionPage({
               onChange={(event) => setChannelName(event.target.value)}
             />
           </div>
-          <div className="channels__field">
-            <div className="channels__field-heading">
-              <label htmlFor="telegram-skill">
-                {t('channels.connect.skillName', 'Skill name')}{' '}
-                <span>{t('channels.connect.optional', '(optional)')}</span>
-              </label>
-            </div>
-            <Input
-              id="telegram-skill"
-              value={skillName}
-              placeholder={t(
-                'channels.connect.skillNameDefault',
-                'Defaults to the Telegram bot name',
-              )}
-              disabled={locked}
-              onChange={(event) => setSkillName(event.target.value)}
-            />
-          </div>
+          <ChannelSkillField
+            value={skillName}
+            onChange={setSkillName}
+            disabled={locked}
+            placeholder={t(
+              'channels.connect.skillNameDefault',
+              'Defaults to the Telegram bot name',
+            )}
+          />
         </div>
         <ChannelServicePicker
           services={services.data ?? []}

@@ -216,7 +216,7 @@ async function request<T>(
   return decode(await response.json());
 }
 
-function registrationPath(registrationId: string): string {
+export function registrationPath(registrationId: string): string {
   if (!registrationId.trim())
     throw new Error('Missing channel registration ID.');
   return `/api/channels/registrations/${encodeURIComponent(registrationId)}`;
