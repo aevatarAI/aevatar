@@ -1,4 +1,11 @@
 export default {
+  'channels.edit.label': 'Label',
+  'channels.edit.labelError':
+    'Enter a non-empty label. If it is too long, shorten it and try again.',
+  'channels.edit.labelFailed':
+    'Could not save the label. Check it and try again.',
+  'channels.edit.partialSave':
+    'Label saved, but the skill name could not be updated. Try saving again.',
   'channels.edit': 'Edit',
   'channels.edit.title': 'Edit {platform}',
   'channels.edit.loadingTitle': 'Edit channel',

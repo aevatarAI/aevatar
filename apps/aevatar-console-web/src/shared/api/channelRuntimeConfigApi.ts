@@ -132,20 +132,24 @@ export function channelConfigPayload(input: ChannelConfigUpdate) {
   return {
     authorization_mode: input.authorizationMode,
     service_ids: [...input.serviceIds].sort(),
-    runtime_config: {
-      instructions: config.instructions.trim(),
-      default_skill: {
-        name: config.defaultSkill.name.trim(),
-        version: config.defaultSkill.version.trim(),
-      },
-      tool_set_refs: [...config.toolSetRefs],
-      extra_tool_names: [...config.extraToolNames],
-      nyxid_service_selectors: config.serviceSelectors.map((selector) => ({
-        service_slug: selector.serviceSlug,
-        endpoint_names: [...selector.endpointNames],
-      })),
-      credential_source_mode: config.credentialSourceMode,
+    runtime_config: runtimeConfigPayload(config),
+  };
+}
+
+function runtimeConfigPayload(config: ChannelRuntimeConfig) {
+  return {
+    instructions: config.instructions,
+    default_skill: {
+      name: config.defaultSkill.name.trim(),
+      version: config.defaultSkill.version,
     },
+    tool_set_refs: [...config.toolSetRefs],
+    extra_tool_names: [...config.extraToolNames],
+    nyxid_service_selectors: config.serviceSelectors.map((selector) => ({
+      service_slug: selector.serviceSlug,
+      endpoint_names: [...selector.endpointNames],
+    })),
+    credential_source_mode: config.credentialSourceMode,
   };
 }
 
@@ -212,7 +216,7 @@ export const channelRuntimeConfigApi = {
   },
   async update(
     registrationId: string,
-    input: ChannelConfigUpdate,
+    input: ChannelRuntimeConfig,
   ): Promise<ChannelConfigReceipt> {
     const response = await authFetch(
       `${registrationPath(registrationId)}/runtime-config`,
@@ -222,7 +226,8 @@ export const channelRuntimeConfigApi = {
           Accept: 'application/json',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(channelConfigPayload(input)),
+        // Omitting service selection preserves the current backend authorization.
+        body: JSON.stringify({ runtime_config: runtimeConfigPayload(input) }),
       },
     );
     const value: unknown = await response.json().catch(() => null);

@@ -1,4 +1,9 @@
 export default {
+  'channels.edit.label': 'Label',
+  'channels.edit.labelError': 'Label 不能为空；如果名称过长，请缩短后重试。',
+  'channels.edit.labelFailed': '无法保存 Label，请检查后重试。',
+  'channels.edit.partialSave':
+    'Label 已保存，但 Skill 名称更新失败，请再次保存。',
   'channels.edit': '编辑',
   'channels.edit.title': '编辑 {platform}',
   'channels.edit.loadingTitle': '编辑渠道',

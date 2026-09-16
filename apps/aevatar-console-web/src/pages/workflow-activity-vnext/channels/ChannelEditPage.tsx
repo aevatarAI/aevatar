@@ -1,7 +1,12 @@
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, Checkbox, Modal } from 'antd';
+import { Button, Input, Modal } from 'antd';
 import * as React from 'react';
+import {
+  type ChannelBotIdentity,
+  isValidChannelBotLabel,
+  updateChannelBotLabel,
+} from '@/shared/api/channelBotsApi';
 import {
   type ChannelConfigDetail,
   ChannelConfigError,
@@ -10,7 +15,6 @@ import {
   channelConfigMatches,
   channelRuntimeConfigApi,
 } from '@/shared/api/channelRuntimeConfigApi';
-import type { ChannelServiceChoice } from '@/shared/api/channelServicesApi';
 import { ChannelApiError } from '@/shared/api/channelsApi';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
@@ -21,11 +25,14 @@ import {
   buildWorkflowActivitySectionHref,
 } from '../navigation';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
-import ChannelServicePicker from './ChannelServicePicker';
 import ChannelSkillField from './ChannelSkillField';
 import { channelConnectionCss } from './connectionStyles';
 import { ChannelLoadError, platformName } from './presentation';
-import { channelKeys, useChannelServiceChoices } from './queries';
+import {
+  channelKeys,
+  useChannelBotIdentities,
+  useChannelRegistrations,
+} from './queries';
 import { channelsCss } from './styles';
 
 export default function ChannelEditPage({
@@ -35,9 +42,10 @@ export default function ChannelEditPage({
   readonly scopeId: string;
   readonly registrationId: string;
 }) {
-  const [initial, setInitial] = React.useState<ChannelConfigDetail | null>(
-    null,
-  );
+  const [initial, setInitial] = React.useState<{
+    config: ChannelConfigDetail;
+    bot: ChannelBotIdentity;
+  } | null>(null);
   const config = useQuery({
     queryKey: channelKeys.config(scopeId, registrationId),
     queryFn: ({ signal }) =>
@@ -51,24 +59,34 @@ export default function ChannelEditPage({
   const [navigate, setNavigate] = React.useState<(target: string) => void>(
     () => history.push,
   );
+  const registrations = useChannelRegistrations(scopeId);
+  const bots = useChannelBotIdentities(scopeId, Boolean(registrationId));
+  const queries = [config, registrations, bots];
+  const pending = queries.some((query) => query.isFetching);
+  const fresh = queries.every(
+    (query) =>
+      query.isSuccess && query.isFetchedAfterMount && !query.isFetching,
+  );
+  const registration = registrations.data?.find(
+    (row) => row.id === registrationId && row.scopeId === scopeId && row.owned,
+  );
+  const bot = bots.data?.find(
+    (row) =>
+      row.id === registration?.botId && row.platform === config.data?.platform,
+  );
+  const loadError =
+    queries.find((query) => query.isError)?.error ??
+    (fresh && (!bot || registration?.platform !== config.data?.platform)
+      ? new ChannelApiError(404)
+      : null);
+  const error = pending ? null : loadError;
   React.useEffect(() => {
-    if (
-      !initial &&
-      config.isSuccess &&
-      config.isFetchedAfterMount &&
-      !config.isFetching
-    )
-      setInitial(config.data);
-  }, [
-    initial,
-    config.data,
-    config.isSuccess,
-    config.isFetchedAfterMount,
-    config.isFetching,
-  ]);
+    if (!initial && fresh && !error && config.data && bot)
+      setInitial({ config: config.data, bot });
+  }, [initial, fresh, error, config.data, bot]);
   const title = initial
     ? t('channels.edit.title', 'Edit {platform}', {
-        platform: platformName(initial.platform),
+        platform: platformName(initial.config.platform),
       })
     : t('channels.edit.loadingTitle', 'Edit channel');
   const listHref = buildWorkflowActivitySectionHref(scopeId, 'channels');
@@ -103,7 +121,7 @@ export default function ChannelEditPage({
         </nav>
         <h1>{title}</h1>
       </div>
-      {!initial && !config.isError ? (
+      {!initial && !error ? (
         <AevatarContentSkeleton
           ariaLabel={t(
             'channels.edit.loading',
@@ -112,16 +130,21 @@ export default function ChannelEditPage({
           variant="list"
           rows={4}
         />
-      ) : !initial && config.isError ? (
+      ) : !initial && error ? (
         <ChannelLoadError
-          error={config.error}
-          pending={config.isFetching}
-          retry={() => void config.refetch()}
+          error={error}
+          pending={pending}
+          retry={() => {
+            void config.refetch();
+            void registrations.refetch();
+            void bots.refetch();
+          }}
         />
       ) : initial ? (
         <ChannelEditForm
           key={`${scopeId}:${registrationId}`}
-          initial={initial}
+          initial={initial.config}
+          initialBot={initial.bot}
           title={title}
           setNavigate={setNavigate}
           readBack={async () => {
@@ -137,11 +160,13 @@ export default function ChannelEditPage({
 
 function ChannelEditForm({
   initial,
+  initialBot,
   title,
   setNavigate,
   readBack,
 }: {
   readonly initial: ChannelConfigDetail;
+  readonly initialBot: ChannelBotIdentity;
   readonly title: string;
   readonly setNavigate: React.Dispatch<
     React.SetStateAction<(target: string) => void>
@@ -152,13 +177,12 @@ function ChannelEditForm({
   const [skillName, setSkillName] = React.useState(
     baseline.runtimeConfig.defaultSkill.name,
   );
-  const [selectedIds, setSelectedIds] = React.useState([
-    ...baseline.serviceIds,
-  ]);
-  const [authorizationMode, setAuthorizationMode] = React.useState(
-    baseline.authorizationMode,
-  );
-  const [errors, setErrors] = React.useState<readonly ChannelConfigField[]>([]);
+  const [label, setLabel] = React.useState(initialBot.label ?? '');
+  const [savedLabel, setSavedLabel] = React.useState(initialBot.label ?? '');
+  const labelId = React.useId();
+  const [errors, setErrors] = React.useState<
+    readonly (ChannelConfigField | 'label')[]
+  >([]);
   const [submitting, setSubmitting] = React.useState(false);
   const [leaveTarget, setLeaveTarget] = React.useState<string | null>(null);
   const inFlight = React.useRef(false);
@@ -166,41 +190,12 @@ function ChannelEditForm({
   const completed = React.useRef(false);
   const toast = useConsoleToast();
   const queryClient = useQueryClient();
-  const services = useChannelServiceChoices(baseline.scopeId);
   const detailsHref = buildChannelDetailsHref(
     baseline.scopeId,
     baseline.registrationId,
   );
-  const usesDefaults = authorizationMode === 'nyxid_default';
-  const selectionChanged =
-    authorizationMode !== baseline.authorizationMode ||
-    JSON.stringify([...selectedIds].sort()) !==
-      JSON.stringify([...baseline.serviceIds].sort());
-  const missingIds = selectedIds.filter(
-    (id) => !services.data?.some((service) => service.id === id),
-  );
-  const choices: readonly ChannelServiceChoice[] = [
-    ...(services.data ?? []),
-    ...missingIds.map(
-      (id): ChannelServiceChoice => ({
-        id,
-        slug: id,
-        label: t('channels.edit.unavailableService', 'Unavailable service'),
-        active: false,
-        allowed: false,
-        source: 'unknown',
-        organizationName: null,
-      }),
-    ),
-  ];
-  const selectedSlugs = new Set(
-    services.data
-      ?.filter((service) => selectedIds.includes(service.id))
-      .map((service) => service.slug),
-  );
   const update: ChannelConfigUpdate = {
-    authorizationMode,
-    serviceIds: usesDefaults ? [] : selectedIds,
+    ...baseline,
     runtimeConfig: {
       ...baseline.runtimeConfig,
       defaultSkill: {
@@ -209,18 +204,11 @@ function ChannelEditForm({
           ? baseline.runtimeConfig.defaultSkill.version
           : '',
       },
-      serviceSelectors: selectionChanged
-        ? baseline.runtimeConfig.serviceSelectors.filter(
-            (selector) =>
-              !usesDefaults && selectedSlugs.has(selector.serviceSlug),
-          )
-        : baseline.runtimeConfig.serviceSelectors,
     },
   };
-  const dirty = !channelConfigMatches(update, baseline);
-  const serviceBlocked =
-    !usesDefaults &&
-    (!services.isSuccess || services.isFetching || missingIds.length > 0);
+  const labelChanged = label.trim() !== savedLabel;
+  const skillChanged = !channelConfigMatches(update, baseline);
+  const dirty = labelChanged || skillChanged;
 
   React.useEffect(() => {
     mounted.current = true;
@@ -245,14 +233,16 @@ function ChannelEditForm({
     });
   }, [dirty, setNavigate]);
 
-  async function finishSave(expected: ChannelConfigUpdate) {
-    let confirmed = false;
+  async function finishSave(expected?: ChannelConfigUpdate) {
+    let confirmed = !expected;
     let readFailed = false;
     try {
-      const actual = await readBack();
-      confirmed =
-        actual.stateVersion > baseline.stateVersion &&
-        channelConfigMatches(actual, expected);
+      if (expected) {
+        const actual = await readBack();
+        confirmed =
+          actual.stateVersion > baseline.stateVersion &&
+          channelConfigMatches(actual, expected);
+      }
     } catch {
       readFailed = true;
     }
@@ -286,52 +276,87 @@ function ChannelEditForm({
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    if (
-      inFlight.current ||
-      submitting ||
-      !dirty ||
-      serviceBlocked ||
-      completed.current
-    )
-      return;
-    const invalid: ChannelConfigField[] = [];
+    if (inFlight.current || submitting || !dirty || completed.current) return;
+    const invalid: (ChannelConfigField | 'label')[] = [];
+    if (labelChanged && !isValidChannelBotLabel(label)) invalid.push('label');
     if (skillName.trim().length > 128) invalid.push('skill');
     setErrors(invalid);
     if (invalid.length) return;
     inFlight.current = true;
     setSubmitting(true);
+    let labelSaved = false;
+    let updatingLabel = labelChanged;
     try {
-      await channelRuntimeConfigApi.update(baseline.registrationId, update);
+      if (labelChanged) {
+        const updated = await updateChannelBotLabel(initialBot, label);
+        queryClient.setQueryData<ChannelBotIdentity[]>(
+          channelKeys.bots(baseline.scopeId),
+          (current) =>
+            current?.map((bot) => (bot.id === updated.id ? updated : bot)),
+        );
+        void queryClient.invalidateQueries({
+          queryKey: channelKeys.bots(baseline.scopeId),
+          refetchType: 'none',
+        });
+        if (!mounted.current) return;
+        setSavedLabel(updated.label ?? '');
+        labelSaved = true;
+        updatingLabel = false;
+      }
+      if (skillChanged)
+        await channelRuntimeConfigApi.update(
+          baseline.registrationId,
+          update.runtimeConfig,
+        );
       if (!mounted.current) return;
       // Read once for truthful feedback, then leave the editor even if the
       // accepted change is not visible yet. Never poll or resubmit to confirm.
-      await finishSave(update);
+      await finishSave(skillChanged ? update : undefined);
     } catch (error) {
       if (!mounted.current) return;
       if (error instanceof ChannelConfigError) {
         setErrors(error.fields);
-        if (error.fields.includes('services')) void services.refetch();
       }
+      if (
+        updatingLabel &&
+        error instanceof ChannelApiError &&
+        error.status === 400
+      )
+        setErrors(['label']);
       toast.error(
-        error instanceof ChannelApiError && [401, 403].includes(error.status)
+        !updatingLabel &&
+          (labelSaved || savedLabel !== (initialBot.label ?? ''))
           ? t(
-              'channels.connect.error.authorization',
-              'Your session or service access needs attention. Sign in again and review your NyxID access.',
+              'channels.edit.partialSave',
+              'Label saved, but the skill name could not be updated. Try saving again.',
             )
-          : error instanceof ChannelApiError &&
-              error.status === 404 &&
-              !(
-                error instanceof ChannelConfigError &&
-                error.fields.includes('services')
-              )
+          : (error instanceof ChannelApiError &&
+                [401, 403].includes(error.status)) ||
+              (error instanceof ChannelConfigError &&
+                error.fields.includes('services'))
             ? t(
-                'channels.error.unavailable',
-                'This channel is unavailable or you do not have access.',
+                'channels.connect.error.authorization',
+                'Your session or service access needs attention. Sign in again and review your NyxID access.',
               )
-            : t(
-                'channels.edit.failed',
-                'Could not save channel changes. Review your choices and try again.',
-              ),
+            : error instanceof ChannelApiError &&
+                error.status === 404 &&
+                !(
+                  error instanceof ChannelConfigError &&
+                  error.fields.includes('services')
+                )
+              ? t(
+                  'channels.error.unavailable',
+                  'This channel is unavailable or you do not have access.',
+                )
+              : updatingLabel
+                ? t(
+                    'channels.edit.labelFailed',
+                    'Could not save the label. Check it and try again.',
+                  )
+                : t(
+                    'channels.edit.failed',
+                    'Could not save channel changes. Review your choices and try again.',
+                  ),
       );
       return;
     } finally {
@@ -340,18 +365,18 @@ function ChannelEditForm({
     }
   }
 
-  const errorText = (field: 'skill' | 'services') =>
-    errors.includes(field)
-      ? field === 'skill'
-        ? t(
-            'channels.edit.skillError',
-            'Check the skill name. Use no more than 128 characters.',
-          )
-        : t(
-            'channels.edit.selectionError',
-            'Review your selected services and try again.',
-          )
-      : undefined;
+  const labelError = errors.includes('label')
+    ? t(
+        'channels.edit.labelError',
+        'Enter a non-empty label. If it is too long, shorten it and try again.',
+      )
+    : undefined;
+  const skillError = errors.includes('skill')
+    ? t(
+        'channels.edit.skillError',
+        'Check the skill name. Use no more than 128 characters.',
+      )
+    : undefined;
 
   return (
     <>
@@ -364,55 +389,34 @@ function ChannelEditForm({
         <h2 className="channels__form-section-title">
           {t('channels.edit.configuration', 'Configuration')}
         </h2>
+        <div className="channels__field">
+          <div className="channels__field-heading">
+            <label htmlFor={labelId}>{t('channels.edit.label', 'Label')}</label>
+          </div>
+          <Input
+            id={labelId}
+            value={label}
+            disabled={submitting}
+            aria-invalid={Boolean(labelError)}
+            aria-describedby={labelError ? `${labelId}-error` : undefined}
+            onChange={(event) => setLabel(event.target.value)}
+          />
+          {labelError ? (
+            <p
+              id={`${labelId}-error`}
+              className="channels__form-error"
+              role="alert"
+            >
+              {labelError}
+            </p>
+          ) : null}
+        </div>
         <ChannelSkillField
           value={skillName}
           onChange={setSkillName}
           disabled={submitting}
-          error={errorText('skill')}
+          error={skillError}
         />
-        {baseline.authorizationMode === 'nyxid_default' ? (
-          <div className="channels__field">
-            <Checkbox
-              checked={usesDefaults}
-              disabled={submitting}
-              onChange={(event) => {
-                setAuthorizationMode(
-                  event.target.checked
-                    ? 'nyxid_default'
-                    : 'explicit_service_allowlist',
-                );
-                setSelectedIds([]);
-              }}
-            >
-              {t('channels.edit.useDefaults', 'Use NyxID defaults')}
-            </Checkbox>
-          </div>
-        ) : null}
-        <ChannelServicePicker
-          services={choices}
-          selectedIds={selectedIds}
-          onChange={setSelectedIds}
-          loading={services.isPending}
-          failed={services.isError}
-          refreshing={services.isFetching}
-          disabled={submitting || usesDefaults}
-          retry={() => void services.refetch()}
-          editing
-          usesDefaults={usesDefaults}
-        />
-        {missingIds.length > 0 && services.isSuccess && !submitting ? (
-          <p className="channels__form-error" role="alert">
-            {t(
-              'channels.edit.missingServices',
-              'Some saved services are no longer available. Deselect them before saving.',
-            )}
-          </p>
-        ) : null}
-        {errorText('services') ? (
-          <p className="channels__form-error" role="alert">
-            {errorText('services')}
-          </p>
-        ) : null}
         <div className="channels__form-actions">
           <Button
             disabled={submitting}
@@ -427,9 +431,7 @@ function ChannelEditForm({
             type="primary"
             htmlType="submit"
             loading={submitting}
-            disabled={
-              submitting || completed.current || !dirty || serviceBlocked
-            }
+            disabled={submitting || completed.current || !dirty}
           >
             {t('channels.edit.save', 'Save changes')}
           </Button>
