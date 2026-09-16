@@ -188,7 +188,7 @@ internal static class ChatRuntimeRequestBuilder
         AgentToolExecutionContext toolContext)
     {
         var credential = string.IsNullOrWhiteSpace(baseCallerContext?.Credentials?.NyxIdBearer)
-            ? Normalize(toolContext.Credentials.NyxIdAccessToken)
+            ? ResolvePromotableNyxIdCredential(toolContext.Credentials)
             : baseCallerContext.Credentials.NyxIdBearer.Trim();
         var credentials = string.IsNullOrWhiteSpace(credential)
             ? baseCallerContext?.Credentials
@@ -215,6 +215,11 @@ internal static class ChatRuntimeRequestBuilder
             Normalize(toolContext.Caller.ResponseId),
             credentials);
     }
+
+    private static string? ResolvePromotableNyxIdCredential(AgentToolCredentials credentials) =>
+        credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.AgentKey
+            ? Normalize(credentials.NyxIdAccessToken)
+            : null;
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
