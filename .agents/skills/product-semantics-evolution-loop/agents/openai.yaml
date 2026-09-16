@@ -1,4 +1,0 @@
-interface:
-  display_name: "Product Semantics Evolution Loop"
-  short_description: "Evolve product meaning across UI and code"
-  default_prompt: "Use $product-semantics-evolution-loop to resolve a product semantics mismatch and update the implementation plus tests."
