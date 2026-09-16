@@ -109,18 +109,18 @@ it('opens Edit from channel details and saves once, preserving hidden config and
   window.history.replaceState(
     {},
     '',
-    '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-alpha',
+    '/scopes/scope-alpha/channels/registration-alpha',
   );
   const view = renderWithQueryClient(<WorkflowActivityVNextPage />);
   fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
   expect(history.push).toHaveBeenCalledWith(
-    '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-alpha/edit',
+    '/scopes/scope-alpha/channels/registration-alpha/edit',
   );
   act(() => {
     window.history.replaceState(
       {},
       '',
-      '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-alpha/edit',
+      '/scopes/scope-alpha/channels/registration-alpha/edit',
     );
     window.dispatchEvent(new PopStateEvent('popstate'));
   });
@@ -170,7 +170,7 @@ it('opens Edit from channel details and saves once, preserving hidden config and
     3,
   );
   expect(history.replace).toHaveBeenCalledWith(
-    '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-alpha',
+    '/scopes/scope-alpha/channels/registration-alpha',
   );
   expect(view.queryClient.getMutationCache().getAll()).toHaveLength(0);
 });
@@ -184,7 +184,7 @@ it('returns to details when an accepted change is still delayed, without requiri
     'Changes submitted. They may take a moment to appear in channel details.',
   );
   expect(history.replace).toHaveBeenCalledWith(
-    '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-alpha',
+    '/scopes/scope-alpha/channels/registration-alpha',
   );
   expect(screen.queryByText('Channel changes saved.')).not.toBeInTheDocument();
   expect(
@@ -327,7 +327,7 @@ it('preserves legacy default authorization and returns to details with accurate 
     service_ids: [],
   });
   expect(history.replace).toHaveBeenCalledWith(
-    '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-alpha',
+    '/scopes/scope-alpha/channels/registration-alpha',
   );
   expect(screen.queryByText('Channel changes saved.')).not.toBeInTheDocument();
   expect(

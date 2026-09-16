@@ -48,6 +48,7 @@ type ConsoleHeaderActionThemeProps = {
 };
 
 type ConsoleAuthActionsProps = ConsoleHeaderActionThemeProps & {
+  readonly onOpenSettings?: () => void;
   readonly principal?: {
     readonly authenticated: boolean;
     readonly displayName: string;
@@ -110,6 +111,7 @@ export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
 
 export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
   dropdownRootClassName,
+  onOpenSettings,
   principal,
 }) => {
   const intl = useIntl();
@@ -167,11 +169,15 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
       }
       menu={{
         items: [
-          {
-            key: 'settings',
-            icon: <SettingOutlined />,
-            label: intl.formatMessage({ id: 'common.user.settings' }),
-          },
+          ...(onOpenSettings
+            ? [
+                {
+                  key: 'settings',
+                  icon: <SettingOutlined />,
+                  label: intl.formatMessage({ id: 'common.user.settings' }),
+                },
+              ]
+            : []),
           {
             key: 'logout',
             icon: <LogoutOutlined />,
@@ -180,7 +186,7 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
         ],
         onClick: ({ key }) => {
           if (key === 'settings') {
-            history.push('/settings');
+            onOpenSettings?.();
             return;
           }
 
@@ -235,24 +241,5 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
         />
       </span>
     </Dropdown>
-  );
-};
-
-export const ConsoleHeaderActions: React.FC<{
-  readonly className?: string;
-  readonly dropdownRootClassName?: string;
-}> = ({ className, dropdownRootClassName }) => {
-  const rootClassName = ['console-header-actions', className]
-    .filter(Boolean)
-    .join(' ');
-
-  return (
-    <div
-      className={rootClassName}
-      data-dropdown-root-class-name={dropdownRootClassName}
-    >
-      <ConsoleLanguageSwitch dropdownRootClassName={dropdownRootClassName} />
-      <ConsoleAuthActions dropdownRootClassName={dropdownRootClassName} />
-    </div>
   );
 };

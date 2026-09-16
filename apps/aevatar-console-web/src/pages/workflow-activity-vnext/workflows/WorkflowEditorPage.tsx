@@ -12,7 +12,6 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Input, Modal, Segmented, Space } from 'antd';
 import React from 'react';
-import WorkflowStudioEditorSurface from '@/pages/team-member-workflow-studio/components/WorkflowStudioEditorSurface';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { formatUtcDateTime } from '@/shared/datetime/dateTime';
 import { t } from '@/shared/i18n/messages';
@@ -25,6 +24,7 @@ import {
 import { createWorkflowRevisionIdentityCandidate } from '@/shared/studio/explicitRequestConfirmation';
 import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
+import WorkflowStudioEditorSurface from '@/shared/workflowEditor/WorkflowStudioEditorSurface';
 import {
   adaptActivityRunToExecutionLogs,
   isTerminalActivityRunStatus,

@@ -176,7 +176,7 @@ it('confirms the exact submitted channel with fresh reads and retries only GET w
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
     await screen.findByText('Telegram channel created.');
     expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-new',
+      '/scopes/scope-alpha/channels/registration-new',
     );
     expect(attempts).toBe(2);
     expect(reads).toBe(3);
@@ -252,7 +252,7 @@ it('creates once and opens the new channel details with its saved name, skill an
   window.history.replaceState(
     {},
     '',
-    '/scopes/scope-alpha/workflow-activity-vnext/channels/connect/telegram',
+    '/scopes/scope-alpha/channels/connect/telegram',
   );
   const view = renderWithQueryClient(<WorkflowActivityVNextPage />);
   expect(
@@ -320,7 +320,7 @@ it('creates once and opens the new channel details with its saved name, skill an
     }),
   ).toBeInTheDocument();
   expect(window.location.pathname).toBe(
-    '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-created',
+    '/scopes/scope-alpha/channels/registration-created',
   );
   const details = screen.getByRole('region', { name: 'Channel details' });
   expect(
@@ -592,7 +592,7 @@ it.each([
   fireEvent.click(screen.getByRole('button', { name: 'Connect Telegram' }));
   await waitFor(() =>
     expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-retried',
+      '/scopes/scope-alpha/channels/registration-retried',
     ),
   );
   expect(attempts).toBe(2);
@@ -676,9 +676,7 @@ it('confirms discarding a skill-only edit without issuing a registration request
       name: 'Discard',
     }),
   );
-  expect(history.push).toHaveBeenCalledWith(
-    '/scopes/scope-alpha/workflow-activity-vnext/channels',
-  );
+  expect(history.push).toHaveBeenCalledWith('/scopes/scope-alpha/channels');
   expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(
     false,
   );

@@ -37,14 +37,6 @@ export interface AuthInitialState {
 const AUTH_SESSION_STORAGE_KEY = 'aevatar-console:nyxid:session';
 const ACCESS_TOKEN_CLOCK_SKEW_MS = 30_000;
 const AUTH_BLOCKED_PATHS = new Set(['/login', '/auth/callback']);
-const LEGACY_RETURN_TO_ALIASES = new Map<string, string>([
-  ['/primitives', '/runtime/primitives'],
-  ['/runs', '/runtime/runs'],
-  ['/actors', '/runtime/explorer'],
-  ['/gagents', '/runtime/gagents'],
-  ['/mission-control', '/runtime/mission-control'],
-  ['/mission-wall', '/runtime/mission-wall'],
-]);
 
 function getStorage(): Storage | undefined {
   if (typeof window === 'undefined') {
@@ -175,10 +167,5 @@ export function sanitizeReturnTo(value?: string | null): string {
     return CONSOLE_HOME_ROUTE;
   }
 
-  const canonicalTarget = LEGACY_RETURN_TO_ALIASES.get(target);
-  if (!canonicalTarget) {
-    return normalized;
-  }
-
-  return `${canonicalTarget}${normalized.slice(target.length)}`;
+  return normalized;
 }

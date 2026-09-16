@@ -17,9 +17,10 @@ import WorkflowTemplatesPage from './workflows/WorkflowTemplatesPage';
 const WorkflowActivityVNextPage: React.FC = () => {
   const location = useConsoleLocation();
   const pathname = location.pathname;
-  const scopeMatch = /^\/scopes\/([^/]+)\/workflow-activity-vnext(?:\/|$)/.exec(
-    pathname,
-  );
+  const scopeMatch =
+    /^\/scopes\/([^/]+)\/(?:workflows|activity|channels|settings)(?:\/|$)/.exec(
+      pathname,
+    );
   const scopeId = scopeMatch ? decodeURIComponent(scopeMatch[1]) : '';
 
   if (pathname.endsWith('/workflows/new/templates')) {

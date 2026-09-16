@@ -257,10 +257,7 @@ describe('Channel pages', () => {
     expect(within(table).getByText('Version 2.4')).toBeInTheDocument();
     expect(
       screen.getByRole('link', { name: 'Connect Telegram' }),
-    ).toHaveAttribute(
-      'href',
-      '/scopes/scope-alpha/workflow-activity-vnext/channels/connect/telegram',
-    );
+    ).toHaveAttribute('href', '/scopes/scope-alpha/channels/connect/telegram');
     const availableChannels = screen.getByRole('region', {
       name: 'Available channels',
     });
@@ -283,11 +280,11 @@ describe('Channel pages', () => {
     expect(await within(table).findByText('Active')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('link', { name: 'Connect Telegram' }));
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/channels/connect/telegram',
+      '/scopes/scope-alpha/channels/connect/telegram',
     );
     fireEvent.click(within(table).getByRole('link', { name: 'Manage' }));
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/channels/registration%3Aalpha%2Fone',
+      '/scopes/scope-alpha/channels/registration%3Aalpha%2Fone',
     );
   });
 
@@ -578,7 +575,7 @@ describe('Channel pages', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
       await waitFor(() =>
         expect(history.replace).toHaveBeenCalledWith(
-          '/scopes/scope-alpha/workflow-activity-vnext/channels',
+          '/scopes/scope-alpha/channels',
         ),
       );
       expect(mockToast.success).toHaveBeenCalledWith('Channel removed.');

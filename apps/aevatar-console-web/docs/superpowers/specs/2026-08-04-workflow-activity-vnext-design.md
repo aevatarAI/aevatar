@@ -1,5 +1,10 @@
 # Workflow + Activity + Settings vNext Design
 
+> Current routing follows the [2026-09-16 consolidation decision](2026-09-16-console-route-consolidation.md).
+> It removes the `workflow-activity-vnext` URL segment and retires legacy
+> console pages, superseding the isolation and legacy-preservation requirements
+> below. The remaining visual, API, identity, and state contracts still apply.
+
 ## Status
 
 Proposed for review on 2026-08-04. This document is the deliverable for the

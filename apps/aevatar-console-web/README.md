@@ -1,6 +1,7 @@
 # Aevatar Console Web
 
-`aevatar-console-web` is the Ant Design Pro based admin shell for Aevatar.
+`aevatar-console-web` is the Aevatar console for Workflows, Activity, Channels,
+and Settings, using the existing Workflow Activity design system.
 
 ## Stack
 
@@ -104,15 +105,16 @@ Current proxy split during local development:
 - `/api/chat`, `/api/workflows/*`, `/api/actors/*`, `/api/runs/*`, `/api/primitives`, `/api/capabilities`, most `/api/scopes/*` runtime routes -> `Mainnet Host API`
 - `/api/app/*`, `/api/auth/*`, `/api/workspace/*`, `/api/editor/*`, `/api/executions/*`, `/api/roles/*`, `/api/connectors/*`, `/api/scopes/{scopeId}/teams*` -> `Studio Hosting API target`
 
-## Current scope
+## Current Routes
 
-- `Overview`
-- `Studio`
-- `Primitives`
-- `Runs`
-- `Actors`
-- `Workflows`
-- `Observability`
-- `Settings`
+`/workflows` resolves the signed-in account's scope. The console uses
+`/scopes/:scopeId/workflows`, `/scopes/:scopeId/activity`,
+`/scopes/:scopeId/channels`, and `/scopes/:scopeId/settings`, including their
+resource detail and editing routes. `/`, `/overview`, and `/scopes` open this
+home. Login and callback remain at `/login` and `/auth/callback`.
 
-If Studio shows `Failed to load Studio workflow` with an RFC 9110 `404 Not Found` payload, check that `AEVATAR_API_TARGET` points to `Aevatar.Mainnet.Host.Api` rather than `Aevatar.Workflow.Host.Api`; scope workflow detail requests are served by mainnet.
+The old Teams, Members, Studio, and other legacy console pages are removed.
+Retired business URLs, including the former `workflow-activity-vnext` prefix,
+render the not-found page. Backend resources and identity contracts are
+unchanged. See the [route consolidation specification](docs/superpowers/specs/2026-09-16-console-route-consolidation.md)
+for the complete route inventory and the shared-component migration.

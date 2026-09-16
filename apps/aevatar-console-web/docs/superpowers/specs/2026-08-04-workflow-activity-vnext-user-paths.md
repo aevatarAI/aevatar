@@ -1,5 +1,10 @@
 # Workflow + Activity + Settings vNext User Paths
 
+> Current routing follows the [2026-09-16 consolidation decision](2026-09-16-console-route-consolidation.md).
+> Interpret scoped URLs below without the `workflow-activity-vnext` segment.
+> Legacy console pages are retired; all retained journeys, recovery behavior,
+> and completion evidence continue to apply.
+
 ## Status
 
 Proposed as the normative user-path companion to

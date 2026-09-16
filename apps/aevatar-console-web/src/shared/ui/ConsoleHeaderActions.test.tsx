@@ -7,7 +7,7 @@ import {
 } from '@/shared/auth/session';
 import {
   ConsoleAuthActions,
-  ConsoleHeaderActions,
+  ConsoleLanguageSwitch,
 } from './ConsoleHeaderActions';
 
 const mockedHistoryPush = jest.fn();
@@ -26,7 +26,7 @@ describe('ConsoleHeaderActions', () => {
     window.history.replaceState(
       {},
       '',
-      '/runtime/mission-wall?focusRunId=run-1',
+      '/scopes/scope-alpha/activity/run-1?view=steps',
     );
   });
 
@@ -35,7 +35,14 @@ describe('ConsoleHeaderActions', () => {
   });
 
   it('renders a login entry when there is no restorable auth session', () => {
-    render(React.createElement(ConsoleHeaderActions));
+    render(
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(ConsoleLanguageSwitch),
+        React.createElement(ConsoleAuthActions),
+      ),
+    );
 
     expect(
       screen.getByRole('button', { name: 'Switch language' }),
@@ -43,7 +50,7 @@ describe('ConsoleHeaderActions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
     expect(mockedHistoryPush).toHaveBeenCalledWith(
-      '/login?redirect=%2Fruntime%2Fmission-wall%3FfocusRunId%3Drun-1',
+      '/login?redirect=%2Fscopes%2Fscope-alpha%2Factivity%2Frun-1%3Fview%3Dsteps',
     );
   });
 
@@ -63,7 +70,14 @@ describe('ConsoleHeaderActions', () => {
       },
     });
 
-    render(React.createElement(ConsoleHeaderActions));
+    render(
+      React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(ConsoleLanguageSwitch),
+        React.createElement(ConsoleAuthActions),
+      ),
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Switch language' }));
     fireEvent.click(screen.getByText('中文'));
@@ -142,7 +156,7 @@ describe('ConsoleHeaderActions', () => {
       window.localStorage.getItem('aevatar-console:nyxid:session'),
     ).toBeNull();
     expect(mockedHistoryPush).toHaveBeenCalledWith(
-      '/login?redirect=%2Fruntime%2Fmission-wall%3FfocusRunId%3Drun-1',
+      '/login?redirect=%2Fscopes%2Fscope-alpha%2Factivity%2Frun-1%3Fview%3Dsteps',
     );
   });
 
@@ -163,21 +177,16 @@ describe('ConsoleHeaderActions', () => {
     });
 
     render(
-      React.createElement(ConsoleHeaderActions, {
-        dropdownRootClassName: 'mission-wall-header-menu',
+      React.createElement(ConsoleLanguageSwitch, {
+        dropdownRootClassName: 'console-language-menu',
       }),
-    );
-
-    expect(document.querySelector('.console-header-actions')).toHaveAttribute(
-      'data-dropdown-root-class-name',
-      'mission-wall-header-menu',
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Switch language' }));
 
     expect(await screen.findByText('中文')).toBeInTheDocument();
     expect(
-      document.querySelector('.mission-wall-header-menu'),
+      document.querySelector('.console-language-menu'),
     ).toBeInTheDocument();
   });
 });

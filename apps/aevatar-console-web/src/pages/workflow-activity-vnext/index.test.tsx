@@ -43,7 +43,7 @@ type SaveWorkflowRequestProbe = {
   readonly yaml: string;
 };
 
-let mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
+let mockLocation = '/scopes/scope-alpha/workflows';
 let mockHistoryMutatesLocation = false;
 const mockLocationSubscribers = new Set<() => void>();
 const mockConsoleToast = {
@@ -369,7 +369,7 @@ jest.mock('@/shared/api/workflowActivityApi', () => ({
   },
 }));
 
-jest.mock('@/pages/settings/userLlmSaveObservation', () => ({
+jest.mock('@/shared/settings/userLlmSaveObservation', () => ({
   observeUserLlmSave: jest.fn(),
 }));
 
@@ -418,12 +418,35 @@ jest.mock('@/shared/ui/ConsoleToast', () => ({
 
 const mockWorkflowStudioCanvasProps = jest.fn();
 
-jest.mock(
-  '@/pages/team-member-workflow-studio/components/WorkflowStudioCanvas',
-  () => ({
-    __esModule: true,
-    default: ({
-      nodes,
+jest.mock('@/shared/workflowEditor/WorkflowStudioCanvas', () => ({
+  __esModule: true,
+  default: ({
+    nodes,
+    onAddFirstStep,
+    onCanvasSelect,
+    onConnectNodes,
+    onDeleteEdges,
+    onDeleteNodes,
+    onEdgeSelect,
+    onNodeLayoutChange,
+    onNodeSelect,
+  }: {
+    nodes: readonly { readonly id: string }[];
+    onAddFirstStep?: () => void;
+    onCanvasSelect?: () => void;
+    onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
+    onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
+    onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
+    onEdgeSelect?: (edgeId: string) => void;
+    onNodeLayoutChange?: (
+      nodes: readonly {
+        readonly id: string;
+        readonly position?: { readonly x: number; readonly y: number };
+      }[],
+    ) => void;
+    onNodeSelect?: (nodeId: string) => void;
+  }) => {
+    mockWorkflowStudioCanvasProps({
       onAddFirstStep,
       onCanvasSelect,
       onConnectNodes,
@@ -432,61 +455,35 @@ jest.mock(
       onEdgeSelect,
       onNodeLayoutChange,
       onNodeSelect,
-    }: {
-      nodes: readonly { readonly id: string }[];
-      onAddFirstStep?: () => void;
-      onCanvasSelect?: () => void;
-      onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
-      onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
-      onDeleteNodes?: (nodeIds: string[]) => Promise<void> | void;
-      onEdgeSelect?: (edgeId: string) => void;
-      onNodeLayoutChange?: (
-        nodes: readonly {
-          readonly id: string;
-          readonly position?: { readonly x: number; readonly y: number };
-        }[],
-      ) => void;
-      onNodeSelect?: (nodeId: string) => void;
-    }) => {
-      mockWorkflowStudioCanvasProps({
-        onAddFirstStep,
-        onCanvasSelect,
-        onConnectNodes,
-        onDeleteEdges,
-        onDeleteNodes,
-        onEdgeSelect,
-        onNodeLayoutChange,
-        onNodeSelect,
-      });
-      return (
-        <div
-          data-connectable={String(Boolean(onConnectNodes))}
-          data-deletable={String(Boolean(onDeleteEdges && onDeleteNodes))}
-          data-edge-selectable={String(Boolean(onEdgeSelect))}
-          data-layout-editable={String(Boolean(onNodeLayoutChange))}
-          data-testid="workflow-studio-canvas"
-        >
-          {nodes.map((node) => (
-            <button
-              key={node.id}
-              onClick={() => onNodeSelect?.(node.id)}
-              type="button"
-            >
-              Select {node.id}
-            </button>
-          ))}
+    });
+    return (
+      <div
+        data-connectable={String(Boolean(onConnectNodes))}
+        data-deletable={String(Boolean(onDeleteEdges && onDeleteNodes))}
+        data-edge-selectable={String(Boolean(onEdgeSelect))}
+        data-layout-editable={String(Boolean(onNodeLayoutChange))}
+        data-testid="workflow-studio-canvas"
+      >
+        {nodes.map((node) => (
           <button
-            disabled={!onConnectNodes || nodes.length < 2}
-            onClick={() => onConnectNodes?.(nodes[0].id, nodes[1].id)}
+            key={node.id}
+            onClick={() => onNodeSelect?.(node.id)}
             type="button"
           >
-            Connect first two nodes
+            Select {node.id}
           </button>
-        </div>
-      );
-    },
-  }),
-);
+        ))}
+        <button
+          disabled={!onConnectNodes || nodes.length < 2}
+          onClick={() => onConnectNodes?.(nodes[0].id, nodes[1].id)}
+          type="button"
+        >
+          Connect first two nodes
+        </button>
+      </div>
+    );
+  },
+}));
 
 const mockStudioApi = jest.requireMock('@/shared/studio/api').studioApi as {
   authorWorkflow: jest.Mock;
@@ -553,12 +550,12 @@ const mockWorkflowScheduleApi = jest.requireMock(
   list: jest.Mock;
 };
 const mockObserveUserLlmSave = jest.requireMock(
-  '@/pages/settings/userLlmSaveObservation',
+  '@/shared/settings/userLlmSaveObservation',
 ).observeUserLlmSave as jest.Mock;
 
 describe('Workflow Activity vNext catalogue', () => {
   beforeEach(() => {
-    mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows';
+    mockLocation = '/scopes/scope-alpha/workflows';
     mockHistoryMutatesLocation = false;
     jest.clearAllMocks();
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
@@ -761,12 +758,10 @@ describe('Workflow Activity vNext catalogue', () => {
       expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(1),
     );
 
-    setMockLocation(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-alpha',
-    );
+    setMockLocation('/scopes/scope-alpha/workflows/wf-alpha');
     expect(await screen.findByDisplayValue('Workflow alpha')).toBeVisible();
 
-    setMockLocation('/scopes/scope-alpha/workflow-activity-vnext/workflows');
+    setMockLocation('/scopes/scope-alpha/workflows');
 
     await waitFor(() =>
       expect(mockScopesApi.queryWorkflowCatalogue).toHaveBeenCalledTimes(2),
@@ -810,8 +805,7 @@ describe('Workflow Activity vNext catalogue', () => {
   });
 
   it('keeps the archived workflow view on the frontend and backend', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=archived';
+    mockLocation = '/scopes/scope-alpha/workflows?view=archived';
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
       createCatalogueResponse([
         createCatalogueRow({
@@ -841,8 +835,7 @@ describe('Workflow Activity vNext catalogue', () => {
   });
 
   it('sends the drafts view and restored search to the backend', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows?q=support&view=drafts';
+    mockLocation = '/scopes/scope-alpha/workflows?q=support&view=drafts';
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
       createCatalogueResponse([
         createCatalogueRow({
@@ -872,8 +865,7 @@ describe('Workflow Activity vNext catalogue', () => {
   });
 
   it('excludes published workflows from the Drafts product view', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=drafts';
+    mockLocation = '/scopes/scope-alpha/workflows?view=drafts';
     mockScopesApi.queryWorkflowCatalogue.mockResolvedValue(
       createCatalogueResponse([
         createCatalogueRow({
@@ -904,8 +896,7 @@ describe('Workflow Activity vNext catalogue', () => {
   });
 
   it('keeps Drafts pagination available when a page contains only published workflows', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows?view=drafts';
+    mockLocation = '/scopes/scope-alpha/workflows?view=drafts';
     mockScopesApi.queryWorkflowCatalogue.mockImplementation(
       (input: { cursor?: string }) =>
         Promise.resolve(
@@ -1224,17 +1215,14 @@ describe('Workflow Activity vNext catalogue', () => {
       within(actionableRow as HTMLElement).getByRole('link', {
         name: 'Open Invoice review in Workspace',
       }),
-    ).toHaveAttribute(
-      'href',
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-alpha',
-    );
+    ).toHaveAttribute('href', '/scopes/scope-alpha/workflows/wf-alpha');
     expect(
       within(actionableRow as HTMLElement).getByRole('link', {
         name: 'View activity for Invoice review in Workspace',
       }),
     ).toHaveAttribute(
       'href',
-      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha',
+      '/scopes/scope-alpha/activity?workflowId=wf-alpha',
     );
     expect(document.body.textContent).not.toContain(identities.memberId);
     expect(document.body.textContent).not.toContain(
@@ -1673,7 +1661,7 @@ describe('Workflow Activity vNext catalogue', () => {
 });
 describe('Workflow Activity vNext settings', () => {
   beforeEach(() => {
-    mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/settings';
+    mockLocation = '/scopes/scope-alpha/settings';
     jest.clearAllMocks();
     clearStoredAuthSession();
     mockStudioApi.getUserLlmSettings.mockResolvedValue({
@@ -1782,7 +1770,7 @@ describe('Workflow Activity vNext settings', () => {
     const accountLink = screen.getByRole('link', { name: 'Account' });
     expect(accountLink).toHaveAttribute(
       'href',
-      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account',
+      '/scopes/scope-alpha/settings?section=account',
     );
     fireEvent.click(accountLink);
     expect(accountLink).toHaveAttribute('aria-current', 'page');
@@ -1852,8 +1840,7 @@ describe('Workflow Activity vNext settings', () => {
       profile: null,
       session,
     });
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
+    mockLocation = '/scopes/scope-alpha/settings?section=account';
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -1882,8 +1869,7 @@ describe('Workflow Activity vNext settings', () => {
         expiresAtUtc: null,
       },
     });
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
+    mockLocation = '/scopes/scope-alpha/settings?section=account';
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     expect(
@@ -1914,8 +1900,7 @@ describe('Workflow Activity vNext settings', () => {
     expected,
   }) => {
     mockStudioApi.getAuthSession.mockRejectedValue(error);
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
+    mockLocation = '/scopes/scope-alpha/settings?section=account';
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -2154,9 +2139,7 @@ describe('Workflow Activity vNext settings', () => {
 
     fireEvent.click(screen.getAllByRole('link', { name: 'Workflows' })[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
-    expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows',
-    );
+    expect(history.push).toHaveBeenCalledWith('/scopes/scope-alpha/workflows');
     expect(mockStudioApi.saveUserLlmSettings).not.toHaveBeenCalled();
   });
 
@@ -2230,7 +2213,7 @@ describe('Workflow Activity vNext settings', () => {
     observeSaved?.({ phase: 'observed' });
     await waitFor(() =>
       expect(history.push).toHaveBeenCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/workflows',
+        '/scopes/scope-alpha/workflows',
       ),
     );
     expect(mockConsoleToast.success).toHaveBeenCalledWith('Settings saved');
@@ -2246,8 +2229,7 @@ describe('Workflow Activity vNext editor', () => {
   } as const;
 
   beforeEach(() => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source';
+    mockLocation = '/scopes/scope-alpha/workflows/wf-committed-source';
     mockLocationSubscribers.clear();
     jest.clearAllMocks();
     mockStudioApi.getWorkspaceSettings.mockResolvedValue({
@@ -2401,8 +2383,7 @@ describe('Workflow Activity vNext editor', () => {
   });
 
   it('opens an instantiated template draft as already saved', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source';
+    mockLocation = '/scopes/scope-alpha/workflows/wf-committed-source';
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -2418,8 +2399,7 @@ describe('Workflow Activity vNext editor', () => {
   });
 
   it('preserves template tool set scopes through serialize and save', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source';
+    mockLocation = '/scopes/scope-alpha/workflows/wf-committed-source';
     const parsedDocument = {
       name: 'committed_source',
       roles: [
@@ -2491,8 +2471,7 @@ describe('Workflow Activity vNext editor', () => {
   });
 
   it('publishes a saved workflow in one click and waits for observed evidence before showing Published', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
+    mockLocation = '/scopes/scope-alpha/workflows/wf-draft-alpha';
     mockCreateWorkflowRevisionIdentityCandidate.mockReturnValue(
       'rev-preview-alpha',
     );
@@ -2731,8 +2710,7 @@ describe('Workflow Activity vNext editor', () => {
     returnedRevisionId,
     returnedWorkflowId,
   }) => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
+    mockLocation = '/scopes/scope-alpha/workflows/wf-draft-alpha';
     mockCreateWorkflowRevisionIdentityCandidate.mockReturnValue(
       'rev-preview-alpha',
     );
@@ -2814,8 +2792,7 @@ describe('Workflow Activity vNext editor', () => {
       roles: [],
       steps,
     };
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha';
+    mockLocation = '/scopes/scope-alpha/workflows/wf-draft-alpha';
     mockCreateWorkflowRevisionIdentityCandidate.mockReturnValue(
       'rev-preview-alpha',
     );
@@ -3315,13 +3292,13 @@ describe('Workflow Activity vNext editor', () => {
       }),
     );
     expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-new',
+      '/scopes/scope-alpha/workflows/wf-draft-new',
     );
   });
 
   it('preserves a requested run target when first save adopts a draft id', async () => {
     mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-committed-source?run=1#run-panel';
+      '/scopes/scope-alpha/workflows/wf-committed-source?run=1#run-panel';
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -3335,7 +3312,7 @@ describe('Workflow Activity vNext editor', () => {
 
     await waitFor(() =>
       expect(history.replace).toHaveBeenCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-new?run=1#run-panel',
+        '/scopes/scope-alpha/workflows/wf-draft-new?run=1#run-panel',
       ),
     );
   });
@@ -3515,7 +3492,7 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await waitFor(() =>
       expect(history.replace).toHaveBeenCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-api',
+        '/scopes/scope-alpha/workflows/wf-draft-api',
       ),
     );
     expect(workflowName).toHaveValue('Updated draft');
@@ -3769,8 +3746,7 @@ describe('Workflow Activity vNext editor', () => {
   });
 
   it('does not honor a requested Run until publication is observed', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha?run=1';
+    mockLocation = '/scopes/scope-alpha/workflows/wf-draft-alpha?run=1';
     mockStudioApi.getWorkflow.mockResolvedValue({
       workflowId: 'wf-draft-alpha',
       name: 'Support triage',
@@ -3802,8 +3778,7 @@ describe('Workflow Activity vNext editor', () => {
   });
 
   it('does not open or submit a requested run for an invalid draft', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-alpha?run=1';
+    mockLocation = '/scopes/scope-alpha/workflows/wf-draft-alpha?run=1';
     mockStudioApi.getWorkflow.mockResolvedValue({
       workflowId: 'wf-draft-alpha',
       name: 'Empty draft',
@@ -5428,9 +5403,7 @@ describe('Workflow Activity vNext editor', () => {
     expect(screen.queryByText('Run accepted')).not.toBeInTheDocument();
     expect(document.querySelector('.ant-alert-info')).toBeNull();
 
-    setMockLocation(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-beta',
-    );
+    setMockLocation('/scopes/scope-alpha/workflows/wf-draft-beta');
     expect(await screen.findByDisplayValue('Other workflow')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Run' })).toHaveAttribute(
@@ -5966,7 +5939,7 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(screen.getAllByRole('link', { name: 'Activity' })[0]);
 
     expect(history.push).not.toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity',
+      '/scopes/scope-alpha/activity',
     );
     const discardDialog = await screen.findByRole('dialog', {
       name: 'Discard node changes?',
@@ -5989,9 +5962,7 @@ describe('Workflow Activity vNext editor', () => {
 
     fireEvent.click(screen.getAllByRole('link', { name: 'Activity' })[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes' }));
-    expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity',
-    );
+    expect(history.push).toHaveBeenCalledWith('/scopes/scope-alpha/activity');
   });
 
   it('offers Save, Discard, and Stay before vNext navigation with unsaved changes', async () => {
@@ -6006,7 +5977,7 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(screen.getAllByRole('link', { name: 'Activity' })[0]);
 
     expect(history.push).not.toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity',
+      '/scopes/scope-alpha/activity',
     );
     expect(
       screen.getByRole('dialog', { name: 'Unsaved workflow changes' }),
@@ -6024,9 +5995,7 @@ describe('Workflow Activity vNext editor', () => {
 
     fireEvent.click(screen.getAllByRole('link', { name: 'Activity' })[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
-    expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity',
-    );
+    expect(history.push).toHaveBeenCalledWith('/scopes/scope-alpha/activity');
   });
 
   it('requires an explicit decision before switching a dirty editor to another workflow route', async () => {
@@ -6082,9 +6051,7 @@ describe('Workflow Activity vNext editor', () => {
       target: { value: 'Unsaved source changes' },
     });
 
-    setMockLocation(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-other',
-    );
+    setMockLocation('/scopes/scope-alpha/workflows/wf-draft-other');
 
     expect(
       await screen.findByRole('dialog', { name: 'Unsaved workflow changes' }),
@@ -6135,8 +6102,7 @@ describe('Workflow Activity vNext editor', () => {
       draftExists: true,
       findings: [],
     };
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-shared-route';
+    mockLocation = '/scopes/scope-alpha/workflows/wf-shared-route';
     mockStudioApi.getWorkflow.mockImplementation(
       (_requestedWorkflowId, requestedScopeId) =>
         Promise.resolve(
@@ -6155,9 +6121,7 @@ describe('Workflow Activity vNext editor', () => {
       target: { value: 'Unsaved scope alpha changes' },
     });
 
-    setMockLocation(
-      '/scopes/scope-beta/workflow-activity-vnext/workflows/wf-shared-route',
-    );
+    setMockLocation('/scopes/scope-beta/workflows/wf-shared-route');
 
     expect(
       await screen.findByRole('dialog', { name: 'Unsaved workflow changes' }),
@@ -6218,7 +6182,7 @@ describe('Workflow Activity vNext editor', () => {
       target: { value: 'Committed source updated' },
     });
     setMockLocation(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-other?run=1#requested-run',
+      '/scopes/scope-alpha/workflows/wf-draft-other?run=1#requested-run',
     );
     expect(
       await screen.findByRole('dialog', { name: 'Unsaved workflow changes' }),
@@ -6228,18 +6192,18 @@ describe('Workflow Activity vNext editor', () => {
 
     await waitFor(() =>
       expect(history.replace).toHaveBeenCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-new?run=1#requested-run',
+        '/scopes/scope-alpha/workflows/wf-draft-new?run=1#requested-run',
       ),
     );
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-draft-other?run=1#requested-run',
+      '/scopes/scope-alpha/workflows/wf-draft-other?run=1#requested-run',
     );
   });
 });
 
 describe('Workflow Activity vNext creation', () => {
   beforeEach(() => {
-    mockLocation = '/scopes/scope-alpha/workflow-activity-vnext/workflows/new';
+    mockLocation = '/scopes/scope-alpha/workflows/new';
     jest.clearAllMocks();
     mockStudioApi.getWorkspaceSettings.mockResolvedValue({
       runtimeBaseUrl: '',
@@ -6393,7 +6357,7 @@ describe('Workflow Activity vNext creation', () => {
       }),
     );
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+      '/scopes/scope-alpha/workflows/wf-created-alpha',
     );
   });
 
@@ -6480,14 +6444,13 @@ describe('Workflow Activity vNext creation', () => {
     fireEvent.click(templateButton);
 
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates',
+      '/scopes/scope-alpha/workflows/new/templates',
     );
     expect(screen.queryByText('Incident triage')).not.toBeInTheDocument();
   });
 
   it('renders the template route with one page heading and returns to the chooser', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates';
+    mockLocation = '/scopes/scope-alpha/workflows/new/templates';
 
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -6505,13 +6468,12 @@ describe('Workflow Activity vNext creation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Change method' }));
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new',
+      '/scopes/scope-alpha/workflows/new',
     );
   });
 
   it('explains when the template contract is unavailable and keeps the raw error in technical details', async () => {
-    mockLocation =
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates';
+    mockLocation = '/scopes/scope-alpha/workflows/new/templates';
     mockRuntimeCatalogApi.listWorkflowTemplates.mockRejectedValue(
       Object.assign(new Error('HTTP 404 Not Found'), { status: 404 }),
     );
@@ -6537,9 +6499,7 @@ describe('Workflow Activity vNext creation', () => {
     });
     await waitFor(() => expect(templateButton).toBeEnabled());
     fireEvent.click(templateButton);
-    setMockLocation(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates',
-    );
+    setMockLocation('/scopes/scope-alpha/workflows/new/templates');
     fireEvent.click(
       await screen.findByRole('button', {
         name: 'Use template Incident triage',
@@ -6555,7 +6515,7 @@ describe('Workflow Activity vNext creation', () => {
     );
     expect(mockStudioApi.parseYaml).not.toHaveBeenCalled();
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+      '/scopes/scope-alpha/workflows/wf-created-alpha',
     );
   });
 

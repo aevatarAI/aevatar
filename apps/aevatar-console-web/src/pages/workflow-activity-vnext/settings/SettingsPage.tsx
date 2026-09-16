@@ -11,7 +11,9 @@ import {
   Typography,
 } from 'antd';
 import React from 'react';
-import { observeUserLlmSave } from '@/pages/settings/userLlmSaveObservation';
+import { t } from '@/shared/i18n/messages';
+import { history } from '@/shared/navigation/history';
+import { observeUserLlmSave } from '@/shared/settings/userLlmSaveObservation';
 import {
   buildUserLlmSelectionOptions,
   cloneUserLlmSelection,
@@ -20,9 +22,7 @@ import {
   resolveSavedUserLlmSelection,
   type UserLlmSelectionDraft,
   userLlmSelectionsEqual,
-} from '@/pages/settings/userLlmSelection';
-import { t } from '@/shared/i18n/messages';
-import { history } from '@/shared/navigation/history';
+} from '@/shared/settings/userLlmSelection';
 import { isStudioApiStatus, studioApi } from '@/shared/studio/api';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useWorkflowActivityAccount } from '../account/useWorkflowActivityAccount';

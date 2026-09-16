@@ -72,7 +72,7 @@ describe('workflow home', () => {
     await act(async () => pending.resolve(account(scopeId)));
     await waitFor(() =>
       expect(history.replace).toHaveBeenCalledWith(
-        `/scopes/${encodeURIComponent(scopeId)}/workflow-activity-vnext/workflows`,
+        `/scopes/${encodeURIComponent(scopeId)}/workflows`,
       ),
     );
   });
@@ -94,7 +94,7 @@ describe('workflow home', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() =>
       expect(history.replace).toHaveBeenCalledWith(
-        '/scopes/current-scope/workflow-activity-vnext/workflows',
+        '/scopes/current-scope/workflows',
       ),
     );
   });
@@ -134,7 +134,7 @@ describe('workflow home', () => {
 
     await waitFor(() =>
       expect(history.replace).toHaveBeenCalledWith(
-        '/scopes/server-scope/workflow-activity-vnext/workflows',
+        '/scopes/server-scope/workflows',
       ),
     );
   });

@@ -80,28 +80,17 @@ const browserProjectConfig = createProjectConfig('browser');
 const nodeProjectConfig = createProjectConfig('node');
 
 const nodeTestFiles = [
-  '<rootDir>/src/pages/MissionControl/runtimeAdapter.test.ts',
-  '<rootDir>/src/pages/actors/actorPresentation.test.ts',
-  '<rootDir>/src/pages/governance/components/governanceQuery.test.ts',
-  '<rootDir>/src/pages/runs/runEventPresentation.test.ts',
-  '<rootDir>/src/pages/scopes/components/resolvedScope.test.ts',
-  '<rootDir>/src/pages/scopes/components/scopeQuery.test.ts',
-  '<rootDir>/src/pages/services/components/serviceQuery.test.ts',
-  '<rootDir>/src/pages/workflows/workflowPresentation.test.ts',
   '<rootDir>/src/shared/agui/customEventData.test.ts',
   '<rootDir>/src/shared/agui/sseFrameNormalizer.test.ts',
   '<rootDir>/src/shared/config/proxyConfig.test.ts',
   '<rootDir>/src/shared/datetime/dateTime.test.ts',
   '<rootDir>/src/shared/playground/stepSummary.test.ts',
   '<rootDir>/src/shared/studio/document.test.ts',
-  '<rootDir>/src/shared/studio/navigation.test.ts',
   '<rootDir>/src/shared/workflows/catalogVisibility.test.ts',
 ] as const;
 
 const browserIgnoredTestPatterns = nodeTestFiles.map((testPath) =>
-  testPath
-    .replace('<rootDir>/', '')
-    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  testPath.replace('<rootDir>/', '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
 );
 
 const config: Record<string, unknown> = {
@@ -120,18 +109,21 @@ const config: Record<string, unknown> = {
         './tests/setupTests.jsx',
       ],
       setupFilesAfterEnv: [
-        ...((browserProjectConfig.setupFilesAfterEnv as string[] | undefined) || []),
+        ...((browserProjectConfig.setupFilesAfterEnv as string[] | undefined) ||
+          []),
         './tests/setupAfterEnv.ts',
       ],
       testEnvironmentOptions: {
-        ...(((browserProjectConfig.testEnvironmentOptions as Record<
+        ...((browserProjectConfig.testEnvironmentOptions as Record<
           string,
           unknown
-        >) || {})),
+        >) || {}),
         url: 'http://localhost:8000',
       },
       testPathIgnorePatterns: [
-        ...((browserProjectConfig.testPathIgnorePatterns as string[] | undefined) || []),
+        ...((browserProjectConfig.testPathIgnorePatterns as
+          | string[]
+          | undefined) || []),
         ...browserIgnoredTestPatterns,
       ],
     },
