@@ -223,6 +223,14 @@ public static class ChannelCallbackEndpoints
         var registrationId = string.IsNullOrWhiteSpace(request.RegistrationId)
             ? Guid.NewGuid().ToString("N")
             : request.RegistrationId.Trim();
+        var existingRegistration = await queryPort.GetSnapshotAsync(registrationId, ct);
+        if (existingRegistration is not null && !existingRegistration.Registration.Tombstoned)
+        {
+            return Results.Json(
+                new { error = "registration_id_already_exists" },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
         var relayCallbackUrl = NyxRelayCallbackUrl.Build(request.WebhookBaseUrl);
         ChannelAgentKeyCredential? channelAgentKey = null;
         ConversationRouteBindingResult? routeBinding = null;
@@ -1479,7 +1487,7 @@ public static class ChannelCallbackEndpoints
             "missing_access_token" => StatusCodes.Status401Unauthorized,
             "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_bot_token" or "missing_webhook_base_url" or "missing_scope_id" or "insecure_webhook_base_url" => StatusCodes.Status400BadRequest,
             "channel_authorization_contract_invalid" => StatusCodes.Status409Conflict,
-            "channel_bot_already_exists" => StatusCodes.Status409Conflict,
+            "channel_bot_already_exists" or "registration_id_already_exists" => StatusCodes.Status409Conflict,
             "ambiguous_channel_bot_route" or "channel_route_not_accessible" => StatusCodes.Status409Conflict,
             "channel_agent_key_write_gate_closed" => StatusCodes.Status503ServiceUnavailable,
             "secret_vault_unavailable" => StatusCodes.Status503ServiceUnavailable,

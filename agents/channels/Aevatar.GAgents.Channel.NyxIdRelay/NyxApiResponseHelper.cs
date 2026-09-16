@@ -486,6 +486,7 @@ internal static class NyxApiResponseHelper
         "nyx_api_base_url_not_configured",
         "channel_bot_id_request_failed",
         "channel_bot_already_exists",
+        "registration_id_already_exists",
         "local_mirror_dispatch_failed",
         "local_mirror_accepted_remote_cleanup_skipped",
         "local_mirror_acceptance_unknown_remote_cleanup_skipped",

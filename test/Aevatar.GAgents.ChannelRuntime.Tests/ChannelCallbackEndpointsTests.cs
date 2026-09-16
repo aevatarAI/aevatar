@@ -717,6 +717,41 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRegisterAsync_ReturnsConflict_WhenRegistrationIdAlreadyExistsBeforeNyxWrites()
+    {
+        var existing = NewModelRegistration("reg-existing", "scope-1", "key-existing");
+        existing.NyxChannelBotId = "bot-existing";
+        var nyxHandler = new RecordingNyxHttpMessageHandler(request =>
+            request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath == "/api/v1/channel-bots/bot-1"
+                ? JsonResponse("""{"id":"bot-1","platform":"lark","name":"Dinner Bot","status":"active","active":true,"webhook_url":"https://nyx.example.com/api/v1/webhooks/channel/lark/bot-1"}""")
+                : NotFoundResponse(request));
+        var nyxClient = CreateNyxClient(nyxHandler);
+        var http = CreateJsonHttpContext(
+            """{"registration_id":"reg-existing","nyx_channel_bot_id":"bot-1","webhook_base_url":"https://aevatar.example.com"}""",
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+        var actorRuntime = AcceptedRegistrationRuntime();
+
+        var result = await InvokeAsync(
+            "HandleRegisterAsync",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            QueryPortWithSnapshots(new ChannelBotRegistrationSnapshot(existing, 12)),
+            OwnerResolver("scope-1"),
+            AuthorizationPlanner(),
+            CreateAgentKeyProvisioningService(nyxClient),
+            nyxClient,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        response.Body.Should().Contain("registration_id_already_exists");
+        nyxHandler.Requests.Select(request => $"{request.Method.Method} {request.RequestUri!.AbsolutePath}")
+            .Should().NotContain("POST /api/v1/api-keys");
+    }
+
+    [Fact]
     public async Task HandleRegisterAsync_DoesNotRevealBinding_WhenNyxChannelBotIsNotVisible()
     {
         var existing = NewModelRegistration("reg-secret", "scope-2", "key-secret");
