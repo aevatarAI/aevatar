@@ -16,9 +16,9 @@ export default {
   'channels.edit.skillError': '请检查 Skill 名称，最多允许 128 个字符。',
   'channels.edit.failed': '无法保存渠道更改，请检查填写内容后重试。',
   'channels.edit.saved': '渠道更改已保存。',
-  'channels.edit.confirming': '更改已提交，正在等待确认。',
-  'channels.edit.checkFailed': '更改已提交，但暂时无法确认结果，请重新检查。',
-  'channels.edit.check': '重新检查',
+  'channels.edit.submitted': '更改已提交，可能需要片刻才会显示在渠道详情中。',
+  'channels.edit.readbackUnavailable':
+    '更改已提交，但暂时无法加载最新配置，请刷新渠道详情查看。',
   'channels.edit.discardTitle': '放弃更改？',
   'channels.edit.discardHelp': '未保存的渠道更改将会丢失。',
   'workflowActivityVNext.nav.channels': '渠道',

@@ -81,7 +81,7 @@ beforeEach(() => {
   );
 });
 
-it('opens Edit from channel details and saves once, preserving hidden config until a newer matching GET confirms it', async () => {
+it('opens Edit from channel details and saves once, preserving hidden config and returning after one matching readback', async () => {
   let resolvePost!: (value: Response) => void;
   const pendingPost = new Promise<Response>((resolve) => {
     resolvePost = resolve;
@@ -150,9 +150,6 @@ it('opens Edit from channel details and saves once, preserving hidden config unt
       default_skill: { name: 'changed-helper', version: '2.1' },
     },
   });
-  await act(async () => resolvePost(response(receipt, 202)));
-  await screen.findByText('Changes submitted. Waiting for confirmation.');
-  expect(screen.queryByText('Channel changes saved.')).not.toBeInTheDocument();
   expect(screen.getByLabelText(/^Skill name/)).toBeDisabled();
   current = {
     ...fixture,
@@ -163,21 +160,41 @@ it('opens Edit from channel details and saves once, preserving hidden config unt
       default_skill: { name: 'changed-helper', version: '2.1' },
     },
   };
-  fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+  await act(async () => resolvePost(response(receipt, 202)));
   await screen.findByText('Channel changes saved.');
+  expect(
+    screen.queryByRole('button', { name: 'Check again' }),
+  ).not.toBeInTheDocument();
   expect(posts()).toHaveLength(1);
+  expect(fetchMock.mock.calls.filter(([input]) => input === path)).toHaveLength(
+    3,
+  );
   expect(history.replace).toHaveBeenCalledWith(
     '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-alpha',
   );
   expect(view.queryClient.getMutationCache().getAll()).toHaveLength(0);
 });
 
-it('clears skill and service selection deliberately, removing only selectors for revoked services', async () => {
+it('returns to details when an accepted change is still delayed, without requiring another confirmation or resubmitting', async () => {
   renderEditor();
   fireEvent.click(await screen.findByRole('checkbox', { name: /GitHub work/ }));
   editSkill('');
   save();
-  await screen.findByText('Changes submitted. Waiting for confirmation.');
+  await screen.findByText(
+    'Changes submitted. They may take a moment to appear in channel details.',
+  );
+  expect(history.replace).toHaveBeenCalledWith(
+    '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-alpha',
+  );
+  expect(screen.queryByText('Channel changes saved.')).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: 'Check again' }),
+  ).not.toBeInTheDocument();
+  fireEvent.submit(screen.getByRole('form', { name: 'Edit Telegram' }));
+  expect(posts()).toHaveLength(1);
+  expect(fetchMock.mock.calls.filter(([input]) => input === path)).toHaveLength(
+    3,
+  );
   expect(postBody()).toEqual({
     authorization_mode: 'explicit_service_allowlist',
     service_ids: [],
@@ -234,6 +251,16 @@ it('keeps unavailable saved services visible until explicitly deselected and han
   expect(
     await screen.findByRole('button', { name: 'Save changes' }),
   ).toBeEnabled();
+  expect(history.replace).not.toHaveBeenCalled();
+  expect(
+    await screen.findByText(
+      'Could not save channel changes. Review your choices and try again.',
+    ),
+  ).toBeInTheDocument();
+  editSkill('retry-helper');
+  save();
+  await waitFor(() => expect(posts()).toHaveLength(2));
+  expect(postBody().runtime_config.default_skill.name).toBe('retry-helper');
 });
 
 it('revalidates a cached detail and retries an unavailable response without exposing a stale editable form', async () => {
@@ -269,9 +296,8 @@ it('revalidates a cached detail and retries an unavailable response without expo
   expect(posts()).toHaveLength(0);
 });
 
-it('preserves a legacy default authorization and retries failed confirmation with GET only', async () => {
+it('preserves legacy default authorization and returns to details with accurate feedback when readback fails', async () => {
   let submitted = false;
-  let readable = false;
   const legacy = {
     ...fixture,
     authorization_mode: 'nyxid_default',
@@ -284,16 +310,8 @@ it('preserves a legacy default authorization and retries failed confirmation wit
       submitted = true;
       return response(receipt, 202);
     }
-    if (submitted && !readable) return response({}, 503);
-    return response(
-      submitted
-        ? {
-            ...legacy,
-            state_version: 13,
-            default_skill: { name: 'updated', version: '2.1' },
-          }
-        : legacy,
-    );
+    if (submitted) return response({}, 503);
+    return response(legacy);
   });
   renderEditor();
   expect(
@@ -302,16 +320,63 @@ it('preserves a legacy default authorization and retries failed confirmation wit
   editSkill('updated');
   save();
   await screen.findByText(
-    'Changes were submitted, but could not be confirmed. Check again.',
+    'Changes submitted, but the latest configuration could not be loaded. Refresh the channel details to view it.',
   );
   expect(postBody()).toMatchObject({
     authorization_mode: 'nyxid_default',
     service_ids: [],
   });
-  readable = true;
-  fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
-  await screen.findByText('Channel changes saved.');
+  expect(history.replace).toHaveBeenCalledWith(
+    '/scopes/scope-alpha/workflow-activity-vnext/channels/registration-alpha',
+  );
+  expect(screen.queryByText('Channel changes saved.')).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: 'Check again' }),
+  ).not.toBeInTheDocument();
   expect(posts()).toHaveLength(1);
+  expect(fetchMock.mock.calls.filter(([input]) => input === path)).toHaveLength(
+    3,
+  );
+});
+
+it('keeps Save pending through readback and ignores its result after leaving the editor', async () => {
+  let resolveRead!: (value: Response) => void;
+  const pendingRead = new Promise<Response>((resolve) => {
+    resolveRead = resolve;
+  });
+  fetchMock.mockImplementation(async (input, init) => {
+    if (input === servicePath) return response({ services: [service] });
+    if (init?.method === 'POST') return response(receipt, 202);
+    return posts().length ? pendingRead : response(fixture);
+  });
+  const view = renderEditor();
+  await screen.findByRole('checkbox', { name: /GitHub work/ });
+  editSkill('updated');
+  save();
+  await waitFor(() =>
+    expect(
+      fetchMock.mock.calls.filter(([input]) => input === path),
+    ).toHaveLength(3),
+  );
+  expect(screen.getByRole('button', { name: /Save changes/ })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  expect(
+    screen.queryByRole('button', { name: 'Check again' }),
+  ).not.toBeInTheDocument();
+  fireEvent.submit(screen.getByRole('form', { name: 'Edit Telegram' }));
+  expect(posts()).toHaveLength(1);
+  view.unmount();
+  await act(async () =>
+    resolveRead(
+      response({
+        ...fixture,
+        state_version: 13,
+        default_skill: { name: 'updated', version: '2.1' },
+      }),
+    ),
+  );
+  expect(history.replace).not.toHaveBeenCalled();
+  expect(screen.queryByText('Channel changes saved.')).not.toBeInTheDocument();
 });
 
 it('protects unsaved navigation and ignores a response after the editor unmounts', async () => {

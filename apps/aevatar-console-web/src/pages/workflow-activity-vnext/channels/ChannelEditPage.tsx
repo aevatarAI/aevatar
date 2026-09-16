@@ -6,7 +6,6 @@ import {
   type ChannelConfigDetail,
   ChannelConfigError,
   type ChannelConfigField,
-  type ChannelConfigReceipt,
   type ChannelConfigUpdate,
   channelConfigMatches,
   channelRuntimeConfigApi,
@@ -28,11 +27,6 @@ import { channelConnectionCss } from './connectionStyles';
 import { ChannelLoadError, platformName } from './presentation';
 import { channelKeys, useChannelServiceChoices } from './queries';
 import { channelsCss } from './styles';
-
-interface PendingSave {
-  readonly receipt: ChannelConfigReceipt;
-  readonly expected: ChannelConfigUpdate;
-}
 
 export default function ChannelEditPage({
   scopeId,
@@ -166,9 +160,6 @@ function ChannelEditForm({
   );
   const [errors, setErrors] = React.useState<readonly ChannelConfigField[]>([]);
   const [submitting, setSubmitting] = React.useState(false);
-  const [pending, setPending] = React.useState<PendingSave | null>(null);
-  const [observing, setObserving] = React.useState(false);
-  const [readFailed, setReadFailed] = React.useState(false);
   const [leaveTarget, setLeaveTarget] = React.useState<string | null>(null);
   const inFlight = React.useRef(false);
   const mounted = React.useRef(true);
@@ -227,7 +218,6 @@ function ChannelEditForm({
     },
   };
   const dirty = !channelConfigMatches(update, baseline);
-  const locked = submitting || pending !== null;
   const serviceBlocked =
     !usesDefaults &&
     (!services.isSuccess || services.isFetching || missingIds.length > 0);
@@ -239,57 +229,66 @@ function ChannelEditForm({
     };
   }, []);
   React.useEffect(() => {
-    if ((!dirty && !submitting) || pending || completed.current) return;
+    if ((!dirty && !submitting) || completed.current) return;
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty, submitting, pending]);
+  }, [dirty, submitting]);
   React.useEffect(() => {
     setNavigate(() => (target: string) => {
       if (inFlight.current) return;
-      if (dirty && !pending && !completed.current) setLeaveTarget(target);
+      if (dirty && !completed.current) setLeaveTarget(target);
       else history.push(target);
     });
-  }, [dirty, pending, setNavigate]);
+  }, [dirty, setNavigate]);
 
-  async function observe(save: PendingSave) {
-    if (inFlight.current || completed.current) return;
-    inFlight.current = true;
-    setObserving(true);
-    setReadFailed(false);
+  async function finishSave(expected: ChannelConfigUpdate) {
+    let confirmed = false;
+    let readFailed = false;
     try {
       const actual = await readBack();
-      if (!mounted.current) return;
-      if (
-        actual.stateVersion <= baseline.stateVersion ||
-        !channelConfigMatches(actual, save.expected)
-      )
-        return;
-      completed.current = true;
-      void queryClient.invalidateQueries({
-        queryKey: channelKeys.list(baseline.scopeId),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: channelKeys.status(baseline.scopeId, baseline.registrationId),
-      });
-      toast.success(t('channels.edit.saved', 'Channel changes saved.'));
-      history.replace(detailsHref);
+      confirmed =
+        actual.stateVersion > baseline.stateVersion &&
+        channelConfigMatches(actual, expected);
     } catch {
-      if (mounted.current) setReadFailed(true);
-    } finally {
-      inFlight.current = false;
-      if (mounted.current) setObserving(false);
+      readFailed = true;
     }
+    if (!mounted.current) return;
+    completed.current = true;
+    void queryClient.invalidateQueries({
+      queryKey: channelKeys.list(baseline.scopeId),
+    });
+    void queryClient.invalidateQueries({
+      queryKey: channelKeys.status(baseline.scopeId, baseline.registrationId),
+    });
+    if (confirmed) {
+      toast.success(t('channels.edit.saved', 'Channel changes saved.'));
+    } else if (readFailed) {
+      toast.warning(
+        t(
+          'channels.edit.readbackUnavailable',
+          'Changes submitted, but the latest configuration could not be loaded. Refresh the channel details to view it.',
+        ),
+      );
+    } else {
+      toast.info(
+        t(
+          'channels.edit.submitted',
+          'Changes submitted. They may take a moment to appear in channel details.',
+        ),
+      );
+    }
+    history.replace(detailsHref);
   }
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (
       inFlight.current ||
-      locked ||
+      submitting ||
       !dirty ||
       serviceBlocked ||
       completed.current
@@ -301,15 +300,12 @@ function ChannelEditForm({
     if (invalid.length) return;
     inFlight.current = true;
     setSubmitting(true);
-    let accepted: PendingSave;
     try {
-      const receipt = await channelRuntimeConfigApi.update(
-        baseline.registrationId,
-        update,
-      );
+      await channelRuntimeConfigApi.update(baseline.registrationId, update);
       if (!mounted.current) return;
-      accepted = { receipt, expected: update };
-      setPending(accepted);
+      // Read once for truthful feedback, then leave the editor even if the
+      // accepted change is not visible yet. Never poll or resubmit to confirm.
+      await finishSave(update);
     } catch (error) {
       if (!mounted.current) return;
       if (error instanceof ChannelConfigError) {
@@ -342,7 +338,6 @@ function ChannelEditForm({
       inFlight.current = false;
       if (mounted.current) setSubmitting(false);
     }
-    await observe(accepted);
   }
 
   const errorText = (field: 'skill' | 'services') =>
@@ -372,14 +367,14 @@ function ChannelEditForm({
         <ChannelSkillField
           value={skillName}
           onChange={setSkillName}
-          disabled={locked}
+          disabled={submitting}
           error={errorText('skill')}
         />
         {baseline.authorizationMode === 'nyxid_default' ? (
           <div className="channels__field">
             <Checkbox
               checked={usesDefaults}
-              disabled={locked}
+              disabled={submitting}
               onChange={(event) => {
                 setAuthorizationMode(
                   event.target.checked
@@ -400,12 +395,12 @@ function ChannelEditForm({
           loading={services.isPending}
           failed={services.isError}
           refreshing={services.isFetching}
-          disabled={locked || usesDefaults}
+          disabled={submitting || usesDefaults}
           retry={() => void services.refetch()}
           editing
           usesDefaults={usesDefaults}
         />
-        {missingIds.length > 0 && services.isSuccess && !locked ? (
+        {missingIds.length > 0 && services.isSuccess && !submitting ? (
           <p className="channels__form-error" role="alert">
             {t(
               'channels.edit.missingServices',
@@ -418,34 +413,11 @@ function ChannelEditForm({
             {errorText('services')}
           </p>
         ) : null}
-        {pending && !completed.current ? (
-          <div className="channels__save-status" role="status">
-            <p>
-              {readFailed
-                ? t(
-                    'channels.edit.checkFailed',
-                    'Changes were submitted, but could not be confirmed. Check again.',
-                  )
-                : t(
-                    'channels.edit.confirming',
-                    'Changes submitted. Waiting for confirmation.',
-                  )}
-            </p>
-            <Button
-              loading={observing}
-              disabled={observing}
-              onClick={() => void observe(pending)}
-            >
-              {t('channels.edit.check', 'Check again')}
-            </Button>
-          </div>
-        ) : null}
         <div className="channels__form-actions">
           <Button
-            disabled={submitting || observing}
+            disabled={submitting}
             onClick={() => {
-              if (dirty && !pending && !completed.current)
-                setLeaveTarget(detailsHref);
+              if (dirty && !completed.current) setLeaveTarget(detailsHref);
               else history.push(detailsHref);
             }}
           >
@@ -454,8 +426,10 @@ function ChannelEditForm({
           <Button
             type="primary"
             htmlType="submit"
-            loading={submitting || observing}
-            disabled={locked || !dirty || serviceBlocked}
+            loading={submitting}
+            disabled={
+              submitting || completed.current || !dirty || serviceBlocked
+            }
           >
             {t('channels.edit.save', 'Save changes')}
           </Button>

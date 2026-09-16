@@ -21,10 +21,10 @@ export default {
   'channels.edit.failed':
     'Could not save channel changes. Review your choices and try again.',
   'channels.edit.saved': 'Channel changes saved.',
-  'channels.edit.confirming': 'Changes submitted. Waiting for confirmation.',
-  'channels.edit.checkFailed':
-    'Changes were submitted, but could not be confirmed. Check again.',
-  'channels.edit.check': 'Check again',
+  'channels.edit.submitted':
+    'Changes submitted. They may take a moment to appear in channel details.',
+  'channels.edit.readbackUnavailable':
+    'Changes submitted, but the latest configuration could not be loaded. Refresh the channel details to view it.',
   'channels.edit.discardTitle': 'Discard your changes?',
   'channels.edit.discardHelp': 'Your unsaved channel changes will be lost.',
   'workflowActivityVNext.nav.channels': 'Channels',
