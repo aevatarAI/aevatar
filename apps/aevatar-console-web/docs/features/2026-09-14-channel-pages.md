@@ -128,13 +128,17 @@ other services.
 Registration uses existing `POST /api/channels/registrations` with
 `platform`, `bot_token`, `label`, `default_skill_name`, `webhook_base_url`, and
 the explicit selection above. A `202`/`status: accepted` response must contain
-the registration ID. After admission, the form clears its token, shows an
-informational "request submitted" toast, and immediately returns to Channels.
-It does not claim that provisioning has completed, wait for a list read, or
-leave the user on a locked connection form. The Channels page owns the normal
-list load and its existing manual Refresh action if the new row is not visible
-yet. Inbound activity continues to use its real status. The form never queries
-registrations; no polling, window-focus refresh, or reconnect refresh runs.
+the registration ID. After admission, the form clears its token, retains only
+the safe returned ID, and explicitly refreshes registrations once. A successful
+fresh read must contain that exact ID, route scope and Telegram platform before
+the success toast and navigation to the newly created channel's existing detail
+page. The form does not return to the collection automatically or infer success
+from cached rows after a failed read. Until confirmation, it preserves the
+submitted choices and shows a pending state with Check again. This action only
+repeats the GET, never the create POST; failed confirmation reads show a safe
+error toast and remain retryable. No polling, window-focus refresh, or reconnect
+refresh runs. Inbound activity continues to use its real status, independently
+of registration creation.
 Registration failures, including
 504 and network errors, show a shared error toast and restore editable fields and Connect
 Telegram. Inputs and still-authorized selections are preserved for an explicit manual
@@ -186,6 +190,11 @@ identifier; loading is shown explicitly. A name-read failure preserves the
 connected rows and actions, shows a safe error toast and can be retried with
 Refresh. Refresh reads the names once with the list/status reads. No per-row
 name request, automatic retry, polling, focus or reconnect refresh is added.
+
+Channel details use the same bot-identity query and exact join for their Channel
+name heading. Missing or failed name reads keep the detail facts and actions
+available with a local Reload channel name action. The title never substitutes
+a compact bot ID, registration ID or Skill name for the label.
 
 Channel details include Skill using the same name, optional version and Ornn
 link as the connected list. Missing skills show Not set. Reading names/skills

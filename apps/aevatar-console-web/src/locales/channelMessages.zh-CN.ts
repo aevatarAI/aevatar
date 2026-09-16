@@ -38,6 +38,7 @@ export default {
   'channels.connectedDescription': '连接到你账户的渠道。',
   'channels.name.loading': '正在加载名称…',
   'channels.name.unavailable': '名称暂不可用',
+  'channels.name.retry': '重新加载渠道名称',
   'channels.column.name': 'Channel 名字',
   'channels.skill.notSet': '未设置',
   'channels.skill.version': '版本 {version}',
@@ -127,8 +128,11 @@ export default {
   'channels.connect.selectionHelp': '此机器人只能使用选中的服务。',
   'channels.connect.selectionChanged':
     '部分选中服务已不可用，请取消勾选后再连接。',
-  'channels.connect.accepted':
-    'Telegram 连接请求已提交。如果渠道尚未显示，可点击刷新查看。',
+  'channels.connect.pending':
+    '请求已提交。可点击再次检查，准备完成后将打开你的渠道详情。',
+  'channels.connect.check': '再次检查',
+  'channels.connect.success': 'Telegram 渠道已创建。',
+  'channels.connect.error.confirmation': '暂时无法查看渠道，请再次检查。',
   'channels.connect.submitted': '请求已提交',
   'channels.connect.error.token': '请检查 BotFather 提供的令牌后重试。',
   'channels.connect.error.botName':

@@ -3,8 +3,9 @@ import {
   DeleteOutlined,
   EditOutlined,
   ExportOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
-import { Button, Modal } from 'antd';
+import { Button, Modal, Tooltip } from 'antd';
 import * as React from 'react';
 import { channelsApi } from '@/shared/api/channelsApi';
 import { t } from '@/shared/i18n/messages';
@@ -22,12 +23,15 @@ import {
   ChannelLink,
   ChannelLoadError,
   ChannelSkill,
-  compactChannelIdentifier,
   DeliveryStatus,
   InboundStatus,
   platformName,
 } from './presentation';
-import { useChannelRegistrations, useChannelStatus } from './queries';
+import {
+  useChannelBotIdentities,
+  useChannelRegistrations,
+  useChannelStatus,
+} from './queries';
 import { channelsCss } from './styles';
 
 // Figma links to the NyxID website, separate from its API/OIDC authority.
@@ -47,8 +51,13 @@ export default function ChannelDetailsPage({
   const [removeError, setRemoveError] = React.useState(false);
   const registrations = useChannelRegistrations(scopeId);
   const registration = registrations.data?.find(
-    (row) => row.id === registrationId,
+    (row) => row.id === registrationId && row.scopeId === scopeId,
   );
+  const bots = useChannelBotIdentities(scopeId, Boolean(registration?.botId));
+  const channelName = bots.data?.find(
+    (bot) =>
+      bot.id === registration?.botId && bot.platform === registration?.platform,
+  )?.label;
   const status = useChannelStatus(scopeId, registration ? registrationId : '');
   const toast = useConsoleToast();
   const completed = React.useRef(false);
@@ -192,12 +201,26 @@ export default function ChannelDetailsPage({
               <ChannelIcon platform={registration.platform} />
               <div className="channels__identity-copy">
                 <h1>
-                  {platformName(registration.platform)} ·{' '}
-                  <span title={registration.botId ?? registration.id}>
-                    {compactChannelIdentifier(
-                      registration.botId ?? registration.id,
-                    )}
-                  </span>
+                  {channelName ??
+                    (registration.botId && bots.isPending
+                      ? t('channels.name.loading', 'Loading name…')
+                      : t('channels.name.unavailable', 'Name unavailable'))}
+                  {registration.botId && !channelName && !bots.isPending ? (
+                    <Tooltip
+                      title={t('channels.name.retry', 'Reload channel name')}
+                    >
+                      <Button
+                        type="text"
+                        icon={<ReloadOutlined />}
+                        aria-label={t(
+                          'channels.name.retry',
+                          'Reload channel name',
+                        )}
+                        loading={bots.isFetching}
+                        onClick={() => void bots.refetch()}
+                      />
+                    </Tooltip>
+                  ) : null}
                 </h1>
                 <p className="channels__identifier">
                   {t('channels.registration', 'Registration')} {registration.id}

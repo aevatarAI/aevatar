@@ -385,6 +385,67 @@ describe('Channel pages', () => {
     ).toBeInTheDocument();
   });
 
+  it('recovers the detail name independently and requires the exact bot ID and platform', async () => {
+    let nameReads = 0;
+    fetchMock.mockImplementation(async (input) => {
+      if (input === '/api/channels/registrations')
+        return response([registration]);
+      if (input === statusPath)
+        return response({ registration_id: registration.id, status: 'active' });
+      if (input === botsPath) {
+        nameReads += 1;
+        if (nameReads === 1) return response({}, 503);
+        return response({
+          bots:
+            nameReads === 2
+              ? [
+                  { ...bot, id: registration.id, label: 'Wrong identity' },
+                  { ...bot, platform: 'lark', label: 'Wrong platform' },
+                ]
+              : [bot],
+        });
+      }
+      throw new Error('Unexpected request');
+    });
+    renderWithQueryClient(
+      <ChannelDetailsPage
+        registrationId={registration.id}
+        scopeId="scope-alpha"
+      />,
+    );
+    await screen.findByRole('heading', { level: 1, name: 'Name unavailable' });
+    expect(
+      screen.getByRole('link', { name: 'Open review.skill in Ornn' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeEnabled();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reload channel name' }),
+    );
+    await waitFor(() => expect(nameReads).toBe(2));
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Reload channel name' }),
+      ).toBeEnabled(),
+    );
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'Name unavailable',
+    );
+    expect(document.body).not.toHaveTextContent('Wrong identity');
+    expect(document.body).not.toHaveTextContent('Wrong platform');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reload channel name' }),
+    );
+    await screen.findByRole('heading', { level: 1, name: 'Team channel' });
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => input === '/api/channels/registrations',
+      ),
+    ).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([input]) => input === statusPath),
+    ).toHaveLength(1);
+  });
+
   it('links exact bot and agent key IDs to NyxID, hides Scope and keeps removal safe', async () => {
     fetchMock.mockImplementation(async (input) =>
       input === statusPath
