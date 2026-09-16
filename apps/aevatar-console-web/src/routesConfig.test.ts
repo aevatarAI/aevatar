@@ -1,6 +1,8 @@
 import { CONSOLE_HOME_ROUTE } from './shared/navigation/consoleHome';
 
 describe('console routes', () => {
+  const benchmarkEnvironmentKey = 'AEVATAR_WORKFLOW_CANVAS_BENCHMARK';
+
   function loadRoutes(): typeof import('../config/routes').default {
     let loadedRoutes!: typeof import('../config/routes').default;
     jest.isolateModules(() => {
@@ -43,6 +45,33 @@ describe('console routes', () => {
 
   beforeEach(() => {
     jest.resetModules();
+    delete process.env[benchmarkEnvironmentKey];
+  });
+
+  afterEach(() => {
+    delete process.env[benchmarkEnvironmentKey];
+  });
+
+  it('registers the workflow canvas benchmark only for the exact opt-in value', () => {
+    expect(hasRoute(loadRoutes(), '/workflow-canvas-benchmark')).toBe(false);
+
+    process.env[benchmarkEnvironmentKey] = 'true';
+    jest.resetModules();
+    expect(hasRoute(loadRoutes(), '/workflow-canvas-benchmark')).toBe(false);
+
+    process.env[benchmarkEnvironmentKey] = '1';
+    jest.resetModules();
+    const benchmarkRoute = findRoute(
+      loadRoutes(),
+      '/workflow-canvas-benchmark',
+    );
+    expect(benchmarkRoute).toEqual(
+      expect.objectContaining({
+        component: './workflow-canvas-benchmark',
+        hideInMenu: true,
+        layout: false,
+      }),
+    );
   });
 
   it('routes console home to Workflow Activity while preserving scoped Teams', () => {
@@ -63,6 +92,10 @@ describe('console routes', () => {
     for (const path of ['/', '/overview']) {
       expect(findRoute(routes, path).redirect).toBe(CONSOLE_HOME_ROUTE);
     }
+    expect(findRoute(routes, '/workflows').component).toBe(
+      './workflow-activity-vnext/WorkflowHomePage',
+    );
+    expect(findRoute(routes, '/workflows').redirect).toBeUndefined();
     expect(findRouteIndex(routes, '/chat')).toBeLessThan(
       findRouteIndex(routes, '/scopes'),
     );
@@ -157,7 +190,6 @@ describe('console routes', () => {
       './scopes/overview',
     );
     expect(hasRoute(routes, '/workflows')).toBe(true);
-    expect(findRoute(routes, '/workflows').redirect).toBe('/runtime/workflows');
     expect(hasRoute(routes, '/primitives')).toBe(true);
     expect(findRoute(routes, '/primitives').redirect).toBe(
       '/runtime/primitives',
@@ -243,7 +275,6 @@ describe('console routes', () => {
       findRouteIndex(routes, `${namespace}/workflows/:workflowId`),
     );
 
-    expect(findRoute(routes, '/workflows').redirect).toBe('/runtime/workflows');
     expect(findRoute(routes, '/runs').redirect).toBe('/runtime/runs');
     expect(findRoute(routes, '/').redirect).toBe(CONSOLE_HOME_ROUTE);
   });

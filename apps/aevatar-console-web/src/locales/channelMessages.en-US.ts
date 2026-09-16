@@ -1,4 +1,32 @@
 export default {
+  'channels.edit': 'Edit',
+  'channels.edit.title': 'Edit {platform}',
+  'channels.edit.loadingTitle': 'Edit channel',
+  'channels.edit.loading': 'Loading channel configuration',
+  'channels.edit.configuration': 'Configuration',
+  'channels.edit.save': 'Save changes',
+  'channels.edit.defaults': 'NyxID defaults',
+  'channels.edit.useDefaults': 'Use NyxID defaults',
+  'channels.edit.unavailableService': 'Unavailable service',
+  'channels.edit.servicesError':
+    'Could not load your services. Try again before saving.',
+  'channels.edit.servicesEmpty':
+    'No services are available with your current authorization.',
+  'channels.edit.missingServices':
+    'Some saved services are no longer available. Deselect them before saving.',
+  'channels.edit.selectionError':
+    'Review your selected services and try again.',
+  'channels.edit.skillError':
+    'Check the skill name. Use no more than 128 characters.',
+  'channels.edit.failed':
+    'Could not save channel changes. Review your choices and try again.',
+  'channels.edit.saved': 'Channel changes saved.',
+  'channels.edit.confirming': 'Changes submitted. Waiting for confirmation.',
+  'channels.edit.checkFailed':
+    'Changes were submitted, but could not be confirmed. Check again.',
+  'channels.edit.check': 'Check again',
+  'channels.edit.discardTitle': 'Discard your changes?',
+  'channels.edit.discardHelp': 'Your unsaved channel changes will be lost.',
   'workflowActivityVNext.nav.channels': 'Channels',
   'channels.title': 'Connect your channels to your agent',
   'channels.description':
@@ -22,6 +50,7 @@ export default {
   'channels.skill.notSet': 'Not set',
   'channels.skill.version': 'Version {version}',
   'channels.skill.open': 'Open {name} in Ornn',
+  'channels.identifier.showFull': 'Show full ID',
   'channels.column.channel': 'Channel',
   'channels.column.skill': 'Skill',
   'channels.column.inbound': 'Inbound',
@@ -56,6 +85,15 @@ export default {
   'channels.breadcrumb': 'Channel navigation',
   'channels.registration': 'Registration',
   'channels.inboundMessages': 'Inbound messages',
+  'channels.services.title': 'Authorized services',
+  'channels.services.loading': 'Loading service names',
+  'channels.services.empty': 'No services authorized.',
+  'channels.services.default':
+    'Uses NyxID default authorization; individual services are not listed.',
+  'channels.services.unavailable':
+    'Authorization details are unavailable for this channel.',
+  'channels.services.namesError':
+    'Could not load service names. Please try again.',
   'channels.botId': 'Bot ID',
   'channels.provider': 'Provider',
   'channels.keyId': 'Agent key ID',
@@ -83,8 +121,11 @@ export default {
   'channels.connect.hideToken': 'Hide bot token',
   'channels.connect.botFather': 'Get token from BotFather',
   'channels.connect.name': 'Channel name',
+  'channels.connect.skillName': 'Skill name',
+  'channels.connect.skillNameDefault': 'Defaults to the Telegram bot name',
   'channels.connect.optional': '(optional)',
-  'channels.connect.botNameDefault': 'Defaults to the Telegram bot name',
+  'channels.connect.botNameDefault':
+    'Defaults to the bot name + 6 random digits',
   'channels.connect.tokenRequired': 'Enter the bot token from BotFather.',
   'channels.connect.services': 'Services',
   'channels.connect.selected': '{count} selected',
@@ -106,10 +147,9 @@ export default {
     'Only selected services will be available to this bot.',
   'channels.connect.selectionChanged':
     'Some selected services are no longer available. Deselect them before connecting.',
-  'channels.connect.pending':
-    'Telegram setup was submitted. Waiting for your channel to appear.',
-  'channels.connect.success':
-    'Telegram added. Send your bot a message to get started.',
+  'channels.connect.accepted':
+    'Telegram connection request submitted. Use Refresh if the channel is not visible yet.',
+  'channels.connect.submitted': 'Request submitted',
   'channels.connect.error.token':
     'Check the bot token from BotFather and try again.',
   'channels.connect.error.botName':
@@ -117,7 +157,7 @@ export default {
   'channels.connect.error.services':
     'The selected services are no longer available. Review your selection and try again.',
   'channels.connect.error.skill':
-    'Could not configure the bot skill. Check the Channel name and your access in Ornn.',
+    'Could not configure the bot skill. Check the Skill name and your access in Ornn.',
   'channels.connect.error.authorization':
     'Your session or service access needs attention. Sign in again and review your NyxID access.',
   'channels.connect.error.conflict':
@@ -125,7 +165,7 @@ export default {
   'channels.connect.error.configuration':
     'Channel setup is unavailable. Ask your administrator to check the deployment configuration.',
   'channels.connect.error.rejected':
-    'Could not connect Telegram. Check the bot token, Channel name, and selected services, then try again.',
+    'Could not connect Telegram. Check the bot token, Skill name, and selected services, then try again.',
   'channels.connect.error.uncertain':
     'Could not confirm the connection. Please try again.',
   'channels.connect.discardTitle': 'Discard this connection setup?',

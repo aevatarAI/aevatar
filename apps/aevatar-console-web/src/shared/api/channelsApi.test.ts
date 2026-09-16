@@ -29,6 +29,8 @@ describe('channel API boundary', () => {
       response([
         {
           ...registration,
+          authorization_mode: 'explicit_service_allowlist',
+          service_ids: ['us-work', 'us-model'],
           default_skill: { name: 'review.skill', version: '2.4' },
           agent_key: { api_key_id: 'key-current', raw_key: 'TEST_ONLY_SECRET' },
           runtime_config: { instructions: 'private instructions' },
@@ -51,6 +53,10 @@ describe('channel API boundary', () => {
         skill: { name: 'review.skill', version: '2.4' },
         workflowDeliveryStatus: 'enabled',
         owned: true,
+        serviceAuthorization: {
+          kind: 'explicit',
+          serviceIds: ['us-work', 'us-model'],
+        },
       },
     ]);
     expect(JSON.stringify(result)).not.toMatch(
@@ -78,6 +84,48 @@ describe('channel API boundary', () => {
   it('rejects malformed list responses instead of presenting an empty collection', async () => {
     fetchMock.mockResolvedValue(response({ registrations: [] }));
     await expect(channelsApi.list()).rejects.toThrow();
+  });
+
+  it('distinguishes explicit empty, NyxID default, missing and unknown service authorization', async () => {
+    fetchMock.mockResolvedValue(
+      response([
+        {
+          ...registration,
+          authorization_mode: 'explicit_service_allowlist',
+          service_ids: [],
+        },
+        { ...registration, authorization_mode: 'nyxid_default' },
+        { ...registration, authorization_mode: 'explicit_service_allowlist' },
+        {
+          ...registration,
+          authorization_mode: 'future_mode',
+          service_ids: ['us-work'],
+        },
+      ]),
+    );
+    expect(
+      (await channelsApi.list()).map((row) => row.serviceAuthorization),
+    ).toEqual([
+      { kind: 'explicit', serviceIds: [] },
+      { kind: 'nyxidDefault' },
+      { kind: 'unavailable' },
+      { kind: 'unavailable' },
+    ]);
+  });
+
+  it('rejects malformed saved service IDs rather than inventing an authorization list', async () => {
+    fetchMock.mockResolvedValue(
+      response([
+        {
+          ...registration,
+          authorization_mode: 'explicit_service_allowlist',
+          service_ids: ['us-work', null],
+        },
+      ]),
+    );
+    await expect(channelsApi.list()).rejects.toThrow(
+      'Invalid authorized service identity.',
+    );
   });
 
   it('encodes opaque registration IDs and rejects a status for a different registration', async () => {

@@ -21,6 +21,11 @@ export interface ChannelServiceChoice {
   readonly organizationName: string | null;
 }
 
+export type ChannelServiceIdentity = Pick<
+  ChannelServiceChoice,
+  'id' | 'slug' | 'label'
+>;
+
 function decodeService(value: unknown): ChannelServiceChoice {
   const row = expectRecord(value, 'User service');
   const source = expectRecord(row.credential_source, 'Credential source');
@@ -47,34 +52,59 @@ function decodeService(value: unknown): ChannelServiceChoice {
   };
 }
 
-export async function listChannelServices(
+async function readChannelServiceInventory(
+  accessToken: string,
   signal?: AbortSignal,
 ): Promise<ChannelServiceChoice[]> {
   const config = getNyxIDRuntimeConfig();
   if (config.configurationError || !config.baseUrl)
     throw new Error('NyxID is unavailable.');
-  const session = await ensureActiveAuthSession();
-  if (!session) throw new ChannelApiError(401);
-  const grants = readAccessTokenServiceGrants(
-    session.tokens.accessToken,
-    session.user.sub,
-  );
   const response = await authFetch(`${config.baseUrl}/api/v1/user-services`, {
     signal,
     credentials: 'omit',
     cache: 'no-store',
     headers: {
       Accept: 'application/json',
-      // Pin the inventory to the exact bearer whose grants were read above.
-      Authorization: `Bearer ${session.tokens.accessToken}`,
+      Authorization: `Bearer ${accessToken}`,
     },
   });
   if (!response.ok) throw new ChannelApiError(response.status);
   const body = expectRecord(await response.json(), 'User services');
-  const authorizedIds = new Set(grants.allowedServiceIds);
   const services = expectArray(body.services, 'User services', decodeService);
   if (new Set(services.map((service) => service.id)).size !== services.length)
     throw new Error('Ambiguous user service identity.');
+  return services;
+}
+
+// Display names do not establish a channel's authorization. The registration's
+// saved service IDs remain authoritative even if this session's grants changed.
+export async function listChannelServiceIdentities(
+  signal?: AbortSignal,
+): Promise<ChannelServiceIdentity[]> {
+  const session = await ensureActiveAuthSession();
+  if (!session) throw new ChannelApiError(401);
+  const services = await readChannelServiceInventory(
+    session.tokens.accessToken,
+    signal,
+  );
+  return services.map(({ id, slug, label }) => ({ id, slug, label }));
+}
+
+export async function listChannelServices(
+  signal?: AbortSignal,
+): Promise<ChannelServiceChoice[]> {
+  const session = await ensureActiveAuthSession();
+  if (!session) throw new ChannelApiError(401);
+  const grants = readAccessTokenServiceGrants(
+    session.tokens.accessToken,
+    session.user.sub,
+  );
+  // Pin inventory and selectable choices to the same authenticated bearer.
+  const services = await readChannelServiceInventory(
+    session.tokens.accessToken,
+    signal,
+  );
+  const authorizedIds = new Set(grants.allowedServiceIds);
   return services.filter(
     (service) =>
       service.active &&

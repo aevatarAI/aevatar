@@ -1081,38 +1081,39 @@ async function streamSse(
   }
 
   if (!response.body) {
-    return;
+    throw new Error('Workflow generation returned no event stream.');
   }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-
-    let boundary = buffer.indexOf('\n\n');
-    while (boundary >= 0) {
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-
-      const data = block
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trim())
-        .join('\n');
-
-      if (data && data !== '[DONE]') {
-        onFrame(JSON.parse(data) as unknown);
+  let ended = false;
+  try {
+    while (true) {
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Request cancelled.', 'AbortError');
+      const { done, value } = await reader.read();
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Request cancelled.', 'AbortError');
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      let boundary = /\r?\n\r?\n/.exec(buffer);
+      while (boundary) {
+        const block = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        const data = block
+          .split(/\r?\n/)
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trim())
+          .join('\n');
+        if (data && data !== '[DONE]') onFrame(JSON.parse(data) as unknown);
+        boundary = /\r?\n\r?\n/.exec(buffer);
       }
-
-      boundary = buffer.indexOf('\n\n');
+      if (done) {
+        ended = true;
+        break;
+      }
     }
-
-    if (done) {
-      break;
-    }
+  } finally {
+    if (!ended) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
 }
 
@@ -4101,6 +4102,7 @@ export const studioApi = {
   ): Promise<string> {
     let generatedText = '';
     let reasoningText = '';
+    let completed = false;
 
     await streamSse(
       '/api/workflows/generator',
@@ -4129,8 +4131,9 @@ export const studioApi = {
         }
 
         if (normalized.type === 'TEXT_MESSAGE_END') {
+          completed = true;
           generatedText =
-            generatedText || normalized.message || normalized.delta || '';
+            normalized.message || normalized.delta || generatedText;
           options?.onText?.(generatedText);
           return;
         }
@@ -4142,6 +4145,9 @@ export const studioApi = {
       options?.signal,
     );
 
+    if (!completed || !generatedText.trim()) {
+      throw new Error('Workflow generation ended without a completed workflow.');
+    }
     return generatedText;
   },
 };

@@ -1,7 +1,10 @@
 import { authFetch } from '@/shared/auth/fetch';
 import { persistAuthSession } from '@/shared/auth/session';
 import { createNyxIDServiceSession } from '../../../tests/fixtures/nyxidServiceSession';
-import { listChannelServices } from './channelServicesApi';
+import {
+  listChannelServiceIdentities,
+  listChannelServices,
+} from './channelServicesApi';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
 jest.mock('@/shared/auth/config', () => ({
@@ -24,6 +27,27 @@ const personal = {
 };
 const response = (value: unknown, status = 200) =>
   ({ ok: status === 200, status, json: async () => value }) as Response;
+
+it('reads safe service names independently of current selectable grants and activity', async () => {
+  persistAuthSession(createNyxIDServiceSession({ allowed_service_ids: [] }));
+  fetchMock.mockResolvedValue(
+    response({
+      services: [
+        personal,
+        {
+          ...personal,
+          id: 'us-inactive',
+          is_active: false,
+          label: 'Old service',
+        },
+      ],
+    }),
+  );
+  expect(await listChannelServiceIdentities()).toEqual([
+    { id: 'us-work', slug: 'api-github', label: 'GitHub work' },
+    { id: 'us-inactive', slug: 'api-github', label: 'Old service' },
+  ]);
+});
 
 afterEach(() => {
   fetchMock.mockReset();

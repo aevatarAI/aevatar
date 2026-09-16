@@ -9,6 +9,7 @@ export const channelConnectionCss = `
 .channels__connection-form h2 { color: var(--wa-ink); font-size: 14px; line-height: 22px; margin: 0; }
 .channels__form-section-title { margin-bottom: 20px !important; }
 .channels__field { margin-bottom: 24px; min-width: 0; }
+.channels__name-fields { display: grid; gap: 20px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .channels__field-heading { align-items: baseline; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; margin-bottom: 8px; }
 .channels__field-heading label { color: var(--wa-ink); font-size: 12px; font-weight: 600; }
 .channels__field-heading label > span { color: var(--wa-muted); font-size: 11px; font-weight: 400; margin-left: 5px; }
@@ -41,9 +42,11 @@ export const channelConnectionCss = `
 .channels__service-state p { margin: 0 0 12px; }
 .channels__form-actions { align-items: center; border-top: 1px solid var(--channels-border); display: flex; gap: 12px; justify-content: space-between; margin-top: 28px; padding-top: 20px; }
 .channels__form-actions .ant-btn { font-size: 12px; min-height: 40px; padding-inline: 18px; }
-.channels__connection-pending { color: var(--wa-muted); line-height: 22px; margin-top: 20px; }
-.channels__connection-pending p { margin: 0 0 12px; }
+.channels__save-status { border-top: 1px solid var(--channels-border); color: var(--wa-muted); font-size: 12px; line-height: 20px; margin-top: 24px; padding-top: 16px; }
+.channels__save-status p { margin: 0 0 12px; }
+.channels__connection-form .ant-btn { white-space: normal; height: auto; }
 @media (max-width: 767px) {
+  .channels__name-fields { gap: 0; grid-template-columns: 1fr; }
   .channels__main--connect .channels__content { padding-top: 20px; }
   .channels__connect-heading h1 { font-size: 24px; line-height: 32px; }
   .channels__connect-heading { margin-bottom: 20px; }

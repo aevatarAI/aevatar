@@ -118,6 +118,97 @@ describe('Channel pages', () => {
     }
   });
 
+  it.each([
+    200, 503,
+  ])('keeps the table busy until all manual refresh reads settle when the list returns %s', async (listStatus) => {
+    renderWithQueryClient(<ChannelsPage scopeId="scope-alpha" />);
+    await screen.findByText('Team channel');
+    await screen.findByText('Active');
+    const table = screen.getByRole('table', { name: /^Connected/ });
+    const refreshButton = screen.getByRole('button', {
+      name: 'Refresh channels',
+    });
+    const pendingList = deferred<Response>();
+    const pendingStatus = deferred<Response>();
+    const pendingNames = deferred<Response>();
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async (input) => {
+      if (input === '/api/channels/registrations') return pendingList.promise;
+      if (input === statusPath) return pendingStatus.promise;
+      if (input === botsPath) return pendingNames.promise;
+      throw new Error(`Unexpected test request: ${String(input)}`);
+    });
+
+    fireEvent.click(refreshButton);
+    expect(refreshButton).toBeDisabled();
+    expect(
+      screen.getByRole('status', { name: 'Loading channels' }),
+    ).toBeInTheDocument();
+    expect(table.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'true');
+    expect(table).toHaveAttribute('inert');
+    expect(within(table).getByText('Team channel')).toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'Connect Telegram' }).closest('[inert]'),
+    ).toBeNull();
+    fireEvent.click(refreshButton);
+    expect(fetchMock.mock.calls.map(([input]) => input).sort()).toEqual(
+      ['/api/channels/registrations', statusPath, botsPath].sort(),
+    );
+
+    await act(async () => {
+      pendingList.resolve(response([registration], listStatus));
+    });
+    expect(refreshButton).toBeDisabled();
+    expect(table.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'true');
+    await act(async () => {
+      pendingStatus.resolve(
+        response({ registration_id: registration.id, status: 'active' }),
+      );
+    });
+    expect(
+      screen.getByRole('status', { name: 'Loading channels' }),
+    ).toBeInTheDocument();
+    expect(refreshButton).toBeDisabled();
+
+    await act(async () => {
+      pendingNames.resolve(
+        response({ bots: [{ ...bot, label: 'Updated channel' }] }),
+      );
+    });
+    await waitFor(() => expect(refreshButton).toBeEnabled());
+    expect(screen.getByRole('table', { name: /^Connected/ })).toBe(table);
+    expect(table.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'false');
+    expect(table).not.toHaveAttribute('inert');
+    expect(
+      screen.queryByRole('status', { name: 'Loading channels' }),
+    ).not.toBeInTheDocument();
+    expect(
+      await within(table).findByText('Updated channel'),
+    ).toBeInTheDocument();
+    if (listStatus === 503) {
+      expect(mockToast.error).toHaveBeenCalledTimes(1);
+      expect(mockToast.error).toHaveBeenCalledWith(
+        'Could not refresh channels. Try again.',
+      );
+    } else {
+      expect(mockToast.error).not.toHaveBeenCalled();
+    }
+
+    fetchMock.mockImplementation(async (input) => {
+      if (input === '/api/channels/registrations')
+        return response([registration]);
+      if (input === statusPath)
+        return response({ registration_id: registration.id, status: 'active' });
+      if (input === botsPath) return response({ bots: [bot] });
+      throw new Error(`Unexpected test request: ${String(input)}`);
+    });
+    fireEvent.click(refreshButton);
+    expect(refreshButton).toBeDisabled();
+    await waitFor(() => expect(refreshButton).toBeEnabled());
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(await within(table).findByText('Team channel')).toBeInTheDocument();
+  });
+
   it('loads the connected table, exact Ornn skill link and first-level navigation without enabling unsupported platforms', async () => {
     const pendingStatus = deferred<Response>();
     const pendingNames = deferred<Response>();

@@ -9,7 +9,6 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { type Edge, MarkerType, type Node, Position } from '@xyflow/react';
 import {
   Alert,
   Button,
@@ -38,10 +37,6 @@ import type {
   WorkflowRunForkAcceptedReceipt,
 } from '@/shared/models/workflowActivity';
 import { history } from '@/shared/navigation/history';
-import type {
-  StudioGraphEdgeData,
-  StudioGraphNodeData,
-} from '@/shared/studio/graph';
 import { AevatarLoadingOverlay } from '@/shared/ui/AevatarLoading';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
@@ -51,6 +46,13 @@ import {
 } from '../navigation';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import {
+  buildExecutionGraph,
+  type ExecutionGraphView,
+  getStepDisplayName,
+  getStepExecutionStatus,
+  reconcileExecutionGraph,
+} from './executionGraph';
 import {
   classifyRunFailure,
   type RunFailureAction,
@@ -151,18 +153,6 @@ function formatRunStatus(status: string | null | undefined): string {
     .join(' ');
 }
 
-function getStepExecutionStatus(
-  step: WorkflowActivityStep,
-): 'idle' | 'active' | 'waiting' | 'completed' | 'failed' {
-  if (step.success === true) return 'completed';
-  if (step.success === false || trimOptional(step.error)) return 'failed';
-  if (trimOptional(step.suspensionType)) return 'waiting';
-  if (trimOptional(step.requestedAtUtc) && !trimOptional(step.completedAtUtc)) {
-    return 'active';
-  }
-  return 'idle';
-}
-
 function getStepStatusTone(step: WorkflowActivityStep): RunStatusTone {
   const status = getStepExecutionStatus(step);
   if (status === 'completed') return 'success';
@@ -230,35 +220,6 @@ function getRunDurationMs(
   return total > 0 ? total : null;
 }
 
-function getStepDisplayName(
-  step: WorkflowActivityStep | null | undefined,
-): string {
-  const stepId = trimOptional(step?.stepId);
-  const stepType = trimOptional(step?.stepType);
-  return stepId || stepType || t('workflowActivityVNext.run.step', 'Step');
-}
-
-function summarizeStepParameters(step: WorkflowActivityStep): string {
-  const entries = Object.entries(step.requestParameters).filter(
-    ([key, value]) => trimOptional(key) || trimOptional(value),
-  );
-  if (!entries.length) {
-    return step.stepType || t('workflowActivityVNext.run.step', 'step');
-  }
-  return entries
-    .slice(0, 2)
-    .map(([key, value]) => `${key}: ${value}`)
-    .join(' | ');
-}
-
-function getStepSortTimestamp(step: WorkflowActivityStep): number {
-  return (
-    Date.parse(
-      trimOptional(step.requestedAtUtc) || trimOptional(step.completedAtUtc),
-    ) || 0
-  );
-}
-
 function getSelectedStepDefaultId(
   steps: readonly WorkflowActivityStep[],
   graph?: WorkflowActivityRunGraph,
@@ -276,140 +237,6 @@ function getSelectedStepDefaultId(
   }
 
   return steps[0]?.stepId ?? '';
-}
-
-function buildExecutionGraph(
-  detail: WorkflowActivityRunDetail | undefined,
-  graph: WorkflowActivityRunGraph | undefined,
-  selectedStepId: string,
-): {
-  readonly edges: Edge<StudioGraphEdgeData>[];
-  readonly nodes: Node<StudioGraphNodeData>[];
-  readonly orderedSteps: WorkflowActivityStep[];
-} {
-  const orderedSteps = [...(detail?.steps ?? [])].sort((left, right) => {
-    const leftTime = getStepSortTimestamp(left);
-    const rightTime = getStepSortTimestamp(right);
-    if (leftTime !== rightTime) return leftTime - rightTime;
-    return left.stepId.localeCompare(right.stepId);
-  });
-  const stepById = new Map(
-    orderedSteps.map((step) => [step.stepId, step] as const),
-  );
-  const nodeById = new Map(
-    graph?.nodes.map((node) => [node.nodeId, node] as const) ?? [],
-  );
-  const stepIdByNodeId = new Map(
-    graph?.nodes.map(
-      (node) => [node.nodeId, trimOptional(node.stepId)] as const,
-    ) ?? [],
-  );
-  const nodes: Node<StudioGraphNodeData>[] = orderedSteps.map(
-    (step, index) => ({
-      data: {
-        branchCount: trimOptional(step.branchKey) ? 1 : 0,
-        executionFocused: step.stepId === selectedStepId,
-        executionStatus: getStepExecutionStatus(step),
-        kind: 'step',
-        label: getStepDisplayName(step),
-        parametersSummary: summarizeStepParameters(step),
-        stepId: step.stepId,
-        stepType: step.stepType || 'step',
-        subtitle: step.stepType || t('workflowActivityVNext.run.step', 'Step'),
-        targetRole: step.targetRole,
-        title: getStepDisplayName(step),
-      },
-      id: `step:${step.stepId}`,
-      position: {
-        x: 120 + index * 310,
-        y: 150 + (index % 2 === 0 ? 0 : 44),
-      },
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
-      type: 'studioWorkflowNode',
-    }),
-  );
-  const edges: Edge<StudioGraphEdgeData>[] = [];
-  const seen = new Set<string>();
-  const pushEdge = (
-    sourceStepId: string,
-    targetStepId: string,
-    implicit: boolean,
-    branchLabel?: string,
-  ) => {
-    if (!stepById.has(sourceStepId) || !stepById.has(targetStepId)) return;
-    const key = `${sourceStepId}->${targetStepId}:${branchLabel ?? ''}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    edges.push({
-      animated: false,
-      data: {
-        branchLabel,
-        implicit,
-        kind: branchLabel ? 'branch' : 'next',
-      },
-      id: `edge:${sourceStepId}:${targetStepId}:${edges.length}`,
-      label: branchLabel || undefined,
-      markerEnd: {
-        color: implicit ? '#94a3b8' : '#1677ff',
-        height: 10,
-        type: MarkerType.ArrowClosed,
-        width: 10,
-      },
-      source: `step:${sourceStepId}`,
-      style: {
-        stroke: implicit ? '#94a3b8' : '#1677ff',
-        strokeDasharray: implicit ? '5 5' : undefined,
-        strokeWidth: implicit ? 1.6 : 2.4,
-      },
-      target: `step:${targetStepId}`,
-      type: 'smoothstep',
-    });
-  };
-
-  if (graph?.edges.length) {
-    for (const edge of graph.edges) {
-      const sourceStepId =
-        trimOptional(stepIdByNodeId.get(edge.fromNodeId)) ||
-        nodeById.get(edge.fromNodeId)?.stepId ||
-        '';
-      const targetStepId =
-        trimOptional(stepIdByNodeId.get(edge.toNodeId)) ||
-        nodeById.get(edge.toNodeId)?.stepId ||
-        '';
-      if (sourceStepId && targetStepId) {
-        pushEdge(
-          sourceStepId,
-          targetStepId,
-          false,
-          trimOptional(edge.branchKey) || undefined,
-        );
-      }
-    }
-  }
-
-  for (const step of orderedSteps) {
-    const nextStepId = trimOptional(step.nextStepId);
-    if (nextStepId) {
-      pushEdge(
-        step.stepId,
-        nextStepId,
-        false,
-        trimOptional(step.branchKey) || undefined,
-      );
-    }
-  }
-
-  if (!edges.length) {
-    orderedSteps.forEach((step, index) => {
-      const next = orderedSteps[index + 1];
-      if (next) {
-        pushEdge(step.stepId, next.stepId, true);
-      }
-    });
-  }
-
-  return { edges, nodes, orderedSteps };
 }
 
 function filterTimelineForStep(
@@ -675,6 +502,29 @@ const RunDetailPage: React.FC<{
   const [selectedStepId, setSelectedStepId] = React.useState('');
   const [refreshing, setRefreshing] = React.useState(false);
   const shownFailureKeys = React.useRef(new Set<string>());
+  const committedGraphViewRef = React.useRef<ExecutionGraphView | undefined>(
+    undefined,
+  );
+  const rawGraphView = React.useMemo(
+    () => buildExecutionGraph(detail.data, graph.data),
+    [detail.data, graph.data],
+  );
+  const graphView = React.useMemo(
+    () => reconcileExecutionGraph(committedGraphViewRef.current, rawGraphView),
+    [rawGraphView],
+  );
+
+  React.useLayoutEffect(() => {
+    // Abandoned concurrent renders must not become the next reconciliation baseline.
+    committedGraphViewRef.current = graphView;
+  }, [graphView]);
+
+  const handleCanvasSelect = React.useCallback(() => {
+    setSelectedStepId('');
+  }, []);
+  const handleNodeSelect = React.useCallback((nodeId: string) => {
+    setSelectedStepId(nodeId.replace(/^step:/, ''));
+  }, []);
 
   const refreshRunDetail = React.useCallback(async () => {
     if (refreshing) return;
@@ -1180,7 +1030,6 @@ const RunDetailPage: React.FC<{
   const selectedHistoryRun =
     effectiveHistory.find((entry) => entry.runId === run.summary.runId) ??
     currentRunHistoryEntry;
-  const graphView = buildExecutionGraph(run, graph.data, selectedStepId);
   const selectedStep =
     graphView.orderedSteps.find((step) => step.stepId === selectedStepId) ??
     graphView.orderedSteps[0] ??
@@ -1237,10 +1086,8 @@ const RunDetailPage: React.FC<{
         edges={graphView.edges}
         height="100%"
         nodes={graphView.nodes}
-        onCanvasSelect={() => setSelectedStepId('')}
-        onNodeSelect={(nodeId) =>
-          setSelectedStepId(nodeId.replace(/^step:/, ''))
-        }
+        onCanvasSelect={handleCanvasSelect}
+        onNodeSelect={handleNodeSelect}
         selectedNodeId={
           selectedStep ? `step:${selectedStep.stepId}` : undefined
         }

@@ -1,11 +1,19 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
 import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from '../../../../tests/reactQueryTestUtils';
-import NewWorkflowPage from './NewWorkflowPage';
+import NewWorkflowPage, {
+  WORKFLOW_GENERATION_TIMEOUT_MS,
+} from './NewWorkflowPage';
 import WorkflowTemplatesPage from './WorkflowTemplatesPage';
 
 jest.mock('@umijs/max', () => ({
@@ -385,14 +393,14 @@ describe('New workflow save-target recovery', () => {
     expect(
       await screen.findByText("Workflow couldn't be created"),
     ).toBeVisible();
-    expect(
-      screen.queryByText('Generation unavailable'),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText('Generation unavailable')).not.toBeVisible();
     expect(workflowName).toHaveValue('Weekly review');
     expect(description).toHaveValue('Summarize this week');
     expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Generate and open' }),
+    );
     await waitFor(() =>
       expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledTimes(1),
     );
@@ -1146,5 +1154,165 @@ describe('New workflow save-target recovery', () => {
     expect(screen.getByLabelText('Workflow YAML')).toHaveValue(
       'name: prepared_workflow',
     );
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function describeWorkflow() {
+  fireEvent.click(await screen.findByRole('button', { name: 'Describe' }));
+  fireEvent.change(screen.getByLabelText('Workflow name'), {
+    target: { value: 'Incident review' },
+  });
+  fireEvent.change(screen.getByLabelText('What should this workflow do?'), {
+    target: { value: 'Review an incident' },
+  });
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Generate and open' }),
+    ).toBeEnabled(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
+}
+
+describe('Workflow generation feedback and cancellation', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    for (const mock of Object.values(mockStudioApi)) mock.mockReset();
+    mockScopesApi.listWorkflows.mockReset();
+    mockStudioApi.getWorkspaceSettings.mockResolvedValue(readyWorkspace);
+    mockStudioApi.listWorkflowDrafts.mockResolvedValue([]);
+    mockScopesApi.listWorkflows.mockResolvedValue([]);
+    mockStudioApi.parseYaml.mockResolvedValue({
+      document: { name: 'incident_review', roles: [], steps: [] },
+      findings: [],
+    });
+    mockStudioApi.createWorkflowDraft.mockResolvedValue(materializedWorkflow);
+    mockUseDraftMaterialization.mockReturnValue({
+      phase: 'idle',
+      receipt: null,
+      observe: jest.fn(),
+      retry: jest.fn(),
+    });
+  });
+
+  it('shows real generation updates, preserves input on cancel and saves only the next attempt', async () => {
+    const oldAttempt = deferred<string>();
+    mockStudioApi.authorWorkflow
+      .mockReturnValueOnce(oldAttempt.promise)
+      .mockResolvedValueOnce('name: fresh_workflow');
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+    await describeWorkflow();
+    expect(screen.getByText('Generating workflow…')).toBeInTheDocument();
+    const options = mockStudioApi.authorWorkflow.mock.calls[0][1];
+    act(() => options.onReasoning('Validating workflow attempt 1'));
+    expect(
+      screen.getByText(
+        'Generation updates received. Waiting for the completed workflow.',
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Generation details'));
+    expect(screen.getByText('Validating workflow attempt 1')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel generation' }));
+    expect(options.signal.aborted).toBe(true);
+    expect(screen.getByLabelText('What should this workflow do?')).toHaveValue(
+      'Review an incident',
+    );
+    expect(screen.getByLabelText('Workflow name')).toHaveValue(
+      'Incident review',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
+    await waitFor(() =>
+      expect(history.push).toHaveBeenCalledWith(
+        '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+      ),
+    );
+    await act(async () => {
+      oldAttempt.resolve('name: stale_workflow');
+    });
+    expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledTimes(1);
+    expect(mockStudioApi.createWorkflowDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ yaml: 'name: fresh_workflow' }),
+    );
+  });
+
+  it('times out during validation and prevents a late valid document from being saved', async () => {
+    const validation = deferred<{
+      document: { name: string };
+      findings: never[];
+    }>();
+    mockStudioApi.authorWorkflow.mockResolvedValue('name: incident_review');
+    mockStudioApi.parseYaml.mockReturnValue(validation.promise);
+    renderWithQueryClient(<NewWorkflowPage scopeId="scope-alpha" />);
+    // Resolve workspace queries before controlling only the generation deadline.
+    fireEvent.click(await screen.findByRole('button', { name: 'Describe' }));
+    fireEvent.change(screen.getByLabelText('Workflow name'), {
+      target: { value: 'Incident review' },
+    });
+    fireEvent.change(screen.getByLabelText('What should this workflow do?'), {
+      target: { value: 'Review an incident' },
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Generate and open' }),
+      ).toBeEnabled(),
+    );
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Generate and open' }),
+        );
+      });
+      expect(
+        screen.getByText('Checking generated workflow…'),
+      ).toBeInTheDocument();
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(WORKFLOW_GENERATION_TIMEOUT_MS);
+      });
+      expect(
+        screen.getByText(
+          'Generation took longer than two minutes. No draft was saved. You can try again.',
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Generate and open' }),
+      ).toBeEnabled();
+      await act(async () => {
+        validation.resolve({
+          document: { name: 'incident_review' },
+          findings: [],
+        });
+      });
+      expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();
+      expect(history.push).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('aborts generation on unmount and ignores its late completion', async () => {
+    const oldAttempt = deferred<string>();
+    mockStudioApi.authorWorkflow.mockReturnValue(oldAttempt.promise);
+    const { rerender } = renderWithQueryClient(
+      <NewWorkflowPage scopeId="scope-alpha" />,
+    );
+    await describeWorkflow();
+    const signal = mockStudioApi.authorWorkflow.mock.calls[0][1].signal;
+    // Unmount exercises the same cleanup used by scope/method transitions.
+    rerender(<div>Different workspace</div>);
+    expect(signal.aborted).toBe(true);
+    await act(async () => {
+      oldAttempt.resolve('name: stale_workflow');
+    });
+    expect(mockStudioApi.parseYaml).not.toHaveBeenCalled();
+    expect(mockStudioApi.createWorkflowDraft).not.toHaveBeenCalled();
+    expect(history.push).not.toHaveBeenCalled();
   });
 });

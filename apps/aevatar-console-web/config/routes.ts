@@ -12,7 +12,20 @@
  */
 import { CONSOLE_HOME_ROUTE } from '../src/shared/navigation/consoleHome';
 
+const workflowCanvasBenchmarkRoutes =
+  process.env.AEVATAR_WORKFLOW_CANVAS_BENCHMARK === '1'
+    ? [
+        {
+          path: '/workflow-canvas-benchmark',
+          component: './workflow-canvas-benchmark',
+          hideInMenu: true,
+          layout: false,
+        },
+      ]
+    : [];
+
 export default [
+  ...workflowCanvasBenchmarkRoutes,
   {
     path: '/login',
     component: './login',
@@ -82,6 +95,11 @@ export default [
   },
   {
     path: '/scopes/:scopeId/workflow-activity-vnext/channels/connect/telegram',
+    component: './workflow-activity-vnext',
+    hideInMenu: true,
+  },
+  {
+    path: '/scopes/:scopeId/workflow-activity-vnext/channels/:registrationId/edit',
     component: './workflow-activity-vnext',
     hideInMenu: true,
   },
@@ -293,7 +311,7 @@ export default [
   },
   {
     path: '/workflows',
-    redirect: '/runtime/workflows',
+    component: './workflow-activity-vnext/WorkflowHomePage',
     hideInMenu: true,
   },
   {

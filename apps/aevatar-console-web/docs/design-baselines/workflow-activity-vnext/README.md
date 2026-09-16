@@ -45,6 +45,18 @@ If the Excalidraw or prototype conflicts with a real API contract, follow the
 design specification's backend-honest behavior. Do not change the backend and
 do not fabricate data to close the gap.
 
+## Console Home Entry
+
+The 2026-09-14 home decision supersedes the original preview-only entry rule.
+`/workflows` resolves the freshly fetched `/api/auth/me` scope and opens
+`/scopes/:scopeId/workflow-activity-vnext/workflows`. `/`, `/overview`, `/scopes`,
+and default login/callback recovery use this home. Explicit safe deep links keep
+their original destination. There is no fixed workspace or intermediate Teams
+home. See the repository-root
+[`home specification`](../../../../../docs/superpowers/specs/2026-08-31-workflow-vnext-home-design.md)
+for loading, authentication, missing-scope, and retry behavior. This entry change
+is the explicit exception to the original restrictions on existing redirects.
+
 ## Production Data Truth Rule
 
 The production frontend must never make sample, fixture, generated, cached, or

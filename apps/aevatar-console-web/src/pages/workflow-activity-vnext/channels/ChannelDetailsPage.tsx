@@ -1,6 +1,7 @@
 import {
   ArrowLeftOutlined,
   DeleteOutlined,
+  EditOutlined,
   ExportOutlined,
 } from '@ant-design/icons';
 import { Button, Modal } from 'antd';
@@ -10,8 +11,12 @@ import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
-import { buildWorkflowActivitySectionHref } from '../navigation';
+import {
+  buildChannelEditHref,
+  buildWorkflowActivitySectionHref,
+} from '../navigation';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import ChannelAuthorizedServices from './ChannelAuthorizedServices';
 import {
   ChannelIcon,
   ChannelLink,
@@ -110,23 +115,47 @@ export default function ChannelDetailsPage({
       contentClassName="channels__content"
     >
       <style>{channelsCss}</style>
-      <nav
-        className="channels__breadcrumb"
-        aria-label={t('channels.breadcrumb', 'Channel navigation')}
-      >
-        <ChannelLink href={listHref}>
-          <ArrowLeftOutlined aria-hidden="true" />
-          {t('workflowActivityVNext.nav.channels', 'Channels')}
-        </ChannelLink>
-        <span aria-hidden="true">/</span>
-        <span>
-          {registration
-            ? t('channels.managePlatform', '{platform} · Manage', {
-                platform: platformName(registration.platform),
-              })
-            : t('channels.details', 'Channel details')}
-        </span>
-      </nav>
+      <div className="channels__detail-toolbar">
+        <nav
+          className="channels__breadcrumb"
+          aria-label={t('channels.breadcrumb', 'Channel navigation')}
+        >
+          <ChannelLink href={listHref}>
+            <ArrowLeftOutlined aria-hidden="true" />
+            {t('workflowActivityVNext.nav.channels', 'Channels')}
+          </ChannelLink>
+          <span aria-hidden="true">/</span>
+          <span>
+            {registration
+              ? t('channels.managePlatform', '{platform} · Manage', {
+                  platform: platformName(registration.platform),
+                })
+              : t('channels.details', 'Channel details')}
+          </span>
+        </nav>
+        {registration ? (
+          <div className="channels__detail-actions">
+            <Button
+              icon={<EditOutlined />}
+              disabled={removing || removalAccepted}
+              onClick={() =>
+                history.push(buildChannelEditHref(scopeId, registrationId))
+              }
+            >
+              {t('channels.edit', 'Edit')}
+            </Button>
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              loading={removing}
+              disabled={removalAccepted}
+              onClick={() => setConfirmOpen(true)}
+            >
+              {t('channels.remove', 'Remove')}
+            </Button>
+          </div>
+        ) : null}
+      </div>
       {registrations.isPending ? (
         <AevatarContentSkeleton
           ariaLabel={t('channels.details.loading', 'Loading channel details')}
@@ -188,6 +217,15 @@ export default function ChannelDetailsPage({
                 <dt>{t('channels.column.skill', 'Skill')}</dt>
                 <dd>
                   <ChannelSkill skill={registration.skill} />
+                </dd>
+              </div>
+              <div>
+                <dt>{t('channels.services.title', 'Authorized services')}</dt>
+                <dd>
+                  <ChannelAuthorizedServices
+                    scopeId={scopeId}
+                    authorization={registration.serviceAuthorization}
+                  />
                 </dd>
               </div>
               <div>
@@ -253,17 +291,6 @@ export default function ChannelDetailsPage({
               ))}
             </dl>
           </section>
-          <div className="channels__detail-actions">
-            <Button
-              danger
-              icon={<DeleteOutlined />}
-              loading={removing}
-              disabled={removalAccepted}
-              onClick={() => setConfirmOpen(true)}
-            >
-              {t('channels.remove', 'Remove')}
-            </Button>
-          </div>
           {removalAccepted ? (
             <div className="channels__removal" role="status">
               <p>

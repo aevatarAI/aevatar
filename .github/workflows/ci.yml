@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.docs_only_route.outputs.docs_only }}
+      frontend_only: ${{ steps.docs_only_route.outputs.frontend_only }}
       all_changed: ${{ steps.filter.outputs.all_changed }}
       core_code: ${{ steps.filter.outputs.core_code }}
       product_runtime: ${{ steps.filter.outputs.product_runtime }}
@@ -130,18 +131,29 @@ jobs:
             console_web:
               - 'apps/aevatar-console-web/**'
               - '.github/workflows/ci.yml'
+            frontend_paths:
+              - 'apps/aevatar-console-web/**'
 
-      - name: Resolve Doc-Only Route
+      - name: Resolve Change Scope
         id: docs_only_route
         env:
           ALL_CHANGED_COUNT: ${{ steps.filter.outputs.all_changed_count }}
           DOCS_ONLY_COUNT: ${{ steps.filter.outputs.docs_only_count }}
+          FRONTEND_CHANGED_COUNT: ${{ steps.filter.outputs.frontend_paths_count }}
         run: |
           if [ "${ALL_CHANGED_COUNT:-0}" != "0" ] && [ "${ALL_CHANGED_COUNT:-0}" = "${DOCS_ONLY_COUNT:-0}" ]; then
             echo "docs_only=true" >> "$GITHUB_OUTPUT"
           else
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
           fi
+          if [ "${ALL_CHANGED_COUNT:-0}" != "0" ] && [ "${ALL_CHANGED_COUNT:-0}" = "${FRONTEND_CHANGED_COUNT:-0}" ]; then
+            echo "frontend_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify Change Scope Routing
+        run: python3 tools/ci/tests/test_ci_change_scope.py
 
   fkst-host-policy:
     if: |
@@ -273,7 +285,8 @@ jobs:
     if: always() && needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
     needs: [changes, console-web-tests]
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Retain the base branch's budget for typecheck, build, and canvas benchmark.
+    timeout-minutes: 45
     steps:
       - name: Require all console-web test shards
         env:
@@ -302,7 +315,20 @@ jobs:
         run: pnpm --dir apps/aevatar-console-web tsc
 
       - name: Build console-web
+        env:
+          AEVATAR_WORKFLOW_CANVAS_BENCHMARK: '1'
         run: pnpm --dir apps/aevatar-console-web build
+
+      - name: Benchmark workflow canvas
+        run: pnpm --dir apps/aevatar-console-web benchmark:workflow-canvas
+
+      - name: Upload workflow canvas benchmark
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-canvas-benchmark
+          path: apps/aevatar-console-web/artifacts/workflow-canvas-benchmark
+          if-no-files-found: warn
 
   slow-test-guards:
     needs: changes
@@ -411,15 +437,15 @@ jobs:
     #   Old pattern: coverage_quality_guard.sh 吞 test fail 继续 emit coverage;split-test-guards 漏跑 22 orphan project
     #   New principle: strict-coverage fail-fast(不吞 fail);aevatar.slnx-or-slow-test 唯一测试权威;
     #   retire slnf 测试执行(只保留 slnf build boundary);slow-tests 独立 CI job
-    # Workflow Activity vNext implementation PRs target an integration baseline branch.
-    # Keep this as a job-level skip so the required check is concluded instead of pending.
+    # Frontend-only PRs do not need backend coverage, regardless of their target branch.
+    # Mixed changes and changes to CI/build infrastructure retain this gate.
     if: |
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
       (
         github.event_name == 'pull_request' &&
-        github.base_ref != 'feat/2026-08-04_workflow-activity-vnext' &&
+        needs.changes.outputs.frontend_only != 'true' &&
         needs.changes.outputs.docs_only == 'false'
       )
     runs-on: ubuntu-latest

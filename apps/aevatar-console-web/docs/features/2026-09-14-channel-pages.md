@@ -11,6 +11,13 @@ runtime-configuration editor is outside this iteration of issue #3617.
 Channel refresh is explicitly user driven. Do not add background polling or
 refresh on focus/reconnection to these pages.
 
+Manual Refresh keeps the connected table mounted and displays the shared
+loading overlay over that table while the registration list, bot names, and
+active status refreshes settle. Table actions are inert during the refresh;
+the button blocks duplicate submissions. Completion or failure removes the
+overlay and restores interaction, with the existing error toast and manual
+retry behavior retained.
+
 The page header and content are horizontally centered within the area beside
 the navigation rail, using the same maximum width and responsive side padding.
 The connection form and details share this alignment; the form keeps its
@@ -27,6 +34,12 @@ Agent key links use the verified NyxID `/keys/api-key/{agentKeyId}` route.
 The Figma `/keys/xxx` placeholder refers to NyxID service details, so it is not
 used for Agent keys. Each complete source ID is encoded as one URL segment;
 missing IDs remain unlinked placeholders.
+
+The compact identifier in each connected-channel row opens the shared Tooltip
+with the exact full bot ID (or registration ID when no bot ID exists). Mouse
+hover, keyboard focus and click/tap reveal the full value, which wraps within
+the Tooltip instead of being shortened again. The control has a visible focus
+ring.
 
 ## Routes and existing setup
 
@@ -51,10 +64,10 @@ separate Console frontend origin or shown as an editable form field.
 
 ## Telegram connection form
 
-The form requires a masked bot token and shows one optional Channel name field
-(「Channel 名字」 in Chinese). It has no separate Skill name input. The service
-selection may be empty. The token reveal control is
-keyboard accessible. Unsaved form navigation asks whether to discard; form data
+The form requires a masked bot token and shows independent optional Channel name
+(「Channel 名字」 in Chinese) and Skill name inputs. They share a row on desktop
+and stack on narrow screens. The service selection may be empty. The token
+reveal control is keyboard accessible. Unsaved form navigation asks whether to discard; form data
 is never persisted. The token is used only for Telegram's official name lookup
 and the authenticated registration POST. It stays in component memory for a
 manual retry after failure and clears after successful admission. No registration
@@ -115,24 +128,33 @@ other services.
 Registration uses existing `POST /api/channels/registrations` with
 `platform`, `bot_token`, `label`, `default_skill_name`, `webhook_base_url`, and
 the explicit selection above. A `202`/`status: accepted` response must contain
-the registration ID. The page waits for that exact Telegram registration in
-the owner list before showing success and opening details; inbound activity
-continues to use its real status. The form does not query registrations before
-acceptance or after a failed submission. Accepted registration triggers one
-list read; if it is not visible yet, Check again performs one GET. No polling,
-window-focus refresh, or reconnect refresh runs. Registration failures, including
+the registration ID. After admission, the form clears its token, shows an
+informational "request submitted" toast, and immediately returns to Channels.
+It does not claim that provisioning has completed, wait for a list read, or
+leave the user on a locked connection form. The Channels page owns the normal
+list load and its existing manual Refresh action if the new row is not visible
+yet. Inbound activity continues to use its real status. The form never queries
+registrations; no polling, window-focus refresh, or reconnect refresh runs.
+Registration failures, including
 504 and network errors, show a shared error toast and restore editable fields and Connect
 Telegram. Inputs and still-authorized selections are preserved for an explicit manual
 retry; no automatic registration retry runs. An in-flight request still blocks
-duplicate clicks, and an accepted registration stays locked during observation.
+duplicate clicks. An accepted submission cannot be sent again while navigation
+is completing; late responses after unmount cannot show a toast or navigate.
 
-### Channel name and Telegram bot-name defaults
+### Channel name, Skill name and Telegram bot-name defaults
 
-The optional Channel name is the only naming decision. The registration adapter
-trims it and sends the same resolved value as both `label` and
-`default_skill_name`. A nonblank custom name bypasses Telegram name lookup.
-When blank or omitted, the adapter calls Telegram's official `getMe` endpoint
-once and uses the bot's `first_name`, never its `username`, for both fields.
+The registration adapter trims the two inputs independently: Channel name maps
+to `label`, and Skill name maps to `default_skill_name`. If both are nonblank,
+Telegram name lookup is skipped. Otherwise, the adapter calls Telegram's
+official `getMe` endpoint once and uses the bot's trimmed `first_name`, never
+its `username`, to resolve missing names.
+
+A blank Channel name defaults to the bot name plus a hyphen and six random
+digits (for example, `My Bot-482731`). The suffix is generated in the frontend
+once per submission, in the range 100000–999999. A blank Skill name defaults
+to the bot name without the suffix, restoring the original independent field
+behavior. Custom names receive no suffix and never overwrite the other input.
 The form locks during lookup/submission and preserves its input after failure;
 a manual retry resolves the current token/name again.
 
@@ -168,6 +190,26 @@ name request, automatic retry, polling, focus or reconnect refresh is added.
 Channel details include Skill using the same name, optional version and Ornn
 link as the connected list. Missing skills show Not set. Reading names/skills
 does not request full runtime configuration or alter bot resources.
+
+### Authorized services in channel details
+
+The detail page displays the registration's saved `authorization_mode` and
+`service_ids` from `GET /api/channels/registrations`. For an explicit allowlist,
+only those exact UserService IDs are shown. One account inventory read resolves
+their labels and slugs; the current session's selectable grants and service
+activity do not hide saved channel authorizations or add other services.
+Only safe ID, label and slug fields enter the service-name query cache.
+
+Services appear as compact labels arranged horizontally, wrapping when the
+available width is filled. Each service shows its resolved display name once;
+the slug is not repeated on a second line. Long names wrap within their label.
+
+Missing service names retain their saved IDs. A failed name lookup preserves
+other details and the saved authorization list, shows a safe toast, and offers
+a manual retry of the names alone. Explicit empty authorization shows no
+services authorized; NyxID default authorization and unavailable or legacy
+authorization details have distinct messages and do not query the inventory.
+No automatic refresh or registration change is introduced by this display.
 
 ## API and ownership
 

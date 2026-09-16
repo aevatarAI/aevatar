@@ -1,8 +1,8 @@
 import {
-  MarkerType,
-  Position,
   type Edge,
+  MarkerType,
   type Node,
+  Position,
   type XYPosition,
 } from '@xyflow/react';
 import { t } from '@/shared/i18n/messages';
@@ -44,7 +44,12 @@ export type StudioGraphNodeData = {
   readonly targetRole: string;
   readonly parametersSummary: string;
   readonly branchCount: number;
-  readonly executionStatus?: 'idle' | 'active' | 'waiting' | 'completed' | 'failed';
+  readonly executionStatus?:
+    | 'idle'
+    | 'active'
+    | 'waiting'
+    | 'completed'
+    | 'failed';
   readonly executionFocused?: boolean;
 };
 
@@ -75,6 +80,13 @@ export type StudioWorkflowLayoutDocument = {
   readonly entryWorkflow?: string;
 };
 
+const STUDIO_AUTO_LAYOUT_ORIGIN_X = 240;
+const STUDIO_AUTO_LAYOUT_ORIGIN_Y = 180;
+const STUDIO_AUTO_LAYOUT_COLUMN_PITCH = 330;
+const STUDIO_AUTO_LAYOUT_ROW_PITCH = 200;
+const STUDIO_AUTO_LAYOUT_NODE_WIDTH = 268;
+const STUDIO_AUTO_LAYOUT_NODE_HEIGHT = 120;
+
 function buildStudioGraphNextEdgeId(
   sourceStepId: string,
   targetStepId: string,
@@ -97,50 +109,67 @@ type WorkflowDocumentLike = {
   readonly steps?: unknown[];
 };
 
-export const STUDIO_GRAPH_CATEGORIES: readonly StudioGraphPrimitiveCategory[] = [
-  {
-    key: 'data',
-    label: 'Data',
-    color: '#3B82F6',
-    items: ['transform', 'assign', 'retrieve_facts', 'cache'],
-  },
-  {
-    key: 'control',
-    label: 'Control',
-    color: '#8B5CF6',
-    items: ['guard', 'conditional', 'switch', 'while', 'delay', 'wait_signal', 'checkpoint'],
-  },
-  {
-    key: 'ai',
-    label: 'AI',
-    color: '#EC4899',
-    items: ['llm_call', 'tool_call', 'evaluate', 'reflect'],
-  },
-  {
-    key: 'composition',
-    label: 'Composition',
-    color: '#F59E0B',
-    items: ['foreach', 'parallel', 'race', 'map_reduce', 'workflow_call', 'dynamic_workflow', 'vote'],
-  },
-  {
-    key: 'integration',
-    label: 'Integration',
-    color: '#10B981',
-    items: ['connector_call', 'emit'],
-  },
-  {
-    key: 'human',
-    label: 'Human',
-    color: '#06B6D4',
-    items: ['human_input', 'human_approval'],
-  },
-  {
-    key: 'validation',
-    label: 'Validation',
-    color: '#64748B',
-    items: ['workflow_yaml_validate'],
-  },
-];
+export const STUDIO_GRAPH_CATEGORIES: readonly StudioGraphPrimitiveCategory[] =
+  [
+    {
+      key: 'data',
+      label: 'Data',
+      color: '#3B82F6',
+      items: ['transform', 'assign', 'retrieve_facts', 'cache'],
+    },
+    {
+      key: 'control',
+      label: 'Control',
+      color: '#8B5CF6',
+      items: [
+        'guard',
+        'conditional',
+        'switch',
+        'while',
+        'delay',
+        'wait_signal',
+        'checkpoint',
+      ],
+    },
+    {
+      key: 'ai',
+      label: 'AI',
+      color: '#EC4899',
+      items: ['llm_call', 'tool_call', 'evaluate', 'reflect'],
+    },
+    {
+      key: 'composition',
+      label: 'Composition',
+      color: '#F59E0B',
+      items: [
+        'foreach',
+        'parallel',
+        'race',
+        'map_reduce',
+        'workflow_call',
+        'dynamic_workflow',
+        'vote',
+      ],
+    },
+    {
+      key: 'integration',
+      label: 'Integration',
+      color: '#10B981',
+      items: ['connector_call', 'emit'],
+    },
+    {
+      key: 'human',
+      label: 'Human',
+      color: '#06B6D4',
+      items: ['human_input', 'human_approval'],
+    },
+    {
+      key: 'validation',
+      label: 'Validation',
+      color: '#64748B',
+      items: ['workflow_yaml_validate'],
+    },
+  ];
 
 const STEP_TYPE_ACRONYM_LABELS: Record<string, string> = {
   ai: 'AI',
@@ -188,9 +217,7 @@ function normalizeString(value: unknown): string {
 
 function normalizeConnectors(value: unknown): string[] {
   return Array.isArray(value)
-    ? value
-        .map((item) => normalizeString(item))
-        .filter(Boolean)
+    ? value.map((item) => normalizeString(item)).filter(Boolean)
     : [];
 }
 
@@ -209,7 +236,10 @@ function normalizeBranches(value: unknown): Record<string, string> {
 
   return Object.fromEntries(
     Object.entries(value)
-      .map(([label, target]) => [normalizeString(label), normalizeString(target)])
+      .map(([label, target]) => [
+        normalizeString(label),
+        normalizeString(target),
+      ])
       .filter(([label, target]) => Boolean(label) && Boolean(target)),
   );
 }
@@ -360,6 +390,10 @@ function summarizeStepParameters(
     .join(' · ');
 }
 
+function createStudioGraphPositionMap(): Record<string, XYPosition> {
+  return Object.create(null);
+}
+
 function extractSavedLayoutPositions(
   layout: unknown,
 ): Record<string, XYPosition> {
@@ -372,25 +406,102 @@ function extractSavedLayoutPositions(
     return {};
   }
 
-  return Object.fromEntries(
-    Object.entries(nodePositions)
-      .map(([stepId, position]) => {
-        const x =
-          typeof position?.x === 'number' && Number.isFinite(position.x)
-            ? position.x
-            : null;
-        const y =
-          typeof position?.y === 'number' && Number.isFinite(position.y)
-            ? position.y
-            : null;
-        if (!stepId || x === null || y === null) {
-          return null;
-        }
+  const savedPositions = createStudioGraphPositionMap();
+  for (const [stepId, position] of Object.entries(nodePositions)) {
+    const x =
+      typeof position?.x === 'number' && Number.isFinite(position.x)
+        ? position.x
+        : null;
+    const y =
+      typeof position?.y === 'number' && Number.isFinite(position.y)
+        ? position.y
+        : null;
+    if (!stepId || x === null || y === null) {
+      continue;
+    }
 
-        return [stepId, { x, y }] as const;
-      })
-      .filter((entry): entry is readonly [string, XYPosition] => Boolean(entry)),
+    savedPositions[stepId] = { x, y };
+  }
+
+  return savedPositions;
+}
+
+export function needsStudioAutoLayout(
+  steps: readonly StudioGraphStep[],
+  savedPositions: Readonly<Record<string, XYPosition>>,
+): boolean {
+  return steps.some(
+    (step) => getStudioGraphPosition(savedPositions, step.id) === undefined,
   );
+}
+
+function getStudioGraphPosition(
+  positions: Readonly<Record<string, XYPosition>>,
+  stepId: string,
+): XYPosition | undefined {
+  return Object.hasOwn(positions, stepId) ? positions[stepId] : undefined;
+}
+
+function studioGraphPositionsOverlap(
+  left: XYPosition,
+  right: XYPosition,
+): boolean {
+  return (
+    left.x < right.x + STUDIO_AUTO_LAYOUT_NODE_WIDTH &&
+    right.x < left.x + STUDIO_AUTO_LAYOUT_NODE_WIDTH &&
+    left.y < right.y + STUDIO_AUTO_LAYOUT_NODE_HEIGHT &&
+    right.y < left.y + STUDIO_AUTO_LAYOUT_NODE_HEIGHT
+  );
+}
+
+function buildStudioGraphNodePositions(
+  steps: readonly StudioGraphStep[],
+  savedPositions: Readonly<Record<string, XYPosition>>,
+  autoLayoutPositions: Readonly<Record<string, XYPosition>>,
+): XYPosition[] {
+  const savedPositionsByStep = steps.map((step) =>
+    getStudioGraphPosition(savedPositions, step.id),
+  );
+  if (savedPositionsByStep.every((position) => position === undefined)) {
+    return steps.map(
+      (step, index) =>
+        getStudioGraphPosition(autoLayoutPositions, step.id) ?? {
+          x:
+            STUDIO_AUTO_LAYOUT_ORIGIN_X +
+            index * STUDIO_AUTO_LAYOUT_COLUMN_PITCH,
+          y: STUDIO_AUTO_LAYOUT_ORIGIN_Y,
+        },
+    );
+  }
+
+  const occupiedPositions = savedPositionsByStep.filter(
+    (position): position is XYPosition => position !== undefined,
+  );
+
+  return steps.map((step, index) => {
+    const savedPosition = savedPositionsByStep[index];
+    if (savedPosition) {
+      return savedPosition;
+    }
+
+    let position = getStudioGraphPosition(autoLayoutPositions, step.id) ?? {
+      x: STUDIO_AUTO_LAYOUT_ORIGIN_X + index * STUDIO_AUTO_LAYOUT_COLUMN_PITCH,
+      y: STUDIO_AUTO_LAYOUT_ORIGIN_Y,
+    };
+    while (
+      occupiedPositions.some((occupied) =>
+        studioGraphPositionsOverlap(position, occupied),
+      )
+    ) {
+      position = {
+        ...position,
+        y: position.y + STUDIO_AUTO_LAYOUT_ROW_PITCH,
+      };
+    }
+
+    occupiedPositions.push(position);
+    return position;
+  });
 }
 
 function buildAutoLayoutPositions(
@@ -497,7 +608,7 @@ function buildAutoLayoutPositions(
     }
   }
 
-  const positions: Record<string, XYPosition> = {};
+  const positions = createStudioGraphPositionMap();
   let globalRow = 0;
 
   function place(stepId: string, startRow: number) {
@@ -506,8 +617,8 @@ function buildAutoLayoutPositions(
     const depth = depths.get(stepId) ?? 0;
     const centerRow = startRow + (size - 1) / 2;
     positions[stepId] = {
-      x: 240 + depth * 330,
-      y: 180 + centerRow * 200,
+      x: STUDIO_AUTO_LAYOUT_ORIGIN_X + depth * STUDIO_AUTO_LAYOUT_COLUMN_PITCH,
+      y: STUDIO_AUTO_LAYOUT_ORIGIN_Y + centerRow * STUDIO_AUTO_LAYOUT_ROW_PITCH,
     };
 
     let nextRow = startRow;
@@ -519,7 +630,7 @@ function buildAutoLayoutPositions(
   }
 
   for (const rootId of rootOrder) {
-    if (!depths.has(rootId) || positions[rootId]) {
+    if (!depths.has(rootId) || getStudioGraphPosition(positions, rootId)) {
       continue;
     }
 
@@ -534,7 +645,9 @@ export function getStudioGraphCategory(
   type: string,
 ): StudioGraphPrimitiveCategory {
   return (
-    STUDIO_GRAPH_CATEGORIES.find((category) => category.items.includes(type)) ?? {
+    STUDIO_GRAPH_CATEGORIES.find((category) =>
+      category.items.includes(type),
+    ) ?? {
       key: 'custom',
       label: 'Custom',
       color: '#6B7280',
@@ -581,18 +694,20 @@ export function buildStudioWorkflowLayout(
       ? (previousLayout as StudioWorkflowLayoutDocument).viewport
       : { x: 0, y: 0, zoom: 1 };
 
+  const nodePositions = createStudioGraphPositionMap();
+  for (const node of nodes) {
+    if (!node.data?.stepId) {
+      continue;
+    }
+
+    nodePositions[node.data.stepId] = {
+      x: node.position.x,
+      y: node.position.y,
+    };
+  }
+
   return {
-    nodePositions: Object.fromEntries(
-      nodes
-        .filter((node) => node.data?.stepId)
-        .map((node) => [
-          node.data.stepId,
-          {
-            x: node.position.x,
-            y: node.position.y,
-          },
-        ]),
-    ),
+    nodePositions,
     viewport,
     mode: 'manual',
     layoutVersion: 2,
@@ -613,10 +728,17 @@ export function buildStudioGraphElements(
   const roles = normalizeRoles(normalizedDocument);
   const steps = normalizeSteps(normalizedDocument);
   const savedLayoutPositions = extractSavedLayoutPositions(layout);
-  const autoLayoutPositions = buildAutoLayoutPositions(steps);
+  const autoLayoutPositions = needsStudioAutoLayout(steps, savedLayoutPositions)
+    ? buildAutoLayoutPositions(steps)
+    : {};
+  const nodePositions = buildStudioGraphNodePositions(
+    steps,
+    savedLayoutPositions,
+    autoLayoutPositions,
+  );
 
   const nodes: Node<StudioGraphNodeData>[] = steps.map((step, index) => {
-    const position = savedLayoutPositions[step.id] ?? autoLayoutPositions[step.id];
+    const position = nodePositions[index];
     return {
       id: `step:${step.id}`,
       type: 'studioWorkflowNode',
@@ -624,11 +746,12 @@ export function buildStudioGraphElements(
         x:
           typeof position?.x === 'number' && Number.isFinite(position.x)
             ? position.x
-            : 240 + index * 330,
+            : STUDIO_AUTO_LAYOUT_ORIGIN_X +
+              index * STUDIO_AUTO_LAYOUT_COLUMN_PITCH,
         y:
           typeof position?.y === 'number' && Number.isFinite(position.y)
             ? position.y
-            : 180,
+            : STUDIO_AUTO_LAYOUT_ORIGIN_Y,
       },
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
@@ -694,11 +817,7 @@ export function buildStudioGraphElements(
         }
 
         edges.push({
-          id: buildStudioGraphBranchEdgeId(
-            step.id,
-            targetStepId,
-            branchLabel,
-          ),
+          id: buildStudioGraphBranchEdgeId(step.id, targetStepId, branchLabel),
           source: sourceNode.id,
           target: targetNode.id,
           type: 'smoothstep',

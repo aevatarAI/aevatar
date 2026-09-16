@@ -5,6 +5,7 @@ import * as React from 'react';
 import type { ChannelRegistration } from '@/shared/api/channelsApi';
 import { t } from '@/shared/i18n/messages';
 import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
+import { AevatarLoadingOverlay } from '@/shared/ui/AevatarLoading';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import {
   buildChannelDetailsHref,
@@ -98,6 +99,7 @@ export default function ChannelsPage({
   const toast = useConsoleToast();
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = React.useState(false);
+  const refreshInFlight = React.useRef(false);
   const reportedNamesError = React.useRef(0);
   React.useEffect(() => {
     if (
@@ -124,6 +126,8 @@ export default function ChannelsPage({
     toast,
   ]);
   async function refresh() {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     setRefreshing(true);
     try {
       const [result] = await Promise.all([
@@ -142,6 +146,7 @@ export default function ChannelsPage({
           t('channels.error.refresh', 'Could not refresh channels. Try again.'),
         );
     } finally {
+      refreshInFlight.current = false;
       setRefreshing(false);
     }
   }
@@ -240,13 +245,14 @@ export default function ChannelsPage({
             </p>
           </div>
           <Button
-            className="channels__refresh"
             icon={<ReloadOutlined />}
             loading={refreshing}
-            disabled={registrations.isPending}
+            disabled={registrations.isPending || refreshing}
             onClick={() => void refresh()}
             aria-label={t('channels.refresh', 'Refresh channels')}
-          />
+          >
+            {t('workflowActivityVNext.common.refresh', 'Refresh')}
+          </Button>
         </div>
         {registrations.isPending ? (
           <AevatarContentSkeleton
@@ -261,10 +267,11 @@ export default function ChannelsPage({
             retry={() => void registrations.refetch()}
           />
         ) : registrations.data?.length ? (
-          <div className="channels__table-wrap">
+          <div className="channels__table-wrap" aria-busy={refreshing}>
             <table
               className="channels__table"
               aria-labelledby="connected-channels"
+              inert={refreshing}
             >
               <thead>
                 <tr>
@@ -301,6 +308,11 @@ export default function ChannelsPage({
                 ))}
               </tbody>
             </table>
+            {refreshing ? (
+              <AevatarLoadingOverlay
+                ariaLabel={t('channels.loading', 'Loading channels')}
+              />
+            ) : null}
           </div>
         ) : (
           <div className="channels__state">

@@ -46,4 +46,4 @@ const WorkflowStudioCanvasRegion = React.forwardRef<
   );
 });
 
-export default WorkflowStudioCanvasRegion;
+export default React.memo(WorkflowStudioCanvasRegion);

@@ -45,7 +45,16 @@ import {
 import { getNavigationSelectedKeys } from './shared/navigation/navigationMenuSelection';
 import { queryClient } from './shared/query/queryClient';
 
-const PUBLIC_ROUTES = new Set(['/login', '/auth/callback']);
+const WORKFLOW_CANVAS_BENCHMARK_ROUTE = '/workflow-canvas-benchmark';
+const WORKFLOW_CANVAS_BENCHMARK_ENABLED =
+  process.env.AEVATAR_WORKFLOW_CANVAS_BENCHMARK === '1';
+const PUBLIC_ROUTES = new Set([
+  '/login',
+  '/auth/callback',
+  ...(WORKFLOW_CANVAS_BENCHMARK_ENABLED
+    ? [WORKFLOW_CANVAS_BENCHMARK_ROUTE]
+    : []),
+]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
 const FULLSCREEN_DISPLAY_ROUTES = new Set(['/runtime/mission-wall']);
 const WORKFLOW_ACTIVITY_VNEXT_ROUTE =
@@ -59,12 +68,15 @@ const STUDIO_HOST_ROUTES = new Set([
 function isFullscreenDisplayRoute(pathname: string): boolean {
   return (
     FULLSCREEN_DISPLAY_ROUTES.has(pathname) ||
-    WORKFLOW_ACTIVITY_VNEXT_ROUTE.test(pathname)
+    isWorkflowActivityVNextRoute(pathname)
   );
 }
 
 function isWorkflowActivityVNextRoute(pathname: string): boolean {
-  return WORKFLOW_ACTIVITY_VNEXT_ROUTE.test(pathname);
+  return (
+    pathname === CONSOLE_HOME_ROUTE ||
+    WORKFLOW_ACTIVITY_VNEXT_ROUTE.test(pathname)
+  );
 }
 
 function isStudioHostRoute(pathname: string): boolean {

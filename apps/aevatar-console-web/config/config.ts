@@ -174,6 +174,9 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
     'process.env.AEVATAR_CONSOLE_PUBLIC_PATH': JSON.stringify(
       process.env.AEVATAR_CONSOLE_PUBLIC_PATH,
     ),
+    'process.env.AEVATAR_WORKFLOW_CANVAS_BENCHMARK': JSON.stringify(
+      process.env.AEVATAR_WORKFLOW_CANVAS_BENCHMARK,
+    ),
   },
 });
 
