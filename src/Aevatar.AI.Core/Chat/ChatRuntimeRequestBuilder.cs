@@ -77,12 +77,14 @@ internal static class ChatRuntimeRequestBuilder
             catalogProof?.AssertMatchesExactTools(exactTools ?? []);
         }
 
+        var callerContext = ResolveCallerContext(baseRequest.CallerContext, effectiveToolContext);
+
         return new LLMRequest
         {
             Messages = baseRequest.Messages,
             RequestId = string.IsNullOrWhiteSpace(requestId) ? baseRequest.RequestId : requestId.Trim(),
             Metadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(mergedMetadata),
-            CallerContext = baseRequest.CallerContext,
+            CallerContext = callerContext,
             ToolContext = effectiveToolContext,
             RoutingContext = effectiveLlmControl?.ToRoutingContext(baseRequest.RoutingContext) ?? baseRequest.RoutingContext,
             LlmControl = effectiveLlmControl,
@@ -180,6 +182,42 @@ internal static class ChatRuntimeRequestBuilder
 
         return merged;
     }
+
+    private static LLMRequestCallerContext? ResolveCallerContext(
+        LLMRequestCallerContext? baseCallerContext,
+        AgentToolExecutionContext toolContext)
+    {
+        var credential = string.IsNullOrWhiteSpace(baseCallerContext?.Credentials?.NyxIdBearer)
+            ? Normalize(toolContext.Credentials.NyxIdAccessToken)
+            : baseCallerContext.Credentials.NyxIdBearer.Trim();
+        var credentials = string.IsNullOrWhiteSpace(credential)
+            ? baseCallerContext?.Credentials
+            : new LLMRequestCallerCredentials(credential);
+        if (baseCallerContext is not null)
+        {
+            return baseCallerContext with
+            {
+                Credentials = credentials,
+            };
+        }
+
+        if (credentials is null &&
+            string.IsNullOrWhiteSpace(toolContext.Caller.ScopeId) &&
+            string.IsNullOrWhiteSpace(toolContext.Caller.OwnerSubject) &&
+            string.IsNullOrWhiteSpace(toolContext.Caller.ResponseId))
+        {
+            return null;
+        }
+
+        return new LLMRequestCallerContext(
+            Normalize(toolContext.Caller.ScopeId) ?? string.Empty,
+            Normalize(toolContext.Caller.OwnerSubject) ?? string.Empty,
+            Normalize(toolContext.Caller.ResponseId),
+            credentials);
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     internal sealed class AuthorizationFence
     {
