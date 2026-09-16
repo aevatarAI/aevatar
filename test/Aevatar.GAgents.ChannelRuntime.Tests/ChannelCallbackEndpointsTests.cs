@@ -176,8 +176,7 @@ public sealed class ChannelCallbackEndpointsTests
             Content = new StringContent("""
             {
               "registration_id": "new",
-              "nyx_channel_bot_id": "bot-audit",
-              "webhook_base_url": "https://aevatar.example.com"
+              "nyx_channel_bot_id": "bot-audit"
             }
             """, Encoding.UTF8, "application/json"),
         };
@@ -430,7 +429,7 @@ public sealed class ChannelCallbackEndpointsTests
     public async Task HandleRegisterAsync_RequiresNyxChannelBotId()
     {
         var http = CreateJsonHttpContext(
-            """{"webhook_base_url":"https://aevatar.example.com"}""",
+            """{}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
         var actorRuntime = AcceptedRegistrationRuntime();
@@ -444,6 +443,7 @@ public sealed class ChannelCallbackEndpointsTests
             AuthorizationPlanner(),
             CreateAgentKeyProvisioningService(CreateNyxClient()),
             CreateNyxClient(),
+            RegistrationOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -456,7 +456,7 @@ public sealed class ChannelCallbackEndpointsTests
     public async Task HandleRegisterAsync_ReturnsStableMissingAccessTokenError()
     {
         var http = CreateJsonHttpContext(
-            """{"nyx_channel_bot_id":"bot-1","webhook_base_url":"https://aevatar.example.com"}""",
+            """{"nyx_channel_bot_id":"bot-1"}""",
             "scope-1");
         var actorRuntime = AcceptedRegistrationRuntime();
 
@@ -469,6 +469,7 @@ public sealed class ChannelCallbackEndpointsTests
             AuthorizationPlanner(),
             CreateAgentKeyProvisioningService(CreateNyxClient()),
             CreateNyxClient(),
+            RegistrationOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -488,7 +489,7 @@ public sealed class ChannelCallbackEndpointsTests
         string serviceIdsJson)
     {
         var http = CreateJsonHttpContext(
-            $$"""{"nyx_channel_bot_id":"bot-1","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist","service_ids":{{serviceIdsJson}}}""",
+            $$"""{"nyx_channel_bot_id":"bot-1","authorization_mode":"explicit_service_allowlist","service_ids":{{serviceIdsJson}}}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
         var nyxClient = CreateNyxClient();
@@ -503,6 +504,7 @@ public sealed class ChannelCallbackEndpointsTests
             AuthorizationPlanner(),
             CreateAgentKeyProvisioningService(nyxClient),
             nyxClient,
+            RegistrationOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -570,8 +572,6 @@ public sealed class ChannelCallbackEndpointsTests
             {
               "registration_id": "reg-adopt",
               "nyx_channel_bot_id": "bot-1",
-              "webhook_base_url": "https://aevatar.example.com",
-              "default_skill_name": " /Dinner-Booking ",
               "runtime_config": {
                 "instructions": "Book dinner only after confirmation.",
                 "default_skill": { "name": "dinner-booking" },
@@ -591,6 +591,7 @@ public sealed class ChannelCallbackEndpointsTests
             AuthorizationPlanner(),
             CreateAgentKeyProvisioningService(nyxClient),
             nyxClient,
+            RegistrationOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -651,7 +652,7 @@ public sealed class ChannelCallbackEndpointsTests
         });
         var nyxClient = CreateNyxClient(nyxHandler);
         var http = CreateJsonHttpContext(
-            """{"registration_id":"reg-adopt","nyx_channel_bot_id":"bot-1","webhook_base_url":"https://aevatar.example.com"}""",
+            """{"registration_id":"reg-adopt","nyx_channel_bot_id":"bot-1"}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
@@ -664,6 +665,7 @@ public sealed class ChannelCallbackEndpointsTests
             AuthorizationPlanner(),
             CreateAgentKeyProvisioningService(nyxClient),
             nyxClient,
+            RegistrationOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -689,7 +691,7 @@ public sealed class ChannelCallbackEndpointsTests
         var existing = NewModelRegistration("reg-existing", "scope-1", "key-existing");
         existing.NyxChannelBotId = "bot-1";
         var http = CreateJsonHttpContext(
-            """{"nyx_channel_bot_id":"bot-1","webhook_base_url":"https://aevatar.example.com"}""",
+            """{"nyx_channel_bot_id":"bot-1"}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
         var nyxClient = CreateNyxClient(new RecordingNyxHttpMessageHandler(request =>
@@ -707,6 +709,7 @@ public sealed class ChannelCallbackEndpointsTests
             AuthorizationPlanner(),
             CreateAgentKeyProvisioningService(nyxClient),
             nyxClient,
+            RegistrationOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -727,7 +730,7 @@ public sealed class ChannelCallbackEndpointsTests
                 : NotFoundResponse(request));
         var nyxClient = CreateNyxClient(nyxHandler);
         var http = CreateJsonHttpContext(
-            """{"registration_id":"reg-existing","nyx_channel_bot_id":"bot-1","webhook_base_url":"https://aevatar.example.com"}""",
+            """{"registration_id":"reg-existing","nyx_channel_bot_id":"bot-1"}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
         var actorRuntime = AcceptedRegistrationRuntime();
@@ -741,6 +744,7 @@ public sealed class ChannelCallbackEndpointsTests
             AuthorizationPlanner(),
             CreateAgentKeyProvisioningService(nyxClient),
             nyxClient,
+            RegistrationOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -757,7 +761,7 @@ public sealed class ChannelCallbackEndpointsTests
         var existing = NewModelRegistration("reg-secret", "scope-2", "key-secret");
         existing.NyxChannelBotId = "bot-secret";
         var http = CreateJsonHttpContext(
-            """{"nyx_channel_bot_id":"bot-secret","webhook_base_url":"https://aevatar.example.com"}""",
+            """{"nyx_channel_bot_id":"bot-secret"}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
         var nyxClient = CreateNyxClient();
@@ -772,6 +776,7 @@ public sealed class ChannelCallbackEndpointsTests
             AuthorizationPlanner(),
             CreateAgentKeyProvisioningService(nyxClient),
             nyxClient,
+            RegistrationOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -810,7 +815,7 @@ public sealed class ChannelCallbackEndpointsTests
         var nyxClient = CreateNyxClient(nyxHandler);
         var actorRuntime = AcceptedRegistrationRuntime();
         var http = CreateJsonHttpContext(
-            """{"nyx_channel_bot_id":"bot-1","webhook_base_url":"https://aevatar.example.com"}""",
+            """{"nyx_channel_bot_id":"bot-1"}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
@@ -823,6 +828,7 @@ public sealed class ChannelCallbackEndpointsTests
             AuthorizationPlanner(),
             CreateAgentKeyProvisioningService(nyxClient),
             nyxClient,
+            RegistrationOptions(),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -834,10 +840,10 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleRegisterAsync_ReturnsBadRequest_WhenWebhookBaseUrlInsecure()
+    public async Task HandleRegisterAsync_ReturnsBadRequest_WhenConfiguredWebhookBaseUrlInsecure()
     {
         var http = CreateJsonHttpContext(
-            """{"nyx_channel_bot_id":"bot-1","webhook_base_url":"http://aevatar.example.com"}""",
+            """{"nyx_channel_bot_id":"bot-1"}""",
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
         var actorRuntime = AcceptedRegistrationRuntime();
@@ -851,6 +857,7 @@ public sealed class ChannelCallbackEndpointsTests
             AuthorizationPlanner(),
             CreateAgentKeyProvisioningService(CreateNyxClient()),
             CreateNyxClient(),
+            RegistrationOptions("http://aevatar.example.com"),
             NullLoggerFactory.Instance,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
@@ -1380,7 +1387,7 @@ public sealed class ChannelCallbackEndpointsTests
         var http = CreateHttpContext("scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
-        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(false), NyxClientWithChannelBots("bot-1"), (string?)null, CancellationToken.None);
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, NyxClientWithChannelBots("bot-1"), CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
@@ -1464,9 +1471,7 @@ public sealed class ChannelCallbackEndpointsTests
             "HandleListRegistrationsAsync",
             http,
             queryPort,
-            AdminAuthorizer(false),
             NyxClientWithChannelBots("bot-new", "bot-explicit-list", "bot-explicit-empty", "bot-invalid-new", "bot-enabled", "bot-failed"),
-            (string?)null,
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
@@ -1537,46 +1542,13 @@ public sealed class ChannelCallbackEndpointsTests
         var http = CreateHttpContext("scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
-        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(false), NyxClientWithChannelBots("bot-mine", "bot-theirs"), (string?)null, CancellationToken.None);
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, NyxClientWithChannelBots("bot-mine", "bot-theirs"), CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("bot-mine");
         response.Body.Should().Contain("bot-theirs");
         response.Body.Should().NotContain("\"id\":\"theirs\"");
-    }
-
-    [Fact]
-    public async Task HandleListRegistrationsAsync_ScopeAll_Forbidden_WhenNotAdmin()
-    {
-        var queryPort = QueryPortWith(new ChannelBotRegistrationEntry { Id = "x", Platform = "lark", ScopeId = "scope-2" });
-        var http = CreateHttpContext("scope-1");
-        http.Request.Headers.Authorization = "Bearer test-token";
-
-        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(false), NyxClientWithChannelBots("bot-mine", "bot-theirs"), "all", CancellationToken.None);
-        var response = await ExecuteResultAsync(result);
-
-        response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
-        response.Body.Should().Contain("scope_admin_required");
-    }
-
-    [Fact]
-    public async Task HandleListRegistrationsAsync_ScopeAll_ReturnsAllAccounts_WhenAdmin()
-    {
-        var queryPort = QueryPortWith(
-            new ChannelBotRegistrationEntry { Id = "mine", Platform = "lark", ScopeId = "scope-1", NyxChannelBotId = "bot-mine" },
-            new ChannelBotRegistrationEntry { Id = "theirs", Platform = "lark", ScopeId = "scope-2", NyxChannelBotId = "bot-theirs" });
-        var http = CreateHttpContext("scope-1");
-        http.Request.Headers.Authorization = "Bearer admin-token";
-
-        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, AdminAuthorizer(true), NyxClientWithChannelBots("bot-mine"), "all", CancellationToken.None);
-        var response = await ExecuteResultAsync(result);
-
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        response.Body.Should().Contain("bot-mine");
-        response.Body.Should().Contain("bot-theirs");
-        response.Body.Should().Contain("nyx_unavailable");
-        response.Body.Should().Contain("\"owned\":false");
     }
 
     [Fact]
@@ -2174,6 +2146,7 @@ public sealed class ChannelCallbackEndpointsTests
         builder.Services.AddSingleton(AuthorizationPlanner());
         builder.Services.AddSingleton(nyxClient);
         builder.Services.AddSingleton(CreateAgentKeyProvisioningService(nyxClient));
+        builder.Services.AddSingleton(RegistrationOptions());
         builder.Services.AddSingleton(Substitute.For<IPlatformAdminAuthorizer>());
         builder.Services.AddSingleton(Substitute.For<INyxChannelBotDeprovisioningService>());
         builder.Services.AddSingleton(
@@ -2229,6 +2202,9 @@ public sealed class ChannelCallbackEndpointsTests
             BaseAddress = new Uri(address),
         };
     }
+
+    private static IOptions<NyxIdRelayOptions> RegistrationOptions(string webhookBaseUrl = "https://aevatar.example.com") =>
+        Options.Create(new NyxIdRelayOptions { WebhookBaseUrl = webhookBaseUrl });
 
     private static HttpContext CreateJsonHttpContext(string json, string? scopeId = null)
     {
