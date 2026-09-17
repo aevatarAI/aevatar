@@ -258,11 +258,7 @@ public sealed class VerifiedChannelRegistrationServiceSelection
                     return Failed("nyxid_scope_plan_unavailable");
 
                 var plan = scopePlan.Value!;
-                if (!IsValidScopePlan(
-                        plan,
-                        selection.AuthenticatedActorId,
-                        selection.Owner,
-                        selection.SelectedServiceIds))
+                if (!IsValidScopePlan(plan, selection))
                     return Failed("nyxid_scope_plan_unavailable");
 
                 return new ChannelRegistrationAuthorizationPlanningResult(
@@ -292,17 +288,15 @@ public sealed class VerifiedChannelRegistrationServiceSelection
 
             private static bool IsValidScopePlan(
                 NyxIdApiKeyScopePlan plan,
-                string authenticatedActorId,
-                ChannelRegistrationKeyOwner owner,
-                IReadOnlyList<string> selectedServiceIds)
+                VerifiedChannelRegistrationServiceSelection selection)
             {
-                var expectedOwner = owner.Kind switch
+                var expectedOwner = selection.Owner.Kind switch
                 {
                     ChannelRegistrationKeyOwnerKind.Personal => new NyxIdScopePlanPrincipal(
-                        owner.Id,
+                        selection.Owner.Id,
                         NyxIdScopePlanPrincipalKind.Personal),
                     ChannelRegistrationKeyOwnerKind.Organization => new NyxIdScopePlanPrincipal(
-                        owner.Id,
+                        selection.Owner.Id,
                         NyxIdScopePlanPrincipalKind.Organization),
                     _ => null,
                 };
@@ -320,13 +314,13 @@ public sealed class VerifiedChannelRegistrationServiceSelection
                         NyxIdApiAccessResponseParser.ScopePlanPolicyVersion,
                         StringComparison.Ordinal) ||
                     plan.AuthenticatedActor != new NyxIdScopePlanPrincipal(
-                        authenticatedActorId,
+                        selection.AuthenticatedActorId,
                         NyxIdScopePlanPrincipalKind.Personal) ||
                     plan.IntendedKeyOwner != expectedOwner ||
                     !plan.Services.Select(static service => service.UserServiceId)
-                        .SequenceEqual(selectedServiceIds, StringComparer.Ordinal) ||
-                    !plan.AllowedServiceIds.SequenceEqual(selectedServiceIds, StringComparer.Ordinal) ||
-                    plan.Services.Any(service => service.ResourceOwner != expectedOwner) ||
+                        .SequenceEqual(selection.SelectedServiceIds, StringComparer.Ordinal) ||
+                    !plan.AllowedServiceIds.SequenceEqual(selection.SelectedServiceIds, StringComparer.Ordinal) ||
+                    !ScopePlanResourceOwnersMatchSelection(plan.Services, selection) ||
                     !HasValidNodeGrants(plan.Services, plan.AllowedNodeIds) ||
                     plan.EvaluatedAtUtc.Offset != TimeSpan.Zero ||
                     plan.EvaluatedAtUtc <= DateTimeOffset.UnixEpoch ||
@@ -345,6 +339,35 @@ public sealed class VerifiedChannelRegistrationServiceSelection
                            NyxIdScopePlanRouteCandidateBasis.ActiveConfiguredRoutes,
                            true);
             }
+
+            private static bool ScopePlanResourceOwnersMatchSelection(
+                IReadOnlyList<NyxIdScopePlanServiceGrant> services,
+                VerifiedChannelRegistrationServiceSelection selection)
+            {
+                for (var i = 0; i < services.Count; i++)
+                {
+                    var service = selection.Inventory.SingleOrDefault(inventoryService =>
+                        string.Equals(inventoryService.Id, services[i].UserServiceId, StringComparison.Ordinal));
+                    if (service is null || services[i].ResourceOwner != ExpectedResourceOwner(service, selection.Owner))
+                        return false;
+                }
+
+                return true;
+            }
+
+            private static NyxIdScopePlanPrincipal? ExpectedResourceOwner(
+                NyxIdUserService service,
+                ChannelRegistrationKeyOwner keyOwner) =>
+                service.CredentialSource.Kind switch
+                {
+                    NyxIdUserServiceCredentialSourceKind.Personal => new NyxIdScopePlanPrincipal(
+                        keyOwner.Id,
+                        NyxIdScopePlanPrincipalKind.Personal),
+                    NyxIdUserServiceCredentialSourceKind.Organization => new NyxIdScopePlanPrincipal(
+                        service.CredentialSource.OrganizationId ?? string.Empty,
+                        NyxIdScopePlanPrincipalKind.Organization),
+                    _ => null,
+                };
 
             private static bool HasValidNodeGrants(
                 IReadOnlyList<NyxIdScopePlanServiceGrant> services,
@@ -451,8 +474,9 @@ public sealed class VerifiedChannelRegistrationServiceSelection
                 return owner.KeyOwner.Kind switch
                 {
                     ChannelRegistrationKeyOwnerKind.Personal => services.All(service =>
-                        service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Personal &&
-                        service.CredentialSource.Allowed),
+                        service.CredentialSource.Allowed &&
+                        service.CredentialSource.Kind is NyxIdUserServiceCredentialSourceKind.Personal or
+                            NyxIdUserServiceCredentialSourceKind.Organization),
                     ChannelRegistrationKeyOwnerKind.Organization => services.All(service =>
                         service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Organization &&
                         service.CredentialSource.Allowed &&
