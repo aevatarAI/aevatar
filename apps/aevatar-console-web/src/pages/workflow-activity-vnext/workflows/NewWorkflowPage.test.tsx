@@ -361,7 +361,7 @@ describe('New workflow save-target recovery', () => {
       yaml: generatedYaml,
     });
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+      '/scopes/scope-alpha/workflows/wf-created-alpha',
     );
   });
 
@@ -437,7 +437,7 @@ describe('New workflow save-target recovery', () => {
       ),
     );
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+      '/scopes/scope-alpha/workflows/wf-created-alpha',
     );
   });
 
@@ -496,7 +496,7 @@ describe('New workflow save-target recovery', () => {
     );
 
     expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/workflows/new/templates',
+      '/scopes/scope-alpha/workflows/new/templates',
     );
     expect(screen.queryByText('Incident triage')).not.toBeInTheDocument();
   });
@@ -1094,9 +1094,7 @@ describe('New workflow save-target recovery', () => {
       ),
     ).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Review access' }));
-    expect(history.push).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/settings',
-    );
+    expect(history.push).toHaveBeenCalledWith('/scopes/scope-alpha/settings');
   });
 
   it('keeps preparation available but prevents implicit ownership when no directory exists', async () => {
@@ -1230,7 +1228,7 @@ describe('Workflow generation feedback and cancellation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Generate and open' }));
     await waitFor(() =>
       expect(history.push).toHaveBeenCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/workflows/wf-created-alpha',
+        '/scopes/scope-alpha/workflows/wf-created-alpha',
       ),
     );
     await act(async () => {

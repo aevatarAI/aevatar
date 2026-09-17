@@ -4,8 +4,13 @@
 
 Status: **Normative for the Workflow Activity vNext frontend**.
 
+The [2026-09-16 route consolidation decision](../../superpowers/specs/2026-09-16-console-route-consolidation.md)
+supersedes the original namespace isolation and legacy-page preservation rules.
+It is authoritative for current URLs and retired frontend surfaces; the visual
+assets and remaining product contracts below continue to apply.
+
 Any implementation or review of routes below
-`/scopes/:scopeId/workflow-activity-vnext` must read this directory together
+`/scopes/:scopeId/{workflows,activity,channels,settings}` must read this directory together
 with the
 [`design specification`](../../superpowers/specs/2026-08-04-workflow-activity-vnext-design.md)
 and
@@ -49,7 +54,7 @@ do not fabricate data to close the gap.
 
 The 2026-09-14 home decision supersedes the original preview-only entry rule.
 `/workflows` resolves the freshly fetched `/api/auth/me` scope and opens
-`/scopes/:scopeId/workflow-activity-vnext/workflows`. `/`, `/overview`, `/scopes`,
+`/scopes/:scopeId/workflows`. `/`, `/overview`, `/scopes`,
 and default login/callback recovery use this home. Explicit safe deep links keep
 their original destination. There is no fixed workspace or intermediate Teams
 home. See the repository-root

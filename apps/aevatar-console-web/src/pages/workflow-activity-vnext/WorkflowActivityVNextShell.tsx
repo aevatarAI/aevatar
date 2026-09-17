@@ -128,6 +128,12 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
 }) => {
   const { principal: accountPrincipal } = useWorkflowActivityAccount();
   const [mobileNavigationOpen, setMobileNavigationOpen] = React.useState(false);
+  const openSettings = () => {
+    const target = buildWorkflowActivitySectionHref(scopeId, 'settings');
+    if (onNavigate) onNavigate(target);
+    else history.push(target);
+    setMobileNavigationOpen(false);
+  };
   const activeItem = items.find((item) => item.key === activeSection);
   const activeLabel = activeItem
     ? t(`workflowActivityVNext.nav.${activeItem.labelKey}`, activeItem.fallback)
@@ -189,7 +195,10 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
         </div>
         <div className="wa-vnext__topbar-actions">
           <ConsoleLanguageSwitch />
-          <ConsoleAuthActions principal={accountPrincipal} />
+          <ConsoleAuthActions
+            principal={accountPrincipal}
+            onOpenSettings={openSettings}
+          />
         </div>
       </header>
       <aside className="wa-vnext__rail">
@@ -228,7 +237,10 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
         />
         <div className="wa-vnext__drawer-actions">
           <ConsoleLanguageSwitch />
-          <ConsoleAuthActions principal={accountPrincipal} />
+          <ConsoleAuthActions
+            principal={accountPrincipal}
+            onOpenSettings={openSettings}
+          />
         </div>
       </Drawer>
     </div>

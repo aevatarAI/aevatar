@@ -19,8 +19,7 @@ const runtimeConfig: NyxIDRuntimeConfig = {
     'openid profile email offline_access urn:nyxid:scope:broker_binding proxy',
 };
 
-const reviewReturnTo =
-  '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
+const reviewReturnTo = '/scopes/scope-alpha/settings?section=account';
 
 function installLocationAssignSpy() {
   const assign = jest.fn();
@@ -80,7 +79,7 @@ describe('NyxIDAuthClient', () => {
     global.fetch = fetchMock as typeof global.fetch;
 
     await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
-      returnTo: '/scopes/scope-1/teams',
+      returnTo: '/scopes/scope-1/workflows',
     });
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -108,7 +107,7 @@ describe('NyxIDAuthClient', () => {
       expect.objectContaining({
         clientId: 'console-client-1',
         redirectUri: 'http://localhost:8000/auth/callback',
-        returnTo: '/scopes/scope-1/teams',
+        returnTo: '/scopes/scope-1/workflows',
         scope:
           'openid profile email offline_access urn:nyxid:scope:broker_binding proxy',
         state: authorizeUrl.searchParams.get('state'),
@@ -179,7 +178,7 @@ describe('NyxIDAuthClient', () => {
 
     await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
       prompt: 'consent',
-      returnTo: '/scopes/scope-1/teams/team-1/members/m-alpha/automations',
+      returnTo: '/scopes/scope-1/workflows/wf-alpha',
     });
 
     const authorizeUrl = new URL(assign.mock.calls[0][0]);
@@ -189,9 +188,7 @@ describe('NyxIDAuthClient', () => {
         'aevatar-console:nyxid:pending:console-client-1',
       ) ?? '{}',
     );
-    expect(pending.returnTo).toBe(
-      '/scopes/scope-1/teams/team-1/members/m-alpha/automations',
-    );
+    expect(pending.returnTo).toBe('/scopes/scope-1/workflows/wf-alpha');
     expect(pending.flow).toBe('signIn');
   });
 
@@ -203,7 +200,7 @@ describe('NyxIDAuthClient', () => {
         clientId: 'broker-client-1',
         codeVerifier: 'pkce-verifier',
         redirectUri: 'http://localhost:8000/auth/callback',
-        returnTo: '/scopes/scope-1/teams',
+        returnTo: '/scopes/scope-1/workflows',
         scope: 'openid urn:nyxid:scope:broker_binding proxy',
         state: 'state-1',
       }),
@@ -233,7 +230,7 @@ describe('NyxIDAuthClient', () => {
       ),
     ).resolves.toEqual({
       flow: 'signIn',
-      returnTo: '/scopes/scope-1/teams',
+      returnTo: '/scopes/scope-1/workflows',
       session: expect.objectContaining({
         tokens: expect.objectContaining({
           accessToken: 'access-token',
@@ -336,7 +333,7 @@ describe('NyxIDAuthClient', () => {
         clientId: 'broker-client-1',
         codeVerifier: 'pkce-verifier',
         redirectUri: 'http://localhost:8000/auth/callback',
-        returnTo: '/scopes/scope-1/workflow-activity-vnext/workflows',
+        returnTo: '/scopes/scope-1/workflows',
         scope: 'openid urn:nyxid:scope:broker_binding proxy',
         state: 'state-1',
         flow: 'signIn',
@@ -356,7 +353,7 @@ describe('NyxIDAuthClient', () => {
     ).rejects.toMatchObject({
       flow: 'signIn',
       reason: 'requiredServiceAccessMissing',
-      returnTo: '/scopes/scope-1/workflow-activity-vnext/workflows',
+      returnTo: '/scopes/scope-1/workflows',
     });
   });
 
@@ -431,7 +428,7 @@ describe('NyxIDAuthClient', () => {
         clientId: 'broker-client-1',
         codeVerifier: 'pkce-verifier',
         redirectUri: 'http://localhost:8000/auth/callback',
-        returnTo: '/runtime/runs',
+        returnTo: '/scopes/scope-1/activity',
         scope: 'openid proxy',
         state: 'state-1',
         flow: 'signIn',
@@ -457,7 +454,7 @@ describe('NyxIDAuthClient', () => {
       message: 'token_exchange_failed',
       name: 'NyxIDAuthCallbackError',
       reason: 'signInFailed',
-      returnTo: '/runtime/runs',
+      returnTo: '/scopes/scope-1/activity',
     } satisfies Partial<NyxIDAuthCallbackError>);
   });
 

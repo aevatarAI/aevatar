@@ -119,25 +119,23 @@ pnpm --dir apps/aevatar-console-web build
   `routeDraftWorkflowId` or `draftWorkflowId` for draft hints, and
   `publishedServiceId` for service identities. An unresolved value must be
   named as a candidate until its source establishes the concrete identity.
-- Canonical Team routes express `scope -> team -> member` ownership:
-  `/scopes/:scopeId/teams`, `/scopes/:scopeId/teams/:teamId`, and
-  `/scopes/:scopeId/teams/:teamId/members/:memberId/...`.
-- `/scopes` is only the authenticated technical entry for resolving a scope; it
-  is not the Team collection URL.
-- Canonical member workflow editors are
-  `/scopes/:scopeId/teams/:teamId/members/:memberId/workflow` and
-  `/scopes/:scopeId/teams/:teamId/members/new/workflow`. The `workflow` path
-  segment names the member implementation editor surface, not a workflow
-  resource identity. A `workflowId` query value is only a draft hint and cannot
-  replace the path's member identity.
-- Do not add or preserve hidden `/teams/:scopeId...` compatibility routes.
-  Parse paths by resource name, not by fragile segment indexes.
+- Canonical console resources are `/scopes/:scopeId/workflows`,
+  `/scopes/:scopeId/activity`, `/scopes/:scopeId/channels`, and
+  `/scopes/:scopeId/settings`, with their resource-owned child routes.
+- `/workflows` resolves the authenticated account's scope. `/`, `/overview`,
+  and `/scopes` use this home; `/scopes` is not a Team collection URL.
+- Legacy Team/member and other console pages are retired under
+  `docs/superpowers/specs/2026-09-16-console-route-consolidation.md`. Do not
+  restore hidden legacy routes or the `workflow-activity-vnext` URL segment.
+  Backend Team/member identity boundaries above still apply.
 
 ## Workflow Activity vNext Baseline
 
 - Before changing any route, page, component, hook, query, adapter, model,
   style, locale, or test for
-  `/scopes/:scopeId/workflow-activity-vnext`, read all three of these sources
+  `/scopes/:scopeId/{workflows,activity,channels,settings}`, first read
+  `docs/superpowers/specs/2026-09-16-console-route-consolidation.md`, then read
+  all three of these sources
   completely:
   `docs/design-baselines/workflow-activity-vnext/README.md` and
   `docs/superpowers/specs/2026-08-04-workflow-activity-vnext-design.md` and
@@ -181,9 +179,10 @@ pnpm --dir apps/aevatar-console-web build
   from `apps/aevatar-console-web/` before and after changing the baseline. The
   verifier must confirm the declared hash, deterministic generator output, and
   exact 17-frame inventory.
-- Keep this feature frontend-only and isolated to its new route namespace.
-  Do not change backend code or alter existing Workflow, Run, Settings, Studio,
-  Team, member, redirect, or menu behavior to implement it.
+- Keep this feature frontend-only. The 2026-09-16 route consolidation decision
+  replaces the original namespace isolation and legacy-page preservation
+  rules; the current experience owns the production console routes and shell.
+  Do not infer backend resource removal from frontend page retirement.
 
 ## UI and Interaction
 

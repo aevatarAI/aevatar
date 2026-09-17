@@ -62,11 +62,6 @@ registry_identity_paths=(
 frontend_runtime_identity_paths=(
   "apps/aevatar-console-web/src/shared/api/runtimeGAgentApi.ts"
   "apps/aevatar-console-web/src/shared/models/runtime/gagents.ts"
-  "apps/aevatar-console-web/src/shared/navigation/runtimeRoutes.ts"
-  "apps/aevatar-console-web/src/pages/gagents/index.tsx"
-  "apps/aevatar-console-web/src/pages/studio/index.tsx"
-  "apps/aevatar-console-web/src/pages/studio/components/StudioBuildPanels.tsx"
-  "apps/aevatar-console-web/src/pages/studio/components/bind/StudioMemberBindPanel.tsx"
   "apps/aevatar-console-web/src/shared/studio/api.ts"
   "apps/aevatar-console-web/src/shared/studio/models.ts"
 )

@@ -80,22 +80,12 @@ const browserProjectConfig = createProjectConfig('browser');
 const nodeProjectConfig = createProjectConfig('node');
 
 const nodeTestFiles = [
-  '<rootDir>/src/pages/MissionControl/runtimeAdapter.test.ts',
-  '<rootDir>/src/pages/actors/actorPresentation.test.ts',
-  '<rootDir>/src/pages/chat/chatTaskPlan.test.ts',
-  '<rootDir>/src/pages/governance/components/governanceQuery.test.ts',
-  '<rootDir>/src/pages/runs/runEventPresentation.test.ts',
-  '<rootDir>/src/pages/scopes/components/resolvedScope.test.ts',
-  '<rootDir>/src/pages/scopes/components/scopeQuery.test.ts',
-  '<rootDir>/src/pages/services/components/serviceQuery.test.ts',
-  '<rootDir>/src/pages/workflows/workflowPresentation.test.ts',
   '<rootDir>/src/shared/agui/customEventData.test.ts',
   '<rootDir>/src/shared/agui/sseFrameNormalizer.test.ts',
   '<rootDir>/src/shared/config/proxyConfig.test.ts',
   '<rootDir>/src/shared/datetime/dateTime.test.ts',
   '<rootDir>/src/shared/playground/stepSummary.test.ts',
   '<rootDir>/src/shared/studio/document.test.ts',
-  '<rootDir>/src/shared/studio/navigation.test.ts',
   '<rootDir>/src/shared/workflows/catalogVisibility.test.ts',
 ] as const;
 
