@@ -220,19 +220,19 @@ export default function ChannelsPage({
                         {row.skill ? (
                           <ChannelSkill skill={row.skill} />
                         ) : (
-                          <span className="channels__muted">&ndash;</span>
+                          <span className="channels__muted">{'\u2013'}</span>
                         )}
                       </td>
                       <td>
                         {row.bindingStatus === 'unbound' ? (
-                          <span className="channels__muted">&ndash;</span>
+                          <span className="channels__muted">{'\u2013'}</span>
                         ) : (
                           <InboundStatus value={row.nyxStatus ?? undefined} />
                         )}
                       </td>
                       <td>
                         {row.bindingStatus === 'unbound' ? (
-                          <span className="channels__muted">&ndash;</span>
+                          <span className="channels__muted">{'\u2013'}</span>
                         ) : (
                           <DeliveryStatus
                             value={row.workflowDeliveryStatus}
@@ -268,7 +268,7 @@ export default function ChannelsPage({
                             {t('channels.manage', 'Manage')}
                           </ChannelLink>
                         ) : (
-                          <span className="channels__muted">&ndash;</span>
+                          <span className="channels__muted">{'\u2013'}</span>
                         )}
                       </td>
                     </tr>
