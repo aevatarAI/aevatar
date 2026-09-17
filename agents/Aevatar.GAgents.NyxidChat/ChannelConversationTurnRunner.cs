@@ -2922,6 +2922,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             $"Follow those skill instructions exactly, with `args` = {argsJson}, until the command's final result is ready.\n" +
             "Stick to the data sources the loaded skill names. Do NOT invent repository/path guesses, do NOT call `/api/v1/skills/.../files` (skill files are already inlined in the `use_skill` response above), and do NOT fall back to generic `nyxid_proxy` discovery when the loaded skill did not point you there.\n" +
             "If no matching skill was actually loaded above, or every matching skill fails to load, give one concise actionable failure that names the command and the Ornn lookup/load problem.\n" +
+            (viaDefaultSkillBinding
+                ? "If the configured default skill is not found in Ornn, tell the operator to create and publish an Ornn skill with that exact name, or update the channel registration `default_skill_name` to an existing published skill.\n"
+                : string.Empty) +
             blockerRecoveryInstruction +
             "Do not narrate intermediate work, path guesses, or partial findings as the user-visible reply.\n" +
             "The only final user-visible answer should be the completed command result or a concise actionable failure after the required tool/skill recovery attempts have been exhausted.\n" +
