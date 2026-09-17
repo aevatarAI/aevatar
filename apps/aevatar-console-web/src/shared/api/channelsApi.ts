@@ -13,10 +13,13 @@ export type ChannelServiceAuthorization =
   | { readonly kind: 'unavailable' };
 
 export interface ChannelRegistration {
-  readonly id: string;
+  readonly id: string | null;
+  readonly botId: string;
+  readonly label: string | null;
   readonly platform: string;
-  readonly scopeId: string;
-  readonly botId: string | null;
+  readonly bindingStatus: 'bound' | 'unbound';
+  readonly availabilityStatus: string | null;
+  readonly nyxStatus: string | null;
   readonly providerSlug: string | null;
   readonly agentKeyId: string | null;
   readonly skill: {
@@ -24,28 +27,38 @@ export interface ChannelRegistration {
     readonly version: string | null;
   } | null;
   readonly workflowDeliveryStatus: string | null;
+  readonly stateVersion: number | null;
   readonly owned: boolean;
   readonly serviceAuthorization: ChannelServiceAuthorization;
 }
 
-export interface ChannelStatus {
+export interface ChannelConfiguration {
+  readonly skillName: string;
+  readonly authorizationMode: 'nyxid_default' | 'explicit_service_allowlist';
+  readonly serviceIds: readonly string[];
+}
+
+export interface ChannelReceipt {
   readonly registrationId: string;
-  readonly status: string;
-  readonly workflowDeliveryStatus: string | null;
+  readonly commandId: string;
 }
 
 export class ChannelApiError extends Error {
   constructor(readonly status: number) {
-    // Backend error bodies can contain provisioning diagnostics. Keep them out
-    // of the query cache and use localized recovery copy in the page.
+    // Never retain provisioning diagnostics or credential material.
     super(`Channel request failed (${status}).`);
     this.name = 'ChannelApiError';
   }
 }
 
+export class ChannelContractUnavailableError extends Error {
+  constructor() {
+    super('Channel binding is not available on this server.');
+    this.name = 'ChannelContractUnavailableError';
+  }
+}
+
 export type ChannelRegistrationFailure =
-  | 'token'
-  | 'botName'
   | 'services'
   | 'skill'
   | 'authorization'
@@ -53,107 +66,53 @@ export type ChannelRegistrationFailure =
   | 'configuration'
   | 'rejected'
   | 'uncertain';
-
-export class ChannelRegistrationError extends Error {
-  constructor(readonly reason: ChannelRegistrationFailure) {
-    super('Could not connect Telegram.');
+export class ChannelRegistrationError extends ChannelApiError {
+  constructor(
+    status: number,
+    readonly reason: ChannelRegistrationFailure,
+  ) {
+    super(status);
     this.name = 'ChannelRegistrationError';
   }
 }
 
-export interface TelegramRegistrationInput {
-  readonly botToken: string;
-  readonly label?: string;
-  readonly skillName?: string;
-  readonly serviceIds: readonly string[];
-  readonly webhookBaseUrl: string;
-}
-
-async function readTelegramBotName(botToken: string): Promise<string> {
-  if (!/^[0-9]+:[A-Za-z0-9_-]+$/.test(botToken))
-    throw new ChannelRegistrationError('token');
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-  try {
-    // Telegram requires the token in its API path. Use a plain, uncached
-    // request without Aevatar auth; never retain or log upstream errors/URLs.
-    const response = await fetch(
-      `https://api.telegram.org/bot${botToken}/getMe`,
-      {
-        method: 'POST',
-        credentials: 'omit',
-        cache: 'no-store',
-        referrerPolicy: 'no-referrer',
-        redirect: 'error',
-        signal: controller.signal,
-      },
-    );
-    if ([401, 404].includes(response.status))
-      throw new ChannelRegistrationError('token');
-    if (!response.ok) throw new ChannelRegistrationError('botName');
-    const payload = expectRecord(await response.json(), 'Telegram response');
-    if (payload.ok !== true) {
-      throw new ChannelRegistrationError(
-        [401, 404].includes(Number(payload.error_code)) ? 'token' : 'botName',
-      );
-    }
-    const bot = expectRecord(payload.result, 'Telegram bot');
-    const botName = readString(bot, 'first_name', 'Telegram bot name').trim();
-    if (bot.is_bot !== true || !botName)
-      throw new ChannelRegistrationError('botName');
-    return botName;
-  } catch (error) {
-    throw error instanceof ChannelRegistrationError
-      ? error
-      : new ChannelRegistrationError('botName');
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function registrationFailure(status: number, value: unknown) {
-  const code =
-    value && typeof value === 'object' && 'error' in value
-      ? value.error
-      : undefined;
-  if (code === 'missing_bot_token' || code === 'invalid_bot_token')
-    return 'token';
-  if (code === 'invalid_service_ids') return 'services';
-  if (code === 'invalid_default_skill' || code === 'skill_not_found')
-    return 'skill';
-  if (status === 401 || status === 403) return 'authorization';
-  if (status === 409) return 'conflict';
-  if (
-    code === 'missing_webhook_base_url' ||
-    code === 'insecure_webhook_base_url' ||
-    code === 'nyx_base_url_not_configured'
-  )
-    return 'configuration';
-  return status >= 500 ? 'uncertain' : 'rejected';
+export function normalizeChannelSkill(value: string): string {
+  return value.trim().replace(/^\/+/, '').toLowerCase();
 }
 
 function decodeRegistration(value: unknown): ChannelRegistration {
   const row = expectRecord(value, 'Channel registration');
-  const skill =
-    row.default_skill == null
-      ? null
-      : expectRecord(row.default_skill, 'Channel default skill');
+  const id = readOptionalString(row, 'id', 'Registration ID') || null;
+  const botId = readString(row, 'nyx_channel_bot_id', 'Bot ID');
+  const bindingStatus = row.binding_status;
+  if (bindingStatus === undefined && 'default_skill_name' in row)
+    throw new ChannelContractUnavailableError();
+  if (
+    !botId.trim() ||
+    !['bound', 'unbound'].includes(String(bindingStatus)) ||
+    (bindingStatus === 'bound' && !id?.trim())
+  )
+    throw new Error('Invalid channel binding identity.');
+  const skillName = readOptionalString(row, 'skill_name', 'Skill name')?.trim();
   const key =
-    row.agent_key == null
-      ? null
-      : expectRecord(row.agent_key, 'Channel agent key');
-  const skillName = skill
-    ? readOptionalString(skill, 'name', 'Skill name')?.trim()
-    : readOptionalString(row, 'default_skill_name', 'Skill name')?.trim();
-  const id = readString(row, 'id', 'Registration ID');
-  if (!id.trim()) throw new Error('Missing channel registration ID.');
-  // Explicitly project safe display fields. Never retain the transport object,
-  // webhook URL, runtime configuration, or unexpected credential fields.
+    row.agent_key == null ? null : expectRecord(row.agent_key, 'Agent key');
+  const version = row.state_version;
+  if (
+    version != null &&
+    (typeof version !== 'number' ||
+      !Number.isSafeInteger(version) ||
+      version < 0)
+  )
+    throw new Error('Invalid channel state version.');
   return {
     id,
+    botId,
     platform: readString(row, 'platform', 'Channel platform'),
-    scopeId: readString(row, 'scope_id', 'Channel scope'),
-    botId: readOptionalString(row, 'nyx_channel_bot_id', 'Bot ID') || null,
+    label: readOptionalString(row, 'label', 'Channel label')?.trim() || null,
+    bindingStatus: bindingStatus === 'bound' ? 'bound' : 'unbound',
+    availabilityStatus:
+      readOptionalString(row, 'availability_status', 'Availability') || null,
+    nyxStatus: readOptionalString(row, 'nyx_status', 'NyxID status') || null,
     providerSlug:
       readOptionalString(row, 'nyx_provider_slug', 'Provider') || null,
     agentKeyId:
@@ -161,27 +120,20 @@ function decodeRegistration(value: unknown): ChannelRegistration {
         ? readOptionalString(key, 'api_key_id', 'Agent key ID')
         : readOptionalString(row, 'nyx_agent_api_key_id', 'Agent key ID')) ||
       null,
-    skill: skillName
-      ? {
-          name: skillName,
-          version: skill
-            ? readOptionalString(skill, 'version', 'Skill version')?.trim() ||
-              null
-            : null,
-        }
-      : null,
+    skill: skillName ? { name: skillName, version: null } : null,
     workflowDeliveryStatus:
       readOptionalString(
         row,
         'workflow_result_delivery_status',
         'Workflow delivery status',
       ) || null,
+    stateVersion: typeof version === 'number' ? version : null,
     owned: expectBoolean(row.owned, 'Channel ownership'),
-    serviceAuthorization: decodeServiceAuthorization(row),
+    serviceAuthorization: decodeAuthorization(row),
   };
 }
 
-function decodeServiceAuthorization(
+function decodeAuthorization(
   row: Record<string, unknown>,
 ): ChannelServiceAuthorization {
   if (row.authorization_mode === 'nyxid_default')
@@ -191,16 +143,54 @@ function decodeServiceAuthorization(
     row.service_ids == null
   )
     return { kind: 'unavailable' };
-  const serviceIds = expectArray(
-    row.service_ids,
-    'Authorized services',
-    (id) => {
-      if (typeof id !== 'string' || !id.trim())
-        throw new Error('Invalid authorized service identity.');
-      return id;
-    },
+  const serviceIds = expectArray(row.service_ids, 'Service IDs', (id) => {
+    if (typeof id !== 'string' || !id.trim())
+      throw new Error('Invalid service identity.');
+    return id;
+  });
+  if (new Set(serviceIds).size !== serviceIds.length)
+    throw new Error('Duplicate service identity.');
+  return { kind: 'explicit', serviceIds };
+}
+
+export function channelConfiguration(
+  row: ChannelRegistration,
+): ChannelConfiguration | null {
+  if (row.serviceAuthorization.kind === 'unavailable') return null;
+  return {
+    skillName: row.skill?.name ?? '',
+    authorizationMode:
+      row.serviceAuthorization.kind === 'explicit'
+        ? 'explicit_service_allowlist'
+        : 'nyxid_default',
+    serviceIds:
+      row.serviceAuthorization.kind === 'explicit'
+        ? row.serviceAuthorization.serviceIds
+        : [],
+  };
+}
+
+export function channelConfigPayload(input: ChannelConfiguration) {
+  return {
+    skill_name: normalizeChannelSkill(input.skillName),
+    authorization_mode: input.authorizationMode,
+    service_ids:
+      input.authorizationMode === 'nyxid_default'
+        ? []
+        : [...input.serviceIds].sort(),
+  };
+}
+
+export function channelConfigMatches(
+  actual: ChannelRegistration,
+  expected: ChannelConfiguration,
+): boolean {
+  const config = channelConfiguration(actual);
+  return (
+    config !== null &&
+    JSON.stringify(channelConfigPayload(config)) ===
+      JSON.stringify(channelConfigPayload(expected))
   );
-  return { kind: 'explicit', serviceIds: [...new Set(serviceIds)] };
 }
 
 async function request<T>(
@@ -210,6 +200,7 @@ async function request<T>(
 ): Promise<T> {
   const response = await authFetch(path, {
     ...init,
+    cache: 'no-store',
     headers: { Accept: 'application/json' },
   });
   if (!response.ok) throw new ChannelApiError(response.status);
@@ -222,90 +213,117 @@ export function registrationPath(registrationId: string): string {
   return `/api/channels/registrations/${encodeURIComponent(registrationId)}`;
 }
 
+async function submit(
+  path: string,
+  body: object,
+  registrationId?: string,
+): Promise<ChannelReceipt> {
+  let response: Response;
+  try {
+    response = await authFetch(path, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ChannelRegistrationError(0, 'uncertain');
+  }
+  const value: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const code =
+      value && typeof value === 'object' && 'error' in value
+        ? value.error
+        : null;
+    const reason =
+      code === 'invalid_service_ids' ||
+      code === 'service_owner_forbidden' ||
+      code === 'channel_authorization_contract_invalid'
+        ? 'services'
+        : code === 'invalid_runtime_config' || code === 'skill_not_found'
+          ? 'skill'
+          : [401, 403].includes(response.status)
+            ? 'authorization'
+            : response.status === 409
+              ? 'conflict'
+              : code === 'insecure_webhook_base_url'
+                ? 'configuration'
+                : response.status >= 500
+                  ? 'uncertain'
+                  : 'rejected';
+    throw new ChannelRegistrationError(response.status, reason);
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new ChannelRegistrationError(response.status, 'uncertain');
+  const receipt = expectRecord(value, 'Channel receipt');
+  if (
+    receipt.status !== 'accepted' ||
+    typeof receipt.registration_id !== 'string' ||
+    !receipt.registration_id.trim() ||
+    typeof receipt.command_id !== 'string' ||
+    !receipt.command_id.trim() ||
+    (registrationId && receipt.registration_id !== registrationId)
+  )
+    throw new ChannelRegistrationError(response.status, 'uncertain');
+  return {
+    registrationId: receipt.registration_id,
+    commandId: receipt.command_id,
+  };
+}
+
 export const channelsApi = {
-  async registerTelegram(
-    input: TelegramRegistrationInput,
-  ): Promise<{ readonly registrationId: string }> {
-    const botToken = input.botToken.trim();
-    const label = input.label?.trim() ?? '';
-    const skillName = input.skillName?.trim() ?? '';
-    const botName =
-      !label || !skillName ? await readTelegramBotName(botToken) : '';
-    const channelName =
-      label || `${botName}-${Math.floor(100_000 + Math.random() * 900_000)}`;
-    // This request carries the token only in the authenticated POST body.
-    // Do not use a mutation cache, navigation state, or persistent draft.
-    let response: Response;
-    try {
-      response = await authFetch('/api/channels/registrations', {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          platform: 'telegram',
-          bot_token: botToken,
-          label: channelName,
-          default_skill_name: skillName || botName,
-          webhook_base_url: input.webhookBaseUrl,
-          authorization_mode: 'explicit_service_allowlist',
-          service_ids: [...input.serviceIds],
-        }),
-      });
-    } catch {
-      throw new ChannelRegistrationError('uncertain');
-    }
-    const body: unknown = await response.json().catch(() => null);
-    if (!response.ok)
-      throw new ChannelRegistrationError(
-        registrationFailure(response.status, body),
-      );
-    if (
-      !body ||
-      typeof body !== 'object' ||
-      !('status' in body) ||
-      body.status !== 'accepted' ||
-      !('registration_id' in body) ||
-      typeof body.registration_id !== 'string' ||
-      !body.registration_id.trim()
-    )
-      throw new ChannelRegistrationError('uncertain');
-    // Retain the identity needed for readback, not raw provisioning output.
-    return { registrationId: body.registration_id };
+  adopt(botId: string, input: ChannelConfiguration): Promise<ChannelReceipt> {
+    if (!botId.trim()) throw new Error('Missing bot identity.');
+    return submit('/api/channels/registrations', {
+      nyx_channel_bot_id: botId,
+      ...channelConfigPayload(input),
+    });
+  },
+  update(
+    registrationId: string,
+    input: ChannelConfiguration,
+  ): Promise<ChannelReceipt> {
+    return submit(
+      registrationPath(registrationId),
+      channelConfigPayload(input),
+      registrationId,
+    );
   },
   list(signal?: AbortSignal): Promise<ChannelRegistration[]> {
     return request(
       '/api/channels/registrations',
-      (value) =>
-        expectArray(value, 'Channel registrations', decodeRegistration).filter(
-          (row) => row.owned,
-        ),
+      (value) => {
+        const rows = expectArray(
+          value,
+          'Channel registrations',
+          decodeRegistration,
+        ).filter((row) => row.owned);
+        if (new Set(rows.map((row) => row.botId)).size !== rows.length)
+          throw new Error('Ambiguous channel bot inventory.');
+        return rows;
+      },
       { signal },
     );
   },
-  status(registrationId: string, signal?: AbortSignal): Promise<ChannelStatus> {
+  get(
+    registrationId: string,
+    signal?: AbortSignal,
+  ): Promise<ChannelRegistration> {
     return request(
-      `${registrationPath(registrationId)}/status`,
+      registrationPath(registrationId),
       (value) => {
-        const row = expectRecord(value, 'Channel status');
-        const returnedId = readString(
-          row,
-          'registration_id',
-          'Registration ID',
-        );
-        if (returnedId !== registrationId)
-          throw new Error('Channel status identity mismatch.');
-        return {
-          registrationId: returnedId,
-          status: readString(row, 'status', 'Inbound status'),
-          workflowDeliveryStatus:
-            readOptionalString(
-              row,
-              'workflow_result_delivery_status',
-              'Workflow delivery status',
-            ) || null,
-        };
+        const row = decodeRegistration(value);
+        if (
+          row.id !== registrationId ||
+          !row.owned ||
+          row.bindingStatus !== 'bound'
+        )
+          throw new ChannelApiError(404);
+        if (row.stateVersion === null)
+          throw new Error('Missing channel detail state version.');
+        return row;
       },
       { signal },
     );

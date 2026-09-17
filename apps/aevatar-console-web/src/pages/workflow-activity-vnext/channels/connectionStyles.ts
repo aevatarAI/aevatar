@@ -4,7 +4,7 @@ export const channelConnectionCss = `
 .channels__connect-heading { margin-bottom: 28px; }
 .channels__connect-heading .channels__breadcrumb { margin-bottom: 8px; }
 .channels__connect-heading h1 { color: var(--wa-ink); font-size: 28px; font-weight: 650; line-height: 36px; margin: 0 0 8px; }
-.channels__connect-heading > p { color: var(--wa-muted); line-height: 22px; margin: 0; }
+.channels__connect-heading > p { color: var(--wa-muted); font-size: 14px; line-height: 22px; margin: 0; }
 .channels__connection-form { --channel-field-height: 44px; background: var(--wa-surface); border: 1px solid var(--channels-border); border-radius: var(--wa-radius); padding: 28px; }
 .channels__connection-form h2 { color: var(--wa-ink); font-size: 14px; line-height: 22px; margin: 0; }
 .channels__form-section-title { margin-bottom: 20px !important; }
@@ -42,9 +42,15 @@ export const channelConnectionCss = `
 .channels__service-state p { margin: 0 0 12px; }
 .channels__form-actions { align-items: center; border-top: 1px solid var(--channels-border); display: flex; gap: 12px; justify-content: space-between; margin-top: 28px; padding-top: 20px; }
 .channels__form-actions .ant-btn { font-size: 12px; min-height: 40px; padding-inline: 18px; }
+.channels__form-actions .ant-btn-primary { min-width: 128px; }
+.channels__form-actions .ant-btn-primary:not(:disabled) { background: var(--wa-blue); border-color: var(--wa-blue); }
+.channels__form-actions .ant-btn-primary:not(:disabled):hover { background: var(--wa-blue); border-color: var(--wa-blue); filter: brightness(.94); }
+.channels__connection-form .ant-select { font-size: 13px; }
+.channels__connection-form .ant-select-outlined { border-color: var(--channels-border); }
 .channels__connection-status { border-top: 1px solid var(--channels-border); color: var(--wa-muted); font-size: 12px; line-height: 20px; margin-top: 24px; padding-top: 16px; }
 .channels__connection-status p { margin: 0 0 12px; }
 .channels__connection-form .ant-btn { white-space: normal; height: auto; }
+.channels__bot-summary .channels__dot { display: none; }
 @media (max-width: 767px) {
   .channels__name-fields { gap: 0; grid-template-columns: 1fr; }
   .channels__main--connect .channels__content { padding-top: 20px; }

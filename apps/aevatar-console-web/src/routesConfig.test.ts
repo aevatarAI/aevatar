@@ -248,14 +248,20 @@ describe('console routes', () => {
       `${namespace}/activity`,
       `${namespace}/activity/:runId`,
       `${namespace}/channels`,
-      `${namespace}/channels/connect/telegram`,
+      `${namespace}/channels/bind/:botId`,
       `${namespace}/channels/:registrationId`,
+      `${namespace}/channels/:registrationId/edit`,
       `${namespace}/settings`,
     ];
 
     for (const path of expectedRoutes) {
       expect(findRoute(routes, path).hideInMenu).toBe(true);
     }
+    expect(
+      routes.some(
+        (route) => route.path === `${namespace}/channels/connect/telegram`,
+      ),
+    ).toBe(false);
 
     expect(findRoute(routes, namespace).redirect).toBe(
       `${namespace}/workflows`,
