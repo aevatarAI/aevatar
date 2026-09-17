@@ -529,7 +529,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 exception.GetType().Name);
         }
 
-        if (IsActivationDeadlineReached(pending))
+        if (exception is TimeoutException || IsActivationDeadlineReached(pending))
         {
             await FailActivationAsync(
                 identity,
@@ -1096,7 +1096,7 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
                 exception.GetType().Name);
         }
 
-        if (IsDeactivationDeadlineReached(current))
+        if (exception is TimeoutException || IsDeactivationDeadlineReached(current))
         {
             await FailDeactivationAsync(
                 identity,
