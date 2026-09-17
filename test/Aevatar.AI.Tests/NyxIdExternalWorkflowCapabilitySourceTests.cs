@@ -242,9 +242,15 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
     }
 
     [Fact]
-    public async Task InspectAsync_ShouldRequireExactServiceAndEndpointSelection()
+    public async Task InspectAsync_ShouldUsePublicApiForSelectionRemediationLocator()
     {
-        var source = CreateSource(new CatalogHandler { Body = Config(Service()) });
+        var source = CreateSource(
+            new CatalogHandler { Body = Config(Service()) },
+            configuredOptions: new NyxIdToolOptions
+            {
+                BaseUrl = "http://nyxid.internal:3001",
+                ApiBaseUrl = "https://nyxid.example.test/",
+            });
 
         var result = await source.InspectAsync(
             Access(),
@@ -255,6 +261,8 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         result.Status.Should().Be(ExternalCapabilityReadinessStatus.OperationSelectionRequired);
         result.Blockers.Should().ContainSingle().Which.Code.Should()
             .Be("NYXID_OPERATION_SELECTION_REQUIRED");
+        result.Remediations.Should().ContainSingle().Which.TrustedLocator.Should()
+            .Be("https://nyxid.example.test");
     }
 
     [Fact]
@@ -348,6 +356,25 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         endpoint["parameters"] = new JsonArray(
             Parameter("Accept", "header", false),
             Parameter("accept", "header", false));
+        var source = CreateSource(new CatalogHandler
+        {
+            Body = Config(Service(endpoints: [endpoint])),
+        });
+
+        var discovery = await source.ListAsync(Access(), CancellationToken.None);
+
+        discovery.Capabilities.Should().BeEmpty();
+        discovery.RejectedCount.Should().Be(1);
+        discovery.Diagnostics.Should().Contain(item =>
+            item.Code == ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter);
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldRejectOptionalHeaderOutsideExactInvocationContract()
+    {
+        var endpoint = Endpoint();
+        endpoint["parameters"] = new JsonArray(
+            Parameter("Content-Type", "header", false));
         var source = CreateSource(new CatalogHandler
         {
             Body = Config(Service(endpoints: [endpoint])),
@@ -765,7 +792,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
                 { Config(Service(endpoints: [cookie])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter, "NYXID_ENDPOINT_PARAMETER_UNSUPPORTED" },
                 { Config(Service(endpoints: [sensitiveHeader])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter, "NYXID_ENDPOINT_PARAMETER_UNSUPPORTED" },
                 { Config(Service(endpoints: [contentTypeHeader])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter, "NYXID_ENDPOINT_PARAMETER_UNSUPPORTED" },
-                { Config(Service(endpoints: [unsatisfiableAcceptHeader])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema, "NYXID_ENDPOINT_SCHEMA_UNSUPPORTED" },
+                { Config(Service(endpoints: [unsatisfiableAcceptHeader])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedParameter, "NYXID_ENDPOINT_PARAMETER_UNSUPPORTED" },
                 { Config(Service(endpoints: [unsupportedBody])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedRequestBody, "NYXID_ENDPOINT_BODY_UNSUPPORTED" },
                 { Config(Service(endpoints: [unsupportedSchema])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema, "NYXID_ENDPOINT_SCHEMA_UNSUPPORTED" },
                 { Config(Service(endpoints: [malformedSchema])), ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema, "NYXID_ENDPOINT_SCHEMA_UNSUPPORTED" },
@@ -804,9 +831,10 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
     private static NyxIdExternalWorkflowCapabilitySource CreateSource(
         CatalogHandler handler,
-        INyxIdAuthorizationCatalogQueryPort? queryPort = null)
+        INyxIdAuthorizationCatalogQueryPort? queryPort = null,
+        NyxIdToolOptions? configuredOptions = null)
     {
-        var options = new NyxIdToolOptions { BaseUrl = "https://nyxid.invalid" };
+        var options = configuredOptions ?? new NyxIdToolOptions { BaseUrl = "https://nyxid.invalid" };
         return new NyxIdExternalWorkflowCapabilitySource(
             new NyxIdApiClient(options, new HttpClient(handler)),
             options,

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.CodeExecution;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -7,6 +8,7 @@ using Aevatar.AI.Infrastructure.ToolExecution;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
+using Aevatar.AI.ToolProviders.Binding;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
 using Aevatar.AI.ToolProviders.ChronoStorage;
@@ -29,6 +31,7 @@ using Aevatar.BackendConsole.Hosting;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
+using Aevatar.Configuration;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Application.AgentProfiles;
@@ -55,12 +58,14 @@ using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Mainnet.Host.Api.BackendConsole;
+using Aevatar.Mainnet.Host.Api.AI;
 using Aevatar.Mainnet.Host.Api.Chat;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.ManagedCodex;
+using Aevatar.Mainnet.Host.Api.ModelCatalog;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.ProjectionRecovery;
 using Aevatar.Mainnet.Host.Api.Responses;
@@ -72,7 +77,9 @@ using Aevatar.Mainnet.Host.Api.WorkflowAdmission;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Extensions.Hosting;
+using Aevatar.Workflow.Infrastructure.Workflows;
 using Aevatar.Workflow.Integration.AI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -80,7 +87,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
 
@@ -121,8 +130,8 @@ public static class MainnetHostBuilderExtensions
         //
         // 2026-06-03 prod incident: enabling HostOptions.ServicesStartConcurrently
         // raced the co-hosted Orleans silo reaching the Active lifecycle stage.
-        // Grain-calling startup services (WorkflowDefinitionBootstrap,
-        // ChannelBotRegistration, AevatarOAuthClientBootstrap, HealthProbeStartup,
+        // Grain-calling startup services (ChannelBotRegistration,
+        // AevatarOAuthClientBootstrap, HealthProbeStartup,
         // StreamingProxyChatLifecycleContinuationRunner) fired their grain calls
         // before the silo could create activations, so every one failed with
         // "Unable to create local activation. Rejecting now." -> AggregateException
@@ -131,8 +140,11 @@ public static class MainnetHostBuilderExtensions
         // Sequential startup runs hosted services in registration order: Kestrel
         // (binds the probe port early), then AddMainnetDistributedOrleansHost (silo
         // to Active), then the grain-calling services above — so grain activations
-        // succeed. Liveness exposure is handled by binding http://+:8080 in the
-        // container (see ConfigureMainnetListenUrls), not by parallelising startup.
+        // succeed. WorkflowDefinitionBootstrap performs file loading in StartAsync
+        // and actor materialization in StartedAsync so a slow committed observation
+        // cannot block the probe port. Liveness exposure is handled by binding
+        // http://+:8080 in the container (see ConfigureMainnetListenUrls), not by
+        // parallelising startup.
 
         builder.AddAevatarDefaultHost(options =>
         {
@@ -144,6 +156,13 @@ public static class MainnetHostBuilderExtensions
             // Secrets must come from AEVATAR_-prefixed environment variables;
             // Set/Remove on the secrets store will throw at the call site.
             options.AllowLocalFileSecretsStore = false;
+        });
+        builder.Services.PostConfigure<WorkflowDefinitionFileSourceOptions>(options =>
+        {
+            if (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"))
+            {
+                options.SkipSourceCredentialRequiredDefinitionsOnStartup = true;
+            }
         });
         builder.AddAevatarHostObservability("Aevatar.Mainnet.Host.Api");
         builder.AddMainnetDistributedOrleansHost();
@@ -178,6 +197,9 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddAgentProfileApplication();
         builder.Services.TryAddSingleton<IAgentProfileActorPort, AgentProfileActorPort>();
         builder.Services.TryAddSingleton<AgentProfileApplicationService>();
+        builder.Services.TryAddSingleton<IAgentProfileCatalogApplicationService>(serviceProvider =>
+            serviceProvider.GetRequiredService<AgentProfileApplicationService>());
+        builder.Services.AddAIWorkspace(builder.Configuration);
         builder.AddStudioCapability();
         builder.Services.AddAuditTrailCore(builder.Configuration);
         builder.AddAuditTrailCapabilityBundle();
@@ -200,16 +222,15 @@ public static class MainnetHostBuilderExtensions
             });
         }
         builder.Services.AddNyxIdChat(builder.Configuration);
+        builder.Services.Replace(ServiceDescriptor.Singleton(
+            NyxIdChatCanaryEffectFaultOptions.EnabledFor(
+                "5d0d7b72-acff-49af-bb1b-9f30bbb7c102")));
         AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
         builder.Services.AddRetiredActorCleanup();
         builder.Services.AddChannelRuntime(builder.Configuration);
         builder.Services.AddChannelIdentity(builder.Configuration);
-        var configuredSandboxServiceSlug = builder.Configuration["Aevatar:NyxId:SandboxServiceSlug"];
-        var sandboxServiceSlug = string.IsNullOrWhiteSpace(configuredSandboxServiceSlug)
-            ? NyxIdToolOptions.DefaultSandboxServiceSlug
-            : configuredSandboxServiceSlug.Trim();
         builder.Services.Configure<NyxIdBrokerOptions>(options =>
         {
             var configuredRoute = builder.Configuration["Aevatar:NyxId:DefaultRoute"];
@@ -227,7 +248,7 @@ public static class MainnetHostBuilderExtensions
                 .Where(static serviceSlug => !string.IsNullOrWhiteSpace(serviceSlug))
                 .Select(static serviceSlug => serviceSlug!.Trim())
                 .Append(ornnSlug)
-                .Append(sandboxServiceSlug)
+                .Append(CodeExecutionContract.ServiceSlug)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
         });
@@ -287,26 +308,10 @@ public static class MainnetHostBuilderExtensions
         builder.Services.TryAddSingleton<ResponsesWebSubstituteToolExecutionService>();
         builder.Services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         builder.Services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
-        builder.Services.TryAddSingleton<IResponsesModelsAggregator, NyxIdResponsesModelsAggregator>();
         // Refactor (iter26/cluster-026-responses-route-user-catalog-cache):
         //   Old pattern: Responses/Messages routes resolve `vendor/model` by reading a singleton per-bearer in-process cache of NyxID user LLM service catalog facts.
         //   New principle: Resolve model route from the current catalog read in the request flow; do not store user route facts in singleton process memory.
         builder.Services.TryAddSingleton<IResponsesRouteResolver, ResponsesRouteResolver>();
-        builder.Services.Configure<ResponsesModelMetadataFallbackOptions>(options =>
-        {
-            // Bind a flat slug-or-slug/model → fallback dictionary from
-            // `Aevatar:Responses:ModelMetadataFallbacks` directly so deployments can
-            // express it with the natural shape `{slug: {context_length, ...}}` instead
-            // of the wrapped `{Entries: {…}}` shape that automatic-binding would force.
-            var section = builder.Configuration.GetSection(ResponsesModelMetadataFallbackOptions.SectionName);
-            foreach (var entry in section.GetChildren())
-            {
-                if (string.IsNullOrWhiteSpace(entry.Key)) continue;
-                var fallback = entry.Get<ResponsesModelMetadataFallback>();
-                if (fallback is null) continue;
-                options.Entries[entry.Key] = fallback;
-            }
-        });
         builder.Services.AddHttpClient();
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesAevatarToolProvider>());
         builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IResponsesToolProvider, ResponsesUserSkillsToolProvider>());
@@ -325,12 +330,6 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelAdminTools();
         builder.Services.AddAgentCatalogTools();
         builder.Services.AddAevatarInvocationTools();
-        // Studio workflow scheduling tool (aevatar_provision_workflow_schedule): the channel-free,
-        // Observatory-delivered analogue of the Lark scheduled_agent_creator. Registered as an
-        // IAgentToolSource here; the studio workflow's allowed_tools allowlist (W2) scopes it to
-        // studio runs. The narrow IWorkflowScheduleProvisioningPort it depends on is registered by
-        // AddStudioApplication (via AddStudioCapability), composed in the same host container.
-        builder.Services.AddStudioProvisioningTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
         // Fail-fast: device HMAC verification must never be disabled in production.
@@ -342,21 +341,109 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChronoSandboxCodexExecution(
             builder.Configuration,
             builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"));
-        builder.Services.AddNyxIdTools(o =>
+        builder.Services.AddNyxIdTools(builder.Configuration, o =>
         {
-            // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
-            // non-empty value; an absent/empty config key must NOT clobber the default to null.
-            var nyxAuthority = builder.Configuration["Aevatar:NyxId:ApiBaseUrl"]
-                               ?? builder.Configuration["Aevatar:NyxId:Authority"]
-                               ?? builder.Configuration["Cli:App:NyxId:Authority"]
-                               ?? builder.Configuration["Aevatar:Authentication:Authority"];
-            if (!string.IsNullOrWhiteSpace(nyxAuthority))
-                o.BaseUrl = nyxAuthority;
-            o.SandboxServiceSlug = sandboxServiceSlug;
             // SSH-backed tools are disabled unless the deployment opts in explicitly.
             // Even when exposed, their contract always requires a durable actor-owned grant.
             if (bool.TryParse(builder.Configuration["Aevatar:NyxId:EnableSshExecTool"], out var enableSsh))
                 o.EnableSshExecTool = enableSsh;
+            // Milestone 40 ships actor-owned connected-service effects on Mainnet. Other hosts
+            // retain NyxIdToolOptions' fail-closed default until they provide the same durable facts.
+            o.EnableAssistantConnectedServiceEffects = true;
+            o.AssistantOperationReadBackBindings.Add(new NyxIdAssistantOperationReadBackBinding
+            {
+                CatalogServiceSlug = "api-lark-bot",
+                EffectHttpMethod = "POST",
+                EffectPathTemplate = "/open-apis/im/v1/messages",
+                ReadHttpMethod = "GET",
+                ReadPathTemplate = "/open-apis/im/v1/messages/{message_id}",
+                CheckName = "lark_provider_message_visible_by_id",
+                Match = AgentToolReadBackMatch.ArrayContainsEquals,
+                JsonPointer = "/data/items",
+                ElementJsonPointer = "/message_id",
+                EffectResultIdentityJsonPointer = "/data/message_id",
+                ProviderResourceArgument = new NyxIdAssistantReadBackProviderResourceArgument
+                {
+                    ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                    ReadArgumentName = "message_id",
+                },
+            });
+            o.AssistantOperationReadBackBindings.Add(new NyxIdAssistantOperationReadBackBinding
+            {
+                CatalogServiceSlug = "api-lark-bot",
+                EffectHttpMethod = "POST",
+                EffectPathTemplate = "/open-apis/approval/v4/instances",
+                ReadHttpMethod = "GET",
+                ReadPathTemplate = "/open-apis/approval/v4/instances/{instance_id}",
+                CheckName = "lark_approval_instance_exists_by_caller_uuid",
+                Match = AgentToolReadBackMatch.Exists,
+                JsonPointer = "/data/instance_code",
+                EffectResultIdentityJsonPointer = "/data/instance_code",
+                ArgumentBindings =
+                [
+                    new NyxIdAssistantReadBackArgumentBinding
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Body,
+                        EffectArgumentName = "uuid",
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        ReadArgumentName = "instance_id",
+                    },
+                ],
+                NotAppliedEvidence = new NyxIdAssistantReadBackNotAppliedEvidence
+                {
+                    JsonPointer = "/code",
+                    ExpectedValue = Value.ForNumber(1390003),
+                },
+            });
+            o.AssistantOperationReadBackBindings.Add(new NyxIdAssistantOperationReadBackBinding
+            {
+                CatalogServiceSlug = "api-lark-bot",
+                EffectHttpMethod = "POST",
+                EffectPathTemplate =
+                    "/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+                ReadHttpMethod = "GET",
+                ReadPathTemplate =
+                    "/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+                CheckName = "lark_bitable_record_exists_by_provider_identity",
+                Match = AgentToolReadBackMatch.ArrayContainsEquals,
+                JsonPointer = "/data/items",
+                ElementJsonPointer = "/record_id",
+                EffectResultIdentityJsonPointer = "/data/record/record_id",
+                ArgumentBindings =
+                [
+                    new NyxIdAssistantReadBackArgumentBinding
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        EffectArgumentName = "app_token",
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        ReadArgumentName = "app_token",
+                    },
+                    new NyxIdAssistantReadBackArgumentBinding
+                    {
+                        EffectLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        EffectArgumentName = "table_id",
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Path,
+                        ReadArgumentName = "table_id",
+                    },
+                ],
+                LiteralReadArguments =
+                [
+                    new NyxIdAssistantReadBackLiteralArgument
+                    {
+                        ReadLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                        ReadArgumentName = "page_size",
+                        Value = Value.ForNumber(20),
+                    },
+                ],
+                Pagination = new NyxIdAssistantReadBackPagination
+                {
+                    HasMoreJsonPointer = "/data/has_more",
+                    PageTokenJsonPointer = "/data/page_token",
+                    PageTokenLocation = NyxIdAssistantOperationArgumentLocation.Query,
+                    PageTokenArgumentName = "page_token",
+                    MaxPages = 200,
+                },
+            });
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
                 $"{ManagedCodexOptions.SectionName}:Enabled");
             o.MaxRequestDurationSeconds = builder.Configuration.GetValue(
@@ -368,6 +455,7 @@ public static class MainnetHostBuilderExtensions
                 "Aevatar:NyxId:ManagedWorkflowAdmissionMode",
                 o.ManagedWorkflowAdmissionMode);
         });
+        ReplaceMainnetWorkflowAgentToolSourceAdapter(builder.Services);
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, NyxIdWorkflowAdmissionEnforcementStartupGuard>());
         builder.Services.Replace(ServiceDescriptor.Singleton<
@@ -389,67 +477,169 @@ public static class MainnetHostBuilderExtensions
             var urls = builder.Configuration[WebHostDefaults.ServerUrlsKey] ?? "http://127.0.0.1:5080";
             o.ApiBaseUrl = urls.Split(';').FirstOrDefault()?.Trim();
         });
-        builder.Services.AddWebTools(o =>
+        // AddAevatarPlatform registers WebToolOptions before Mainnet applies its host
+        // invariants. Replace that instance explicitly so a mounted appsettings.json
+        // cannot keep an obsolete provider slug alive through the earlier registration.
+        builder.Services.Replace(ServiceDescriptor.Singleton(new WebToolOptions
         {
-            o.NyxIdBaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
-                             ?? builder.Configuration["Cli:App:NyxId:Authority"]
-                             ?? builder.Configuration["Aevatar:Authentication:Authority"];
-            o.NyxIdSearchSlug = builder.Configuration["Aevatar:Web:NyxIdSearchSlug"]
-                                ?? builder.Configuration["Aevatar:Web:SearchSlug"];
-            o.SearchApiBaseUrl = builder.Configuration["Aevatar:Web:SearchApiBaseUrl"];
-        });
+            NyxIdBaseUrl = FirstConfiguredValue(
+                    builder.Configuration,
+                    "Aevatar:Web:NyxIdBaseUrl")
+                ?? NyxIdEndpointResolver.ResolvePublicApiBaseUrl(builder.Configuration),
+            // Mainnet Milestone 40 has one admitted search capability. Stale deployment
+            // overrides must not silently route the mounted web_search tool to another service.
+            NyxIdSearchSlug = "tavily-search",
+            SearchApiBaseUrl = FirstConfiguredValue(
+                builder.Configuration,
+                "Aevatar:Web:SearchApiBaseUrl",
+                "Aevatar:WebSearch:ApiBaseUrl"),
+        }));
         builder.Services.AddToolSetRegistry(options =>
         {
             options.AddToolSet(
-                ToolSetNames.WorkspaceDefault,
+                ToolSetNames.ChatCore,
+                [CreateToolSource<AskUserAgentToolSource>],
+                "Typed user clarification for ordinary chat routes.");
+            options.AddToolSet(
+                ToolSetNames.WebRuntime,
+                [CreateToolSource<WebAgentToolSource>],
+                "Canonical web_search and web_fetch runtime tools.");
+            options.AddToolSet(
+                ToolSetNames.SkillRuntime,
+                [
+                    CreateToolSource<SkillsAgentToolSource>,
+                    CreateToolSource<OrnnSearchAgentToolSource>,
+                ],
+                "Runtime skill discovery and exact skill execution.");
+            options.AddToolSet(
+                ToolSetNames.SkillAuthoring,
+                [CreateToolSource<OrnnAuthoringAgentToolSource>],
+                "Opt-in Ornn skill publishing and update tools.");
+            options.AddToolSet(
+                ToolSetNames.AevatarInvoke,
                 [
                     CreateToolSource<InvokeGAgentToolSource>,
                     CreateToolSource<InvokeTeamToolSource>,
                     CreateToolSource<InvokeMemberToolSource>,
                     CreateToolSource<StartWorkflowToolSource>,
+                    CreateToolSource<WorkflowCatalogAgentToolSource>,
+                ],
+                "Typed Aevatar agent, team, member, and workflow invocation tools.");
+            options.AddToolSet(
+                ToolSetNames.AevatarObserve,
+                [
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
-                    CreateToolSource<WorkflowCatalogAgentToolSource>,
+                ],
+                "Typed run observation and artifact reads.");
+            options.AddToolSet(
+                ToolSetNames.ResponsesState,
+                [CreateToolSource<ResponsesAevatarToolProvider>],
+                "Responses-owned state tools without ingress Web aliases.");
+            options.AddToolSet(
+                ToolSetNames.NyxIdPrivileged,
+                [CreateToolSource<NyxIdAgentToolSource>],
+                "Opt-in NyxID account, service, credential, proxy, approval, node, and admin tools.");
+            options.AddToolSet(
+                ToolSetNames.NyxIdExecution,
+                [CreateToolSource<NyxIdExecutionAgentToolSource>],
+                "Opt-in NyxID SSH, code, and Codex execution tools.");
+            options.AddToolSet(
+                ToolSetNames.StorageRead,
+                [CreateToolSource<ChronoStorageReadAgentToolSource>],
+                "Read-only ChronoStorage browsing tools.");
+            options.AddToolSet(
+                ToolSetNames.StorageWrite,
+                [CreateToolSource<ChronoStorageWriteAgentToolSource>],
+                "Mutating ChronoStorage tools.");
+            options.AddToolSet(
+                ToolSetNames.ChannelCore,
+                [
+                    CreateToolSource<ChannelInteractiveReplyToolSource>,
+                    CreateToolSource<ChannelRegistrationToolSource>,
+                    CreateToolSource<AgentDeliveryTargetToolSource>,
+                ],
+                "Channel-agnostic reply, registration, and delivery-target tools.");
+            options.AddToolSet(
+                ToolSetNames.ChannelLark,
+                [ToolSetNames.ChannelCore],
+                [CreateToolSource<LarkAgentToolSource>],
+                "Lark channel tools with the shared channel core.");
+            options.AddToolSet(
+                ToolSetNames.ChannelTelegram,
+                [ToolSetNames.ChannelCore],
+                [CreateToolSource<TelegramAgentToolSource>],
+                "Telegram channel tools with the shared channel core.");
+            options.AddToolSet(
+                ToolSetNames.WorkspaceDefault,
+                [
+                    ToolSetNames.ChatCore,
+                    ToolSetNames.WebRuntime,
+                    ToolSetNames.SkillRuntime,
+                    ToolSetNames.AevatarInvoke,
+                    ToolSetNames.AevatarObserve,
+                ],
+                [],
+                "Public text route ceiling composed from reviewed runtime capabilities.");
+            options.AddToolSet(
+                ToolSetNames.LarkSelfNotify,
+                [ToolSetNames.WorkspaceDefault, ToolSetNames.ChannelLark],
+                [],
+                "Explicit Lark route composition with the public workspace ceiling.");
+            options.AddToolSet(
+                ToolSetNames.StudioLocal,
+                [
                     CreateToolSource<ProvisionWorkflowScheduleToolSource>,
                     CreateToolSource<CreateStudioTeamToolSource>,
                     CreateToolSource<StudioTeamQueryToolSource>,
                     CreateToolSource<CreateStudioMemberToolSource>,
                     CreateToolSource<CreateStudioMemberWorkflowDraftToolSource>,
                     CreateToolSource<StudioMemberQueryToolSource>,
-                    CreateToolSource<StudioScheduleQueryToolSource>,
+                    CreateToolSource<StudioMemberInvocationReadinessToolSource>,
                     CreateToolSource<StudioWorkflowQueryToolSource>,
+                    CreateToolSource<StudioScheduleQueryToolSource>,
                     CreateToolSource<BindStudioMemberWorkflowToolSource>,
                     CreateToolSource<ScheduleStudioMemberWorkflowToolSource>,
-                    CreateToolSource<ResponsesAevatarToolProvider>,
-                    CreateToolSource<ChannelInteractiveReplyToolSource>,
-                    CreateToolSource<ChannelRegistrationToolSource>,
-                    CreateToolSource<AgentDeliveryTargetToolSource>,
-                    CreateToolSource<NyxIdAgentToolSource>,
-                    CreateToolSource<LarkAgentToolSource>,
-                    CreateToolSource<TelegramAgentToolSource>,
-                    CreateToolSource<ChronoStorageAgentToolSource>,
-                    CreateToolSource<WebAgentToolSource>,
-                    CreateToolSource<SkillsAgentToolSource>,
-                    CreateToolSource<OrnnAgentToolSource>,
                 ],
-                "Default /v1/responses workspace tool composition.");
-            options.AddToolSet(
-                ToolSetNames.LarkSelfNotify,
-                [ToolSetNames.WorkspaceDefault],
-                [],
-                "Lark route tool composition with the default workspace tools.");
+                "Studio-owned local provisioning, member, binding, schedule, and query tools.");
+            options.AddToolSet<WorkflowExternalCapabilityAuthoringToolSource>(
+                ToolSetNames.WorkflowExternalCapabilityAuthoring,
+                "Read-only external workflow capability discovery, readiness, and explicit-request preview.");
             // Opt-in only: connected-service tools carry per-user NyxID surfaces, so this set
             // is referenced by route policy (not folded into workspace.default) to avoid
             // injecting every caller's connected services by default.
             options.AddToolSet(
                 ToolSetNames.NyxIdConnectedServices,
                 [CreateToolSource<NyxIdConnectedServiceToolSource>],
-                "NyxID connected-service operations explicitly marked x-aevatar-tool, registered as individual tools.");
+                "NyxID request-local operations admitted from the exact MCP and connected-service inventory intersection.");
+            options.AddToolSet(
+                ToolSetNames.NyxIdAssistantAdmission,
+                [CreateToolSource<NyxIdAssistantToolSource>],
+                "Pinned local NyxID Assistant tools used by built-in admission intents without external discovery dependencies.");
+            options.AddToolSet(
+                ToolSetNames.NyxIdChatDefault,
+                [
+                    CreateToolSource<NyxIdAssistantToolSource>,
+                    CreateToolSource<NyxIdConnectedServiceToolSource>,
+                    CreateToolSource<WebSearchAgentToolSource>,
+                    CreateToolSource<AskUserAgentToolSource>,
+                    CreateToolSource<ConditionEvaluateAgentToolSource>,
+                    CreateToolSource<SkillsAgentToolSource>,
+                    CreateToolSource<OrnnSearchAgentToolSource>,
+                    CreateToolSource<OrnnPublishAgentToolSource>,
+                    CreateToolSource<StartWorkflowToolSource>,
+                    CreateToolSource<ObserveRunToolSource>,
+                    CreateToolSource<ReadWorkflowRunArtifactToolSource>,
+                ],
+                "Ordinary NyxID Assistant turn surface: safe management reads, admitted request-local connected-service operations, web and Ornn skill search, readiness, typed user input, explicit skill loading, and managed workflow execution with typed observation.");
             options.AddToolSet(
                 AgentProfilePolicies.NyxIdChatRouteToolSet,
-                [ToolSetNames.WorkspaceDefault, ToolSetNames.NyxIdConnectedServices],
+                [
+                    ToolSetNames.NyxIdChatDefault,
+                    ToolSetNames.WorkflowExternalCapabilityAuthoring,
+                ],
                 [],
-                "NyxID chat profile route tool composition with workspace and typed connected-service tools.");
+                "NyxID Agent Profile authority route. Per-turn intent policy attenuates this superset before schemas reach the model.");
         });
 
         return builder;
@@ -462,6 +652,28 @@ public static class MainnetHostBuilderExtensions
                 MainnetNyxIdChatAgentProfileResolver>());
     }
 
+    private static void ReplaceMainnetWorkflowAgentToolSourceAdapter(IServiceCollection services)
+    {
+        var defaultAdapter = services.SingleOrDefault(static descriptor =>
+            descriptor.ServiceType == typeof(IWorkflowToolSource) &&
+            descriptor.ImplementationType == typeof(AgentWorkflowToolSourceAdapter));
+        if (defaultAdapter is null)
+        {
+            throw new InvalidOperationException(
+                "The default workflow agent tool source adapter registration is missing.");
+        }
+
+        services.Remove(defaultAdapter);
+        services.AddSingleton<IWorkflowToolSource>(serviceProvider =>
+            new AgentWorkflowToolSourceAdapter(
+                serviceProvider.GetServices<IAgentToolSource>()
+                    .Append(serviceProvider.GetRequiredService<NyxIdWorkflowAgentToolSource>())
+                    .Append(serviceProvider.GetRequiredService<NyxIdExecutionAgentToolSource>())
+                    .ToArray(),
+                serviceProvider.GetRequiredService<IAgentToolExecutionPort>(),
+                serviceProvider.GetRequiredService<ILogger<AgentWorkflowToolSourceAdapter>>()));
+    }
+
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)
         where TSource : class, IAgentToolSource
         => ActivatorUtilities.CreateInstance<TSource>(serviceProvider);
@@ -470,16 +682,23 @@ public static class MainnetHostBuilderExtensions
     {
         ArgumentNullException.ThrowIfNull(app);
 
+        app.UseAIWorkspaceErrorContract();
         app.UseAevatarDefaultHost();
         app.MapMainnetChatEndpoints();
         app.MapNyxIdChatPublicEndpoints();
         app.MapNyxIdChatEndpoints();
         app.MapChatRoutePolicyAdminEndpoints();
+        app.MapLLMModelCatalogEndpoints();
         app.MapAgentProfileEndpoints();
+        app.MapAIWorkspaceEndpoints();
+        app.MapAIWorkspaceAgentManagementEndpoints();
+        app.MapAIPageEndpoints();
+        app.MapDefaultVoiceAgentEndpoints();
         app.MapVoicePresenceCapabilityAdminEndpoints();
         app.MapVoiceConsoleEndpoints();
         app.MapAutoConsoleCallbackEndpoints();
         app.MapAdminConsoleEndpoints();
+        app.MapDeliveryConsoleEndpoints();
         app.MapCqrsObservatoryPageEndpoints();
         app.MapCqrsObservatoryApiEndpoints();
         app.MapStreamingProxyEndpoints();
@@ -521,7 +740,7 @@ public static class MainnetHostBuilderExtensions
         if (!string.IsNullOrWhiteSpace(builder.Configuration[audienceKey]))
             return;
 
-        // NyxID access tokens use its API BASE_URL as their audience. Identity assertions use
+        // NyxID access tokens use its public API BASE_URL as their audience. Identity assertions use
         // a separate audience and must not be reused for bearer-token validation.
         var nyxIdApiBaseUrl = builder.Configuration[NyxIdApiBaseUrlKey];
         if (string.IsNullOrWhiteSpace(nyxIdApiBaseUrl))
@@ -600,9 +819,22 @@ public static class MainnetHostBuilderExtensions
                string.Equals(value, "1", StringComparison.Ordinal);
     }
 
+    private static string? FirstConfiguredValue(IConfiguration configuration, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            var value = configuration[key];
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+
+        return null;
+    }
+
     private static void ConfigureMainnetAIFeatures(AevatarAIFeatureOptions options)
     {
         options.EnableBindingTools = true;
+        options.EnableWorkflowExternalCapabilityAuthoringTools = true;
 
         if (!options.VoicePresence.Module.DirectExternalEventTypeUrls.Contains(
                 DeviceInboundDirectExternalEventTypeUrl,

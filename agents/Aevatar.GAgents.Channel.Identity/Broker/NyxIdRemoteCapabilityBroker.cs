@@ -48,6 +48,15 @@ public sealed class NyxIdRemoteCapabilityBroker :
     /// </summary>
     public const string HttpClientName = "nyxid-broker";
 
+    /// <summary>Token grant that covers every UserService the owner holds.</summary>
+    internal const string AllowAllGrantMode = "allow_all";
+
+    /// <summary>Token grant limited to an explicit resource / service-id set.</summary>
+    internal const string RestrictedGrantMode = "restricted";
+
+    /// <summary>Token whose service-grant claims could not be parsed at all.</summary>
+    internal const string UnreadableGrantMode = "unreadable";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -88,6 +97,13 @@ public sealed class NyxIdRemoteCapabilityBroker :
             _options.ResourceServerBaseUrl,
             _options.RequiredLlmServiceSlug,
             _options.AdditionalRequiredServiceSlugs);
+
+    private static string[] NormalizeResourceUris(IReadOnlyList<string>? resourceUris) =>
+        (resourceUris ?? [])
+            .Select(static resourceUri => resourceUri?.Trim() ?? string.Empty)
+            .Where(static resourceUri => !string.IsNullOrWhiteSpace(resourceUri))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     public async Task<BindingChallenge> StartExternalBindingAsync(
         ExternalSubjectRef externalSubject,
@@ -168,10 +184,10 @@ public sealed class NyxIdRemoteCapabilityBroker :
 
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         _logger.LogError(
-            "NyxID revoke binding failed: status={StatusCode}, binding_id={BindingId}, body={Body}",
+            "NyxID revoke binding failed: status={StatusCode}, binding_digest={BindingDigest}, body={Body}",
             (int)response.StatusCode,
-            bindingId,
-            Truncate(SecretScrubber.Scrub(body), 256));
+            BindingDigest(bindingId),
+            Truncate(ScrubBindingId(body, bindingId), 256));
         response.EnsureSuccessStatusCode();
     }
 
@@ -355,6 +371,7 @@ public sealed class NyxIdRemoteCapabilityBroker :
             codeVerifier,
             ResolveRedirectUri(),
             requireProvisionedRedirectUri: true,
+            resourceUris: null,
             ct);
     }
 
@@ -368,11 +385,31 @@ public sealed class NyxIdRemoteCapabilityBroker :
         ArgumentException.ThrowIfNullOrWhiteSpace(codeVerifier);
         ArgumentException.ThrowIfNullOrWhiteSpace(redirectUri);
 
+        return ExchangeAuthorizationCodeAsync(
+            authorizationCode,
+            codeVerifier,
+            redirectUri,
+            resourceUris: null,
+            ct);
+    }
+
+    public Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
+        string authorizationCode,
+        string codeVerifier,
+        string redirectUri,
+        IReadOnlyList<string>? resourceUris,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(authorizationCode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(codeVerifier);
+        ArgumentException.ThrowIfNullOrWhiteSpace(redirectUri);
+
         return ExchangeAuthorizationCodeCoreAsync(
             authorizationCode,
             codeVerifier,
             redirectUri.Trim(),
             requireProvisionedRedirectUri: false,
+            resourceUris,
             ct);
     }
 
@@ -425,14 +462,13 @@ public sealed class NyxIdRemoteCapabilityBroker :
         string codeVerifier,
         string redirectUri,
         bool requireProvisionedRedirectUri,
+        IReadOnlyList<string>? resourceUris,
         CancellationToken ct)
     {
         var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
         if (requireProvisionedRedirectUri)
             EnsureClientCurrent(snapshot, redirectUri);
 
-        // The authorization code already carries the user's finalized Consent selection.
-        // Repeating resource here would narrow that grant to Aevatar's minimum runtime set.
         var form = new List<KeyValuePair<string, string>>
         {
             new("grant_type", "authorization_code"),
@@ -441,6 +477,8 @@ public sealed class NyxIdRemoteCapabilityBroker :
             new("redirect_uri", redirectUri),
             new("client_id", snapshot.ClientId),
         };
+        foreach (var resourceUri in NormalizeResourceUris(resourceUris))
+            form.Add(new KeyValuePair<string, string>("resource", resourceUri));
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -502,8 +540,14 @@ public sealed class NyxIdRemoteCapabilityBroker :
             queryParts.Add(
                 $"external_subject_tenant={Uri.EscapeDataString(externalSubject.Tenant)}");
         }
-        queryParts.AddRange(RequiredResourceUris()
-            .Select(static resource => $"resource={Uri.EscapeDataString(resource)}"));
+        // No RFC 8707 `resource` here. NyxID narrows the authorization code —
+        // and therefore the durable broker binding — to exactly the resources
+        // requested at /oauth/authorize, discarding every optional UserService
+        // the user approved on the Consent page. Channel /init converges on the
+        // same authorize contract as Studio login: the Consent page owns the
+        // authorization ceiling, and RequiredResourceUris() is enforced as a
+        // fail-closed runtime floor at callback probe and every short-lived
+        // capability issuance instead.
         queryParts.AddRange(
         [
             $"state={Uri.EscapeDataString(stateToken)}",
@@ -555,33 +599,50 @@ public sealed class NyxIdRemoteCapabilityBroker :
     {
         var grant = ParseTokenServiceGrant(accessToken);
         if (!grant.Valid)
+        {
+            LogRequiredResourceFloor(UnreadableGrantMode, requiredResources.Count, requiredResources.Count);
             return requiredResources.ToArray();
+        }
 
+        var grantMode = grant.AllowsEveryService ? AllowAllGrantMode : RestrictedGrantMode;
         var missingResources = AevatarOAuthClientResources.MissingRequiredResources(
             grant.ResourceUris,
             requiredResources);
         if (missingResources.Length == 0)
+        {
+            LogRequiredResourceFloor(grantMode, requiredResources.Count, 0);
             return [];
+        }
 
         var catalogResources = await ResolveGrantedCatalogResourcesAsync(accessToken, grant, ct)
             .ConfigureAwait(false);
-        return AevatarOAuthClientResources.MissingRequiredResources(
+        missingResources = AevatarOAuthClientResources.MissingRequiredResources(
             grant.ResourceUris.Concat(catalogResources),
             requiredResources);
+        LogRequiredResourceFloor(grantMode, requiredResources.Count, missingResources.Length);
+        return missingResources;
     }
+
+    /// <summary>
+    /// Records how the issued token's service grant compares with the configured
+    /// runtime floor. Counts and the grant mode only: the granted resource URIs
+    /// belong to the user's Consent selection, so enumerating them here would
+    /// leak which optional services a user connected.
+    /// </summary>
+    private void LogRequiredResourceFloor(string grantMode, int requiredCount, int missingCount) =>
+        _logger.LogInformation(
+            "NyxID binding grant checked against the configured runtime floor: grant_mode={GrantMode}, required_resource_count={RequiredResourceCount}, missing_required_resource_count={MissingRequiredResourceCount}",
+            grantMode,
+            requiredCount,
+            missingCount);
 
     private async Task<string[]> ResolveGrantedCatalogResourcesAsync(
         string accessToken,
         TokenServiceGrant grant,
         CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"{_options.ResourceServerBaseUrl.Trim().TrimEnd('/')}{UserServicesEndpoint}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-
         var http = CreateHttpClient();
-        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+        using var response = await SendCatalogRequestAsync(http, accessToken, ct).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -603,6 +664,24 @@ public sealed class NyxIdRemoteCapabilityBroker :
             .Where(static resource => !string.IsNullOrWhiteSpace(resource))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private async Task<HttpResponseMessage> SendCatalogRequestAsync(
+        HttpClient http,
+        string accessToken,
+        CancellationToken ct)
+    {
+        using var request = CreateCatalogRequest(_options.PublicApiBaseUrl, accessToken);
+        return await http.SendAsync(request, ct).ConfigureAwait(false);
+    }
+
+    private static HttpRequestMessage CreateCatalogRequest(string? baseUrl, string accessToken)
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{baseUrl?.Trim().TrimEnd('/')}{UserServicesEndpoint}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        return request;
     }
 
     private static TokenServiceGrant ParseTokenServiceGrant(string accessToken)
@@ -665,8 +744,14 @@ public sealed class NyxIdRemoteCapabilityBroker :
     private static string Truncate(string value, int max) =>
         string.IsNullOrEmpty(value) ? string.Empty : value.Length <= max ? value : value[..max];
 
+    private static string ScrubBindingId(string value, string bindingId) =>
+        SecretScrubber.Scrub(value)
+            .Replace(bindingId, SecretScrubber.Marker, StringComparison.Ordinal);
+
     internal static string HashBindingId(string bindingId) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(bindingId))).ToLowerInvariant();
+
+    internal static string BindingDigest(string bindingId) => HashBindingId(bindingId)[..12];
 
     private sealed record TokenResponse
     {

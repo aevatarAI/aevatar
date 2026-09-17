@@ -12,7 +12,7 @@ namespace Aevatar.Studio.Hosting.NyxId;
 // Refactor (iter159/cluster-646-first):
 //   Old pattern: Every IUserLlmCatalogPort.GetServicesAsync call fetched NyxID directly during the request path,
 //                amplifying NyxID catalog IO across hot-path Studio requests.
-//   New principle: Host/NyxID adapter owns a bounded stale-while-revalidate snapshot, keyed by NyxID authority +
+//   New principle: Host/NyxID adapter owns a bounded stale-while-revalidate snapshot, keyed by NyxID API base URL +
 //                  caller bearer fingerprint. The snapshot is a non-authoritative performance hint — NOT a readmodel,
 //                  NOT actor state, NOT a query fact source. Authoritative facts remain in NyxID; cache eviction,
 //                  miss, or disabled mode falls back to authoritative fetch. ProvisionAsync invalidates the caller's
@@ -162,12 +162,12 @@ internal sealed class CachedNyxIdLlmCatalogPort : IUserLlmCatalogPort, IDisposab
 
     private NyxIdLlmCatalogCacheKey BuildKey(string bearerToken)
     {
-        var authority = NyxIdAuthorityResolver.ResolveNyxIdAuthorityBase(_configuration);
-        if (string.IsNullOrWhiteSpace(authority))
-            throw new InvalidOperationException("NyxID authority is not configured.");
+        var apiBaseUrl = NyxIdApiEndpointResolver.ResolvePublicApiBaseUrl(_configuration);
+        if (string.IsNullOrWhiteSpace(apiBaseUrl))
+            throw new InvalidOperationException("NyxID public API base URL is not configured.");
 
         return new NyxIdLlmCatalogCacheKey(
-            authority,
+            apiBaseUrl,
             ComputeSha256Hex(bearerToken));
     }
 
@@ -196,6 +196,6 @@ internal sealed class CachedNyxIdLlmCatalogPort : IUserLlmCatalogPort, IDisposab
         DateTimeOffset StaleUntilUtc);
 
     private readonly record struct NyxIdLlmCatalogCacheKey(
-        string Authority,
+        string ApiBaseUrl,
         string BearerFingerprint);
 }

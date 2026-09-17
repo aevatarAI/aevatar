@@ -1,17 +1,28 @@
+using System.Diagnostics.Metrics;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using Aevatar.Bootstrap.Hosting;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using OpenTelemetry;
+using OpenTelemetry.Metrics;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
 public class ObservabilityExtensionsTests
 {
     private const double DefaultRatio = 0.1d;
+    private const string MaterializerDurationInstrumentName = "aevatar.projection.materializer.duration";
+    private const string Neo4jWriteDurationInstrumentName = "aevatar.projection.neo4j.write.duration";
     private static readonly Type ObservabilityExtensionsType = typeof(AevatarHostObservabilityExtensions);
+
+    private static readonly FieldInfo DefaultProjectionLatencyBucketsField =
+        ObservabilityExtensionsType.GetField(
+            "DefaultProjectionLatencyBucketsMs",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
 
     private static readonly MethodInfo ResolveSamplingRatioMethod =
         ObservabilityExtensionsType.GetMethod("ResolveSamplingRatio", BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -139,6 +150,7 @@ public class ObservabilityExtensionsTests
             ["Observability:Tracing:SampleRatio"] = "0.4",
             ["Observability:Metrics:ApiLatencyBucketsMs"] = "5,10,20",
             ["Observability:Metrics:RuntimeLatencyBucketsMs"] = "1,2,3",
+            ["Observability:Metrics:ProjectionLatencyBucketsMs"] = "100,1000,10000,60000",
         });
         var developmentBuilder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -158,6 +170,41 @@ public class ObservabilityExtensionsTests
         developmentBuilder.Services.Should().NotBeEmpty();
     }
 
+    [Fact]
+    public void AddAevatarHostObservability_ShouldApplyDefaultProjectionBucketsToBothDurationViews()
+    {
+        var defaultBuckets = GetDefaultProjectionLatencyBuckets();
+        defaultBuckets.Should().BeInAscendingOrder();
+        defaultBuckets.Last().Should().Be(600000d);
+        var exporter = new HistogramBoundsExporter(
+            MaterializerDurationInstrumentName,
+            Neo4jWriteDurationInstrumentName);
+        var builder = CreateBuilder();
+        InvokeAddObservability(builder, "wf-default");
+        builder.Services
+            .AddOpenTelemetry()
+            .WithMetrics(metrics => metrics.AddReader(new BaseExportingMetricReader(exporter)));
+
+        using var app = builder.Build();
+        var provider = app.Services.GetRequiredService<MeterProvider>();
+        var testVersion = $"view-test-{Guid.NewGuid():N}";
+        using var materializerMeter = new Meter("Aevatar.CQRS.Projection", testVersion);
+        using var neo4jMeter = new Meter("Aevatar.CQRS.Projection.Providers.Neo4j", testVersion);
+        var materializerDuration = materializerMeter.CreateHistogram<double>(
+            MaterializerDurationInstrumentName,
+            unit: "ms");
+        var neo4jWriteDuration = neo4jMeter.CreateHistogram<double>(
+            Neo4jWriteDurationInstrumentName,
+            unit: "ms");
+
+        materializerDuration.Record(1d);
+        neo4jWriteDuration.Record(1d);
+
+        provider.ForceFlush(10000).Should().BeTrue();
+        exporter.GetBounds(MaterializerDurationInstrumentName).Should().Equal(defaultBuckets);
+        exporter.GetBounds(Neo4jWriteDurationInstrumentName).Should().Equal(defaultBuckets);
+    }
+
     private static WebApplicationBuilder CreateBuilder(Dictionary<string, string?>? values = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
@@ -170,6 +217,9 @@ public class ObservabilityExtensionsTests
 
         return builder;
     }
+
+    private static double[] GetDefaultProjectionLatencyBuckets() =>
+        ((double[])DefaultProjectionLatencyBucketsField.GetValue(null)!).ToArray();
 
     private static double InvokeResolveSamplingRatio(WebApplicationBuilder builder, double defaultValue)
     {
@@ -222,6 +272,54 @@ public class ObservabilityExtensionsTests
         {
             ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
             throw;
+        }
+    }
+
+    private sealed class HistogramBoundsExporter : BaseExporter<Metric>
+    {
+        private readonly HashSet<string> _expectedInstrumentNames;
+        private readonly Dictionary<string, double[]> _boundsByInstrument = new(StringComparer.Ordinal);
+        private readonly object _gate = new();
+
+        public HistogramBoundsExporter(params string[] expectedInstrumentNames)
+        {
+            _expectedInstrumentNames = expectedInstrumentNames.ToHashSet(StringComparer.Ordinal);
+        }
+
+        public override ExportResult Export(in Batch<Metric> batch)
+        {
+            foreach (var metric in batch)
+            {
+                if (!_expectedInstrumentNames.Contains(metric.Name))
+                    continue;
+
+                foreach (var metricPoint in metric.GetMetricPoints())
+                {
+                    var bounds = new List<double>();
+                    foreach (var bucket in metricPoint.GetHistogramBuckets())
+                    {
+                        if (!double.IsPositiveInfinity(bucket.ExplicitBound))
+                            bounds.Add(bucket.ExplicitBound);
+                    }
+
+                    lock (_gate)
+                    {
+                        _boundsByInstrument[metric.Name] = bounds.ToArray();
+                    }
+
+                    break;
+                }
+            }
+
+            return ExportResult.Success;
+        }
+
+        public double[] GetBounds(string instrumentName)
+        {
+            lock (_gate)
+            {
+                return _boundsByInstrument[instrumentName].ToArray();
+            }
         }
     }
 }

@@ -1,12 +1,21 @@
 using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Foundation.Runtime.Callbacks;
 
 public sealed class InMemoryActorRuntimeCallbackScheduler :
-    IActorRuntimeCallbackScheduler
+    IActorRuntimeCallbackScheduler,
+    IRuntimeFleetReconcileScheduleOwner,
+    IRuntimeFleetReconcileDeliveryVerifier,
+    IDisposable
 {
+    private const int FleetReconcileSlotEpoch = 1;
+    private static readonly TimeSpan FleetReconcileInitialDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan FleetReconcilePeriod = TimeSpan.FromSeconds(10);
     private readonly IStreamProvider _streams;
     private readonly ConcurrentDictionary<CallbackKey, ScheduledCallback> _callbacks = [];
     private readonly ConcurrentDictionary<CallbackKey, long> _callbackGenerations = [];
@@ -21,6 +30,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
     public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(RuntimeCallbackTimeoutRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ThrowIfGenericMutationTargetsReservedSlot(request.ActorId, request.CallbackId);
         ValidateScheduleRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
         ct.ThrowIfCancellationRequested();
 
@@ -54,6 +64,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
     public Task<RuntimeCallbackLease> ScheduleTimerAsync(RuntimeCallbackTimerRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ThrowIfGenericMutationTargetsReservedSlot(request.ActorId, request.CallbackId);
         ValidateScheduleRequest(request.ActorId, request.CallbackId, request.TriggerEnvelope, request.DueTime);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(request.Period, TimeSpan.Zero);
         ct.ThrowIfCancellationRequested();
@@ -92,6 +103,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         if (lease.Backend != RuntimeCallbackBackend.InMemory)
             throw new InvalidOperationException($"In-memory callback scheduler cannot cancel backend '{lease.Backend}'.");
 
+        ThrowIfGenericMutationTargetsReservedSlot(lease.ActorId, lease.CallbackId);
+
         var key = new CallbackKey(lease.ActorId, lease.CallbackId);
         if (!_callbacks.TryGetValue(key, out var callback))
             return Task.CompletedTask;
@@ -111,6 +124,14 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
+        if (string.Equals(
+                actorId,
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet capability authority callback scheduler is runtime-reserved and cannot be purged.");
+        }
 
         var callbacks = _callbacks
             .Where(x => string.Equals(x.Key.ActorId, actorId, StringComparison.Ordinal))
@@ -131,6 +152,88 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         return Task.CompletedTask;
     }
 
+    public void Dispose()
+    {
+        foreach (var callback in _callbacks.Values)
+            callback.Stop();
+        _callbacks.Clear();
+        _callbackGenerations.Clear();
+        GC.SuppressFinalize(this);
+    }
+
+    public Task EnsureScheduledAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var actorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId;
+        var callbackId = RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId;
+        var key = new CallbackKey(actorId, callbackId);
+        if (_callbacks.TryGetValue(key, out var existing) && existing.IsFleetReconcile)
+            return Task.CompletedTask;
+
+        var generation = _callbackGenerations.AddOrUpdate(key, 1, (_, current) => current + 1);
+        var trigger = CreateFleetReconcileTriggerEnvelope();
+        var callback = _callbacks.AddOrUpdate(
+            key,
+            _ => ScheduledCallback.Create(
+                actorId,
+                callbackId,
+                trigger,
+                RuntimeCallbackDeliveryMode.FiredSelfEvent,
+                isPeriodic: true,
+                FleetReconcilePeriod,
+                generation,
+                isFleetReconcile: true),
+            (_, current) => current.Replace(
+                trigger,
+                RuntimeCallbackDeliveryMode.FiredSelfEvent,
+                isPeriodic: true,
+                FleetReconcilePeriod,
+                generation,
+                isFleetReconcile: true));
+        callback.Start(this, FleetReconcileInitialDelay);
+        return Task.CompletedTask;
+    }
+
+    public Task<RuntimeFleetReconcileDeliveryAttestation?> VerifyAsync(
+        EventEnvelope envelope,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+        ct.ThrowIfCancellationRequested();
+        if (envelope.Payload?.Is(RuntimeFleetReconcileRequested.Descriptor) != true ||
+            envelope.Runtime?.Callback is not { } callback ||
+            !string.Equals(
+                callback.CallbackId,
+                RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+                StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(envelope.Id) ||
+            !_callbacks.TryGetValue(
+                new CallbackKey(
+                    RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                    RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId),
+                out var scheduled) ||
+            !scheduled.IsFleetReconcile ||
+            callback.Generation != scheduled.Generation ||
+            callback.SlotEpoch != FleetReconcileSlotEpoch)
+        {
+            return Task.FromResult<RuntimeFleetReconcileDeliveryAttestation?>(null);
+        }
+
+        var valid = HasExactEnvelope(scheduled.PendingDeliveryEnvelope, envelope) ||
+                    HasExactEnvelope(scheduled.LastDeliveryEnvelope, envelope);
+        return Task.FromResult<RuntimeFleetReconcileDeliveryAttestation?>(valid
+            ? new RuntimeFleetReconcileDeliveryAttestation(
+                envelope.Id,
+                callback.Generation,
+                callback.FireIndex,
+                callback.SlotEpoch)
+            : null);
+    }
+
+    private static bool HasExactEnvelope(EventEnvelope? persisted, EventEnvelope delivered) =>
+        persisted != null &&
+        persisted.ToByteString().Equals(delivered.ToByteString());
+
     private static void ValidateScheduleRequest(
         string actorId,
         string callbackId,
@@ -144,6 +247,27 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(dueTime, TimeSpan.Zero);
     }
 
+    private static void ThrowIfGenericMutationTargetsReservedSlot(
+        string actorId,
+        string callbackId)
+    {
+        if (RuntimeFleetCapabilityAuthorityIdentity.IsReservedCallback(actorId, callbackId))
+        {
+            throw new InvalidOperationException(
+                "The runtime fleet reconcile callback is runtime-reserved and cannot be mutated through the generic callback API.");
+        }
+    }
+
+    private static EventEnvelope CreateFleetReconcileTriggerEnvelope() => new()
+    {
+        Id = Guid.NewGuid().ToString("N"),
+        Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+        Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            TopologyAudience.Self),
+        Payload = Any.Pack(new RuntimeFleetReconcileRequested()),
+    };
+
     private async Task OnCallbackFiredAsync(
         CallbackKey key,
         ScheduledCallback callback,
@@ -152,16 +276,31 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
         if (!_callbacks.TryGetValue(key, out var current) || !ReferenceEquals(current, callback))
             return;
 
-        var fireIndex = callback.IncrementFireIndex();
-        var envelope = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
-            callback.ActorId,
-            callback.CallbackId,
-            callback.Generation,
-            fireIndex,
-            callback.TriggerEnvelope,
-            callback.DeliveryMode);
+        var envelope = callback.PendingDeliveryEnvelope;
+        if (envelope == null)
+        {
+            var fireIndex = callback.IncrementFireIndex();
+            envelope = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
+                callback.ActorId,
+                callback.CallbackId,
+                callback.Generation,
+                fireIndex,
+                callback.TriggerEnvelope,
+                callback.DeliveryMode,
+                callback.IsFleetReconcile
+                    ? FleetReconcileSlotEpoch
+                    : RuntimeCallbackSlotEpoch.Unspecified);
+        }
+        if (callback.IsFleetReconcile)
+            callback.PendingDeliveryEnvelope = envelope.Clone();
 
-        await _streams.GetStream(callback.ActorId).ProduceAsync(envelope, ct);
+        await _streams.GetStream(callback.ActorId).ProduceAsync(envelope.Clone(), ct);
+
+        if (callback.IsFleetReconcile)
+        {
+            callback.LastDeliveryEnvelope = envelope.Clone();
+            callback.PendingDeliveryEnvelope = null;
+        }
 
         if (!callback.IsPeriodic)
         {
@@ -191,7 +330,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             RuntimeCallbackDeliveryMode deliveryMode,
             bool isPeriodic,
             TimeSpan period,
-            long generation)
+            long generation,
+            bool isFleetReconcile = false)
         {
             ActorId = actorId;
             CallbackId = callbackId;
@@ -200,6 +340,7 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             IsPeriodic = isPeriodic;
             Period = period;
             Generation = generation;
+            IsFleetReconcile = isFleetReconcile;
         }
 
         public string ActorId { get; }
@@ -216,6 +357,12 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
 
         public long Generation { get; }
 
+        public bool IsFleetReconcile { get; }
+
+        public EventEnvelope? PendingDeliveryEnvelope { get; set; }
+
+        public EventEnvelope? LastDeliveryEnvelope { get; set; }
+
         public static ScheduledCallback Create(
             string actorId,
             string callbackId,
@@ -223,9 +370,18 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             RuntimeCallbackDeliveryMode deliveryMode,
             bool isPeriodic,
             TimeSpan period,
-            long generation)
+            long generation,
+            bool isFleetReconcile = false)
         {
-            return new ScheduledCallback(actorId, callbackId, triggerEnvelope, deliveryMode, isPeriodic, period, generation);
+            return new ScheduledCallback(
+                actorId,
+                callbackId,
+                triggerEnvelope,
+                deliveryMode,
+                isPeriodic,
+                period,
+                generation,
+                isFleetReconcile);
         }
 
         public ScheduledCallback Replace(
@@ -233,7 +389,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
             RuntimeCallbackDeliveryMode deliveryMode,
             bool isPeriodic,
             TimeSpan period,
-            long generation)
+            long generation,
+            bool isFleetReconcile = false)
         {
             Stop();
             return new ScheduledCallback(
@@ -243,7 +400,8 @@ public sealed class InMemoryActorRuntimeCallbackScheduler :
                 deliveryMode,
                 isPeriodic,
                 period,
-                generation);
+                generation,
+                isFleetReconcile);
         }
 
         public void Start(InMemoryActorRuntimeCallbackScheduler owner, TimeSpan dueTime)

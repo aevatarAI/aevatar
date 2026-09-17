@@ -240,6 +240,7 @@ internal static class NyxIdManagedToolReceiptFactory
 {
     private const string InvalidActionCode = "invalid_action";
     private const string InvalidArgumentsCode = "invalid_arguments";
+    private const string InvalidResponseCode = "invalid_nyxid_response";
     private const string RequestFailedCode = "nyxid_request_failed";
 
     public static AgentToolReceipt? TryCreate(
@@ -301,7 +302,8 @@ internal static class NyxIdManagedToolReceiptFactory
             : null;
         var errorCode = string.Equals(providerCode, InvalidActionCode, StringComparison.Ordinal)
             ? InvalidActionCode
-            : error.ValueKind == JsonValueKind.True
+            : error.ValueKind == JsonValueKind.True ||
+              string.Equals(providerCode, InvalidResponseCode, StringComparison.Ordinal)
                 ? RequestFailedCode
                 : InvalidArgumentsCode;
         var safeMessage = errorCode switch

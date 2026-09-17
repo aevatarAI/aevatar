@@ -21,6 +21,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Prompt = command.Prompt,
             SessionId = sessionId,
             ScopeId = command.ScopeId ?? string.Empty,
+            CurrentTurnId = command.CurrentTurnId ?? string.Empty,
         };
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
@@ -136,17 +137,26 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         var parsed = WorkflowCallerCredentialTokens.ParseOptional(source?.BearerToken);
         var sourceReadable = WorkflowCallerCredentialTokens.ParseOptional(
             source?.SourceReadableUserBearerToken);
+        var durable = source?.DurableCallerCredential;
+        var hasDurable = durable != null && !string.IsNullOrWhiteSpace(durable.Ref);
         if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
                 source?.BearerToken,
                 source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
                 source?.SourceReadableUserBearerToken))
             throw new ArgumentException("Workflow caller credential bearer token is invalid.", nameof(source));
+        if (hasDurable && (parsed.IsValid || sourceReadable.IsValid))
+            throw new ArgumentException("Workflow caller credential cannot combine a durable handle with bearer material.", nameof(source));
 
         var authority = source?.NyxIdAuthority;
-        if (authority != null && !parsed.IsValid)
+        var authorityOnly = authority != null &&
+                            parsed.IsMissing &&
+                            sourceReadable.IsMissing &&
+                            source?.Kind == NyxIdCallerCredentialKind.ProxyDelegation &&
+                            source.UnattendedEffectAuthorization is not null;
+        if (authority != null && !parsed.IsValid && !authorityOnly && !hasDurable)
         {
             throw new ArgumentException(
-                "Workflow caller NyxID authority requires a valid caller credential.",
+                "Workflow caller NyxID authority requires a valid proxy delegation credential or authority-only delegation.",
                 nameof(source));
         }
 
@@ -156,6 +166,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             Kind = source?.Kind ?? NyxIdCallerCredentialKind.Unspecified,
             SourceReadableUserBearerToken = sourceReadable.NormalizedBearerToken ?? string.Empty,
         };
+        if (hasDurable)
+            credential.DurableCallerCredential = durable!.Clone();
         if (authority != null)
         {
             var platform = Normalize(authority.Platform);
@@ -163,7 +175,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             var scope = Normalize(authority.Scope);
             if (string.IsNullOrWhiteSpace(platform) ||
                 string.IsNullOrWhiteSpace(externalUserId) ||
-                string.IsNullOrWhiteSpace(scope))
+                string.IsNullOrWhiteSpace(scope) ||
+                authorityOnly && string.IsNullOrWhiteSpace(authority.BindingId))
             {
                 throw new ArgumentException(
                     "Workflow caller NyxID authority is incomplete.",
@@ -179,6 +192,17 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 BindingId = Normalize(authority.BindingId),
             };
         }
+        if (source?.UnattendedEffectAuthorization != null)
+        {
+            if (!authorityOnly && !hasDurable)
+            {
+                throw new ArgumentException(
+                    "Workflow unattended effect authorization requires authority-only proxy delegation.",
+                    nameof(source));
+            }
+            credential.UnattendedEffectAuthorization =
+                source.UnattendedEffectAuthorization.Clone();
+        }
 
         return credential;
     }
@@ -191,6 +215,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             SourceRunId = Normalize(source.SourceRunId),
             StartAtStepId = Normalize(source.StartAtStepId),
             Attempt = Math.Max(0, source.Attempt),
+            OriginalRunId = Normalize(source.OriginalRunId),
         };
         if (source.StartStepIdempotency != null)
         {
@@ -203,7 +228,20 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             };
         }
 
-        AppendVariables(payload.Variables, source.Variables);
+        if (source.NormalizedValues != null)
+        {
+            if (source.Variables.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "A normalized workflow fork seed cannot also carry expanded legacy variables.");
+            }
+            payload.NormalizedValues = source.NormalizedValues.Clone();
+        }
+        else
+        {
+            AppendVariables(payload.Variables, source.Variables);
+        }
+        AppendVariables(payload.VariableOverrides, source.VariableOverrides);
         return payload;
     }
 
@@ -246,6 +284,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             StateVersion = Math.Max(0, source.StateVersion),
             Truncated = source.Truncated,
             MaxMessageCount = Math.Max(0, source.MaxMessageCount),
+            CurrentTurnId = Normalize(source.CurrentTurnId),
         };
         payload.Messages.Add(source.Messages
             .Where(static message => !string.IsNullOrWhiteSpace(message.Content))

@@ -440,7 +440,7 @@ public sealed class NyxIdRelayAuthValidator
         if (!string.IsNullOrWhiteSpace(_relayOptions.OidcDiscoveryUrl))
             return _relayOptions.OidcDiscoveryUrl.Trim();
 
-        var baseUrl = _nyxOptions.BaseUrl?.TrimEnd('/');
+        var baseUrl = _nyxOptions.EffectiveAuthority?.TrimEnd('/');
         if (string.IsNullOrWhiteSpace(baseUrl))
             throw new InvalidOperationException("NyxID base URL is not configured.");
 

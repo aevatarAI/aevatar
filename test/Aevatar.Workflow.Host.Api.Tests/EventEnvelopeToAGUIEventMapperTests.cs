@@ -109,6 +109,34 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
     }
 
     [Fact]
+    public void WorkflowInteractiveActionHandoff_ShouldMapOnlyTheSchemaV4ActionRequest()
+    {
+        var events = CreateMapper().Map(WrapCommitted(
+            new WorkflowInteractiveActionHandoffDispatchedEvent
+            {
+                HandoffId = "handoff-alpha",
+                Request = InteractiveActionRequest(),
+                TerminalContinuation = new WorkflowLlmInvocationCompletedEvent
+                {
+                    RunId = "run-alpha",
+                    StepId = "reply",
+                    SessionId = "session-alpha",
+                    Success = false,
+                    Error = "private-terminal-continuation",
+                },
+            }));
+
+        var mapped = events.Should().ContainSingle().Which;
+        mapped.EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.Custom);
+        mapped.Custom.Name.Should().Be("nyxid.action.request");
+        mapped.Custom.Payload.Is(WorkflowInteractiveActionRequestWirePayload.Descriptor)
+            .Should().BeTrue();
+        var request = mapped.Custom.Payload.Unpack<WorkflowInteractiveActionRequestWirePayload>();
+        request.Should().BeEquivalentTo(InteractiveActionRequest());
+        mapped.Custom.Payload.ToString().Should().NotContain("private-terminal-continuation");
+    }
+
+    [Fact]
     public void StepRequestEvent_ShouldMapToStepStartedAndCustomPayload()
     {
         var events = CreateMapper().Map(WrapCommitted(new StepRequestEvent
@@ -215,6 +243,264 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         endEvents.Should().ContainSingle();
         endEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.TextMessageEnd);
         endEvents[0].TextMessageEnd.MessageId.Should().Be($"msg:{endEnvelope.Id}");
+    }
+
+    [Fact]
+    public void CommittedRoleChatProgress_ShouldMapEveryLivePresentationFrame()
+    {
+        const string sessionId = "role-session-1";
+        var progress = new RoleChatSessionProgressedEvent[]
+        {
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 1,
+                TextStarted = new RoleChatTextStartedProgress { AgentId = "workflow:assistant" },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 2,
+                TextDelta = new RoleChatTextDeltaProgress { Delta = "streamed text" },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 3,
+                ReasoningDelta = new RoleChatReasoningDeltaProgress { Delta = "thinking" },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 4,
+                Media = new RoleChatMediaProgress
+                {
+                    AgentId = "workflow:assistant",
+                    Part = new ChatContentPart
+                    {
+                        Kind = ChatContentPartKind.Image,
+                        Uri = "https://example.test/image.png",
+                    },
+                },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 5,
+                ModelStarted = new RoleChatModelStartedProgress
+                {
+                    OperationId = "model-round-0",
+                    Round = 0,
+                    Model = "model-a",
+                    Provider = "provider-a",
+                    InputSummary = "safe model input",
+                    AvailableToolNames = { "lookup", "search" },
+                },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 6,
+                ToolStarted = new RoleChatToolStartedProgress
+                {
+                    CallId = "call-1",
+                    ToolName = "search",
+                    OperationId = "tool-operation-1",
+                },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 7,
+                ToolCompleted = new RoleChatToolCompletedProgress
+                {
+                    ToolName = "search",
+                    OperationId = "tool-operation-1",
+                    SafeArgumentsJson = "{\"query\":\"status\"}",
+                    Result = new ToolResultEvent
+                    {
+                        CallId = "call-1",
+                        ResultJson = "{\"ok\":true}",
+                        Success = true,
+                    },
+                },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 8,
+                ModelCompleted = new RoleChatModelCompletedProgress
+                {
+                    OperationId = "model-round-0",
+                    Round = 0,
+                    Model = "model-a",
+                    Content = "",
+                    ReasoningContent = "tool required",
+                    Usage = new TokenUsagePayload
+                    {
+                        PromptTokens = 2,
+                        CompletionTokens = 3,
+                        TotalTokens = 5,
+                    },
+                    FinishReason = "tool_calls",
+                    Success = true,
+                },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 9,
+                Usage = new RoleChatUsageProgress
+                {
+                    Usage = new TokenUsagePayload
+                    {
+                        PromptTokens = 2,
+                        CompletionTokens = 3,
+                        TotalTokens = 5,
+                    },
+                    Model = "model-a",
+                },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 10,
+                TextEnded = new RoleChatTextEndedProgress { MessageId = sessionId },
+            },
+            new()
+            {
+                SessionId = sessionId,
+                Sequence = 11,
+                AuthorizationRequired = new RoleChatAuthorizationRequiredProgress
+                {
+                    AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
+                    {
+                        ServiceSlug = "github",
+                    },
+                },
+            },
+        };
+
+        var events = progress
+            .SelectMany(item => CreateMapper().Map(WrapCommitted(item)))
+            .ToArray();
+
+        events.Should().HaveCount(11);
+        events[0].TextMessageStart.MessageId.Should().Be($"msg:{sessionId}");
+        events[1].TextMessageContent.MessageId.Should().Be($"msg:{sessionId}");
+        events[1].TextMessageContent.Delta.Should().Be("streamed text");
+        events[2].Custom.Name.Should().Be("aevatar.llm.reasoning");
+        events[2].Custom.Payload.Unpack<WorkflowReasoningCustomPayload>().Delta.Should().Be("thinking");
+        events[3].Custom.Name.Should().Be("aevatar.media.chunk");
+        events[4].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.ModelCallStart);
+        events[4].Sequence.Should().Be(5);
+        events[4].ModelCallStart.OperationId.Should().Be("model-round-0");
+        events[4].ModelCallStart.SessionId.Should().Be(sessionId);
+        events[4].ModelCallStart.Round.Should().Be(0);
+        events[4].ModelCallStart.Model.Should().Be("model-a");
+        events[4].ModelCallStart.Provider.Should().Be("provider-a");
+        events[4].ModelCallStart.InputSummary.Should().Be("safe model input");
+        events[4].ModelCallStart.AvailableToolNames.Should().Equal("lookup", "search");
+        events[5].ToolCallStart.ToolCallId.Should().Be("call-1");
+        events[5].ToolCallStart.ToolName.Should().Be("search");
+        events[5].Sequence.Should().Be(6);
+        events[6].ToolCallEnd.ToolCallId.Should().Be("call-1");
+        events[6].ToolCallEnd.Result.Should().Be("{\"ok\":true}");
+        events[6].ToolCallEnd.Success.Should().BeTrue();
+        events[6].ToolCallEnd.Error.Should().BeNull();
+        events[6].ToolCallEnd.ArgumentsJson.Should().Be("{\"query\":\"status\"}");
+        events[6].Sequence.Should().Be(7);
+        events[7].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.ModelCallEnd);
+        events[7].Sequence.Should().Be(8);
+        events[7].ModelCallEnd.OperationId.Should().Be("model-round-0");
+        events[7].ModelCallEnd.SessionId.Should().Be(sessionId);
+        events[7].ModelCallEnd.Content.Should().BeEmpty(
+            "tool-call-only model rounds still need an explicit terminal operation");
+        events[7].ModelCallEnd.ReasoningContent.Should().Be("tool required");
+        events[7].ModelCallEnd.Usage.TotalTokens.Should().Be(5);
+        events[7].ModelCallEnd.FinishReason.Should().Be("tool_calls");
+        events[7].ModelCallEnd.Success.Should().BeTrue();
+        events[8].Usage.TotalTokens.Should().Be(5);
+        events[9].TextMessageEnd.MessageId.Should().Be($"msg:{sessionId}");
+        events[10].Custom.Name.Should().Be("nyxid.authorization.required");
+    }
+
+    [Fact]
+    public void CommittedRoleChatCompletion_ShouldExpandPresentationTailWithoutOwningWorkflowTerminal()
+    {
+        var completion = new RoleChatSessionCompletedEvent
+        {
+            SessionId = "role-session-2",
+            Content = "fallback content",
+            ContentEmitted = false,
+            Outcome = RoleChatSessionOutcome.Completed,
+            TerminalProgress =
+            {
+                new RoleChatSessionProgressedEvent
+                {
+                    SessionId = "role-session-2",
+                    Sequence = 1,
+                    TextDelta = new RoleChatTextDeltaProgress { Delta = "fallback content" },
+                },
+                new RoleChatSessionProgressedEvent
+                {
+                    SessionId = "role-session-2",
+                    Sequence = 2,
+                    TextEnded = new RoleChatTextEndedProgress { MessageId = "role-session-2" },
+                },
+                new RoleChatSessionProgressedEvent
+                {
+                    SessionId = "role-session-2",
+                    Sequence = 3,
+                    Terminal = new RoleChatTerminalProgress
+                    {
+                        Outcome = RoleChatSessionOutcome.Completed,
+                        FinalContent = "fallback content",
+                    },
+                },
+            },
+        };
+
+        var events = CreateMapper().Map(WrapCommitted(completion));
+
+        events.Should().HaveCount(2);
+        events[0].TextMessageContent.Delta.Should().Be("fallback content");
+        events[1].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.TextMessageEnd);
+        events.Should().NotContain(item =>
+            item.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunFinished ||
+            item.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunError);
+    }
+
+    [Fact]
+    public void CommittedRoleChatTerminalAndReplay_ShouldNotOwnWorkflowPresentation()
+    {
+        var terminal = new RoleChatSessionProgressedEvent
+        {
+            SessionId = "role-session-3",
+            Sequence = 1,
+            Terminal = new RoleChatTerminalProgress
+            {
+                Outcome = RoleChatSessionOutcome.Completed,
+                FinalContent = "done",
+            },
+        };
+        var replay = new RoleChatSessionProgressedEvent
+        {
+            SessionId = "role-session-3",
+            Sequence = 2,
+            Replay = new RoleChatReplayProgress
+            {
+                Snapshot = new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "role-session-3",
+                    Content = "done",
+                    Outcome = RoleChatSessionOutcome.Completed,
+                },
+            },
+        };
+
+        CreateMapper().Map(WrapCommitted(terminal)).Should().BeEmpty();
+        CreateMapper().Map(WrapCommitted(replay)).Should().BeEmpty();
     }
 
     [Fact]
@@ -480,22 +766,30 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         {
             CallId = "call-1",
             ToolName = "search",
+            ArgumentsJson = "{\"secret\":\"raw\"}",
         }));
         var endEvents = mapper.Map(WrapCommitted(new ToolResultEvent
         {
             CallId = "call-1",
             ResultJson = "{\"ok\":true}",
+            Success = false,
+            Error = "upstream unavailable",
         }));
 
         startEvents.Should().ContainSingle();
         startEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.ToolCallStart);
         startEvents[0].ToolCallStart.ToolCallId.Should().Be("call-1");
         startEvents[0].ToolCallStart.ToolName.Should().Be("search");
+        WorkflowToolCallStartEventPayload.Descriptor.Fields.InDeclarationOrder()
+            .Should().NotContain(field => field.Name == "arguments_json",
+                "raw tool arguments must not be exposed on a live start frame");
 
         endEvents.Should().ContainSingle();
         endEvents[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.ToolCallEnd);
         endEvents[0].ToolCallEnd.ToolCallId.Should().Be("call-1");
         endEvents[0].ToolCallEnd.Result.Should().Be("{\"ok\":true}");
+        endEvents[0].ToolCallEnd.Success.Should().BeFalse();
+        endEvents[0].ToolCallEnd.Error.Should().Be("upstream unavailable");
     }
 
     [Fact]
@@ -520,6 +814,11 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
 
         new StepCompletedRunEventEnvelopeMappingHandler().TryMap(unsupported, out var completedEvents).Should().BeFalse();
         completedEvents.Should().BeEmpty();
+
+        new RoleChatSessionProgressRunEventEnvelopeMappingHandler()
+            .TryMap(unsupported, out var roleProgressEvents)
+            .Should().BeFalse();
+        roleProgressEvents.Should().BeEmpty();
 
         new AITextStreamRunEventEnvelopeMappingHandler().TryMap(noPayload, out var textEvents).Should().BeFalse();
         textEvents.Should().BeEmpty();
@@ -626,9 +925,11 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
         return new EventEnvelopeToWorkflowRunEventMapper(
         [
             new WorkflowRunExecutionStartedEnvelopeMappingHandler(),
+            new WorkflowInteractiveActionRunEventEnvelopeMappingHandler(),
             new StartWorkflowRunEventEnvelopeMappingHandler(),
             new StepRequestRunEventEnvelopeMappingHandler(),
             new StepCompletedRunEventEnvelopeMappingHandler(),
+            new RoleChatSessionProgressRunEventEnvelopeMappingHandler(),
             new AITextStreamRunEventEnvelopeMappingHandler(),
             new AIReasoningRunEventEnvelopeMappingHandler(),
             new WorkflowCompletedRunEventEnvelopeMappingHandler(),
@@ -639,4 +940,24 @@ public sealed class EventEnvelopeToAGUIEventMapperTests
             new WorkflowSignalBufferedRunEventEnvelopeMappingHandler(),
         ]);
     }
+
+    private static WorkflowInteractiveActionRequestWirePayload InteractiveActionRequest() =>
+        new()
+        {
+            SchemaVersion = 4,
+            ActorId = "nyxid-chat-alpha",
+            OriginTurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            ActionRequestId = "action-alpha",
+            Action = "service.connect",
+            Params = new WorkflowInteractiveActionParams
+            {
+                CatalogService = new WorkflowInteractiveCatalogServiceActionParams
+                {
+                    ServiceSlug = "api-github",
+                    RequestedScopes = { "repo" },
+                },
+            },
+        };
 }

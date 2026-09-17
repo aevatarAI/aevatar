@@ -13,6 +13,7 @@ internal static class SkillRecoveryPlanner
     private const string CompactCallIdPrefix = "sr";
     private const string OrnnSearchSkillsToolName = "ornn_search_skills";
     private const string UseSkillToolName = "use_skill";
+    private const string StartWorkflowToolName = "aevatar_start_workflow";
 
     private enum SkillDiscoveryBlockerDisposition
     {
@@ -125,24 +126,12 @@ internal static class SkillRecoveryPlanner
         if (!IsEnabled(recovery))
             return false;
 
+        if (HasToolCall(messages, StartWorkflowToolName))
+            return false;
+
         var maxAttempts = recovery.MaxOrnnSearchAttempts > 0
             ? recovery.MaxOrnnSearchAttempts
             : 1;
-
-        if (!primarySkillAttempted &&
-            !string.IsNullOrWhiteSpace(recovery.PrimarySkillName) &&
-            !HasUseSkillFor(messages, recovery.PrimarySkillName))
-        {
-            directive = new RecoveryDirective(
-                BuildUseSkillToolCall(
-                    BuildCallId(callIdPrefix, UseSkillToolName),
-                    recovery.PrimarySkillName,
-                    ExtractCommandArguments(recovery)),
-                ConsumesOrnnSearchAttempt: false,
-                Nudge: null,
-                AttemptsPrimarySkill: true);
-            return true;
-        }
 
         if (recovery.RequireInitialOrnnSearch &&
             !HasToolCall(messages, OrnnSearchSkillsToolName))
@@ -157,6 +146,15 @@ internal static class SkillRecoveryPlanner
             return true;
         }
 
+        if (TryBuildWorkflowMountConfirmationDirective(
+                recovery,
+                messages,
+                callIdPrefix,
+                out directive))
+        {
+            return true;
+        }
+
         if (TryGetLatestOrnnSearchWithMatches(messages, out var latestSearchIndex, out var latestSearchResult) &&
             !HasToolCallAfter(messages, UseSkillToolName, latestSearchIndex))
         {
@@ -168,7 +166,8 @@ internal static class SkillRecoveryPlanner
                     BuildUseSkillToolCall(
                         BuildCallId(callIdPrefix, UseSkillToolName),
                         skillName,
-                        ExtractCommandArguments(recovery)),
+                        ExtractCommandArguments(recovery),
+                        recovery.MountWorkflowsRequested),
                     ConsumesOrnnSearchAttempt: false,
                     Nudge: null)
                 : recoveryAttempts >= maxAttempts
@@ -178,6 +177,22 @@ internal static class SkillRecoveryPlanner
                     ConsumesOrnnSearchAttempt: true,
                     Nudge: BuildUseDiscoveredSkillNudge(recovery, latestSearchResult.DisplayText));
             return directive.ToolCall is not null || !string.IsNullOrWhiteSpace(directive.Nudge);
+        }
+
+        if (!primarySkillAttempted &&
+            !string.IsNullOrWhiteSpace(recovery.PrimarySkillName) &&
+            !HasUseSkillFor(messages, recovery.PrimarySkillName))
+        {
+            directive = new RecoveryDirective(
+                BuildUseSkillToolCall(
+                    BuildCallId(callIdPrefix, UseSkillToolName),
+                    recovery.PrimarySkillName,
+                    ExtractCommandArguments(recovery),
+                    recovery.MountWorkflowsRequested),
+                ConsumesOrnnSearchAttempt: false,
+                Nudge: null,
+                AttemptsPrimarySkill: true);
+            return true;
         }
 
         if (!recovery.RequireOrnnSearchOnBlocker)
@@ -212,18 +227,129 @@ internal static class SkillRecoveryPlanner
             }),
         };
 
-    private static ToolCall BuildUseSkillToolCall(string callId, string skillName, string args) =>
+    private static ToolCall BuildUseSkillToolCall(
+        string callId,
+        string skillName,
+        string args,
+        bool mountWorkflowsRequested,
+        string? workflowMountConfirmationToken = null) =>
         new()
         {
             Id = callId,
             Name = UseSkillToolName,
-            ArgumentsJson = JsonSerializer.Serialize(new
-            {
-                skill = skillName,
-                args,
-                mount_workflows = true,
-            }),
+            ArgumentsJson = mountWorkflowsRequested && !string.IsNullOrWhiteSpace(workflowMountConfirmationToken)
+                ? JsonSerializer.Serialize(new
+                {
+                    skill = skillName,
+                    args,
+                    mount_workflows = true,
+                    workflow_mount_confirmation_token = workflowMountConfirmationToken,
+                })
+                : mountWorkflowsRequested
+                ? JsonSerializer.Serialize(new
+                {
+                    skill = skillName,
+                    args,
+                    mount_workflows = true,
+                })
+                : JsonSerializer.Serialize(new
+                {
+                    skill = skillName,
+                    args,
+                }),
         };
+
+    private static bool TryBuildWorkflowMountConfirmationDirective(
+        AgentSkillRecoveryContext recovery,
+        IReadOnlyList<ChatMessage> messages,
+        string? callIdPrefix,
+        out RecoveryDirective directive)
+    {
+        directive = default;
+        if (!recovery.MountWorkflowsRequested)
+            return false;
+
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            var load = messages[i].ToolResultView?.SkillLoad;
+            if (load is null ||
+                !string.Equals(load.WorkflowMountStatus, "confirmation_required", StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(load.WorkflowMountConfirmationToken))
+            {
+                continue;
+            }
+
+            var skillName = load.SkillName?.Trim();
+            if (string.IsNullOrWhiteSpace(skillName) ||
+                HasWorkflowMountConfirmationCallAfter(messages, i, skillName))
+            {
+                return false;
+            }
+
+            directive = new RecoveryDirective(
+                BuildUseSkillToolCall(
+                    BuildCallId(callIdPrefix, UseSkillToolName),
+                    skillName,
+                    ExtractCommandArguments(recovery),
+                    mountWorkflowsRequested: true,
+                    workflowMountConfirmationToken: load.WorkflowMountConfirmationToken),
+                ConsumesOrnnSearchAttempt: false,
+                Nudge: null,
+                AttemptsPrimarySkill: string.Equals(
+                    skillName,
+                    recovery.PrimarySkillName,
+                    StringComparison.OrdinalIgnoreCase));
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasWorkflowMountConfirmationCallAfter(
+        IReadOnlyList<ChatMessage> messages,
+        int startIndex,
+        string skillName)
+    {
+        for (var i = Math.Max(0, startIndex + 1); i < messages.Count; i++)
+        {
+            var calls = messages[i].ToolCalls;
+            if (calls is not { Count: > 0 })
+                continue;
+
+            foreach (var call in calls)
+            {
+                if (IsWorkflowMountConfirmationCall(call, skillName))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsWorkflowMountConfirmationCall(ToolCall call, string skillName)
+    {
+        if (!IsTool(call, UseSkillToolName) || string.IsNullOrWhiteSpace(call.ArgumentsJson))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(call.ArgumentsJson);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                   root.TryGetProperty("skill", out var skill) &&
+                   skill.ValueKind == JsonValueKind.String &&
+                   string.Equals(skill.GetString()?.Trim(), skillName, StringComparison.OrdinalIgnoreCase) &&
+                   root.TryGetProperty("mount_workflows", out var mount) &&
+                   mount.ValueKind == JsonValueKind.True &&
+                   root.TryGetProperty("workflow_mount_confirmation_token", out var token) &&
+                   token.ValueKind == JsonValueKind.String &&
+                   !string.IsNullOrWhiteSpace(token.GetString());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     private static string BuildCallId(string? callIdPrefix, string toolName)
     {
@@ -339,6 +465,11 @@ internal static class SkillRecoveryPlanner
     private static bool HasUseSkillFor(IReadOnlyList<ChatMessage> messages, string skillName) =>
         messages.Any(message =>
             message.ToolCalls?.Any(call => IsTool(call, UseSkillToolName) && ToolCallUsesSkill(call, skillName)) == true);
+
+    internal static bool HasPrimarySkillAttempt(
+        IReadOnlyList<ChatMessage> messages,
+        string? skillName) =>
+        !string.IsNullOrWhiteSpace(skillName) && HasUseSkillFor(messages, skillName);
 
     private static bool ToolCallUsesSkill(ToolCall call, string skillName)
     {
@@ -500,10 +631,13 @@ internal static class SkillRecoveryPlanner
     {
         var command = DescribeCommand(recovery);
         var result = TrimForPrompt(searchResult);
+        var mountInstruction = recovery.MountWorkflowsRequested
+            ? " Set `mount_workflows=true`; use the first response only as a preview, then continue with its exact confirmation token so the mutating call can enter approval."
+            : string.Empty;
         return
             "[System: The Ornn skill search returned matching skills, but no skill has been loaded after that search. " +
             $"Before any final answer, call `{UseSkillToolName}` for the best matching skill from this result: `{result}`. " +
-            $"Then continue `{command}` from the loaded skill instructions. " +
+            $"Then continue `{command}` from the loaded skill instructions.{mountInstruction} " +
             "Only give a concise actionable failure if the matching skill cannot be loaded.]";
     }
 

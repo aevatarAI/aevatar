@@ -1,14 +1,17 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.AGUI.Contracts;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Security.Cryptography;
 using System.Text;
@@ -18,6 +21,12 @@ namespace Aevatar.GAgents.NyxidChat;
 
 public static partial class NyxIdChatEndpoints
 {
+    private const int MaxInlineInputPartBytes = 10 * 1024 * 1024;
+    internal const string ActionContinuationCredentialRefreshRequiredCode =
+        "NYXID_ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED";
+    internal const string ActionContinuationCatalogUnavailableCode =
+        "NYXID_ACTION_CONTINUATION_CATALOG_UNAVAILABLE";
+
     internal static TimeSpan StreamKeepAliveInterval { get; set; } = TimeSpan.FromSeconds(15);
     internal static TimeSpan StreamTerminalTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
@@ -65,6 +74,7 @@ public static partial class NyxIdChatEndpoints
         var ownerSubject = string.Empty;
         AgentProfileReference? agentProfileReference = null;
         IReadOnlyList<NyxIdChatActionReport> actionReports = [];
+        IReadOnlyList<ChatContentPart> inputParts = [];
 
         try
         {
@@ -130,6 +140,33 @@ public static partial class NyxIdChatEndpoints
                     ScopeResourceOperation.Stream,
                     ct))
                 return;
+
+            if (string.Equals(streamType, "action.continue", StringComparison.Ordinal) &&
+                !await TryEnsureActionContinuationCredentialVisibilityAsync(
+                    http,
+                    actionReports,
+                    accessToken,
+                    ct))
+            {
+                return;
+            }
+
+            if (string.Equals(streamType, "text", StringComparison.Ordinal))
+            {
+                var normalizedInput = await MaterializeInlineInputPartsAsync(
+                    request.InputParts,
+                    scopeId,
+                    turnId,
+                    http.RequestServices.GetService<IFileArtifactIngressPort>(),
+                    ct);
+                if (!normalizedInput.Succeeded)
+                {
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return;
+                }
+
+                inputParts = normalizedInput.Parts;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -217,7 +254,13 @@ public static partial class NyxIdChatEndpoints
                         clientRequestId!,
                         actionReports,
                         CommandId: commandId,
-                        CorrelationId: commandId),
+                        CorrelationId: commandId,
+                        ToolContext: BuildAuthenticatedOwnerControlToolContext(
+                            scopeId,
+                            actorId,
+                            clientRequestId!,
+                            ownerSubject,
+                            credentials)),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -226,6 +269,7 @@ public static partial class NyxIdChatEndpoints
             {
                 var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
                 var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
+                var rawInputParts = request.InputParts?.Select(static part => part.ToProto()).ToArray() ?? [];
                 var commandId = NyxIdChatPublicIdentity.CreateChatCommandId(
                     actorId,
                     scopeId,
@@ -233,7 +277,7 @@ public static partial class NyxIdChatEndpoints
                     clientRequestId,
                     turnId,
                     prompt,
-                    request.InputParts?.Select(static part => part.ToProto()) ?? [],
+                    rawInputParts,
                     agentProfileReference);
 
                 // Streaming endpoints do not pre-read runtime state before command dispatch.
@@ -245,7 +289,7 @@ public static partial class NyxIdChatEndpoints
                         prompt,
                         turnId,
                         accessToken,
-                        request.InputParts,
+                        inputParts,
                         metadata,
                         llmControl,
                         CommandId: commandId,
@@ -254,7 +298,8 @@ public static partial class NyxIdChatEndpoints
                         CreateIfMissing: createIfMissing,
                         OwnerSubject: ownerSubject,
                         AgentProfileReference: agentProfileReference,
-                        NyxIdCredentialKind: credentials.NyxIdCredentialKind),
+                        NyxIdCredentialKind: credentials.NyxIdCredentialKind,
+                        InputPartsFingerprint: NyxIdChatPublicIdentity.CreateInputPartsFingerprint(rawInputParts)),
                     EmitAsync,
                     null,
                     interactionCancellation.Token);
@@ -580,12 +625,15 @@ public static partial class NyxIdChatEndpoints
                 result.Error switch
                 {
                     NyxIdChatStartError.ProjectionUnavailable => "PROJECTION_UNAVAILABLE",
+                    NyxIdChatStartError.AdmissionUnavailable => "ADMISSION_UNAVAILABLE",
                     NyxIdChatStartError.ActorNotFound => "ACTOR_NOT_FOUND",
                     _ => "COMMAND_START_FAILED",
                 },
                 result.Error switch
                 {
                     NyxIdChatStartError.ProjectionUnavailable => "NyxID chat projection pipeline is unavailable.",
+                    NyxIdChatStartError.AdmissionUnavailable =>
+                        "NyxID chat admission is unavailable for the requested Agent Profile or route.",
                     NyxIdChatStartError.ActorNotFound => "NyxID chat conversation was not found.",
                     _ => message,
                 },
@@ -670,6 +718,96 @@ public static partial class NyxIdChatEndpoints
 
         mapped = values;
         return true;
+    }
+
+    private static async Task<bool> TryEnsureActionContinuationCredentialVisibilityAsync(
+        HttpContext http,
+        IReadOnlyList<NyxIdChatActionReport> actionReports,
+        string bearerToken,
+        CancellationToken ct)
+    {
+        var userServiceIds = actionReports
+            .Where(static report =>
+                report.Disposition == NyxIdChatActionDisposition.Completed &&
+                report.Resource?.ResourceCase ==
+                NyxIdChatSafeResourceRef.ResourceOneofCase.UserService)
+            .Select(static report => report.Resource.UserService.UserServiceId)
+            .Where(static userServiceId => !string.IsNullOrWhiteSpace(userServiceId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (userServiceIds.Length == 0)
+            return true;
+
+        var visibilityPort = http.RequestServices.GetService<
+            INyxIdActionContinuationCredentialVisibilityPort>();
+        if (visibilityPort is null)
+        {
+            await WriteActionContinuationVisibilityFailureAsync(
+                http,
+                StatusCodes.Status503ServiceUnavailable,
+                ActionContinuationCatalogUnavailableCode,
+                "The NyxID action continuation catalog is temporarily unavailable.",
+                ct);
+            return false;
+        }
+
+        try
+        {
+            foreach (var userServiceId in userServiceIds)
+            {
+                var visibility = await visibilityPort
+                    .InspectUserServiceAsync(bearerToken, userServiceId, ct)
+                    .ConfigureAwait(false);
+                switch (visibility.Status)
+                {
+                    case NyxIdActionContinuationCredentialVisibilityStatus.Visible:
+                        continue;
+                    case NyxIdActionContinuationCredentialVisibilityStatus.CredentialRefreshRequired:
+                        await WriteActionContinuationVisibilityFailureAsync(
+                            http,
+                            StatusCodes.Status401Unauthorized,
+                            ActionContinuationCredentialRefreshRequiredCode,
+                            "The action continuation requires a refreshed NyxID credential.",
+                            ct);
+                        return false;
+                    default:
+                        await WriteActionContinuationVisibilityFailureAsync(
+                            http,
+                            StatusCodes.Status503ServiceUnavailable,
+                            ActionContinuationCatalogUnavailableCode,
+                            "The NyxID action continuation catalog is temporarily unavailable.",
+                            ct);
+                        return false;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            await WriteActionContinuationVisibilityFailureAsync(
+                http,
+                StatusCodes.Status503ServiceUnavailable,
+                ActionContinuationCatalogUnavailableCode,
+                "The NyxID action continuation catalog is temporarily unavailable.",
+                ct);
+            return false;
+        }
+
+        return true;
+    }
+
+    private static Task WriteActionContinuationVisibilityFailureAsync(
+        HttpContext http,
+        int statusCode,
+        string code,
+        string message,
+        CancellationToken ct)
+    {
+        http.Response.StatusCode = statusCode;
+        return http.Response.WriteAsJsonAsync(new { code, message }, cancellationToken: ct);
     }
 
     private static bool TryParseActionDisposition(
@@ -1075,5 +1213,105 @@ public static partial class NyxIdChatEndpoints
             Uri = Uri ?? string.Empty,
             Name = Name ?? string.Empty,
         };
+    }
+
+    private static async ValueTask<InlineInputPartsResult> MaterializeInlineInputPartsAsync(
+        IReadOnlyList<ContentPartDto>? parts,
+        string scopeId,
+        string turnId,
+        IFileArtifactIngressPort? fileIngressPort,
+        CancellationToken ct)
+    {
+        if (parts is not { Count: > 0 })
+            return InlineInputPartsResult.Success([]);
+
+        var normalized = new List<ChatContentPart>(parts.Count);
+        for (var index = 0; index < parts.Count; index++)
+        {
+            var part = parts[index];
+            if (part is null)
+                return InlineInputPartsResult.Invalid();
+
+            var proto = part.ToProto();
+            if (string.IsNullOrWhiteSpace(part.DataBase64))
+            {
+                normalized.Add(proto);
+                continue;
+            }
+
+            if (fileIngressPort is null)
+                throw new InvalidOperationException("File artifact ingress is unavailable for inline chat input.");
+
+            byte[] content;
+            try
+            {
+                content = Convert.FromBase64String(part.DataBase64);
+            }
+            catch (FormatException)
+            {
+                return InlineInputPartsResult.Invalid();
+            }
+
+            if (content.Length is 0 or > MaxInlineInputPartBytes)
+                return InlineInputPartsResult.Invalid();
+
+            var ingress = await fileIngressPort.IngestAsync(
+                new FileArtifactIngressRequest(
+                    content,
+                    FileArtifactSourceKind.ChatInput,
+                    SourceMessageId: turnId,
+                    SourceResourceKey: $"inline-{index}",
+                    FileName: NormalizeInlineInputValue(part.Name),
+                    MediaType: NormalizeInlineInputValue(part.MediaType),
+                    OwnerScopeId: scopeId),
+                ct);
+            proto.DataBase64 = string.Empty;
+            proto.FileRef = ToChatFileRef(ingress.FileRef);
+            proto.Uri = ingress.FileRef.ArtifactId ?? proto.Uri;
+            proto.MediaType = ingress.FileRef.MediaType ?? proto.MediaType;
+            proto.Name = ingress.FileRef.FileName ?? proto.Name;
+            normalized.Add(proto);
+        }
+
+        return InlineInputPartsResult.Success(normalized);
+    }
+
+    private static Aevatar.AI.Abstractions.ChatFileRef ToChatFileRef(FileArtifactRef source) =>
+        new()
+        {
+            FileId = source.FileId ?? string.Empty,
+            ArtifactId = source.ArtifactId ?? string.Empty,
+            SourceKind = source.SourceKind switch
+            {
+                FileArtifactSourceKind.ChatInput => Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput,
+                FileArtifactSourceKind.FormUpload => Aevatar.AI.Abstractions.ChatFileSourceKind.FormUpload,
+                FileArtifactSourceKind.ConnectedServiceResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ConnectedServiceResource,
+                FileArtifactSourceKind.ExternalResource => Aevatar.AI.Abstractions.ChatFileSourceKind.ExternalResource,
+                FileArtifactSourceKind.Generated => Aevatar.AI.Abstractions.ChatFileSourceKind.Generated,
+                _ => Aevatar.AI.Abstractions.ChatFileSourceKind.Unspecified,
+            },
+            SourceMessageId = source.SourceMessageId ?? string.Empty,
+            SourceResourceKey = source.SourceResourceKey ?? string.Empty,
+            FileName = source.FileName ?? string.Empty,
+            MediaType = source.MediaType ?? string.Empty,
+            SizeBytes = source.SizeBytes,
+            Sha256 = source.Sha256 ?? string.Empty,
+            CreatedAtUnixMs = source.CreatedAtUnixMs,
+            ExpiresAtUnixMs = source.ExpiresAtUnixMs,
+            OwnerRunId = source.OwnerRunId ?? string.Empty,
+            OwnerScopeId = source.OwnerScopeId ?? string.Empty,
+        };
+
+    private static string? NormalizeInlineInputValue(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private readonly record struct InlineInputPartsResult(
+        bool Succeeded,
+        IReadOnlyList<ChatContentPart> Parts)
+    {
+        public static InlineInputPartsResult Success(IReadOnlyList<ChatContentPart> parts) =>
+            new(true, parts);
+
+        public static InlineInputPartsResult Invalid() => new(false, []);
     }
 }

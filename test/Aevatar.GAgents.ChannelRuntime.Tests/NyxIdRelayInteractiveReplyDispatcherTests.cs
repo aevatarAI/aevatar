@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
+using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -180,6 +182,54 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
             .GetString()
             .Should()
             .Be("2.0");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_agent_run_approval_uses_real_lark_producer_and_preserves_typed_identity()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK,
+            JsonSerializer.Serialize(new { message_id = "mid", platform_message_id = "pmid" }));
+        var client = CreateClient(handler);
+        var composer = new LarkMessageComposer();
+        var producer = new LarkChannelNativeMessageProducer(composer);
+        var registry = new ChannelMessageComposerRegistry(new[] { composer }, new[] { producer });
+        var dispatcher = new NyxIdRelayInteractiveReplyDispatcher(
+            registry,
+            client,
+            NullLogger<NyxIdRelayInteractiveReplyDispatcher>.Instance);
+        var pending = new AgentRunPendingToolApprovalState
+        {
+            RunId = "agent-run-approval-1",
+            ApprovalRequestId = "tool-approval-1",
+            ToolCallId = "call-approval-1",
+            ToolName = "use_skill",
+            ArgumentsSha256 = new string('a', 64),
+            SideEffectKind = "skill.mount",
+            SubjectKind = "skill",
+            SubjectId = "lark-bot-file-upload-validation",
+        };
+
+        var result = await dispatcher.DispatchAsync(
+            ChannelId.From("lark"),
+            "relay-message-1",
+            "relay-token",
+            AgentRunToolApprovalMessageMapper.ToMessageContent(pending),
+            new ComposeContext());
+
+        result.Succeeded.Should().BeTrue();
+        result.FellBackToText.Should().BeFalse();
+        using var document = JsonDocument.Parse(handler.LastRequestBody!);
+        var card = document.RootElement
+            .GetProperty("reply")
+            .GetProperty("metadata")
+            .GetProperty("card");
+        var serializedCard = card.GetRawText();
+        serializedCard.Should().Contain("\"agent_run_id\":\"agent-run-approval-1\"");
+        serializedCard.Should().Contain("\"agent_run_approval_request_id\":\"tool-approval-1\"");
+        serializedCard.Should().Contain("\"agent_run_tool_call_id\":\"call-approval-1\"");
+        serializedCard.Should().Contain("\"agent_run_arguments_sha256\":\"" + new string('a', 64) + "\"");
+        serializedCard.Should().Contain("\"agent_run_approved\":true");
+        serializedCard.Should().Contain("\"agent_run_approved\":false");
     }
 
     [Fact]

@@ -166,7 +166,8 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
         SetAgentId(runAgent, "workflow-run-nyxid-failure");
         runAgent.EventPublisher = committedPublisher;
         runAgent.CommittedStateEventPublisher = committedPublisher;
-            await BindInteractiveWorkflowRunDefinitionAsync(runAgent,
+        await BindInteractiveWorkflowRunDefinitionAsync(
+            runAgent,
             "definition-nyxid-failure",
             """
             name: nyxid_failure
@@ -193,7 +194,6 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
 
         var reportStore = new RecordingReportStore();
         var reportProjector = new WorkflowRunInsightReportArtifactProjector(
-            reportStore,
             reportStore,
             reportStore);
         await reportProjector.ProjectAsync(
@@ -496,7 +496,15 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
         var ctx = CreateContext(workflowRunAgent);
         await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
 
-        return ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        if (module is ToolCallModule toolCallModule)
+        {
+            await WorkflowCoreModuleTestBase.DrainToolCallContinuationsAsync(
+                toolCallModule,
+                request,
+                ctx);
+        }
+
+        return ctx.GetPublishedSnapshot().Select(static item => item.evt).OfType<StepCompletedEvent>().Single();
     }
 
     private static EventEnvelope Envelope(IMessage evt)
@@ -578,6 +586,7 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
     private sealed class RecordingReportStore :
         IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>,
         IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>,
+        IProjectionDocumentMutator<WorkflowRunInsightReportDocument, string>,
         IProjectionGraphWriter<WorkflowRunInsightReportDocument>
     {
         public WorkflowRunInsightReportDocument? Document { get; private set; }
@@ -607,8 +616,25 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
         public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
             throw new NotSupportedException("This regression does not delete projected runs.");
 
+        public Task<ProjectionDocumentMutationResult<WorkflowRunInsightReportDocument>> MutateAsync(
+            string key,
+            Func<WorkflowRunInsightReportDocument?, WorkflowRunInsightReportDocument> reducer,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var incoming = reducer(Document?.Clone());
+            var result = ProjectionWriteResultEvaluator.Evaluate(Document, incoming);
+            if (result.IsApplied)
+                Document = incoming.Clone();
+
+            return Task.FromResult(new ProjectionDocumentMutationResult<WorkflowRunInsightReportDocument>(
+                result,
+                Document?.Clone()));
+        }
+
         Task IProjectionGraphWriter<WorkflowRunInsightReportDocument>.UpsertAsync(
             WorkflowRunInsightReportDocument readModel,
+            string projectionKind,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
@@ -624,5 +650,4 @@ public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
             return Task.FromResult<IReadOnlyList<IWorkflowTool>>([tool]);
         }
     }
-
 }

@@ -144,6 +144,7 @@ public sealed class WorkflowCompatibilityProfileTests
             roles:
               - id: planner
                 allowed_tools: [search, calendar]
+                tool_sets: [nyxid.connected_services]
               - id: isolated
                 allowed_tools: []
               - id: inherited
@@ -152,12 +153,14 @@ public sealed class WorkflowCompatibilityProfileTests
                 type: llm_call
                 target_role: planner
                 allowed_tools: [calendar]
+                tool_sets: [nyxid.connected_services]
                 parameters:
                   prompt_prefix: "Use scoped tool"
               - id: no_tools
                 type: llm_call
                 target_role: isolated
                 allowed_tools: []
+                tool_sets: []
               - id: inherited_tools
                 type: llm_call
                 target_role: inherited
@@ -170,10 +173,13 @@ public sealed class WorkflowCompatibilityProfileTests
         studioParse.Document.Should().NotBeNull();
         var document = studioParse.Document!;
         document.Roles[0].AllowedTools.Should().Equal("search", "calendar");
+        document.Roles[0].ToolSets.Should().Equal("nyxid.connected_services");
         document.Roles[1].AllowedTools.Should().BeEmpty();
         document.Roles[2].AllowedTools.Should().BeNull();
         document.Steps[0].AllowedTools.Should().Equal("calendar");
+        document.Steps[0].ToolSets.Should().Equal("nyxid.connected_services");
         document.Steps[1].AllowedTools.Should().BeEmpty();
+        document.Steps[1].ToolSets.Should().BeEmpty();
         document.Steps[2].AllowedTools.Should().BeNull();
 
         var serialized = service.Serialize(document);
@@ -181,18 +187,24 @@ public sealed class WorkflowCompatibilityProfileTests
         studioRoundTrip.Findings.Should().NotContain(finding =>
             string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase));
         studioRoundTrip.Document!.Roles[0].AllowedTools.Should().Equal("search", "calendar");
+        studioRoundTrip.Document.Roles[0].ToolSets.Should().Equal("nyxid.connected_services");
         studioRoundTrip.Document.Roles[1].AllowedTools.Should().BeEmpty();
         studioRoundTrip.Document.Roles[2].AllowedTools.Should().BeNull();
         studioRoundTrip.Document.Steps[0].AllowedTools.Should().Equal("calendar");
+        studioRoundTrip.Document.Steps[0].ToolSets.Should().Equal("nyxid.connected_services");
         studioRoundTrip.Document.Steps[1].AllowedTools.Should().BeEmpty();
+        studioRoundTrip.Document.Steps[1].ToolSets.Should().BeEmpty();
         studioRoundTrip.Document.Steps[2].AllowedTools.Should().BeNull();
 
         var runtimeRoundTrip = new WorkflowParser().Parse(serialized);
         runtimeRoundTrip.Roles[0].AgentToolScope!.AllowedToolNames.Should().Equal("search", "calendar");
+        runtimeRoundTrip.Roles[0].AgentToolScope!.ToolSetRefs.Should().Equal("nyxid.connected_services");
         runtimeRoundTrip.Roles[1].AgentToolScope!.AllowedToolNames.Should().BeEmpty();
         runtimeRoundTrip.Roles[2].AgentToolScope.Should().BeNull();
         runtimeRoundTrip.Steps[0].AgentToolScope!.AllowedToolNames.Should().Equal("calendar");
+        runtimeRoundTrip.Steps[0].AgentToolScope!.ToolSetRefs.Should().Equal("nyxid.connected_services");
         runtimeRoundTrip.Steps[1].AgentToolScope!.AllowedToolNames.Should().BeEmpty();
+        runtimeRoundTrip.Steps[1].AgentToolScope!.ToolSetRefs.Should().BeEmpty();
         runtimeRoundTrip.Steps[2].AgentToolScope.Should().BeNull();
     }
 

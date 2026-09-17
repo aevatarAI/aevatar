@@ -11,6 +11,7 @@ using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.AGUI.Contracts;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -26,7 +27,7 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
         var registration = new RecordingServiceRunRegistrationPort();
         var service = await CreateServiceAsync(
             identity,
-            CreateArtifact(identity, ServiceImplementationKind.Workflow),
+            CreateArtifact(identity, ServiceImplementationKind.Scripting),
             interaction,
             registration);
 
@@ -496,9 +497,16 @@ public sealed class StaticGAgentStreamInvocationApplicationServiceTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "wf",
                     WorkflowYaml = "name: wf",
                     DefinitionActorId = "workflow-definition-1",
+                    ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+                        ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                    },
                 },
             };
         }

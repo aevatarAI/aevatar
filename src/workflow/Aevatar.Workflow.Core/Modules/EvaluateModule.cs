@@ -56,8 +56,10 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = request.StepId,
                     RunId = runId,
+                    ExecutionId = request.ExecutionId,
                     Success = false,
                     Error = "evaluate step requires non-empty step_id",
+                    OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 }, TopologyAudience.Self, ct);
                 return;
             }
@@ -88,8 +90,10 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = stepId,
                     RunId = runId,
+                    ExecutionId = request.ExecutionId,
                     Success = false,
                     Error = $"evaluate target resolution failed: {ex.Message}",
+                    OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 }, TopologyAudience.Self, ct);
                 return;
             }
@@ -99,7 +103,11 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = stepId,
                 RunId = runId,
-                OriginalInput = request.Input ?? string.Empty,
+                OriginalInput = string.IsNullOrWhiteSpace(request.InputValueId)
+                    ? request.Input ?? string.Empty
+                    : string.Empty,
+                InputValueId = request.InputValueId,
+                ExecutionId = request.ExecutionId,
                 Threshold = threshold,
                 OnBelow = onBelow,
             };
@@ -114,7 +122,9 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
                 ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
             };
-            WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+            WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyDurableAgentKeyOrSenderNyxIdAccessToken(
+                ctx,
+                intent);
             CopyParametersToIntent(request.Parameters, intent);
             try
             {
@@ -141,8 +151,10 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
                 {
                     StepId = stepId,
                     RunId = runId,
+                    ExecutionId = request.ExecutionId,
                     Success = false,
                     Error = $"evaluate dispatch failed: {ex.Message}",
+                    OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 }, TopologyAudience.Self, ct);
                 return;
             }
@@ -166,8 +178,10 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = evalCtx.StepId,
                 RunId = evalCtx.RunId,
+                ExecutionId = evalCtx.ExecutionId,
                 Success = false,
                 Error = string.IsNullOrWhiteSpace(llmCompleted.Error) ? "evaluate LLM call failed." : llmCompleted.Error,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             }, TopologyAudience.Self, ct);
             stateForCompletion.PendingBySessionId.Remove(llmCompleted.SessionId);
             stateForCompletion.AttemptsByStepId.Remove(BuildAttemptKey(evalCtx.RunId, evalCtx.StepId));
@@ -181,12 +195,22 @@ public sealed class EvaluateModule : IEventModule<IWorkflowExecutionContext>
         ctx.Logger.LogInformation("Evaluate {StepId}: score={Score} threshold={Threshold} passed={Passed}",
             evalCtx.StepId, score, evalCtx.Threshold, passed);
 
+        var forwardedInput = evalCtx.OriginalInput;
+        if (!string.IsNullOrWhiteSpace(evalCtx.InputValueId))
+        {
+            var kernelState = WorkflowExecutionStateAccess.Load<WorkflowExecutionKernelState>(
+                ctx,
+                WorkflowExecutionKernel.ModuleStateKey);
+            forwardedInput = WorkflowExecutionValueStore.GetCanonicalValue(kernelState, evalCtx.InputValueId).Value;
+        }
         var completed = new StepCompletedEvent
         {
             StepId = evalCtx.StepId,
             RunId = evalCtx.RunId,
+            ExecutionId = evalCtx.ExecutionId,
             Success = true,
-            Output = evalCtx.OriginalInput,
+            Output = forwardedInput,
+            OutputProvenance = WorkflowStepOutputProvenance.ForwardedInput,
         };
         completed.Annotations["evaluate.score"] = score.ToString("F1");
         completed.Annotations["evaluate.passed"] = passed.ToString();

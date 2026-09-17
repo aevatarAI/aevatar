@@ -24,6 +24,7 @@ public static class PolicyAwareVoiceEndpoints
     private const string WhipOfferPattern = "/whip/offer";
     internal const string VoiceNotConfiguredReason = "voice_not_configured";
     private const string VoiceCredentialUnavailableReason = "voice_credential_unavailable";
+    internal const string VoiceToolCatalogUnavailableReason = "voice_tool_catalog_unavailable";
 
     public static IEndpointConventionBuilder MapPolicyAwareVoiceEndpoint(this IEndpointRouteBuilder app) =>
         app.Map(DefaultPattern, HandlePolicyAwareVoiceAsync);
@@ -251,47 +252,46 @@ public static class PolicyAwareVoiceEndpoints
 
     private static async Task<VoiceToolContextAdmission> TryBuildToolContextAsync(HttpContext http)
     {
+        var allowedToolNames = ResolveVoiceToolAllowlist();
         var callerBearer = ExtractCallerBearer(http);
-        if (string.IsNullOrWhiteSpace(callerBearer))
-            return new VoiceToolContextAdmission(true, null);
+        VoiceToolCredentialIssueResult? issued = null;
+        if (!string.IsNullOrWhiteSpace(callerBearer))
+        {
+            var issuer = http.RequestServices.GetService<IVoiceToolCredentialIssuer>();
+            if (issuer is null)
+            {
+                await WriteCredentialUnavailableAsync(http);
+                return new VoiceToolContextAdmission(false, null);
+            }
 
-        var issuer = http.RequestServices.GetService<IVoiceToolCredentialIssuer>();
-        if (issuer is null)
-        {
-            await WriteCredentialUnavailableAsync(http);
-            return new VoiceToolContextAdmission(false, null);
-        }
+            try
+            {
+                issued = await issuer.IssueAsync(
+                    new VoiceToolCredentialIssueRequest(
+                        callerBearer,
+                        DateTimeOffset.UtcNow.AddMinutes(5)),
+                    http.RequestAborted);
+            }
+            catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                await WriteCredentialUnavailableAsync(http);
+                return new VoiceToolContextAdmission(false, null);
+            }
 
-        var expiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(5);
-        VoiceToolCredentialIssueResult? issued;
-        try
-        {
-            issued = await issuer.IssueAsync(
-                new VoiceToolCredentialIssueRequest(
-                    callerBearer,
-                    expiresAtUtc),
-                http.RequestAborted);
-        }
-        catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch
-        {
-            await WriteCredentialUnavailableAsync(http);
-            return new VoiceToolContextAdmission(false, null);
-        }
-
-        if (issued is null || string.IsNullOrWhiteSpace(issued.CredentialRef))
-        {
-            await WriteCredentialUnavailableAsync(http);
-            return new VoiceToolContextAdmission(false, null);
+            if (issued is null || string.IsNullOrWhiteSpace(issued.CredentialRef))
+            {
+                await WriteCredentialUnavailableAsync(http);
+                return new VoiceToolContextAdmission(false, null);
+            }
         }
 
         var toolContext = new VoiceToolExecutionContext
         {
-            CredentialRef = issued.CredentialRef,
-            ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(issued.ExpiresAtUtc.ToUniversalTime()),
+            CredentialRef = issued?.CredentialRef ?? string.Empty,
             CallerScopeId = FirstNonEmpty(
                 http.User.FindFirst(AevatarStandardClaimTypes.ScopeId)?.Value,
                 http.User.FindFirst("uid")?.Value,
@@ -318,16 +318,44 @@ public static class PolicyAwareVoiceEndpoints
             NyxIdRoutePreference = NormalizeOptional(http.Request.Query["nyxid_route_preference"].ToString()) ?? string.Empty,
             SenderBindingId = NormalizeOptional(http.Request.Query["sender_binding_id"].ToString()) ?? string.Empty,
         };
+        if (issued is not null)
+        {
+            toolContext.ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                issued.ExpiresAtUtc.ToUniversalTime());
+        }
 
-        // Slim the voice tool surface to the NyxID service-operation tools (overridable via
-        // VOICE_TOOL_ALLOWLIST). Unrestricted, the model session gets ~69 tools across every source
-        // (skills / workflow / storage / nyxid account-mgmt), which overwhelms the realtime model's
-        // tool selection so it never calls nyxid_proxy for Home Assistant. AllowedToolNames flows to
-        // both the actor and the relay (model) tool discovery, so the model only sees this focused set.
-        foreach (var allowed in ResolveVoiceToolAllowlist())
+        foreach (var allowed in allowedToolNames)
             toolContext.AllowedToolNames.Add(allowed);
 
-        return new VoiceToolContextAdmission(true, toolContext, issued.TransportBinding);
+        var toolCatalog = http.RequestServices.GetService<IVoiceToolCatalog>();
+        if (toolCatalog is null)
+        {
+            await ReleasePendingToolCredentialAsync(http, toolContext);
+            await WriteToolCatalogUnavailableAsync(http);
+            return new VoiceToolContextAdmission(false, null);
+        }
+
+        try
+        {
+            var snapshot = await toolCatalog.DiscoverAsync(toolContext, http.RequestAborted);
+            VoiceToolCatalogSnapshotValidator.Validate(snapshot);
+            toolContext.ToolCatalogProof = snapshot.Proof.Clone();
+            toolContext.ToolCatalogPolicyVersion = snapshot.PolicyVersion;
+        }
+        catch (OperationCanceledException) when (http.RequestAborted.IsCancellationRequested)
+        {
+            await ReleasePendingToolCredentialAsync(http, toolContext);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            GetLogger(http).LogWarning(ex, "Voice tool catalog admission failed closed.");
+            await ReleasePendingToolCredentialAsync(http, toolContext);
+            await WriteToolCatalogUnavailableAsync(http);
+            return new VoiceToolContextAdmission(false, null);
+        }
+
+        return new VoiceToolContextAdmission(true, toolContext, issued?.TransportBinding);
     }
 
     // The realtime voice agent's job is to operate the user's NyxID-connected services + follow its
@@ -341,11 +369,14 @@ public static class PolicyAwareVoiceEndpoints
     private static IReadOnlyList<string> ResolveVoiceToolAllowlist()
     {
         var configured = Environment.GetEnvironmentVariable("VOICE_TOOL_ALLOWLIST");
-        if (string.IsNullOrWhiteSpace(configured))
+        if (configured is null)
             return DefaultVoiceToolAllowlist;
 
-        var names = configured.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return names.Length > 0 ? names : DefaultVoiceToolAllowlist;
+        return configured
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private sealed record VoiceToolContextAdmission(
@@ -357,6 +388,12 @@ public static class PolicyAwareVoiceEndpoints
     {
         http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
         await http.Response.WriteAsync(VoiceCredentialUnavailableReason, http.RequestAborted);
+    }
+
+    private static async Task WriteToolCatalogUnavailableAsync(HttpContext http)
+    {
+        http.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await http.Response.WriteAsync(VoiceToolCatalogUnavailableReason, http.RequestAborted);
     }
 
     // internal (not private) so M5 can unit-test the extraction precedence

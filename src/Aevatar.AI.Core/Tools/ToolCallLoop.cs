@@ -95,10 +95,13 @@ public sealed class ToolCallLoop
                 ToolContext = AgentToolExecutionContextMapper.FromRequestWithCallId(baseRequest, callId),
                 RoutingContext = baseRequest.RoutingContext,
                 LlmControl = baseRequest.LlmControl,
+                RouteTarget = baseRequest.RouteTarget?.Clone(),
                 Tools = baseRequest.Tools,
+                ToolCatalogProof = baseRequest.ToolCatalogProof,
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
                 MaxTokens = baseRequest.MaxTokens,
+                AllowMultipleToolCalls = baseRequest.AllowMultipleToolCalls,
                 ResponseFormat = baseRequest.ResponseFormat,
             };
 
@@ -236,10 +239,14 @@ public sealed class ToolCallLoop
             ToolContext = AgentToolExecutionContextMapper.FromRequestWithCallId(baseRequest, finalCallId),
             RoutingContext = baseRequest.RoutingContext,
             LlmControl = baseRequest.LlmControl,
+            RouteTarget = baseRequest.RouteTarget?.Clone(),
             Tools = null,
+            ToolCatalogProof = AgentTurnToolCatalogProof.RestrictedEmpty(
+                baseRequest.ToolCatalogProof?.Budget),
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
+            AllowMultipleToolCalls = baseRequest.AllowMultipleToolCalls,
             ResponseFormat = baseRequest.ResponseFormat,
         };
         var (finalResponse, _, authorizedFinalTools) = await InvokeLlmAsync(provider, finalRequest, ct);
@@ -272,10 +279,13 @@ public sealed class ToolCallLoop
                     ToolContext = finalRequest.ToolContext,
                     RoutingContext = finalRequest.RoutingContext,
                     LlmControl = finalRequest.LlmControl,
+                    RouteTarget = finalRequest.RouteTarget?.Clone(),
                     Tools = null,
+                    ToolCatalogProof = finalRequest.ToolCatalogProof,
                     Model = finalRequest.Model,
                     Temperature = finalRequest.Temperature,
                     MaxTokens = finalRequest.MaxTokens,
+                    AllowMultipleToolCalls = finalRequest.AllowMultipleToolCalls,
                     ResponseFormat = finalRequest.ResponseFormat,
                 };
                 var (summaryResponse, _, _) = await InvokeLlmAsync(provider, summaryRequest, ct);

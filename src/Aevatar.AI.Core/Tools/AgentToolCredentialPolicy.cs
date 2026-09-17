@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.Core.Tools;
@@ -12,9 +13,7 @@ internal static class AgentToolCredentialPolicy
         ArgumentNullException.ThrowIfNull(tool);
         ArgumentNullException.ThrowIfNull(callSafety);
 
-        return !callSafety.IsReadOnly ||
-               callSafety.IsDestructive ||
-               !string.IsNullOrWhiteSpace(tool.SideEffectKind) ||
-               callSafety.RequiresApproval == true;
+        return AgentToolReceiptEffectPolicy.FromCallSafety(callSafety, tool.SideEffectKind) ==
+               AgentToolReceiptEffect.Mutating;
     }
 }

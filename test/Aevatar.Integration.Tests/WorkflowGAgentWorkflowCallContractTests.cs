@@ -106,7 +106,7 @@ public sealed class WorkflowGAgentWorkflowCallContractTests : WorkflowGAgentTest
         }
 
         [Fact]
-        public async Task WorkflowRunGAgent_WhenSingletonSubWorkflowInvoked_ShouldPersistPendingAndReuseChildActor()
+        public async Task WorkflowRunGAgent_WhenSingletonSubWorkflowInvoked_ShouldFailConcurrentAndReuseSeriallyWithNextGeneration()
         {
             var runtime = new RecordingActorRuntime();
             var runPublisher = new RecordingEventPublisher();
@@ -138,15 +138,30 @@ public sealed class WorkflowGAgentWorkflowCallContractTests : WorkflowGAgentTest
             runtime.CreateCalls.Should().Be(1);
             agent.State.SubWorkflowBindings.Should().ContainSingle(x =>
                 x.DefinitionActorId == "workflow-definition:sub_flow" &&
-                x.DefinitionVersion == definitionAgent.State.Version);
+                x.DefinitionVersion == definitionAgent.State.Version &&
+                x.BindingGeneration == 1);
             agent.State.PendingSubWorkflowDefinitionResolutions.Should().BeEmpty();
             agent.State.PendingSubWorkflowInvocations.Should().ContainSingle(x =>
                 x.InvocationId == "invoke-1" &&
                 x.DefinitionActorId == "workflow-definition:sub_flow" &&
-                x.DefinitionVersion == definitionAgent.State.Version);
-            runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().ContainSingle();
+                x.DefinitionVersion == definitionAgent.State.Version &&
+                x.BindingGeneration == 1);
+            var firstStart = runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>()
+                .Should().ContainSingle().Subject;
+            firstStart.RunId.Should().Be("invoke-1");
+            firstStart.BindingGeneration.Should().Be(1);
+
+            var childAgent = runtime.CreatedChildWorkflowAgents.Single();
+            var firstBind = childAgent.BindEvents.Should().ContainSingle().Subject;
+            firstBind.RunId.Should().Be("invoke-1");
+            firstBind.ReusePolicy.Should().Be(WorkflowRunActorReusePolicy.SerialSingleton);
+            firstBind.BindingGeneration.Should().Be(1);
+            firstBind.ReuseAuthorityActorId.Should().Be(agent.Id);
+            firstBind.InitialLineage.SubWorkflow.ParentActorId.Should().Be(agent.Id);
+            var linkedCountBeforeBusy = runtime.Linked.Count;
 
             runPublisher.Sent.Clear();
+            runPublisher.Published.Clear();
             definitionPublisher.Sent.Clear();
 
             await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
@@ -159,20 +174,125 @@ public sealed class WorkflowGAgentWorkflowCallContractTests : WorkflowGAgentTest
                 Lifecycle = "singleton",
             });
 
-            agent.State.PendingSubWorkflowDefinitionResolutions.Should().ContainSingle(x => x.InvocationId == "invoke-2");
-            runPublisher.Sent.Select(x => x.evt).OfType<SubWorkflowDefinitionResolveRequestedEvent>().Should().ContainSingle();
+            agent.State.PendingSubWorkflowDefinitionResolutions.Should().BeEmpty();
+            agent.State.PendingSubWorkflowInvocations.Should().ContainSingle(x =>
+                x.InvocationId == "invoke-1" && x.BindingGeneration == 1);
+            runtime.CreateCalls.Should().Be(1);
+            runtime.Linked.Should().HaveCount(linkedCountBeforeBusy);
+            childAgent.BindEvents.Should().ContainSingle();
+            runPublisher.Sent.Select(x => x.evt).OfType<SubWorkflowDefinitionResolveRequestedEvent>().Should().BeEmpty();
+            runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().BeEmpty();
+            var busyFailure = runPublisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>()
+                .Should().ContainSingle().Subject;
+            busyFailure.RunId.Should().Be("parent-run");
+            busyFailure.StepId.Should().Be("step-b");
+            busyFailure.Success.Should().BeFalse();
+            busyFailure.Error.Should().Be("workflow_call singleton is busy for workflow 'sub_flow'");
+
+            var firstPending = agent.State.PendingSubWorkflowInvocations.Single();
+            await agent.HandleWorkflowCompletionEnvelope(Envelope(
+                new WorkflowCompletedEvent
+                {
+                    WorkflowName = "sub_flow",
+                    RunId = firstPending.ChildRunId,
+                    Success = true,
+                    Output = "first-done",
+                },
+                firstPending.ChildActorId,
+                TopologyAudience.ParentAndChildren));
+
+            agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+            agent.State.PendingChildRunIdsByParentRunId.Should().BeEmpty();
+            runPublisher.Sent.Clear();
+            runPublisher.Published.Clear();
+            definitionPublisher.Sent.Clear();
+
+            await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-3",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-c",
+                WorkflowName = "sub_flow",
+                Input = "payload-c",
+                Lifecycle = "singleton",
+            });
+
+            agent.State.PendingSubWorkflowDefinitionResolutions.Should().ContainSingle(x => x.InvocationId == "invoke-3");
             await ResolveLatestDefinitionRequestAsync(agent, runPublisher, definitionAgent, definitionPublisher);
 
             runtime.CreateCalls.Should().Be(1);
-            agent.State.SubWorkflowBindings.Should().ContainSingle();
-            agent.State.PendingSubWorkflowInvocations.Should().HaveCount(2);
-            agent.State.PendingSubWorkflowInvocations.Select(x => x.ChildActorId).Distinct().Should().ContainSingle();
+            agent.State.SubWorkflowBindings.Should().ContainSingle(x => x.BindingGeneration == 2);
+            agent.State.PendingSubWorkflowInvocations.Should().ContainSingle(x =>
+                x.InvocationId == "invoke-3" &&
+                x.BindingGeneration == 2 &&
+                x.ChildActorId == firstPending.ChildActorId);
             agent.State.PendingChildRunIdsByParentRunId.Should().ContainKey("parent-run");
-            runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().ContainSingle();
-
-            var childAgent = runtime.CreatedChildWorkflowAgents.Single();
-            childAgent.BindEvents.Select(x => x.RunId).Should().Equal("invoke-1", "invoke-2");
+            var secondStart = runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>()
+                .Should().ContainSingle().Subject;
+            secondStart.RunId.Should().Be("invoke-3");
+            secondStart.BindingGeneration.Should().Be(2);
+            childAgent.BindEvents.Select(x => x.RunId).Should().Equal("invoke-1", "invoke-3");
+            childAgent.BindEvents.Select(x => x.BindingGeneration).Should().Equal(1, 2);
+            childAgent.BindEvents.Should().OnlyContain(x =>
+                x.ReusePolicy == WorkflowRunActorReusePolicy.SerialSingleton &&
+                x.ReuseAuthorityActorId == agent.Id);
             childAgent.StartEvents.Should().BeEmpty();
+        }
+
+        [Fact]
+        public async Task WorkflowRunGAgent_WhenLegacySingletonBindingExists_ShouldCreateFencedActorInsteadOfUpgradingLegacyActor()
+        {
+            var runtime = new RecordingActorRuntime();
+            var runPublisher = new RecordingEventPublisher();
+            var definitionPublisher = new RecordingEventPublisher();
+            var definitionAgent = await CreateRegisteredDefinitionAgentAsync(
+                runtime,
+                definitionPublisher,
+                "workflow-definition:sub_flow",
+                "sub_flow",
+                BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
+            var agent = CreateRunAgent(runtime: runtime);
+            SetAgentId(agent, "workflow-run-parent-legacy-singleton");
+            agent.EventPublisher = runPublisher;
+            var legacyActorId = $"{agent.Id}:workflow:workflow-definition-sub_flow";
+            var legacyChild = new FakeWorkflowRunChildAgent(legacyActorId);
+            runtime.RegisterAgent(legacyActorId, legacyChild);
+            agent.State.SubWorkflowBindings.Add(new WorkflowRunState.Types.SubWorkflowBinding
+            {
+                WorkflowName = "sub_flow",
+                ChildActorId = legacyActorId,
+                Lifecycle = WorkflowCallLifecycle.Singleton,
+                DefinitionActorId = "workflow-definition:sub_flow",
+                DefinitionVersion = definitionAgent.State.Version,
+                BindingGeneration = 0,
+            });
+
+            await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
+            {
+                InvocationId = "invoke-fenced-1",
+                ParentRunId = "parent-run",
+                ParentStepId = "step-fenced",
+                WorkflowName = "sub_flow",
+                Input = "payload",
+                Lifecycle = "singleton",
+            });
+            await ResolveLatestDefinitionRequestAsync(agent, runPublisher, definitionAgent, definitionPublisher);
+
+            legacyChild.BindEvents.Should().BeEmpty();
+            runtime.CreateCalls.Should().Be(1);
+            var fencedChild = runtime.CreatedChildWorkflowAgents.Should().ContainSingle().Subject;
+            fencedChild.Id.Should().NotBe(legacyActorId);
+            var fencedBind = fencedChild.BindEvents.Should().ContainSingle().Subject;
+            fencedBind.RunId.Should().Be("invoke-fenced-1");
+            fencedBind.ReusePolicy.Should().Be(WorkflowRunActorReusePolicy.SerialSingleton);
+            fencedBind.BindingGeneration.Should().Be(1);
+            fencedBind.ReuseAuthorityActorId.Should().Be(agent.Id);
+            agent.State.SubWorkflowBindings.Should().ContainSingle(x =>
+                x.ChildActorId == fencedChild.Id &&
+                x.BindingGeneration == 1);
+            agent.State.PendingSubWorkflowInvocations.Should().ContainSingle(x =>
+                x.ChildActorId == fencedChild.Id &&
+                x.BindingGeneration == 1);
         }
 
         [Fact]

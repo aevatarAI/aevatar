@@ -16,7 +16,7 @@ internal sealed class ResponsesUserSkillsToolProvider : IResponsesToolProvider
 
     public ResponsesUserSkillsToolProvider(
         SkillsAgentToolSource skillsSource,
-        OrnnAgentToolSource ornnSource,
+        OrnnSearchAgentToolSource ornnSource,
         ILogger<ResponsesUserSkillsToolProvider>? logger = null)
         : this(
             (IAgentToolSource)(skillsSource ?? throw new ArgumentNullException(nameof(skillsSource))),

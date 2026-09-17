@@ -1,4 +1,5 @@
 import {
+  buildChannelBindHref,
   buildWorkflowActivityEditorHref,
   buildWorkflowActivityNewHref,
   buildWorkflowActivitySettingsHref,
@@ -6,6 +7,12 @@ import {
 } from './navigation';
 
 describe('Workflow Activity vNext navigation', () => {
+  it('keeps a NyxID bot identity in the canonical channel binding route', () => {
+    expect(buildChannelBindHref('scope alpha', 'bot:one/two')).toBe(
+      '/scopes/scope%20alpha/channels/bind/bot%3Aone%2Ftwo',
+    );
+  });
+
   it('builds an encoded canonical template creation URL', () => {
     expect(buildWorkflowActivityTemplatesHref('scope with space')).toBe(
       '/scopes/scope%20with%20space/workflows/new/templates',

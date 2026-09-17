@@ -1,4 +1,52 @@
 export default {
+  'channels.error.contract':
+    'Bot binding is not available yet. Please try again later.',
+  'channels.guide.title': 'How to connect a bot',
+  'channels.guide.add': 'Add bot in NyxID',
+  'channels.guide.addHelp': 'Create your bot in NyxID.',
+  'channels.guide.bind': 'Refresh and bind',
+  'channels.guide.bindHelp':
+    'Return here, refresh the table, then choose Bind.',
+  'channels.guide.view': 'View your bound bot',
+  'channels.guide.viewHelp': 'Find your bot and its skill in the table below.',
+  'channels.guide.step': 'STEP {number}',
+  'channels.bots.title': 'Channel bots',
+  'channels.bots.empty': 'No bots yet',
+  'channels.bots.emptyHelp': 'Add a bot in NyxID, then refresh this table.',
+  'channels.column.binding': 'Binding',
+  'channels.binding.bind': 'Bind',
+  'channels.binding.bound': 'Bound',
+  'channels.binding.unbound': 'Not bound',
+  'channels.binding.unavailable': 'Unavailable',
+  'channels.status.disabled': 'Disabled',
+  'channels.skills.placeholder': 'Select a skill',
+  'channels.skills.search': 'Search skills',
+  'channels.skills.available': 'Available in Ornn',
+  'channels.skills.loading': 'Loading skills',
+  'channels.skills.failed': 'Could not load skills. Use Refresh to try again.',
+  'channels.skills.empty': 'No skills found',
+  'channels.skills.more': 'Load more skills',
+  'channels.skills.create': 'Create new skill',
+  'channels.skills.createHelp':
+    'Opens Ornn in a new tab. Create your skill, then return here and refresh the list.',
+  'channels.skills.refresh': 'Refresh skills',
+  'channels.bind.title': 'Bind bot',
+  'channels.bind.description':
+    'Choose a skill and the services this bot can use.',
+  'channels.bind.success': 'Bot bound successfully.',
+  'channels.bind.confirming': 'Confirming your changes...',
+  'channels.bind.delayed':
+    'Your request was accepted. The updated binding is not visible yet. You can return to Channels and refresh the table.',
+  'channels.bind.uncertain':
+    'The request could not be confirmed. Return to Channels and refresh before trying again.',
+  'channels.bind.conflict':
+    'This bot could not be bound. Refresh the channel list and review its binding and routes in NyxID.',
+  'channels.bind.failed':
+    'Could not save this bot. Check your skill, services and NyxID access, then try again.',
+  'channels.bind.configuration':
+    'Bot binding is unavailable because the server callback address is not configured correctly. Contact your administrator.',
+  'channels.edit.partialConfigSave':
+    'Label saved, but the configuration could not be updated. Review your choices and try again.',
   'channels.edit.label': 'Label',
   'channels.edit.labelError':
     'Enter a non-empty label. If it is too long, shorten it and try again.',
@@ -36,8 +84,7 @@ export default {
   'channels.edit.discardHelp': 'Your unsaved channel changes will be lost.',
   'workflowActivityVNext.nav.channels': 'Channels',
   'channels.title': 'Connect your channels to your agent',
-  'channels.description':
-    'Choose a channel to connect your bot and select the services it can use.',
+  'channels.description': 'Bring your NyxID bots into Aevatar.',
   'channels.intro':
     'Once connected, talk to your Aevatar bot directly from the channel.',
   'channels.available': 'Available channels',
@@ -129,7 +176,7 @@ export default {
   'channels.connect.hideToken': 'Hide bot token',
   'channels.connect.botFather': 'Get token from BotFather',
   'channels.connect.name': 'Channel name',
-  'channels.connect.skillName': 'Skill name',
+  'channels.connect.skillName': 'Skill',
   'channels.connect.skillNameDefault': 'Defaults to the Telegram bot name',
   'channels.connect.optional': '(optional)',
   'channels.connect.botNameDefault':

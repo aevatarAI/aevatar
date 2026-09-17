@@ -1,0 +1,407 @@
+{
+  "specRevision": "f45febb057a7182dab2495d4c739d2bb8d7026f5",
+  "conversationActorId": "conversation-uc2",
+  "initialInput": {
+    "stateVersion": 11,
+    "snapshot": {
+      "actorId": "conversation-uc2",
+      "stateVersion": 11,
+      "progressSequence": 11,
+      "activeTurn": { "turnId": "turn-uc2-1", "taskId": "task-uc2", "status": "active" },
+      "activeTask": {
+        "schemaVersion": 4,
+        "actorId": "conversation-uc2",
+        "turnId": "turn-uc2-1",
+        "taskId": "task-uc2",
+        "planId": "plan-uc2",
+        "planRevision": 1,
+        "title": "Scope the dinner request",
+        "status": "active",
+        "gate": { "mode": "auto", "reason": null },
+        "steps": [
+          {
+            "stepId": "step-uc2-gaps",
+            "order": 1,
+            "kind": "input",
+            "status": "waiting",
+            "description": "Answer party size, dietary needs, budget, and research-only scope together.",
+            "source": { "input": { "requestId": "input-uc2-gaps" } },
+            "externalEffect": "not_started",
+            "addedBy": "initial",
+            "availableActions": { "retry": false, "skip": false, "stop": true }
+          }
+        ]
+      },
+      "pendingInput": {
+        "requestId": "input-uc2-gaps",
+        "turnId": "turn-uc2-1",
+        "taskId": "task-uc2",
+        "stepId": "step-uc2-gaps",
+        "prompt": "Please answer together: party size, dietary restrictions, budget cap, and whether you accept a research-only shortlist because no reservation can be placed.",
+        "options": [],
+        "allowFreeText": true,
+        "multiSelect": false
+      },
+      "controlFence": null
+    }
+  },
+  "researchRunning": {
+    "stateVersion": 20,
+    "snapshot": {
+      "actorId": "conversation-uc2",
+      "stateVersion": 20,
+      "progressSequence": 20,
+      "activeTurn": { "turnId": "turn-uc2-1", "taskId": "task-uc2", "status": "active" },
+      "activeTask": {
+        "schemaVersion": 4,
+        "actorId": "conversation-uc2",
+        "turnId": "turn-uc2-1",
+        "taskId": "task-uc2",
+        "planId": "plan-uc2",
+        "planRevision": 2,
+        "title": "Research a ready-to-book dinner shortlist",
+        "status": "active",
+        "gate": { "mode": "auto", "reason": "Read and draft only." },
+        "steps": [
+          {
+            "stepId": "step-uc2-gaps",
+            "order": 1,
+            "kind": "input",
+            "status": "done",
+            "description": "Answer logistics and agree to research-only scope.",
+            "source": { "input": { "requestId": "input-uc2-gaps" } },
+            "externalEffect": "not_applied",
+            "addedBy": "initial",
+            "availableActions": { "retry": false, "skip": false, "stop": false }
+          },
+          {
+            "stepId": "step-uc2-search",
+            "order": 2,
+            "kind": "tool",
+            "status": "running",
+            "description": "Aevatar web search - find Greek dinner candidates.",
+            "source": { "tool": { "toolName": "web_search" } },
+            "externalEffect": "not_started",
+            "operation": {
+              "key": {
+                "conversationActorId": "conversation-uc2",
+                "turnId": "turn-uc2-1",
+                "taskId": "task-uc2",
+                "stepId": "step-uc2-search",
+                "operationId": "operation-uc2-search",
+                "operationGeneration": 1
+              },
+              "kind": "tool",
+              "phase": "running",
+              "mayChangeExternalState": false,
+              "idempotent": true,
+              "idempotencyKey": "operation-uc2-search"
+            },
+            "addedBy": "replan",
+            "dependsOn": ["step-uc2-gaps"],
+            "substeps": [
+              { "substepId": "prepare-operation", "title": "Build search query", "status": "done" },
+              { "substepId": "execute-operation", "title": "Search current web results", "status": "running" }
+            ],
+            "availableActions": { "retry": false, "skip": false, "stop": true }
+          },
+          {
+            "stepId": "step-uc2-compare",
+            "order": 3,
+            "kind": "llm",
+            "status": "planned",
+            "description": "Compare shortlist fit for six people and one vegetarian.",
+            "source": { "llm": {} },
+            "externalEffect": "not_started",
+            "addedBy": "replan",
+            "dependsOn": ["step-uc2-search"],
+            "availableActions": { "retry": false, "skip": false, "stop": true }
+          }
+        ]
+      },
+      "pendingInput": null,
+      "controlFence": null
+    }
+  },
+  "steered": {
+    "stateVersion": 31,
+    "snapshot": {
+      "actorId": "conversation-uc2",
+      "stateVersion": 31,
+      "progressSequence": 31,
+      "activeTurn": { "turnId": "turn-uc2-2", "taskId": "task-uc2", "status": "active" },
+      "activeTask": {
+        "schemaVersion": 4,
+        "actorId": "conversation-uc2",
+        "turnId": "turn-uc2-2",
+        "taskId": "task-uc2",
+        "planId": "plan-uc2",
+        "planRevision": 3,
+        "title": "Refine the shortlist for 7 pm and a private room",
+        "status": "active",
+        "gate": { "mode": "auto", "reason": "Read and draft only." },
+        "steps": [
+          {
+            "stepId": "step-uc2-gaps",
+            "order": 1,
+            "kind": "input",
+            "status": "done",
+            "description": "Answer logistics and agree to research-only scope.",
+            "source": { "input": { "requestId": "input-uc2-gaps" } },
+            "externalEffect": "not_applied",
+            "addedBy": "initial",
+            "availableActions": { "retry": false, "skip": false, "stop": false }
+          },
+          {
+            "stepId": "step-uc2-search",
+            "order": 2,
+            "kind": "tool",
+            "status": "done",
+            "description": "Aevatar web search - find Greek dinner candidates.",
+            "source": { "tool": { "toolName": "web_search" } },
+            "externalEffect": "not_applied",
+            "operation": {
+              "key": {
+                "conversationActorId": "conversation-uc2",
+                "turnId": "turn-uc2-1",
+                "taskId": "task-uc2",
+                "stepId": "step-uc2-search",
+                "operationId": "operation-uc2-search",
+                "operationGeneration": 1
+              },
+              "kind": "tool",
+              "phase": "succeeded",
+              "mayChangeExternalState": false,
+              "idempotent": true,
+              "idempotencyKey": "operation-uc2-search"
+            },
+            "addedBy": "replan",
+            "dependsOn": ["step-uc2-gaps"],
+            "substeps": [
+              { "substepId": "prepare-operation", "title": "Build search query", "status": "done" },
+              { "substepId": "execute-operation", "title": "Search current web results", "status": "done" }
+            ],
+            "availableActions": { "retry": false, "skip": false, "stop": false }
+          },
+          {
+            "stepId": "step-uc2-compare",
+            "order": 3,
+            "kind": "llm",
+            "status": "cancelled",
+            "description": "Compare the original shortlist fit.",
+            "source": { "llm": {} },
+            "externalEffect": "not_started",
+            "addedBy": "replan",
+            "dependsOn": ["step-uc2-search"],
+            "availableActions": { "retry": false, "skip": false, "stop": false }
+          },
+          {
+            "stepId": "step-uc2-refine",
+            "order": 4,
+            "kind": "llm",
+            "status": "running",
+            "description": "Refine for 7 pm and a private room.",
+            "source": { "llm": {} },
+            "externalEffect": "not_started",
+            "operation": {
+              "key": {
+                "conversationActorId": "conversation-uc2",
+                "turnId": "turn-uc2-2",
+                "taskId": "task-uc2",
+                "stepId": "step-uc2-refine",
+                "operationId": "operation-uc2-refine",
+                "operationGeneration": 1
+              },
+              "kind": "llm",
+              "phase": "running",
+              "mayChangeExternalState": false,
+              "idempotent": true,
+              "idempotencyKey": "operation-uc2-refine"
+            },
+            "addedBy": "steering",
+            "dependsOn": ["step-uc2-search"],
+            "availableActions": { "retry": false, "skip": false, "stop": true }
+          }
+        ]
+      },
+      "pendingInput": null,
+      "controlFence": null
+    }
+  },
+  "stopped": {
+    "stateVersion": 36,
+    "snapshot": {
+      "actorId": "conversation-uc2",
+      "stateVersion": 36,
+      "progressSequence": 36,
+      "activeTurn": { "turnId": "turn-uc2-2", "taskId": "task-uc2", "status": "stopped" },
+      "activeTask": {
+        "schemaVersion": 4,
+        "actorId": "conversation-uc2",
+        "turnId": "turn-uc2-2",
+        "taskId": "task-uc2",
+        "planId": "plan-uc2",
+        "planRevision": 3,
+        "title": "Refine the shortlist for 7 pm and a private room",
+        "status": "stopped",
+        "safeMessage": "Stopped. Partial-work receipt: 2 completed steps were retained. Retained: Answer logistics and agree to research-only scope; Aevatar web search - find Greek dinner candidates. Unfinished work was fenced; the in-flight operation could not be proven cancelled. Fenced: Refine for 7 pm and a private room. No external effect was applied. Late evidence cannot advance this stopped task.",
+        "gate": { "mode": "auto", "reason": "Read and draft only." },
+        "steps": [
+          {
+            "stepId": "step-uc2-gaps",
+            "order": 1,
+            "kind": "input",
+            "status": "done",
+            "source": { "input": { "requestId": "input-uc2-gaps" } },
+            "externalEffect": "not_applied",
+            "addedBy": "initial",
+            "availableActions": { "retry": false, "skip": false, "stop": false }
+          },
+          {
+            "stepId": "step-uc2-search",
+            "order": 2,
+            "kind": "tool",
+            "status": "done",
+            "source": { "tool": { "toolName": "web_search" } },
+            "externalEffect": "not_applied",
+            "operation": {
+              "key": {
+                "conversationActorId": "conversation-uc2",
+                "turnId": "turn-uc2-1",
+                "taskId": "task-uc2",
+                "stepId": "step-uc2-search",
+                "operationId": "operation-uc2-search",
+                "operationGeneration": 1
+              },
+              "kind": "tool",
+              "phase": "succeeded",
+              "mayChangeExternalState": false,
+              "idempotent": true,
+              "idempotencyKey": "operation-uc2-search"
+            },
+            "addedBy": "replan",
+            "substeps": [
+              { "substepId": "prepare-operation", "title": "Build search query", "status": "done" },
+              { "substepId": "execute-operation", "title": "Search current web results", "status": "done" }
+            ],
+            "availableActions": { "retry": false, "skip": false, "stop": false }
+          },
+          {
+            "stepId": "step-uc2-compare",
+            "order": 3,
+            "kind": "llm",
+            "status": "cancelled",
+            "source": { "llm": {} },
+            "externalEffect": "not_started",
+            "addedBy": "replan",
+            "availableActions": { "retry": false, "skip": false, "stop": false }
+          },
+          {
+            "stepId": "step-uc2-refine",
+            "order": 4,
+            "kind": "llm",
+            "status": "cancelled",
+            "source": { "llm": {} },
+            "externalEffect": "not_applied",
+            "operation": {
+              "key": {
+                "conversationActorId": "conversation-uc2",
+                "turnId": "turn-uc2-2",
+                "taskId": "task-uc2",
+                "stepId": "step-uc2-refine",
+                "operationId": "operation-uc2-refine",
+                "operationGeneration": 1
+              },
+              "kind": "llm",
+              "phase": "running",
+              "mayChangeExternalState": false,
+              "idempotent": true,
+              "idempotencyKey": "operation-uc2-refine"
+            },
+            "addedBy": "steering",
+            "availableActions": { "retry": false, "skip": false, "stop": false }
+          }
+        ]
+      },
+      "pendingInput": null,
+      "controlFence": {
+        "kind": "stop",
+        "requestId": "stop-uc2-1",
+        "clientRequestId": "client-stop-uc2-1",
+        "turnId": "turn-uc2-2",
+        "taskId": "task-uc2",
+        "outcome": "uncancellable",
+        "safeMessage": "Stopped. Partial-work receipt: 2 completed steps were retained. Retained: Answer logistics and agree to research-only scope; Aevatar web search - find Greek dinner candidates. Unfinished work was fenced; the in-flight operation could not be proven cancelled. Fenced: Refine for 7 pm and a private room. No external effect was applied. Late evidence cannot advance this stopped task."
+      }
+    }
+  },
+  "restart": {
+    "stateVersion": 48,
+    "snapshot": {
+      "actorId": "conversation-uc2",
+      "stateVersion": 48,
+      "progressSequence": 48,
+      "activeTurn": { "turnId": "turn-uc2b-1", "taskId": "task-uc2b", "status": "succeeded" },
+      "activeTask": {
+        "schemaVersion": 4,
+        "actorId": "conversation-uc2",
+        "turnId": "turn-uc2b-1",
+        "taskId": "task-uc2b",
+        "planId": "plan-uc2b",
+        "planRevision": 1,
+        "title": "Finish the research shortlist",
+        "status": "succeeded",
+        "gate": { "mode": "auto", "reason": "Read and draft only." },
+        "steps": [
+          {
+            "stepId": "step-uc2b-search",
+            "order": 1,
+            "kind": "tool",
+            "status": "done",
+            "source": { "tool": { "toolName": "web_search" } },
+            "externalEffect": "not_applied",
+            "operation": {
+              "key": {
+                "conversationActorId": "conversation-uc2",
+                "turnId": "turn-uc2b-1",
+                "taskId": "task-uc2b",
+                "stepId": "step-uc2b-search",
+                "operationId": "operation-uc2b-search",
+                "operationGeneration": 1
+              },
+              "kind": "tool",
+              "phase": "succeeded",
+              "mayChangeExternalState": false,
+              "idempotent": true,
+              "idempotencyKey": "operation-uc2b-search"
+            },
+            "addedBy": "initial",
+            "substeps": [
+              { "substepId": "prepare-operation", "title": "Build search query", "status": "done" },
+              { "substepId": "execute-operation", "title": "Search current web results", "status": "done" }
+            ],
+            "availableActions": { "retry": false, "skip": false, "stop": false }
+          },
+          {
+            "stepId": "step-uc2b-draft",
+            "order": 2,
+            "kind": "llm",
+            "status": "done",
+            "source": { "llm": {} },
+            "externalEffect": "not_applied",
+            "addedBy": "initial",
+            "dependsOn": ["step-uc2b-search"],
+            "availableActions": { "retry": false, "skip": false, "stop": false }
+          }
+        ]
+      },
+      "pendingInput": null,
+      "controlFence": null
+    },
+    "assistantMessage": {
+      "turnId": "turn-uc2b-1",
+      "taskId": "task-uc2b",
+      "content": "Verified facts:\n- North Olive lists a private room for 6, vegetarian choices, and Friday 7 pm.\n- Agora Table lists vegetarian choices and Friday 7 pm; its private room is on request.\n\nCannot check right now: Atlas Taverna's Friday hours are not stated in the successful search results.\n\nResearch artifact only: no reservation was made."
+    }
+  }
+}

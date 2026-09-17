@@ -21,7 +21,7 @@ public sealed class WorkflowSkillsDirectYamlSynthesizerTests
 
         yaml.Should().Contain("name: ornn-skill-abc-123");
         yaml.Should().Contain("type: llm_call");
-        yaml.Should().Contain("role: assistant");
+        yaml.Should().Contain("target_role: assistant");
         yaml.Should().Contain("system_prompt: |");
         // Instruction lines are indented under the block scalar (6 spaces); colons/blank lines survive.
         yaml.Should().Contain("      Line one");

@@ -602,6 +602,70 @@ public class EventSourcingBehaviorTests
     }
 
     [Fact]
+    public async Task ReplayAsync_WhenReplayObservesEventsBeyondStoreVersion_ShouldThrowDriftException()
+    {
+        // The 2026-08-12 production wedge (aevatar#3432): an append aborted
+        // mid-script by the store (ENOSPC) left event entries above the
+        // committed version key. A store whose reads are not bounded at the
+        // commit point replays those uncommitted facts, so the actor activates
+        // at replayedVersion > storeVersion and every subsequent append
+        // conflicts forever while the actor keeps accepting commands.
+        // Reverse drift must fail activation with the typed error instead.
+        var store = new OverReadingEventStore(reportedVersion: 3);
+        await store.AppendAsync(
+            "agent-reverse-drift",
+            [
+                BuildEvent(version: 1, amount: 1),
+                BuildEvent(version: 2, amount: 2),
+                BuildEvent(version: 3, amount: 3),
+                BuildEvent(version: 4, amount: 4),
+                BuildEvent(version: 5, amount: 5),
+            ],
+            expectedVersion: 0);
+
+        var behavior = new CounterEventSourcingBehavior(store, "agent-reverse-drift");
+
+        var ex = await Should.ThrowAsync<EventStoreVersionDriftException>(
+            () => behavior.ReplayAsync("agent-reverse-drift"));
+        ex.AgentId.ShouldBe("agent-reverse-drift");
+        ex.ReplayedVersion.ShouldBe(5);
+        ex.StoreVersion.ShouldBe(3);
+    }
+
+    [Fact]
+    public async Task ReplayAsync_WhenSnapshotIsAheadOfStoreVersion_ShouldThrowDriftException()
+    {
+        // Same reverse-drift boundary via the snapshot path: a snapshot ahead
+        // of a truncated/rewound log means activating would resurrect state
+        // whose history the store no longer acknowledges; every append from
+        // the snapshot version would conflict permanently.
+        var store = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<CounterState>();
+
+        await snapshotStore.SaveAsync(
+            "agent-snapshot-reverse-drift",
+            new EventSourcingSnapshot<CounterState>(
+                new CounterState { Count = 6, Name = "snap" },
+                Version: 6));
+
+        await store.AppendAsync(
+            "agent-snapshot-reverse-drift",
+            [BuildEvent(version: 1, amount: 1), BuildEvent(version: 2, amount: 2)],
+            expectedVersion: 0);
+
+        var behavior = new CounterEventSourcingBehavior(
+            store,
+            "agent-snapshot-reverse-drift",
+            snapshotStore);
+
+        var ex = await Should.ThrowAsync<EventStoreVersionDriftException>(
+            () => behavior.ReplayAsync("agent-snapshot-reverse-drift"));
+        ex.AgentId.ShouldBe("agent-snapshot-reverse-drift");
+        ex.ReplayedVersion.ShouldBe(6);
+        ex.StoreVersion.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task DefaultTransitionState_ReturnsCurrentUnchanged()
     {
         var store = new InMemoryEventStore();
@@ -692,6 +756,44 @@ public class EventSourcingBehaviorTests
     private sealed class RecoverableProjectionActor : IEventSourcingVersionDriftRecoverableActor;
 
     private sealed class StrictDomainActor;
+
+    /// <summary>
+    /// Models the pre-fix Garnet read path: <see cref="GetEventsAsync"/> returns
+    /// every stored entry — including ones beyond the reported committed
+    /// version — the shape an append aborted mid-script leaves behind.
+    /// </summary>
+    private sealed class OverReadingEventStore : IEventStore
+    {
+        private readonly InMemoryEventStore _inner = new();
+        private readonly long _reportedVersion;
+
+        public OverReadingEventStore(long reportedVersion)
+        {
+            _reportedVersion = reportedVersion;
+        }
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default) =>
+            _inner.AppendAsync(agentId, events, expectedVersion, ct);
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            Task.FromResult(_reportedVersion);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
 
     private sealed class MalformedConflictEventStore : IEventStore
     {

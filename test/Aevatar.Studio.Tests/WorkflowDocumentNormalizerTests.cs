@@ -39,6 +39,22 @@ public sealed class WorkflowDocumentNormalizerTests
     }
 
     [Fact]
+    public void NormalizeForExport_ShouldTrimToolSets()
+    {
+        var doc = new WorkflowDocument
+        {
+            Name = "wf",
+            Roles = [new RoleModel { Id = "r1", ToolSets = [" route.a ", "route.b "] }],
+            Steps = [new StepModel { Id = "s1", Type = "llm_call", ToolSets = [" step.scope "] }],
+        };
+
+        var result = _normalizer.NormalizeForExport(doc);
+
+        result.Roles[0].ToolSets.Should().Equal("route.a", "route.b");
+        result.Steps[0].ToolSets.Should().Equal("step.scope");
+    }
+
+    [Fact]
     public void NormalizeForExport_ShouldUseIdAsNameWhenNameIsBlank()
     {
         var doc = new WorkflowDocument

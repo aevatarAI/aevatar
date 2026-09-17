@@ -8,6 +8,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Configuration;
 using Aevatar.Configuration.BackendConsole;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
@@ -15,6 +16,7 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
+using Aevatar.GAgents.Channel.Identity.ProjectionRecovery;
 using Aevatar.GAgents.Channel.Identity.Slash;
 using Google.Protobuf;
 using Microsoft.Extensions.Configuration;
@@ -242,6 +244,13 @@ public static class IdentityServiceCollectionExtensions
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,
                 "channel-identity.oauth-projection-rebuild"));
+        services.AddIdentityOAuthCommandDispatch<RepairAevatarOAuthClientProjectionCommand, AevatarOAuthClientGAgent>(
+            static _ => new ChannelIdentityOAuthCommandTarget(
+                AevatarOAuthClientGAgent.WellKnownId,
+                "channel-identity.oauth-projection-repair"));
+        services.TryAddSingleton<
+            IAevatarOAuthClientProjectionRepublishPort,
+            ActorDispatchAevatarOAuthClientProjectionRepublishPort>();
         services.AddIdentityOAuthCommandDispatch<RotateAevatarOAuthClientHmacKeyCommand, AevatarOAuthClientGAgent>(
             static _ => new ChannelIdentityOAuthCommandTarget(
                 AevatarOAuthClientGAgent.WellKnownId,
@@ -260,8 +269,12 @@ public static class IdentityServiceCollectionExtensions
         {
             services.Configure<NyxIdBrokerOptions>(options =>
             {
+                var publicApiBaseUrl =
+                    configuration[NyxIdBrokerOptions.ApiBaseUrlConfigurationKey];
+                var normalizedPublicApiBaseUrl = publicApiBaseUrl?.Trim().TrimEnd('/');
+                options.PublicApiBaseUrl = normalizedPublicApiBaseUrl ?? string.Empty;
                 options.ResourceServerBaseUrl =
-                    (configuration[NyxIdBrokerOptions.ResourceServerBaseUrlConfigurationKey] ?? string.Empty)
+                    (normalizedPublicApiBaseUrl ?? string.Empty)
                     .Trim()
                     .TrimEnd('/');
             });
@@ -269,7 +282,12 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IValidateOptions<NyxIdBrokerOptions>, NyxIdBrokerOptionsValidator>());
         services.TryAddSingleton<StateTokenCodec>();
-        services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
+        services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(static () => new HttpClientHandler
+            {
+                // Broker control-plane requests must not silently cross origins through redirects.
+                AllowAutoRedirect = false,
+            });
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdConnectedServiceInventoryCapabilityIssuer>(sp =>

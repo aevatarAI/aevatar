@@ -101,6 +101,7 @@ public sealed class WorkflowArtifactQueryTool : IAgentTool
             subgraph = new
             {
                 root = subgraph.RootNodeId,
+                source_state_version = subgraph.SourceStateVersion,
                 nodes = subgraph.Nodes.Select(n => new
                 {
                     id = n.NodeId, type = n.NodeType, updated_at = n.UpdatedAt,

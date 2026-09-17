@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-allowed_document_files_regex='^(agents/Aevatar\.GAgents\.Channel\.Identity/(DependencyInjection/IdentityServiceCollectionExtensions\.cs|Provisioning/AevatarOAuthClient(Document\.Partial|DocumentMetadataProvider|EsAclOptions|EsAclStartupGuard|ProjectionProvider|Projector)\.cs|protos/aevatar_oauth_client\.proto)|src/Aevatar\.Mainnet\.Host\.Api/Hosting/(MainnetAgentProjectionDocumentStoresExtensions|HttpOAuthClientEsAclProbe)\.cs|test/)'
+allowed_document_files_regex='^(agents/Aevatar\.GAgents\.Channel\.Identity/(DependencyInjection/IdentityServiceCollectionExtensions\.cs|Provisioning/AevatarOAuthClient(Document\.Partial|DocumentMetadataProvider|EsAclOptions|EsAclStartupGuard|ProjectionProvider|Projector)\.cs|protos/aevatar_oauth_client\.proto)|src/Aevatar\.Mainnet\.Host\.Api/(Hosting/(MainnetAgentProjectionDocumentStoresExtensions|HttpOAuthClientEsAclProbe)\.cs|ProjectionRecovery/ElasticsearchAevatarOAuthClientVersionRegressionStorePort\.cs)|test/)'
 
 document_hits="$(
   rg -n "AevatarOAuthClientDocument|IProjectionDocumentReader<AevatarOAuthClientDocument|IProjectionDocumentWriter<AevatarOAuthClientDocument" \
@@ -27,6 +27,7 @@ event_store_hits="$(
     -g '!**/obj/**' \
     | xargs rg -n "IEventStore|ReadEventsAsync|Replay|EventStore" \
     | rg -v "agents/Aevatar.GAgents.Channel.Identity/Provisioning/AevatarOAuthClientGAgent.cs:.*EventStoreOptimisticConcurrencyException" \
+    | rg -v "src/Aevatar.Mainnet.Host.Api/ProjectionRecovery/ElasticsearchAevatarOAuthClientVersionRegressionStorePort.cs:" \
     | rg -v "GrantMatchesGrainEventStoreInternal|grain/event-store internal|AevatarOAuthClient ES ACL startup guard" \
     | rg -v "MainnetHostBuilderExtensions.cs:.*IdentityAssertionReplayGuard" \
     || true
@@ -44,7 +45,7 @@ guard_registration_hits="$(
 
 if [[ -n "${document_hits}" ]]; then
   echo "${document_hits}"
-  echo "AevatarOAuthClientDocument carries HMAC keys. Only the projector, internal provider, metadata, startup guard, Mainnet Host composition root, proto, and tests may reference it."
+  echo "AevatarOAuthClientDocument carries HMAC keys. Only the projector, internal provider, metadata, startup guard, guarded Mainnet repair adapter, Mainnet Host composition root, proto, and tests may reference it."
   exit 1
 fi
 

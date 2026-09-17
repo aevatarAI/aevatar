@@ -11,9 +11,9 @@ public sealed class WorkflowDefinitionCatalogOptions
     public bool RegisterBuiltInAutoReviewWorkflow { get; set; } = true;
 
     /// <summary>
-    /// Pre-loads the channel-less <c>studio</c> workflow used by the <c>/workflow/studio</c> authoring surface
-    /// (workflow-first + Observatory-delivered steering). Selected per-request via <c>workflow: "studio"</c>;
-    /// other <c>Direct</c> callers are unaffected.
+    /// Pre-loads the frozen <c>studio</c> workflow used only by the external
+    /// <c>workflow: "studio"</c> compatibility adapter. Aevatar-owned Studio chat uses the
+    /// actor-owned Assistant trunk.
     /// </summary>
     public bool RegisterBuiltInStudioWorkflow { get; set; } = true;
 }

@@ -41,7 +41,18 @@ public sealed class ServiceDeploymentCatalogQueryReader : IServiceDeploymentCata
                     x.PrimaryActorId,
                     x.Status,
                     x.ActivatedAt,
-                    x.UpdatedAt))
+                    x.UpdatedAt,
+                    x.ArtifactHash))
+                .ToList(),
+            readModel.ActivationFailures
+                .OrderByDescending(x => x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch)
+                .ThenBy(x => x.RevisionId, StringComparer.Ordinal)
+                .Select(x => new ServiceDeploymentActivationFailureSnapshot(
+                    x.RevisionId,
+                    x.FailureCode,
+                    x.FailureReason,
+                    x.OccurredAtUtcValue?.ToDateTimeOffset() ?? DateTimeOffset.UnixEpoch,
+                    x.ActivationAttemptId))
                 .ToList(),
             readModel.UpdatedAt);
     }

@@ -52,7 +52,8 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         var result = NyxIdLlmServiceCatalogParser.ParseServicesResult(response.Body);
         result = await MergeUserKeyRouteCandidatesAsync(result, bearerToken, ct).ConfigureAwait(false);
         result = await MergeProxyRouteCandidatesAsync(result, bearerToken, ct).ConfigureAwait(false);
-        return await ComposeUserServiceInventoryAsync(result, bearerToken, ct).ConfigureAwait(false);
+        result = await ComposeUserServiceInventoryAsync(result, bearerToken, ct).ConfigureAwait(false);
+        return await MergeObservedProxyModelsAsync(result, bearerToken, ct).ConfigureAwait(false);
     }
 
     public Task<NyxIdLlmServicesResult> GetFreshServicesAsync(string bearerToken, CancellationToken ct) =>
@@ -79,10 +80,10 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
 
     public string? ResolveGatewayUrl()
     {
-        var authorityBase = ResolveNyxIdAuthorityBase();
-        return string.IsNullOrWhiteSpace(authorityBase)
+        var apiBaseUrl = ResolveNyxIdApiBaseUrl();
+        return string.IsNullOrWhiteSpace(apiBaseUrl)
             ? null
-            : $"{authorityBase}/api/v1/llm/gateway/v1";
+            : $"{apiBaseUrl}/api/v1/llm/gateway/v1";
     }
 
     private async Task<NyxIdHttpResult> SendNyxIdAsync(
@@ -92,11 +93,11 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         string? body,
         CancellationToken ct)
     {
-        var authorityBase = ResolveNyxIdAuthorityBase();
-        if (string.IsNullOrWhiteSpace(authorityBase))
-            throw new InvalidOperationException("NyxID authority is not configured.");
+        var apiBaseUrl = ResolveNyxIdApiBaseUrl();
+        if (string.IsNullOrWhiteSpace(apiBaseUrl))
+            throw new InvalidOperationException("NyxID public API base URL is not configured.");
 
-        using var request = new HttpRequestMessage(method, $"{authorityBase}{path}");
+        using var request = new HttpRequestMessage(method, $"{apiBaseUrl}{path}");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
         if (body is not null)
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
@@ -216,9 +217,71 @@ public sealed class NyxIdLlmCatalogHttpClient : IUserLlmCatalogPort
         return NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(diagnostics, inventory.Value!);
     }
 
-    private string? ResolveNyxIdAuthorityBase()
+    private async Task<NyxIdLlmServicesResult> MergeObservedProxyModelsAsync(
+        NyxIdLlmServicesResult result,
+        string bearerToken,
+        CancellationToken ct)
     {
-        return NyxIdAuthorityResolver.ResolveNyxIdAuthorityBase(_configuration);
+        foreach (var service in result.Services.Where(NyxIdLlmServiceCatalogParser.ShouldProbeProxyModels))
+        {
+            result = await MergeObservedProxyModelsAsync(result, service, bearerToken, ct).ConfigureAwait(false);
+        }
+
+        return result;
+    }
+
+    private async Task<NyxIdLlmServicesResult> MergeObservedProxyModelsAsync(
+        NyxIdLlmServicesResult result,
+        NyxIdLlmService service,
+        string bearerToken,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (service.Identity is not
+                {
+                    Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                    NyxIdUserServiceId: var userServiceId,
+                } identity || string.IsNullOrWhiteSpace(userServiceId))
+                return result;
+
+            var path = $"/api/v1/proxy/s/{Uri.EscapeDataString(service.ServiceSlug)}/models" +
+                       $"?_nyxid_via={Uri.EscapeDataString(userServiceId.Trim())}";
+
+            var response = await SendNyxIdAsync(
+                HttpMethod.Get,
+                path,
+                bearerToken,
+                body: null,
+                ct).ConfigureAwait(false);
+            if ((int)response.StatusCode is < 200 or > 299)
+            {
+                var scrubbedBody = SecretScrubber.Scrub(response.Body);
+                _logger.LogWarning(
+                    "NyxID proxy models endpoint for {ServiceSlug} returned {StatusCode}: {Body}",
+                    service.ServiceSlug,
+                    response.StatusCode,
+                    scrubbedBody.Length > 500 ? scrubbedBody[..500] : scrubbedBody);
+                return result;
+            }
+
+            var observedCatalog = NyxIdLlmServiceCatalogParser.ParseOpenAIModelsResponse(response.Body);
+            return NyxIdLlmServiceCatalogParser.MergeObservedModelCatalog(result, identity, observedCatalog);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to merge NyxID proxy models for {ServiceSlug}", service.ServiceSlug);
+            return result;
+        }
+    }
+
+    private string? ResolveNyxIdApiBaseUrl()
+    {
+        return NyxIdApiEndpointResolver.ResolvePublicApiBaseUrl(_configuration);
     }
 
     private readonly record struct NyxIdHttpResult(HttpStatusCode StatusCode, string Body);

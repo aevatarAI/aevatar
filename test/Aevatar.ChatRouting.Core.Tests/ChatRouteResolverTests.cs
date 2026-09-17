@@ -56,6 +56,56 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
+    public void Resolve_NullSnapshot_WhenImplicitToolSetOverrideSelected_ShouldReplaceFallbackToolSet()
+    {
+        var fallback = Substitute.For<IChatRouteFallbackProvider>();
+        fallback.GetFallbackDecision().Returns(new ChatRouteDecision
+        {
+            Action = ForwardToModelAction(
+                "fallback-model",
+                includeToolSetRef: true,
+                includeToolChoiceHint: true),
+            UsedFallback = true,
+        });
+        var resolver = new ChatRouteResolver(fallback);
+
+        var decision = resolver.Resolve(
+            null,
+            new ChatRouteInput(),
+            implicitToolSetNameOverride: "profile.route");
+
+        decision.UsedFallback.Should().BeTrue();
+        decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("profile.route");
+        decision.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("notify_self");
+    }
+
+    [Fact]
+    public void Resolve_NullSnapshot_ShouldNotLeakImplicitToolSetOverrideIntoSharedFallbackDecision()
+    {
+        var sharedFallback = new ChatRouteDecision
+        {
+            Action = ForwardToModelAction(
+                "fallback-model",
+                includeToolSetRef: true,
+                includeToolChoiceHint: false),
+            UsedFallback = true,
+        };
+        var fallback = Substitute.For<IChatRouteFallbackProvider>();
+        fallback.GetFallbackDecision().Returns(sharedFallback);
+        var resolver = new ChatRouteResolver(fallback);
+
+        var selected = resolver.Resolve(
+            null,
+            new ChatRouteInput(),
+            implicitToolSetNameOverride: "profile.route");
+        var unselected = resolver.Resolve(null, new ChatRouteInput());
+
+        selected.Action.ForwardToModel.ToolSetRef.Name.Should().Be("profile.route");
+        unselected.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
+        sharedFallback.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
+    }
+
+    [Fact]
     public void Resolve_RulesEmpty_ReturnsDefaultTarget()
     {
         var resolver = NewResolver();
@@ -102,6 +152,20 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
+    public void Resolve_ProjectedForwardToModelWithoutToolSetRef_ShouldUseImplicitToolSetOverride()
+    {
+        var resolver = NewResolver(defaultToolSetName: "workspace.default");
+        var snapshot = new ChatRoutePolicySnapshot(ForwardToModelAction("default-model"), []);
+
+        var decision = resolver.Resolve(
+            snapshot,
+            new ChatRouteInput(),
+            implicitToolSetNameOverride: "profile.route");
+
+        decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("profile.route");
+    }
+
+    [Fact]
     public void Resolve_ForwardToModelWithToolSetRef_WhenDefaultToolSetConfigured_ShouldPreserveExplicitToolSet()
     {
         var resolver = NewResolver(defaultToolSetName: "workspace.default");
@@ -112,6 +176,25 @@ public sealed class ChatRouteResolverTests
         var snapshot = new ChatRoutePolicySnapshot(action, []);
 
         var decision = resolver.Resolve(snapshot, new ChatRouteInput());
+
+        decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
+        decision.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("notify_self");
+    }
+
+    [Fact]
+    public void Resolve_ProjectedForwardToModelWithToolSetRef_ShouldPreserveExplicitRouteOverImplicitOverride()
+    {
+        var resolver = NewResolver(defaultToolSetName: "workspace.default");
+        var action = ForwardToModelAction(
+            "default-model",
+            includeToolSetRef: true,
+            includeToolChoiceHint: true);
+        var snapshot = new ChatRoutePolicySnapshot(action, []);
+
+        var decision = resolver.Resolve(
+            snapshot,
+            new ChatRouteInput(),
+            implicitToolSetNameOverride: "profile.route");
 
         decision.Action.ForwardToModel.ToolSetRef.Name.Should().Be("lark.self_notify");
         decision.Action.ForwardToModel.ToolChoiceHint.ToolName.Should().Be("notify_self");
@@ -153,7 +236,7 @@ public sealed class ChatRouteResolverTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public void Resolve_ForwardToModelRule_PassesThroughUnchanged(
+    public void Resolve_ForwardToModelRule_AddsWorkspaceProfileKindWithoutChangingOtherFields(
         bool includeToolSetRef,
         bool includeToolChoiceHint)
     {
@@ -177,7 +260,7 @@ public sealed class ChatRouteResolverTests
         var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/model" });
 
         decision.MatchedRuleId.Should().Be("model-route");
-        decision.Action.Should().Be(action);
+        decision.Action.Should().Be(WithProfileKind(action, ChatRouteAgentProfileKind.WorkspaceChat));
     }
 
     [Theory]
@@ -185,7 +268,7 @@ public sealed class ChatRouteResolverTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public void Resolve_DefaultTargetForwardToModel_PassesThroughUnchanged(
+    public void Resolve_DefaultTargetForwardToModel_AddsWorkspaceProfileKindWithoutChangingOtherFields(
         bool includeToolSetRef,
         bool includeToolChoiceHint)
     {
@@ -199,11 +282,11 @@ public sealed class ChatRouteResolverTests
         var decision = resolver.Resolve(snapshot, new ChatRouteInput());
 
         decision.MatchedRuleId.Should().BeEmpty();
-        decision.Action.Should().Be(defaultAction);
+        decision.Action.Should().Be(WithProfileKind(defaultAction, ChatRouteAgentProfileKind.WorkspaceChat));
     }
 
     [Fact]
-    public void Resolve_GAgentToolHintRule_PassesThroughUnchanged()
+    public void Resolve_GAgentToolHintRule_AddsVoiceWorkspaceProfileKind()
     {
         var resolver = NewResolver();
         var action = ToolHintAction(
@@ -233,7 +316,7 @@ public sealed class ChatRouteResolverTests
         });
 
         decision.MatchedRuleId.Should().Be("voice-openai");
-        decision.Action.Should().Be(action);
+        decision.Action.Should().Be(WithProfileKind(action, ChatRouteAgentProfileKind.WorkspaceChat));
         AssertForwardToModelTool(
             decision.Action,
             expectedToolName: "aevatar_invoke_gagent",
@@ -246,7 +329,7 @@ public sealed class ChatRouteResolverTests
     }
 
     [Fact]
-    public void Resolve_TeamToolHintRule_PassesThroughUnchanged()
+    public void Resolve_TeamToolHintRule_AddsWorkspaceProfileKind()
     {
         var resolver = NewResolver();
         var action = ToolHintAction(
@@ -271,7 +354,7 @@ public sealed class ChatRouteResolverTests
         var decision = resolver.Resolve(snapshot, new ChatRouteInput { CommandName = "/triage" });
 
         decision.MatchedRuleId.Should().Be("team-route");
-        decision.Action.Should().Be(action);
+        decision.Action.Should().Be(WithProfileKind(action, ChatRouteAgentProfileKind.WorkspaceChat));
         AssertForwardToModelTool(
             decision.Action,
             expectedToolName: "aevatar_invoke_team",
@@ -574,6 +657,43 @@ public sealed class ChatRouteResolverTests
             .Value.Defaults.DefaultForwardToModelToolSetName.Should().Be("workspace.default");
     }
 
+    [Theory]
+    [InlineData(ChatSourceKind.Direct, ChatRouteAgentProfileKind.NyxidChat)]
+    [InlineData(ChatSourceKind.NyxRelay, ChatRouteAgentProfileKind.ChannelReply)]
+    [InlineData(ChatSourceKind.NyxResponses, ChatRouteAgentProfileKind.WorkspaceChat)]
+    [InlineData(ChatSourceKind.Voice, ChatRouteAgentProfileKind.WorkspaceChat)]
+    public void Resolve_ShouldMapIngressToServerOwnedProfileKind(
+        ChatSourceKind sourceKind,
+        ChatRouteAgentProfileKind expectedProfileKind)
+    {
+        var resolver = NewResolver();
+        var snapshot = new ChatRoutePolicySnapshot(ForwardToModelAction("model"), []);
+
+        var decision = resolver.Resolve(snapshot, new ChatRouteInput { SourceKind = sourceKind });
+
+        decision.Action.ForwardToModel.ProfileKind.Should().Be(expectedProfileKind);
+    }
+
+    [Fact]
+    public void Resolve_ShouldPreserveExplicitProfileKindAndReference()
+    {
+        var resolver = NewResolver();
+        var action = ForwardToModelAction("model");
+        action.ForwardToModel.ProfileKind = ChatRouteAgentProfileKind.ChannelReply;
+        action.ForwardToModel.ProfileRef = new ChatRouteAgentProfileRef
+        {
+            OwnerKind = ChatRouteAgentProfileReferenceOwnerKind.Caller,
+            ProfileSlug = "my-channel-agent",
+        };
+        var snapshot = new ChatRoutePolicySnapshot(action, []);
+
+        var decision = resolver.Resolve(
+            snapshot,
+            new ChatRouteInput { SourceKind = ChatSourceKind.NyxResponses });
+
+        decision.Action.Should().Be(action);
+    }
+
     private static ChatRouteResolver NewResolver(string defaultToolSetName = "")
     {
         var fallback = Substitute.For<IChatRouteFallbackProvider>();
@@ -591,6 +711,15 @@ public sealed class ChatRouteResolverTests
                     DefaultForwardToModelToolSetName = defaultToolSetName,
                 },
             }));
+    }
+
+    private static ChatRouteAction WithProfileKind(
+        ChatRouteAction action,
+        ChatRouteAgentProfileKind profileKind)
+    {
+        var clone = action.Clone();
+        clone.ForwardToModel.ProfileKind = profileKind;
+        return clone;
     }
 
     internal static ChatRouteAction ForwardToModelAction(string modelName) =>

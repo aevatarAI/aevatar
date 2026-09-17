@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions.Credentials;
 
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
@@ -92,6 +93,8 @@ public sealed record AgentToolExecutionContext(
 
     public AgentToolExecutionOwner ExecutionOwner { get; init; } = new();
 
+    public DurableCallerCredentialRef? DurableNyxIdCredential { get; init; }
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,
@@ -181,7 +184,8 @@ public sealed record AgentToolRequestIdentity(
     string? CallId,
     string? IdempotencyKey,
     long IssuedAtUnixMs,
-    string? OperationId = null)
+    string? OperationId = null,
+    long OperationGeneration = 0)
 {
     public AgentToolRequestIdentity(
         string? requestId,
@@ -203,6 +207,13 @@ public enum AgentToolNyxIdCredentialKind
     Unspecified = 0,
     SourceReadableUserBearer = 1,
     ProxyDelegation = 2,
+    AgentKey = 3,
+}
+
+public enum AgentToolNyxIdCredentialAuthority
+{
+    Unspecified = 0,
+    ToolExecutionContext = 1,
 }
 
 public sealed record AgentToolCredentials(
@@ -210,7 +221,9 @@ public sealed record AgentToolCredentials(
     string? NyxIdOrgToken,
     string? SenderNyxIdAccessToken,
     AgentToolNyxIdCredentialKind NyxIdCredentialKind = AgentToolNyxIdCredentialKind.Unspecified,
-    string? SourceReadableNyxIdAccessToken = null)
+    string? SourceReadableNyxIdAccessToken = null,
+    AgentToolNyxIdCredentialAuthority NyxIdCredentialAuthority =
+        AgentToolNyxIdCredentialAuthority.Unspecified)
 {
     public static AgentToolCredentials Empty { get; } = new(null, null, null);
 }
@@ -298,7 +311,9 @@ public sealed record AgentSkillRecoveryContext(
     string? PrimarySkillName,
     int MaxOrnnSearchAttempts,
     string? CommandArguments = null,
-    bool DiscoveryRequested = false)
+    bool DiscoveryRequested = false,
+    bool IsolatePriorConversationHistory = false,
+    bool MountWorkflowsRequested = false)
 {
     public static AgentSkillRecoveryContext Empty { get; } = new(
         RequireInitialOrnnSearch: false,
@@ -308,5 +323,7 @@ public sealed record AgentSkillRecoveryContext(
         PrimarySkillName: null,
         MaxOrnnSearchAttempts: 0,
         CommandArguments: null,
-        DiscoveryRequested: false);
+        DiscoveryRequested: false,
+        IsolatePriorConversationHistory: false,
+        MountWorkflowsRequested: false);
 }

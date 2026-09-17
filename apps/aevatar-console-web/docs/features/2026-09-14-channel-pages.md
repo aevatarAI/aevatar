@@ -1,5 +1,10 @@
 # Channels in the Console
 
+> Superseded by [Channel Bot Adoption](../superpowers/specs/2026-09-17-channel-bot-adoption.md).
+> Channels now lists bound and unbound NyxID bots with a static illustrated guide
+> and a Bind action. The Telegram credential form and runtime-config API described
+> below are historical.
+
 Channels is a first-level destination in the Workflow Activity vNext sidebar.
 It lets the signed-in owner view their connected bots and inspect a connection.
 

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -69,7 +70,12 @@ public sealed class LlmRunCore(
         {
             ExecutionOwner = AgentToolExecutionOwners.WorkflowRun(request.RunId),
         };
-        var tools = await BuildEffectiveToolsAsync(command, toolContext, request.OriginPlatform, ct).ConfigureAwait(false);
+        var runtimeCatalog = await BuildRuntimeToolCatalogAsync(
+            command,
+            toolContext,
+            request.OriginPlatform,
+            ct).ConfigureAwait(false);
+        var tools = runtimeCatalog.EffectiveTools;
         var ownershipPlan = LlmToolOwnershipPlan.From(command.ToolSelection, tools);
         var messages = command.Messages.Select(ToChatMessage).ToList();
         var outputText = new System.Text.StringBuilder();
@@ -88,6 +94,7 @@ public sealed class LlmRunCore(
                     toolContext.Caller.ResponseId,
                     new LLMRequestCallerCredentials(toolContext.Credentials.NyxIdAccessToken)),
                 Tools = tools,
+                ToolCatalogProof = runtimeCatalog.OwnedProof,
                 ToolContext = toolContext,
                 LlmControl = new LLMControlContext(
                     NyxIdAccessToken: toolContext.Credentials.NyxIdAccessToken,
@@ -97,6 +104,7 @@ public sealed class LlmRunCore(
                     NyxIdRoutePreference: toolContext.Routing.NyxIdRoutePreference,
                     MaxToolRoundsOverride: null,
                     UserMemoryPrompt: toolContext.Routing.UserMemoryPrompt),
+                RouteTarget = command.RouteTarget?.Clone(),
                 Model = NormalizeOptional(command.Model),
                 Temperature = command.HasTemperature ? command.Temperature : null,
                 MaxTokens = command.HasMaxTokens ? command.MaxTokens : null,
@@ -199,37 +207,244 @@ public sealed class LlmRunCore(
         }, ct).ConfigureAwait(false);
     }
 
+    private async Task<RuntimeToolCatalog> BuildRuntimeToolCatalogAsync(
+        LlmRunRequested command,
+        AgentToolExecutionContext toolContext,
+        string? originPlatform,
+        CancellationToken ct)
+    {
+        var selection = command.ToolSelection;
+        if (!string.Equals(
+                selection?.ToolCatalogPolicyVersion,
+                ResponsesOwnedToolCatalogPlanner.PolicyVersion,
+                StringComparison.Ordinal))
+        {
+            var legacy = await BuildLegacyEffectiveToolsAsync(
+                command,
+                toolContext,
+                originPlatform,
+                ct).ConfigureAwait(false);
+            return new RuntimeToolCatalog(legacy, null);
+        }
+        if (selection?.OwnedCatalogProof is null)
+            throw CatalogProofMismatch("The persisted owned tool catalog proof is missing.");
+
+        var proof = AgentTurnToolCatalogProofPayloadMapper.FromPayload(selection.OwnedCatalogProof);
+        ValidatePinnedProfile(selection, proof);
+        var context = new ResponsesToolProviderContext(
+            toolContext with
+            {
+                Channel = toolContext.Channel with { Platform = originPlatform },
+            });
+
+        var substituteTools = await DiscoverSubstituteToolsStrictAsync(context, ct).ConfigureAwait(false);
+        var routeTools = await DiscoverRouteToolsStrictAsync(
+            selection.ToolSetName,
+            toolContext,
+            ct).ConfigureAwait(false);
+        var substitutedNames = selection.SubstitutedToolNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ownedNames = selection.OwnedToolNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var proofNames = proof.ToolDescriptors
+            .Select(static descriptor => descriptor.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!proofNames.SetEquals(ownedNames))
+            throw CatalogProofMismatch("Persisted owned tool names do not match the catalog proof.");
+
+        var ownedTools = new List<IAgentTool>(ownedNames.Count);
+        foreach (var ownedName in ownedNames.OrderBy(static name => name, StringComparer.OrdinalIgnoreCase))
+        {
+            var source = substitutedNames.Contains(ownedName) ? substituteTools : routeTools;
+            if (!source.TryGetValue(ownedName, out var exact))
+            {
+                throw CatalogProofMismatch(
+                    $"Owned tool '{ownedName}' could not be re-materialized from its pinned source.");
+            }
+
+            ownedTools.Add(exact);
+        }
+        proof.AssertMatchesExactTools(ownedTools);
+
+        var forwardedTools = new List<IAgentTool>();
+        var effectiveNames = new HashSet<string>(ownedNames, StringComparer.OrdinalIgnoreCase);
+        foreach (var declaration in selection.ForwardedTools)
+        {
+            if (string.IsNullOrWhiteSpace(declaration.ToolName) ||
+                !effectiveNames.Add(declaration.ToolName.Trim()))
+            {
+                throw CatalogProofMismatch(
+                    "Forwarded and owned tool declarations contain a duplicate name.");
+            }
+
+            forwardedTools.Add(new ForwardedRuntimeTool(declaration));
+        }
+
+        var effective = ownedTools.Concat(forwardedTools).ToArray();
+        var forwardedSchemaBytes = selection.ForwardedTools.Sum(static declaration =>
+            System.Text.Encoding.UTF8.GetByteCount(ToolDeclarationParametersJson(declaration)));
+        AgentTurnToolCatalogTelemetry.RecordForwarded(
+            forwardedTools.Count,
+            forwardedSchemaBytes,
+            "runtime");
+        logger.LogInformation(
+            "Responses runtime tool catalog verified. policy={PolicyVersion} profile={ProfileId} owned={OwnedCount} ownedSchemaBytes={OwnedSchemaBytes} forwarded={ForwardedCount} forwardedSchemaBytes={ForwardedSchemaBytes} combined={CombinedCount} combinedSchemaBytes={CombinedSchemaBytes} digest={CatalogDigest}",
+            selection.ToolCatalogPolicyVersion,
+            selection.ProfileSnapshot?.ProfileId ?? string.Empty,
+            proof.ToolCount,
+            proof.SchemaBytes,
+            forwardedTools.Count,
+            forwardedSchemaBytes,
+            effective.Length,
+            proof.SchemaBytes + forwardedSchemaBytes,
+            proof.CatalogDigest);
+        return new RuntimeToolCatalog(effective, proof);
+    }
+
+    private static void ValidatePinnedProfile(
+        LlmSessionRuntimeToolSelection selection,
+        AgentTurnToolCatalogProof proof)
+    {
+        var profile = selection.ProfileSnapshot;
+        if (profile is null)
+        {
+            if (proof.ToolCount != 0 || !string.IsNullOrWhiteSpace(selection.ToolSetName))
+            {
+                throw CatalogProofMismatch(
+                    "A non-empty owned catalog requires an immutable pinned profile snapshot.");
+            }
+
+            return;
+        }
+        if (!AgentProfileSnapshotCodec.Verify(profile) ||
+            !string.Equals(profile.RouteToolSetRef, selection.ToolSetName, StringComparison.Ordinal))
+        {
+            throw CatalogProofMismatch(
+                "The pinned profile snapshot does not match the persisted route tool set.");
+        }
+
+        // The persisted proof carries its own budget, so re-derive the authoritative one from the
+        // sealed profile instead of trusting what the payload asserts about itself.
+        if (proof.Budget != AgentTurnToolCatalogFactory.ResolveProfileBudget(profile))
+        {
+            throw CatalogProofMismatch(
+                "The persisted catalog budget does not match the sealed profile budget.");
+        }
+    }
+
+    private async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverSubstituteToolsStrictAsync(
+        ResponsesToolProviderContext context,
+        CancellationToken ct)
+    {
+        var exact = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var provider in toolProviders)
+        {
+            ct.ThrowIfCancellationRequested();
+            var tools = await provider.GetSubstituteToolsAsync(context, ct).ConfigureAwait(false);
+            AddExactToolsOrThrow(exact, tools, provider.GetType().FullName ?? provider.GetType().Name);
+        }
+
+        return exact;
+    }
+
+    private async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverRouteToolsStrictAsync(
+        string? toolSetName,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(toolSetName))
+            return new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+
+        ToolSetResolveResult resolved;
+        try
+        {
+            resolved = toolSetRegistry.Resolve(toolSetName);
+        }
+        catch (Exception exception)
+        {
+            throw new ToolSetResolutionException(new ToolSetResolveError(
+                ToolSetResolveError.ResolutionFailedCode,
+                toolSetName.Trim(),
+                $"Run tool set '{toolSetName.Trim()}' could not be resolved.",
+                toolSetRegistry.GetRegisteredNames()), exception);
+        }
+        if (!resolved.IsSuccess)
+            throw new ToolSetResolutionException(resolved.Error!);
+
+        var discovery = await AgentToolDiscoveryService.Instance
+            .DiscoverAsync(resolved.Sources, toolContext, ct)
+            .ConfigureAwait(false);
+        if (!discovery.IsSuccess)
+            throw new AgentToolDiscoveryException(discovery.Failure!);
+        return discovery.Tools.ToDictionary(
+            static tool => tool.Name,
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void AddExactToolsOrThrow(
+        Dictionary<string, IAgentTool> exact,
+        IReadOnlyList<IAgentTool> tools,
+        string providerType)
+    {
+        foreach (var tool in tools)
+        {
+            if (tool is null || string.IsNullOrWhiteSpace(tool.Name))
+            {
+                throw new AgentToolDiscoveryException(new AgentToolDiscoveryFailure(
+                    AgentToolDiscoveryFailureCode.InvalidToolName,
+                    string.Empty,
+                    providerType,
+                    string.Empty,
+                    $"Responses provider '{providerType}' returned an empty tool name."));
+            }
+
+            var name = tool.Name.Trim();
+            if (!exact.TryGetValue(name, out var existing))
+            {
+                exact.Add(name, tool);
+                continue;
+            }
+            if (ReferenceEquals(existing, tool))
+                continue;
+
+            throw new AgentToolDiscoveryException(new AgentToolDiscoveryFailure(
+                AgentToolDiscoveryFailureCode.ToolNameCollision,
+                name,
+                existing.GetType().FullName ?? existing.GetType().Name,
+                providerType,
+                $"Responses substitute tool '{name}' resolved to different exact objects."));
+        }
+    }
+
+    private static AgentTurnToolCatalogException CatalogProofMismatch(string detail) =>
+        new(new AgentTurnToolCatalogFailure(
+            AgentTurnToolCatalogFailureCode.CatalogProofMismatch,
+            detail));
+
     private IEnumerable<IResponsesToolProvider> ResolveRunToolProviders(string? toolSetName)
     {
         if (string.IsNullOrWhiteSpace(toolSetName))
             return toolProviders;
 
+        ToolSetResolveResult resolved;
         try
         {
-            var resolved = toolSetRegistry.Resolve(toolSetName);
-            if (resolved.IsSuccess)
-                return toolProviders.Append(new ToolSetResponsesToolProvider(resolved.Sources, logger));
-
-            logger.LogWarning(
-                "Run tool set '{ToolSetName}' did not resolve ({Code}); using DI providers only.",
-                toolSetName,
-                resolved.Error?.Code);
+            resolved = toolSetRegistry.Resolve(toolSetName);
         }
         catch (Exception ex)
         {
-            // IToolSetRegistry.Resolve THROWS on unknown-include / cycle (not just a failure
-            // result). Never fail the whole run over a tool-set config problem — degrade to the
-            // always-on DI providers (pre-fix behavior).
-            logger.LogWarning(
-                ex,
-                "Run tool set '{ToolSetName}' resolution threw; using DI providers only.",
-                toolSetName);
+            throw new ToolSetResolutionException(new ToolSetResolveError(
+                ToolSetResolveError.ResolutionFailedCode,
+                toolSetName.Trim(),
+                $"Run tool set '{toolSetName.Trim()}' could not be resolved.",
+                toolSetRegistry.GetRegisteredNames()), ex);
         }
 
-        return toolProviders;
+        if (!resolved.IsSuccess)
+            throw new ToolSetResolutionException(resolved.Error!);
+
+        return toolProviders.Append(new ToolSetResponsesToolProvider(resolved.Sources, logger));
     }
 
-    private async Task<IReadOnlyList<IAgentTool>> BuildEffectiveToolsAsync(
+    private async Task<IReadOnlyList<IAgentTool>> BuildLegacyEffectiveToolsAsync(
         LlmRunRequested command,
         AgentToolExecutionContext toolContext,
         string? originPlatform,
@@ -673,11 +888,30 @@ public sealed class LlmRunCore(
         {
             NyxIdAuthenticationRequiredException => "authentication_required",
             NyxIdUpstreamException upstream => upstream.Kind.ToString().ToLowerInvariant(),
+            ToolSetResolutionException resolution => resolution.Error.Code,
+            AgentToolDiscoveryException discovery => discovery.Failure.Code switch
+            {
+                AgentToolDiscoveryFailureCode.ToolNameCollision => "tool_name_collision",
+                AgentToolDiscoveryFailureCode.InvalidToolName => "invalid_tool_name",
+                _ => "tool_discovery_failed",
+            },
+            AgentTurnToolCatalogException catalog => catalog.Failure.Code switch
+            {
+                AgentTurnToolCatalogFailureCode.CatalogProofMismatch => "tool_catalog_proof_mismatch",
+                AgentTurnToolCatalogFailureCode.CatalogOverBudget => "tool_catalog_over_budget",
+                AgentTurnToolCatalogFailureCode.ToolNameCollision => "tool_name_collision",
+                AgentTurnToolCatalogFailureCode.SchemaInvalid => "tool_schema_invalid",
+                _ => "tool_catalog_invalid",
+            },
             _ => "execution_failed",
         };
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed record RuntimeToolCatalog(
+        IReadOnlyList<IAgentTool> EffectiveTools,
+        AgentTurnToolCatalogProof? OwnedProof);
 
     private sealed class ForwardedRuntimeTool : IAgentTool
     {

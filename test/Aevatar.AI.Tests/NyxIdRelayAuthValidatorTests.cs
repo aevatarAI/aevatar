@@ -26,14 +26,17 @@ public sealed class NyxIdRelayAuthValidatorTests
     };
 
     [Fact]
-    public async Task ValidateAsync_ShouldAcceptValidCallbackJwt()
+    public async Task ValidateAsync_ShouldUseAuthorityForOidcInsteadOfInternalTransport()
     {
         using var rsa = RSA.Create(2048);
         var key = CreateSigningKey(rsa, "kid-1");
         var handler = new NyxRelayOidcDocumentHandler(
             CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"),
             () => CreateJwksJson(key));
-        var validator = CreateValidator(handler, Issuer);
+        var validator = CreateValidator(
+            handler,
+            "http://nyxid.internal:3001",
+            authority: Issuer);
         var request = CreateRelayRequest(key, userToken: "user-token-1");
 
         var result = await validator.ValidateAsync(
@@ -52,6 +55,9 @@ public sealed class NyxIdRelayAuthValidatorTests
         result.Principal!.Claims.Should().Contain(claim =>
             string.Equals(claim.Type, "scope_id", StringComparison.Ordinal) &&
             string.Equals(claim.Value, "scope-123", StringComparison.Ordinal));
+        handler.RequestUris.Should().Equal(
+            $"{Issuer}/.well-known/openid-configuration",
+            $"{Issuer}/jwks");
     }
 
     [Fact]
@@ -514,12 +520,17 @@ public sealed class NyxIdRelayAuthValidatorTests
     private static NyxIdRelayAuthValidator CreateValidator(
         HttpMessageHandler handler,
         string baseUrl,
-        int kidMissRefreshCooldownSeconds = 0)
+        int kidMissRefreshCooldownSeconds = 0,
+        string? authority = null)
     {
         var factory = new NyxRelayTestHttpClientFactory(new HttpClient(handler));
         return new NyxIdRelayAuthValidator(
             factory,
-            new NyxIdToolOptions { BaseUrl = baseUrl },
+            new NyxIdToolOptions
+            {
+                BaseUrl = baseUrl,
+                Authority = authority,
+            },
             new NyxIdRelayOptions
             {
                 OidcCacheTtlSeconds = 60,

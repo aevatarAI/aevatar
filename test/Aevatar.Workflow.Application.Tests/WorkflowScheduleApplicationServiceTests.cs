@@ -1007,6 +1007,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
             string actorId,
             ScheduledDispatchConfiguration configuration,
             PreparedScheduledDispatchTarget dispatch,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default)
         {
             Updated.Add((actorId, configuration, dispatch));
@@ -1026,6 +1027,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public Task<DispatchAdmission> DispatchEnableAsync(
             string actorId,
             string reason,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default)
         {
             Enabled.Add((actorId, reason));
@@ -1035,6 +1037,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public Task<DispatchAdmission> DispatchDisableAsync(
             string actorId,
             string reason,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default)
         {
             Disabled.Add((actorId, reason));
@@ -1044,6 +1047,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public Task<DispatchAdmission> DispatchDeleteAsync(
             string actorId,
             string reason,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default)
         {
             Deleted.Add((actorId, reason));
@@ -1053,6 +1057,7 @@ public sealed class WorkflowScheduleApplicationServiceTests
         public Task<DispatchAdmission> DispatchRunNowAsync(
             string actorId,
             DateTimeOffset scheduledFireAt,
+            ScheduledDispatchExpectedServiceTarget? expectedTarget = null,
             CancellationToken ct = default)
         {
             RunNowRequests.Add((actorId, scheduledFireAt));

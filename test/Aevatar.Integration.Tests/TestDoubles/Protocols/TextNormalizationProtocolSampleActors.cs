@@ -143,7 +143,7 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
     public async Task HandleRequested(TextNormalizationRequested evt)
     {
         var definitionActor = await EnsureWorkflowDefinitionAsync();
-        var runActor = await EnsureWorkflowRunAsync();
+        var runActor = await EnsureWorkflowRunAsync(evt.CommandId);
         var workerActor = await EnsureWorkerActorAsync();
         var runAgent = (WorkflowRunGAgent)runActor.Agent;
         var definitionAgent = (WorkflowGAgent)definitionActor.Agent;
@@ -220,9 +220,12 @@ public sealed class TextNormalizationWorkflowProtocolGAgent : GAgentBase<TextNor
                ?? await _runtime.CreateAsync<WorkflowGAgent>(actorId, CancellationToken.None);
     }
 
-    private async Task<IActor> EnsureWorkflowRunAsync()
+    private async Task<IActor> EnsureWorkflowRunAsync(string? commandId)
     {
-        var actorId = $"{Id}:workflow-run";
+        var normalizedCommandId = commandId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedCommandId))
+            throw new InvalidOperationException("Text normalization workflow command id is required.");
+        var actorId = $"{Id}:workflow-run:{normalizedCommandId}";
         return await _runtime.GetAsync(actorId)
                ?? await _runtime.CreateAsync<WorkflowRunGAgent>(actorId, CancellationToken.None);
     }

@@ -80,18 +80,60 @@ internal sealed class RuntimeEnvelopeRetryPolicy
     }
 
     private bool ShouldRetry(Exception exception) =>
-        !RetryOnlyRecoverableConcurrencyFailures || ContainsRecoverableConcurrencyFailure(exception);
+        !RetryOnlyRecoverableConcurrencyFailures || ContainsDefaultRetryableFailure(exception);
 
-    private static bool ContainsRecoverableConcurrencyFailure(Exception exception)
+    private static bool ContainsDefaultRetryableFailure(Exception exception)
+    {
+        return exception switch
+        {
+            IRuntimeEnvelopeRetryableException => true,
+            EventStoreOptimisticConcurrencyException => true,
+            CommittedStatePublicationException => true,
+            AggregateException aggregate =>
+                aggregate.InnerExceptions.Any(ContainsDefaultRetryableFailure),
+            _ when exception.InnerException is not null =>
+                ContainsDefaultRetryableFailure(exception.InnerException),
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// True when the failure chain indicates the actor's in-memory state and the
+    /// event store disagree about the committed history (append conflict, version
+    /// drift, or a committed-state publication that could not be persisted).
+    /// After such a failure the activation's memory is not trustworthy: keeping
+    /// the actor alive lets it consume and drop every subsequent command while
+    /// callers see accepted results. The grain should shed the activation so the
+    /// next envelope rehydrates from the committed history.
+    /// </summary>
+    internal static bool ContainsCommitConsistencyFailure(Exception exception)
     {
         return exception switch
         {
             EventStoreOptimisticConcurrencyException => true,
+            EventStoreVersionDriftException => true,
             CommittedStatePublicationException => true,
             AggregateException aggregate =>
-                aggregate.InnerExceptions.Any(ContainsRecoverableConcurrencyFailure),
+                aggregate.InnerExceptions.Any(ContainsCommitConsistencyFailure),
             _ when exception.InnerException is not null =>
-                ContainsRecoverableConcurrencyFailure(exception.InnerException),
+                ContainsCommitConsistencyFailure(exception.InnerException),
+            _ => false,
+        };
+    }
+
+    /// <summary>
+    /// True when the handler explicitly requires the same envelope to remain
+    /// unacknowledged after runtime retries are exhausted.
+    /// </summary>
+    internal static bool ContainsRuntimeEnvelopeRetryableFailure(Exception exception)
+    {
+        return exception switch
+        {
+            IRuntimeEnvelopeRetryableException => true,
+            AggregateException aggregate =>
+                aggregate.InnerExceptions.Any(ContainsRuntimeEnvelopeRetryableFailure),
+            _ when exception.InnerException is not null =>
+                ContainsRuntimeEnvelopeRetryableFailure(exception.InnerException),
             _ => false,
         };
     }

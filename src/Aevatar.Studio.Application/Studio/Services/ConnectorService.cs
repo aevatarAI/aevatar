@@ -195,12 +195,15 @@ public sealed class ConnectorService
 
         var mcpCommand = connector.Mcp?.Command?.Trim() ?? string.Empty;
         var mcpUrl = connector.Mcp?.Url?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(mcpCommand) && string.IsNullOrWhiteSpace(mcpUrl))
+        var hasMcpCommand = !string.IsNullOrWhiteSpace(mcpCommand);
+        var hasMcpUrl = !string.IsNullOrWhiteSpace(mcpUrl);
+        if (hasMcpCommand == hasMcpUrl)
         {
-            throw new InvalidOperationException($"Connector '{connector.Name}' requires mcp.command or mcp.url.");
+            throw new InvalidOperationException(
+                $"Connector '{connector.Name}' requires exactly one of mcp.command or mcp.url.");
         }
 
-        if (!string.IsNullOrWhiteSpace(mcpUrl) && !Uri.TryCreate(mcpUrl, UriKind.Absolute, out _))
+        if (hasMcpUrl && !Uri.TryCreate(mcpUrl, UriKind.Absolute, out _))
         {
             throw new InvalidOperationException($"Connector '{connector.Name}' has an invalid mcp.url.");
         }

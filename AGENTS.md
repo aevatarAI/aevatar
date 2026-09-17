@@ -13,6 +13,15 @@
 - 不保留无效层：空转发、重复抽象、无业务价值代码直接删除。
 - 变更必须可验证：架构调整需同步文档，且 `build/test` 通过。
 
+## 生产环境调试边界（Hard Gate，最高优先级）
+- 适用范围仅限生产环境（线上集群、线上 namespace、线上服务实例）。本地容器、本地 `kind/minikube`、开发者自有 `docker compose` 等本地运行环境不受本条约束，可自由启停、重建、进入调试。
+- 调试生产环境时，禁止 LLM/agent 对生产 pod 及其所在集群执行任何变更类操作：`kubectl exec / delete / rollout restart / scale / patch / edit / apply / cordon / drain / port-forward / cp`，以及等价的 `helm`、云控制台操作、CI 重启入口。
+- 生产只读观测仍然允许：`kubectl logs / get / describe` 等只读命令与明确只读的日志 skill（如 `/aevatar-prod-logs`）可继续使用；一旦某个动作会改变生产 pod 的状态、生命周期、配置或网络可达性，即属于越界。
+- 越界时唯一允许的动作是上报：立即停止操作，整理现象、时间窗、涉及的 namespace/service/pod、已获取的只读证据与建议处置动作，通知 dev，由 dev 告知运维执行；禁止 agent 代为执行，禁止“先重启一次试试”。
+- 阻塞必须显式承认：若某个结论只能在生产 pod 侧变更后才能验证，必须在输出中写明“待运维执行 X 后确认”，不得用推测冒充验证，也不得为绕过阻塞改走其他变更路径。
+- 禁止绕道与自我豁免：不得通过远程 exec、sandbox、云控制台代理或其他间接集群管理手段，执行上述被禁止的生产 pod 操作；任务紧急或会话内口头“这次可以重启”均不构成豁免。
+- 本规则不限制标准源码交付：允许按本仓库既定流程 commit/push 到约定分支，并由既有 CI/CD 自动完成构建与部署；任务明确要求推送时应正常执行，无需把源码 push 视为生产 pod 操作或等待运维代为执行。该许可不允许 agent 在流水线之外直接操作生产 pod，也不允许绕过流水线门禁。
+
 ## Studio Workflow / Member 身份语义（最高优先级）
 - 禁止用 `Build / Bind / Invoke / Observe` 作为 Studio workflow 的全局产品生命周期模型。仓库中若仍出现 `BuildReady / BindReady / binding / invoke / observe`，只能按所在资源边界解释为局部状态或动作，不得反推出一条线性 workflow 生命周期。
 - `memberId`、`workflowId`、`publishedServiceId` 是隔离身份，不是同一资源在不同阶段的别名：`memberId` 表示 Studio team member authority；`workflowId` 表示 workspace workflow draft / definition document；`publishedServiceId` 表示 callable service runtime identity。

@@ -1,5 +1,10 @@
 # Provision Workflow First-Class One-Shot Design
 
+> Superseded by
+> [Durable Studio Workflow Schedule Provisioning](2026-08-05-durable-studio-workflow-schedule-provisioning-design.md).
+> The typed one-shot decision remains valid, but fire-time resolution and schedule
+> mutation now occur after the member actor observes the exact binding revision.
+
 ## Problem
 
 Issue #2962 tracks a semantic mismatch in the C1 `/provision-workflow` path.
@@ -80,10 +85,9 @@ validation.
 Recurring cron validation also remains in the scheduled-dispatch application
 service. The C1 path only normalizes the caller timezone as it does today.
 
-This change does not poll binding readiness. A binding that is still pending
-when the one-shot fires remains part of the broader asynchronous provisioning
-lifecycle tracked by #2679. This issue removes the false annual retry
-representation without claiming to complete that lifecycle.
+The superseding design preserves the no-poll request path while moving one-shot
+fire-time resolution behind binding observation. A one-shot can no longer fire
+before its exact target revision is ready.
 
 ## Compatibility
 

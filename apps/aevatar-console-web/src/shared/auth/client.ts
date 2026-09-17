@@ -45,6 +45,8 @@ export type LoginRedirectOptions =
     }
   | {
       readonly flow: 'serviceAccessReview';
+      /** Exact RFC 8707 service resources requested by this access review. */
+      readonly resources?: readonly string[];
       readonly returnTo: string;
       readonly prompt?: never;
     };
@@ -210,6 +212,11 @@ export class NyxIDAuthClient {
     const prompt = flow === 'serviceAccessReview' ? 'consent' : options.prompt;
     if (prompt) {
       url.searchParams.set('prompt', prompt);
+    }
+    if (options.flow === 'serviceAccessReview') {
+      for (const resource of options.resources ?? []) {
+        if (resource.trim()) url.searchParams.append('resource', resource);
+      }
     }
 
     window.location.assign(url.toString());

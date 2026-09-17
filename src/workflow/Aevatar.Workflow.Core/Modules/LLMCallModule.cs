@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Diagnostics.CodeAnalysis;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -21,7 +22,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 {
     private const int DefaultLlmTimeoutMs = 1_800_000;
     private const string LlmWatchdogCallbackPrefix = "llm-watchdog";
-    private const string ModuleStateKey = "llm_call";
+    internal const string ModuleStateKey = "llm_call";
 
     private readonly WorkflowStepTargetAgentResolver? _targetAgentResolver;
     private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
@@ -110,6 +111,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 RequestDispatched = false,
                 WatchdogCallbackId = BuildWatchdogCallbackId(sessionId),
                 DispatchOperationId = BuildDispatchOperationId(sessionId),
+                ExecutionId = request.ExecutionId,
+                InputValueId = request.InputValueId,
             };
             runtimeState.PendingBySessionId[sessionId] = pendingState;
             await SaveStateAsync(runtimeState, ctx, ct);
@@ -169,10 +172,26 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         await StopWatchdogAsync(pending, ctx, ct);
+        if (evt.AuthorizationRequirement is not null)
+        {
+            ctx.Logger.LogInformation(
+                "LLMCallModule: run={RunId} step={StepId} session={SessionId} status=interactive_authorization_handoff",
+                pending.RunId,
+                pending.StepId,
+                sessionId);
+            return;
+        }
+
         var publisherActorId = envelope.Route?.PublisherActorId ?? ctx.AgentId;
         if (!evt.Success)
         {
-            await PublishFailedCompletionAsync(pending, string.IsNullOrWhiteSpace(evt.Error) ? "LLM call failed." : evt.Error, publisherActorId, ctx, ct);
+            await PublishFailedCompletionAsync(
+                pending,
+                string.IsNullOrWhiteSpace(evt.Error) ? "LLM call failed." : evt.Error,
+                publisherActorId,
+                evt.RecoveryFailureKind,
+                ctx,
+                ct);
             await RemovePendingAsync(sessionId, pending, ctx, ct);
             return;
         }
@@ -195,8 +214,10 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = pending.StepId,
                 RunId = pending.RunId,
+                ExecutionId = pending.ExecutionId,
                 Success = true,
                 Output = evt.Content ?? string.Empty,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 WorkerId = publisherActorId,
                 Usage = evt.Usage?.Clone(),
             },
@@ -397,6 +418,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             // fills a caller scope that is otherwise unset.
             ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
             ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
+            ToolCatalogPolicyVersion = Normalize(ctx.ToolCatalogPolicyVersion) ?? string.Empty,
         };
         intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
@@ -420,14 +442,16 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
-        var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
-        intent.CallerCredential = callerCredential.Found
-            ? await WorkflowCallerAccessTokenResolver.ResolveAsync(
-                callerCredential.Credential,
-                _callerAccessTokenProvider,
-                ct)
-            : new WorkflowCallerCredential();
-        WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
+        if (!WorkflowLlmExecutionIntentRuntimeContextAccess.ApplyDurableAgentKeyOrSenderNyxIdAccessToken(
+                ctx,
+                intent))
+        {
+            var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
+            intent.CallerCredential = await BuildRoleCallerCredentialAsync(
+                callerCredential,
+                HasUnattendedWebhookAuthorization(ctx),
+                ct);
+        }
         CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);
         CopyParametersToChatRequest(request, intent, timeoutMs);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, intent.Headers);
@@ -458,10 +482,66 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         await ctx.PublishAsync(intent, TopologyAudience.Self, ct, dispatchOptions);
     }
 
+    private static bool HasUnattendedWebhookAuthorization(IWorkflowExecutionContext ctx) =>
+        ctx is IWorkflowExecutionStateHostAccessor accessor &&
+        string.Equals(accessor.StateHost.RunOrigin, WorkflowRunOrigins.Webhook, StringComparison.Ordinal) &&
+        accessor.StateHost.ExecutionContextSnapshot.UnattendedEffectAuthorization is not null;
+
+    private async Task<WorkflowCallerCredential> BuildRoleCallerCredentialAsync(
+        (bool Found, WorkflowCallerCredential Credential) resolved,
+        bool hasUnattendedWebhookAuthorization,
+        CancellationToken ct)
+    {
+        if (!resolved.Found)
+            return new WorkflowCallerCredential();
+
+        var durable = resolved.Credential.DurableCallerCredential;
+        if (WorkflowLlmExecutionIntentRuntimeContextAccess.IsDurableAgentKeyCredential(durable))
+        {
+            // Unattended workflows carry only the vault-backed Agent Key handle across
+            // the role-actor boundary. The role resolves it locally for every NyxID-backed
+            // tool path; a short-lived delegation token never replaces this authority.
+            return new WorkflowCallerCredential
+            {
+                DurableCallerCredential = durable.Clone(),
+                Kind = NyxIdCallerCredentialKind.AgentKey,
+            };
+        }
+
+        if (!hasUnattendedWebhookAuthorization)
+        {
+            return await WorkflowCallerAccessTokenResolver.ResolveAsync(
+                resolved.Credential,
+                _callerAccessTokenProvider,
+                ct);
+        }
+
+        if (durable?.SourceKind != DurableCallerCredentialSourceKind.WebhookBinding)
+            return new WorkflowCallerCredential();
+
+        // The role actor receives only the vault handle. It resolves the exact
+        // Agent Key locally, so raw binding credentials never cross actor events.
+        return new WorkflowCallerCredential
+        {
+            DurableCallerCredential = durable.Clone(),
+            NyxIdAuthority = resolved.Credential.NyxIdAuthority?.Clone(),
+            Kind = resolved.Credential.Kind,
+        };
+    }
+
     private static Task PublishFailedCompletionAsync(
         PendingLlmCallState pending,
         string error,
         string workerId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct) =>
+        PublishFailedCompletionAsync(pending, error, workerId, WorkflowRecoveryFailureKind.Unspecified, ctx, ct);
+
+    private static Task PublishFailedCompletionAsync(
+        PendingLlmCallState pending,
+        string error,
+        string workerId,
+        WorkflowRecoveryFailureKind recoveryFailureKind,
         IWorkflowExecutionContext ctx,
         CancellationToken ct) =>
         PublishFailedCompletionAsync(
@@ -469,6 +549,8 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             pending.RunId,
             error,
             workerId,
+            recoveryFailureKind,
+            pending.ExecutionId,
             ctx,
             ct);
 
@@ -479,14 +561,36 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         string workerId,
         IWorkflowExecutionContext ctx,
         CancellationToken ct) =>
+        PublishFailedCompletionAsync(
+            stepId,
+            runId,
+            error,
+            workerId,
+            WorkflowRecoveryFailureKind.Unspecified,
+            string.Empty,
+            ctx,
+            ct);
+
+    private static Task PublishFailedCompletionAsync(
+        string stepId,
+        string runId,
+        string error,
+        string workerId,
+        WorkflowRecoveryFailureKind recoveryFailureKind,
+        string executionId,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct) =>
         ctx.PublishAsync(
             new StepCompletedEvent
             {
                 StepId = stepId,
                 RunId = runId,
+                ExecutionId = executionId,
                 Success = false,
                 Error = error,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
                 WorkerId = string.IsNullOrWhiteSpace(workerId) ? ctx.AgentId : workerId,
+                RecoveryFailureKind = recoveryFailureKind,
             },
             TopologyAudience.Self,
             ct);

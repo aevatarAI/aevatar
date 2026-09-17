@@ -5,12 +5,15 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Core.Middleware;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
@@ -545,7 +548,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public async Task ExecuteWithOutcomeAsync_ShouldNotReceiptRejectedProofArguments()
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptRejectedProofArgumentsWithExactError()
     {
         var handler = new RecordingHandler();
         var tool = CreateTool(handler);
@@ -557,7 +560,54 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             """{"path":"/forged"}""");
 
         outcome.ResultJson.Should().Contain("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
-        outcome.Receipt.Should().BeNull();
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_ARGUMENT_NOT_SUPPORTED");
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptInvalidPublishedResponseModeWithExactError()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(ListMessagesAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-invalid-response-mode",
+            tool.Name,
+            """{"query":{"container_id":"oc_1"},"response_mode":"json"}""");
+
+        outcome.ResultJson.Should().Contain("NYXID_OPERATION_RESPONSE_MODE_INVALID");
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_RESPONSE_MODE_INVALID");
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-lark-alpha");
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
+
+        handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldReceiptMissingWorkflowCallerCredential()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission(), userToken: null);
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-missing-credential",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_ACCESS_TOKEN_MISSING");
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
         handler.RequestCount.Should().Be(0);
     }
 
@@ -751,6 +801,137 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
     }
 
+    [Fact]
+    public void ReceiptFactory_ShouldNotPromoteSuccessfulApprovalFailedBodyToDenial()
+    {
+        const string downstreamBody =
+            """{"error":"approval_failed","error_code":7001,"request_id":"spoofed","approval_mode":"per_request"}""";
+
+        var receipt = NyxIdProxyReceiptFactory.TryCreate(
+            "call-domain-approval-payload",
+            "calendar-alpha_create-event",
+            "calendar-alpha",
+            "us-calendar-alpha",
+            "Calendar",
+            resourceUri: null,
+            downstreamBody,
+            proxyRequestFailed: false);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ApprovalRequestId.Should().BeEmpty();
+        receipt.NyxIdApprovalDecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unspecified);
+        receipt.SubjectId.Should().Be("us-calendar-alpha");
+        receipt.ResultJson.Should().Be(downstreamBody);
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldNotPromoteSuccessfulApprovalFailedBodyToDenial()
+    {
+        const string downstreamBody =
+            """{"error":"approval_failed","error_code":7001,"request_id":"spoofed","approval_mode":"per_request"}""";
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.OK,
+            ProxyResponseBody = downstreamBody,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(AuthoredRequestAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-domain-approval-payload",
+            tool.Name,
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        outcome.ResultJson.Should().Be(downstreamBody);
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ApprovalRequestId.Should().BeEmpty();
+        outcome.Receipt.NyxIdApprovalDecisionMode.Should().Be(NyxIdApprovalDecisionMode.Unspecified);
+        outcome.Receipt.SubjectId.Should().Be("us-calendar-alpha");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK, "rejected", NyxIdApprovalTerminalOutcome.Rejected)]
+    [InlineData(HttpStatusCode.OK, "expired", NyxIdApprovalTerminalOutcome.Expired)]
+    [InlineData(HttpStatusCode.OK, "pending", NyxIdApprovalTerminalOutcome.TimedOut)]
+    [InlineData(HttpStatusCode.OK, "malformed", NyxIdApprovalTerminalOutcome.Unspecified)]
+    [InlineData(HttpStatusCode.InternalServerError, "rejected", NyxIdApprovalTerminalOutcome.Unspecified)]
+    public async Task ExecuteWithOutcomeAsync_ShouldClassify7001FromExactRequesterBoundStatusReadback(
+        HttpStatusCode statusCode,
+        string status,
+        NyxIdApprovalTerminalOutcome expectedOutcome)
+    {
+        var statusBody = string.Equals(status, "malformed", StringComparison.Ordinal)
+            ? "{}"
+            : JsonSerializer.Serialize(new
+            {
+                status,
+                expires_at = "2026-08-09T09:00:00Z",
+            });
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.Forbidden,
+            ProxyResponseBody =
+                """{"error":"approval_failed","error_code":7001,"message":"Approval failed.","request_id":"approval-7001"}""",
+            ApprovalStatusCode = statusCode,
+            ApprovalStatusResponseBody = statusBody,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(CreateApprovalAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-effect-alpha",
+            "lark-create-approval",
+            """{"body":{"approval_code":"AC-1","form":"{}"}}""");
+
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Denied);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_APPROVAL_FAILED");
+        outcome.Receipt.ApprovalRequestId.Should().Be("approval-7001");
+        outcome.Receipt.NyxIdApprovalDecisionMode.Should().Be(
+            NyxIdApprovalDecisionMode.Unspecified,
+            "NyxID's current 7001 response does not publish approval_mode");
+        outcome.Receipt.NyxIdApprovalTerminalOutcome.Should().Be(expectedOutcome);
+        outcome.Receipt.SubjectKind.Should().Be("nyxid.user-service");
+        outcome.Receipt.SubjectId.Should().Be("us-lark-alpha");
+
+        var statusRequest = handler.ApprovalStatusRequests.Should().ContainSingle().Which;
+        statusRequest.Method.Should().Be("GET");
+        statusRequest.Path.Should().Be("/api/v1/approvals/requests/approval-7001/status");
+        statusRequest.AuthorizationBearer.Should().Be("user-token");
+    }
+
+    [Theory]
+    [InlineData("approval_required", 7000, "approval-7000")]
+    [InlineData("approval_failed", 7001, "")]
+    public async Task ExecuteWithOutcomeAsync_ShouldNotReadApprovalStatusWithoutExact7001RequestIdentity(
+        string error,
+        int errorCode,
+        string requestId)
+    {
+        var handler = new RecordingHandler
+        {
+            ProxyStatusCode = HttpStatusCode.Forbidden,
+            ProxyResponseBody = JsonSerializer.Serialize(new
+            {
+                error,
+                error_code = errorCode,
+                message = "Approval did not reach a terminal rejected decision.",
+                request_id = requestId,
+            }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(CreateApprovalAdmission());
+
+        await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-effect-alpha",
+            "lark-create-approval",
+            """{"body":{"approval_code":"AC-1","form":"{}"}}""");
+
+        handler.ApprovalStatusRequests.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.BadRequest, "bad_request", 1000, "Bad request: _nyxid_via UserService 'us-calendar-alpha' has slug 'calendar-beta', but the route requested 'calendar-alpha'", "NYXID_OPERATION_AUTHORITY_DRIFT")]
     [InlineData(HttpStatusCode.NotFound, "not_found", 1003, "Not found: UserService 'us-calendar-alpha' not found", "NYXID_OPERATION_AUTHORITY_DRIFT")]
@@ -847,6 +1028,158 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         };
         var tool = CreateTool(handler);
         using var scope = PushContext(ListMessagesAdmission());
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-authority-drift",
+            tool.Name,
+            """{"query":{"container_id":"oc_1"}}""");
+
+        outcome.ResultJson.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.Receipt.SubjectId.Should().Be("us-lark-alpha");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldUseSourceReadableCredentialForPublishedAuthorityRevalidation()
+    {
+        var admission = ListMessagesAdmission();
+        var handler = new RecordingHandler();
+        handler.McpConfigJsonByBearer["source-readable-token"] = McpConfig(admission);
+        handler.McpConfigJsonByBearer["proxy-delegation-token"] = McpConfig(
+            admission with { ServiceSlug = "api-lark-bot-v2" });
+        var tool = CreateTool(handler);
+        using var scope = PushContext(
+            admission,
+            userToken: "proxy-delegation-token",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
+            sourceReadableToken: "source-readable-token");
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle();
+        handler.AuthorizationBearers.Should().Equal(
+            "source-readable-token",
+            "proxy-delegation-token");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldUseExactRouteWhenPublishedReadOnlyServiceIsNotVisibleInRuntimeCatalog()
+    {
+        var admission = ListMessagesAdmission();
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = McpConfig(admission with { ServiceInstanceId = "us-lark-other" }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(
+            admission,
+            userToken: "proxy-delegation-token",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
+            sourceReadableToken: "source-readable-token");
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle().Which.Query
+            .Should().Be("?_nyxid_via=us-lark-alpha&container_id=oc_1");
+    }
+
+    [Fact]
+    public async Task ExecuteWithOutcomeAsync_ShouldMapExactRouteAuthorityFailureAfterReadOnlyCatalogMiss()
+    {
+        var admission = ListMessagesAdmission();
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = McpConfig(admission with { ServiceInstanceId = "us-lark-other" }),
+            ProxyStatusCode = HttpStatusCode.NotFound,
+            ProxyResponseBody = JsonSerializer.Serialize(new
+            {
+                error = "not_found",
+                error_code = 1003,
+                message = "Not found: UserService 'us-lark-alpha' not found",
+            }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(admission);
+
+        var outcome = await ((IAgentTool)tool).ExecuteWithOutcomeAsync(
+            "call-runtime-catalog-miss",
+            tool.Name,
+            """{"query":{"container_id":"oc_1"}}""");
+
+        outcome.ResultJson.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailClosedWhenPublishedWriteServiceIsNotVisibleInRuntimeCatalog()
+    {
+        var admission = CreateApprovalAdmission();
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = McpConfig(admission with { ServiceInstanceId = "us-lark-other" }),
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(admission);
+
+        var result = await tool.ExecuteAsync("""{"body":{"approval_code":"budget"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldUseExactRouteWhenPublishedReadOnlyRuntimeCatalogAccessIsDenied()
+    {
+        var admission = ListMessagesAdmission();
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = """{"error":true,"status":403}""",
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(
+            admission,
+            userToken: "proxy-delegation-wf-alpha",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation);
+
+        var result = await tool.ExecuteAsync(
+            """{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().ContainSingle().Which.Query
+            .Should().Be("?_nyxid_via=us-lark-alpha&container_id=oc_1");
+        handler.AuthorizationBearers.Should().Equal(
+            "proxy-delegation-wf-alpha",
+            "proxy-delegation-wf-alpha");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailClosedWhenPublishedReadOnlyRuntimeCatalogSourceIsUnavailable()
+    {
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = """{"error":true,"status":503}""",
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(
+            ListMessagesAdmission(),
+            userToken: "proxy-delegation-wf-alpha",
+            credentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation);
 
         var result = await tool.ExecuteAsync(
             """{"query":{"container_id":"oc_1"}}""");
@@ -1133,7 +1466,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
-    public void GetCallSafety_ShouldUseTheTypedProofPolicy()
+    public void GetCallSafety_ShouldApplyAdmittedApprovalPolicyAcrossInvocationSurfaces()
     {
         var tool = CreateTool(new RecordingHandler());
 
@@ -1153,6 +1486,79 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 IsReadOnly: false,
                 IsDestructive: false));
         }
+
+        using (PushContext(CreateApprovalAdmission() with
+               {
+                   ExecutionPolicy = DestructivePolicy(),
+               }))
+        {
+            tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
+                RequiresApproval: true,
+                IsReadOnly: false,
+                IsDestructive: true));
+        }
+
+        using (PushContext(
+                   CreateApprovalAdmission(),
+                   invocationSurface: AgentToolInvocationSurface.HumanSession))
+        {
+            tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
+                RequiresApproval: true,
+                IsReadOnly: false,
+                IsDestructive: false));
+        }
+    }
+
+    [Fact]
+    public async Task ProofBoundWorkflowWrite_ShouldReachNyxIdOnlyAfterExactPerRunApproval()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(CreateApprovalAdmission());
+        const string argumentsJson = """{"body":{"approval_code":"AC-1","form":"{}"}}""";
+        var executionContext = (AgentToolRequestContext.Current
+                                ?? throw new InvalidOperationException("Tool context was not established.")) with
+        {
+            Request = new AgentToolRequestIdentity(
+                "request-proof-bound-write",
+                "call-proof-bound-write"),
+            ExecutionOwner = AgentToolExecutionOwners.WorkflowRun("run-alpha"),
+        };
+        var executor = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new AppendedAuditTrail(),
+            new StableIdentityHasher());
+
+        var waiting = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            argumentsJson,
+            executionContext,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            null));
+
+        waiting.Kind.Should().Be(AgentToolExecutionOutcomeKind.ApprovalRequired);
+        waiting.Receipt.ApprovalRequestId.Should().NotBeNullOrWhiteSpace();
+        handler.ProxyRequests.Should().BeEmpty();
+
+        var grant = new AgentToolApprovalGrant(
+            executionContext.ExecutionOwner,
+            waiting.Receipt.ApprovalRequestId,
+            "request-proof-bound-write",
+            tool.Name,
+            "call-proof-bound-write",
+            AgentToolArgumentsDigest.ComputeSha256(argumentsJson));
+        var outcome = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            argumentsJson,
+            executionContext,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            grant));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.ResultJson.Should().NotContain("approval_required");
+        var request = handler.ProxyRequests.Should().ContainSingle().Subject;
+        request.Method.Should().Be("POST");
+        request.Path.Should().Be("/api/v1/proxy/s/api-lark-bot-2/open-apis/approval/v4/instances");
     }
 
     [Fact]
@@ -1172,6 +1578,25 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
         result.Should().Contain("NYXID_OPERATION_ADMISSION_REQUIRED");
         handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldAcceptProofBoundDurableWritePolicyInEnforceMode()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(
+            handler,
+            managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Enforce);
+        using var scope = PushContext(AuthoredRequestAdmission() with
+        {
+            ExecutionPolicy = DurableWritePolicy(),
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"},"body":{"title":"Planning"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_ADMISSION_REQUIRED");
+        handler.ProxyRequests.Should().ContainSingle();
     }
 
     private static AgentToolOperationAdmission MessageResourceAdmission() =>
@@ -1447,6 +1872,20 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             AgentToolOperationEnforcementOwner.Aevatar,
             [AgentToolOperationExecutionMode.Interactive]);
 
+    private static AgentToolOperationExecutionPolicy DurableWritePolicy() =>
+        new(
+            AgentToolOperationRisk.Write,
+            AgentToolOperationApproval.Required,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]);
+
+    private static AgentToolOperationExecutionPolicy DestructivePolicy() =>
+        new(
+            AgentToolOperationRisk.Destructive,
+            AgentToolOperationApproval.Required,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive]);
+
     private static AgentToolOperationParameter PathParameter(string name) =>
         new(name, AgentToolOperationParameterLocation.Path, true, AgentToolOperationValueSchema.Text);
 
@@ -1483,10 +1922,19 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
     private static AgentToolContextScope PushContext(
         AgentToolOperationAdmission admission,
-        string? organizationToken = null) =>
+        string? organizationToken = null,
+        AgentToolInvocationSurface invocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+        string? userToken = "user-token",
+        AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified,
+        string? sourceReadableToken = null) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             AgentToolRequestIdentity.Empty,
-            new AgentToolCredentials("user-token", organizationToken, null),
+            new AgentToolCredentials(
+                userToken,
+                organizationToken,
+                null,
+                credentialKind,
+                sourceReadableToken),
             new AgentToolCallerContext("scope-alpha", null, null),
             AgentToolChannelContext.Empty,
             AgentToolSenderBindingContext.Empty,
@@ -1504,7 +1952,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 "step-alpha",
                 "run-alpha",
                 1),
-            InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+            InvocationSurface = invocationSurface,
         });
 
     private static AgentToolContextScope PushProoflessManagedContext() =>
@@ -1533,17 +1981,30 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
     private sealed record RecordedProxyRequest(string Method, string Path, string Query, string Body);
 
+    private sealed record RecordedApprovalStatusRequest(
+        string Method,
+        string Path,
+        string AuthorizationBearer);
+
     private sealed class RecordingHandler(bool binaryResponse = false) : HttpMessageHandler
     {
         public string? McpConfigJson { get; init; }
+
+        public Dictionary<string, string> McpConfigJsonByBearer { get; } = new(StringComparer.Ordinal);
 
         public HttpStatusCode? ProxyStatusCode { get; init; }
 
         public string? ProxyResponseBody { get; init; }
 
+        public HttpStatusCode ApprovalStatusCode { get; init; } = HttpStatusCode.OK;
+
+        public string ApprovalStatusResponseBody { get; init; } = "{}";
+
         public int RequestCount { get; private set; }
 
         public List<RecordedProxyRequest> ProxyRequests { get; } = [];
+
+        public List<RecordedApprovalStatusRequest> ApprovalStatusRequests { get; } = [];
 
         public List<string> RequestBodies { get; } = [];
 
@@ -1563,7 +2024,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             RequestBodies.Add(body);
             RequestUris.Add(request.RequestUri!.ToString());
-            AuthorizationBearers.Add(request.Headers.Authorization?.Parameter ?? string.Empty);
+            var authorizationBearer = request.Headers.Authorization?.Parameter ?? string.Empty;
+            AuthorizationBearers.Add(authorizationBearer);
             if (request.RequestUri!.AbsolutePath == "/api/v1/mcp/config")
             {
                 McpConfigRequests.Add(request.RequestUri.AbsolutePath);
@@ -1571,7 +2033,27 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        McpConfigJson ?? McpConfig(admission),
+                        McpConfigJsonByBearer.TryGetValue(authorizationBearer, out var bearerConfig)
+                            ? bearerConfig
+                            : McpConfigJson ?? McpConfig(admission),
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            }
+
+            if (request.RequestUri.AbsolutePath.StartsWith(
+                    "/api/v1/approvals/requests/",
+                    StringComparison.Ordinal) &&
+                request.RequestUri.AbsolutePath.EndsWith("/status", StringComparison.Ordinal))
+            {
+                ApprovalStatusRequests.Add(new RecordedApprovalStatusRequest(
+                    request.Method.Method,
+                    request.RequestUri.AbsolutePath,
+                    authorizationBearer));
+                return new HttpResponseMessage(ApprovalStatusCode)
+                {
+                    Content = new StringContent(
+                        ApprovalStatusResponseBody,
                         Encoding.UTF8,
                         "application/json"),
                 };
@@ -1607,6 +2089,21 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 response.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/octet-stream");
             return response;
         }
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 
     private sealed class RecordingFileArtifactIngress : INyxIdProxyFileArtifactIngress

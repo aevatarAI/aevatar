@@ -8,7 +8,10 @@ owner: eanzhao
 
 ## Status
 
-Accepted (Phase 1 landed alongside ADR 0019). Co-issued with issues
+Accepted. The runtime migration consumer and the first concrete migration
+landed with issue
+[#3482](https://github.com/aevatarAI/aevatar/issues/3482). The original field
+placement landed alongside ADR 0019 and was co-issued with issues
 [#498](https://github.com/aevatarAI/aevatar/issues/498) and
 [#500](https://github.com/aevatarAI/aevatar/issues/500).
 
@@ -36,16 +39,18 @@ version"). That coupling is wrong:
 
 ## Decision
 
-Place `state_schema_version` on the runtime envelope, alongside `kind` and
-`legacy_clr_type_name`, on `RuntimeActorIdentity` (see ADR 0019). The
+Place `state_schema_version` on the runtime envelope, alongside `kind`, on
+`RuntimeActorIdentity` (see ADR 0019). The
 identity envelope is defined as a Protobuf message in
 `src/Aevatar.Foundation.Abstractions/runtime_actor_identity.proto`:
 
 ```proto
 message RuntimeActorIdentity {
+  reserved 3;
+  reserved "legacy_clr_type_name";
   string kind = 1;
   int32 state_schema_version = 2;
-  string legacy_clr_type_name = 3;
+  repeated RuntimeActorStateSchemaAdoptionReceipt state_schema_adoptions = 4;
 }
 ```
 
@@ -59,12 +64,15 @@ carry a version field.
 
 ### Consumer contract (lazy migration)
 
-The canon matrix reserves an `IActorStateMigration<TState>` interface for
-within-actor schema upgrades. That mechanism reads
+Within-actor schema upgrades implement `IActorStateMigration<TState>`. The
+registry discovers migrations by exact `AgentKind`, requires one complete
+consecutive chain from version `0` to the implementation's declared current
+version, and rejects migrations for another Protobuf state contract. The
+runtime reads
 `Identity.StateSchemaVersion` from the runtime envelope, applies registered
 migrations until the version reaches the agent's current schema, persists
-the new state with the new version, and only then dispatches commands to
-the agent. The interface is defined as:
+the new state with the new version, and only then constructs or activates the
+agent. The interface is:
 
 ```csharp
 public interface IActorStateMigration<TState>
@@ -75,8 +83,7 @@ public interface IActorStateMigration<TState>
 }
 ```
 
-Constraints (locked at the contract level, enforced by CI guard when the
-interface lands):
+Constraints:
 
 - **Pure function** of input state. No I/O, no other-actor calls, no
   random / time-dependent inputs.
@@ -87,30 +94,56 @@ interface lands):
   `IServiceProvider`, any `IClient*`, any `*Async*` service, `ITimeService`,
   `IRandom`, or anything that performs I/O.
 
-These constraints are doctrine; the actual interface and CI guard land
-together with the first concrete migration case. Until then, the canon
-matrix owns the decision boundary and this ADR only fixes version
-placement.
+Each step also declares one exact fleet capability, contract id, and minimum
+reader contract version. Adoption is fail-closed unless the authority
+current-state read model proves all of the following at the same time:
 
-### Phase 1 scope (this PR)
+1. The gate is `Open` and belongs to the fixed capability authority actor.
+2. Authority state version and capability epoch are positive.
+3. Membership epoch, digest, deployment revision, and validity window match
+   the local runtime's current trusted membership identity.
+4. Every active member advertises exactly one compatible contract, and the
+   exact local member id plus incarnation occurs once in the admitted set.
 
-- The `StateSchemaVersion` field exists on `RuntimeActorIdentity`.
-- Default value is `0`; no migrations are registered yet.
-- `RuntimeActorGrain` reads the field but does not yet route through any
-  migration pipeline — that infrastructure lands with the first concrete
-  lazy migration case.
+The deployment revision is a stable `manifest-v1` SHA-256 digest over the
+runtime grain module identity and the sorted capability contract, reader
+version, and declared reader implementation module identity. A Workflow reader
+assembly change therefore changes the revision even when the Orleans runtime
+assembly itself did not change.
 
-This pre-records the field placement so #500's consumer contract reads
-from a known location and so the field is sized correctly in Phase 1
-state rows.
+The read model is eventually consistent. A live membership epoch, digest,
+deployment revision, or local incarnation mismatch rejects an old proof
+immediately. If Authority revokes while the exact membership proof remains
+unchanged, an unprojected stale `Open` document can be accepted only until its
+committed `valid_until`; expiry is the hard bound, and admission does not
+side-read the Authority actor to simulate query-time strong consistency.
 
-### Out of scope (deferred to follow-up issues)
+The runtime atomically persists the migrated typed snapshot, state contract
+name, `state_schema_version`, and one immutable
+`RuntimeActorStateSchemaAdoptionReceipt` per adopted step. Orleans uses its
+single persisted grain row; the local runtime uses
+`RuntimeActorStateEnvelope` as the same atomic boundary. A failed write does
+not leave a new schema marker or receipt attached to an old snapshot.
 
-- The migration interface + CI guard (zero-dependency constructor).
-- Defining actors, proto fields, envelope kinds, pipeline phases, or a
-  state-key protocol for projection-driven split / merge / re-key.
+An adoption receipt proves that one actor row crossed a gate while the exact
+fleet evidence was valid. Later expiry or revocation does not downgrade that
+row or make its already-normalized state unreadable. Capabilities that begin
+a new logical mutation after adoption may additionally require the live gate
+to remain valid; that revalidation uses the same admission policy rather than
+trusting the historical receipt as current fleet evidence.
+
+Consumers that must persist or act on the live proof use the typed
+`RuntimeFleetCapabilityAdmissionGrant`. The validator binds one cloned
+admission, one local membership identity, and one validation timestamp in the
+same read/validation operation. Such consumers must not first request a Boolean
+grant and then re-read the admission, because those two reads could span a
+membership, authority, or freshness change.
+
+### Out of scope
+
+- Defining a state-key protocol for projection-driven split / merge / re-key.
 - The event-immutability policy ADR (separate doctrine ADR).
-- A general-purpose data-transformation framework (explicit non-goal).
+- A general-purpose data-transformation framework.
 
 ## Consequences
 
@@ -120,6 +153,9 @@ state rows.
 - The runtime can probe migration eligibility (`Identity.StateSchemaVersion`)
   without deserializing the state body, decoupling activation safety from
   proto evolution.
+- Schema adoption is coupled to exact, freshness-bearing fleet evidence and
+  leaves durable proof without turning that proof into a perpetual live-gate
+  grant.
 - Cross-actor state evolution (split / merge / re-key) is explicitly **not**
   served by this version field — those follow the projection-driven
   bootstrap / retire cleanup / re-key redirect canon in

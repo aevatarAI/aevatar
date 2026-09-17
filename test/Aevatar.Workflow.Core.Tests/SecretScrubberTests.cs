@@ -10,6 +10,22 @@ namespace Aevatar.Workflow.Core.Tests;
 public sealed class SecretScrubberTests
 {
     [Fact]
+    public void ScrubJson_ShouldRecursivelyMaskSensitiveFieldsAndPreserveOrdinaryArguments()
+    {
+        const string input = """
+            {"query":"deployment status","headers":{"authorization":"Bearer short-secret","cookie":"session=short"},"token":123,"nested":[{"password":true},{"limit":5}]}
+            """;
+
+        var scrubbed = SecretScrubber.ScrubJson(input);
+
+        scrubbed.Should().Contain("\"query\":\"deployment status\"");
+        scrubbed.Should().Contain("\"limit\":5");
+        scrubbed.Should().NotContain("short-secret");
+        scrubbed.Should().NotContain("session=short");
+        scrubbed.Should().Contain(SecretScrubber.Marker);
+    }
+
+    [Fact]
     public void Scrub_ShouldMask_JwtShape()
     {
         // header.payload.signature base64url form.

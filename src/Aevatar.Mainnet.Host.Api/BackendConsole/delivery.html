@@ -1,0 +1,3630 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Workflow Delivery Center · Aevatar</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --surface: #ffffff;
+      --surface-subtle: #f8fafc;
+      --surface-strong: #eef2f6;
+      --text: #1f2937;
+      --heading: #101828;
+      --muted: #667085;
+      --faint: #98a2b3;
+      --border: #e4e7ec;
+      --border-strong: #cfd4dc;
+      --primary: #1677ff;
+      --primary-hover: #0958d9;
+      --primary-soft: #e6f4ff;
+      --primary-border: #91caff;
+      --success: #138a52;
+      --success-soft: #eaf8f1;
+      --success-border: #a9dfc2;
+      --warning: #b86100;
+      --warning-soft: #fff6e8;
+      --warning-border: #f0c98f;
+      --danger: #cf3038;
+      --danger-soft: #fff0f0;
+      --danger-border: #f2b8bc;
+      --header-height: 58px;
+      --rail-width: 224px;
+      --radius: 6px;
+      --sans: 'AlibabaSans', 'Alibaba PuHuiTi 2.0', 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 var(--sans);
+      letter-spacing: 0;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select, textarea { color: inherit; font: inherit; letter-spacing: 0; }
+    button { cursor: pointer; }
+    a { color: inherit; text-decoration: none; }
+    h1, h2, h3, p { margin: 0; letter-spacing: 0; }
+    h1 { color: var(--heading); font-size: 24px; line-height: 1.25; }
+    h2 { color: var(--heading); font-size: 17px; line-height: 1.35; }
+    h3 { color: var(--heading); font-size: 14px; line-height: 1.4; }
+    code, .mono { font-family: var(--mono); font-size: .92em; overflow-wrap: anywhere; }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+    [hidden] { display: none !important; }
+
+    .boot, .gate {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .gate-panel {
+      width: min(520px, 100%);
+      padding: 28px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .gate-mark {
+      width: 42px;
+      height: 42px;
+      margin-bottom: 18px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--primary-border);
+      border-radius: var(--radius);
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-weight: 750;
+    }
+    .gate-panel p { margin-top: 8px; color: var(--muted); }
+    .gate-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
+
+    .spinner {
+      width: 26px;
+      height: 26px;
+      border: 3px solid var(--surface-strong);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template: var(--header-height) minmax(0, 1fr) / var(--rail-width) minmax(0, 1fr);
+    }
+    .topbar {
+      grid-column: 1 / -1;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      min-width: 0;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: calc(var(--rail-width) - 20px);
+      color: var(--heading);
+      font-weight: 700;
+    }
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--primary);
+      border-radius: var(--radius);
+      color: var(--primary);
+      font-size: 12px;
+    }
+    .top-context {
+      min-width: 0;
+      flex: 1;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .account {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+    .account-copy { min-width: 0; text-align: right; }
+    .account-copy strong, .account-copy span {
+      display: block;
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .account-copy span { color: var(--muted); font-size: 12px; }
+    .avatar {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--heading);
+      color: var(--surface);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .mobile-nav { display: none; }
+
+    .rail {
+      grid-row: 2;
+      position: sticky;
+      top: var(--header-height);
+      height: calc(100vh - var(--header-height));
+      padding: 18px 12px;
+      border-right: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .rail-label {
+      padding: 0 10px 8px;
+      color: var(--faint);
+      font: 11px/1.4 var(--mono);
+      text-transform: uppercase;
+    }
+    .rail-nav { display: grid; gap: 4px; }
+    .nav-link {
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 0 10px;
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-weight: 550;
+    }
+    .nav-link:hover { background: var(--surface-subtle); color: var(--heading); }
+    .nav-link.active { background: var(--surface-strong); color: var(--heading); font-weight: 700; }
+    .nav-glyph {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      font: 10px var(--mono);
+    }
+
+    .main {
+      grid-row: 2;
+      min-width: 0;
+      padding: 22px 24px 48px;
+    }
+    .page { width: min(1380px, 100%); margin: 0 auto; }
+    .page.narrow { width: min(1040px, 100%); }
+    .page-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 18px;
+    }
+    .page-head p { max-width: 760px; margin-top: 5px; color: var(--muted); }
+    .page-actions, .inline-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .page-actions { justify-content: flex-end; }
+
+    .button {
+      min-height: 38px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 7px 13px;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--heading);
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .button:hover { background: var(--surface-strong); }
+    .button.primary { border-color: var(--primary); background: var(--primary); color: var(--surface); }
+    .button.primary:hover { border-color: var(--primary-hover); background: var(--primary-hover); }
+    .button.secondary { border-color: var(--border-strong); background: var(--surface); }
+    .button.secondary:hover { border-color: var(--muted); background: var(--surface-subtle); }
+    .button.danger { border-color: var(--danger-border); background: var(--surface); color: var(--danger); }
+    .button.quiet { padding-inline: 9px; color: var(--muted); }
+    .button:disabled { cursor: not-allowed; opacity: .48; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      padding: 2px 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface-subtle);
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .badge.info { border-color: var(--primary-border); background: var(--primary-soft); color: var(--primary); }
+    .badge.success { border-color: var(--success-border); background: var(--success-soft); color: var(--success); }
+    .badge.warning { border-color: var(--warning-border); background: var(--warning-soft); color: var(--warning); }
+    .badge.danger { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger); }
+
+    .section {
+      padding: 0 0 22px;
+      margin-bottom: 22px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section:last-child { border-bottom: 0; }
+    .section-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 12px;
+    }
+    .section-head p { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .work-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(330px, .65fr); gap: 16px; }
+    .detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; }
+    .panel {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .panel-head { padding: 13px 15px; border-bottom: 1px solid var(--border); }
+    .panel-head p { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .panel-body { padding: 15px; }
+
+    .notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 11px 12px;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-subtle);
+    }
+    .notice.info { border-color: var(--primary-border); background: var(--primary-soft); }
+    .notice.success { border-color: var(--success-border); background: var(--success-soft); }
+    .notice.warning { border-color: var(--warning-border); background: var(--warning-soft); }
+    .notice.danger { border-color: var(--danger-border); background: var(--danger-soft); }
+    .notice-symbol {
+      width: 22px;
+      height: 22px;
+      flex: none;
+      display: grid;
+      place-items: center;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+      font: 11px var(--mono);
+    }
+    .notice p { margin-top: 2px; color: var(--muted); font-size: 12px; }
+
+    .empty {
+      min-height: 220px;
+      display: grid;
+      place-items: center;
+      padding: 34px 20px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .empty strong { display: block; margin-bottom: 4px; color: var(--heading); }
+    .empty .button { margin-top: 14px; }
+
+    .loading-lines { display: grid; gap: 9px; padding: 8px 0; }
+    .loading-line {
+      height: 14px;
+      border-radius: 3px;
+      background: var(--surface-strong);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    .loading-line:nth-child(2) { width: 82%; }
+    .loading-line:nth-child(3) { width: 64%; }
+    @keyframes pulse { 50% { opacity: .45; } }
+
+    .table-wrap {
+      width: 100%;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+    th { background: var(--surface-subtle); color: var(--muted); font: 11px/1.35 var(--mono); text-transform: uppercase; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: var(--surface-subtle); }
+    .cell-title { color: var(--heading); font-weight: 650; }
+    .cell-sub { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .cell-actions { text-align: right; white-space: nowrap; }
+
+    .package-list { display: grid; }
+    .package-option {
+      width: 100%;
+      min-height: 76px;
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 11px;
+      padding: 12px 14px;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      text-align: left;
+    }
+    .package-option:last-child { border-bottom: 0; }
+    .package-option:hover { background: var(--surface-subtle); }
+    .package-option.selected { background: var(--primary-soft); }
+    .radio {
+      width: 18px;
+      height: 18px;
+      border: 1px solid var(--border-strong);
+      border-radius: 50%;
+      background: var(--surface);
+    }
+    .package-option.selected .radio { border: 5px solid var(--primary); }
+    .package-option p { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .package-meta { color: var(--muted); font: 11px var(--mono); text-align: right; }
+
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+    .field { display: grid; gap: 5px; align-content: start; }
+    .field.full { grid-column: 1 / -1; }
+    .field label, .field-label { color: var(--heading); font-size: 12px; font-weight: 650; }
+    .field small { color: var(--muted); }
+    .required { color: var(--danger); }
+    .input, .select, .textarea {
+      width: 100%;
+      min-height: 39px;
+      padding: 8px 10px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .textarea { min-height: 88px; resize: vertical; }
+    .input:focus, .select:focus, .textarea:focus {
+      border-color: var(--primary);
+      outline: 0;
+      box-shadow: 0 0 0 2px var(--primary-soft);
+    }
+    .input[aria-invalid="true"], .select[aria-invalid="true"], .textarea[aria-invalid="true"] {
+      border-color: var(--danger);
+    }
+    .field-error { color: var(--danger); font-size: 12px; }
+    .checkbox-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      min-height: 39px;
+      padding: 9px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-subtle);
+    }
+    .checkbox-row input { width: 17px; height: 17px; flex: none; margin-top: 1px; accent-color: var(--primary); }
+
+    .definition { display: grid; grid-template-columns: 160px minmax(0, 1fr); }
+    .definition dt, .definition dd { margin: 0; padding: 9px 0; border-bottom: 1px solid var(--border); }
+    .definition dt { color: var(--muted); }
+    .definition dd { color: var(--heading); overflow-wrap: anywhere; }
+    .definition dt:last-of-type, .definition dd:last-of-type { border-bottom: 0; }
+
+    .team-list, .connection-list, .risk-list, .stage-list { display: grid; gap: 8px; }
+    .team-option {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      text-align: left;
+    }
+    .team-option:hover:not(:disabled) { border-color: var(--primary-border); }
+    .team-option.selected { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+    .team-option:disabled { cursor: not-allowed; opacity: .55; }
+    .team-option p { color: var(--muted); font-size: 12px; }
+
+    .connection-row {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 11px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .connection-mark {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface-subtle);
+      color: var(--primary);
+      font-weight: 700;
+    }
+    .connection-row p { color: var(--muted); font-size: 12px; }
+
+    .risk-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 11px 12px;
+      border: 1px solid var(--warning-border);
+      border-radius: var(--radius);
+      background: var(--warning-soft);
+    }
+    .risk-row input { width: 17px; height: 17px; flex: none; margin-top: 2px; accent-color: var(--warning); }
+    .risk-row p { margin-top: 2px; color: var(--muted); font-size: 12px; }
+
+    .action-bar {
+      position: sticky;
+      bottom: 0;
+      z-index: 8;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      margin: 18px -24px -48px;
+      padding: 12px 24px;
+      border-top: 1px solid var(--border);
+      background: rgba(255, 255, 255, .96);
+      backdrop-filter: blur(8px);
+    }
+    .action-copy { flex: 1; color: var(--muted); font-size: 12px; }
+
+    .stage-row {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: start;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .stage-row:last-child { border-bottom: 0; }
+    .stage-index {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border-strong);
+      border-radius: 50%;
+      color: var(--muted);
+      font: 10px var(--mono);
+    }
+    .stage-row p { margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .receipt-grid { display: grid; grid-template-columns: 190px minmax(0, 1fr); }
+    .receipt-grid div { padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .receipt-grid div:nth-last-child(-n + 2) { border-bottom: 0; }
+    .receipt-label { color: var(--muted); }
+    .receipt-value { overflow-wrap: anywhere; }
+
+    @media (max-width: 920px) {
+      .shell { display: block; }
+      .topbar { min-height: var(--header-height); flex-wrap: wrap; height: auto; padding: 10px 14px; }
+      .brand { min-width: 0; flex: 1; }
+      .brand span:last-child, .top-context, .account-copy { display: none; }
+      .mobile-nav { width: 100%; display: flex; gap: 6px; overflow-x: auto; }
+      .mobile-nav .nav-link { min-height: 36px; white-space: nowrap; }
+      .rail { display: none; }
+      .main { padding: 18px 14px 42px; }
+      .work-grid, .detail-grid { grid-template-columns: 1fr; }
+      .action-bar { margin: 18px -14px -42px; padding: 12px 14px; }
+    }
+
+    @media (max-width: 680px) {
+      h1 { font-size: 21px; }
+      .page-head { display: block; }
+      .page-actions { justify-content: flex-start; margin-top: 12px; }
+      .page-actions .button { flex: 1; }
+      .form-grid { grid-template-columns: 1fr; }
+      .field.full { grid-column: auto; }
+      .table-wrap { border: 0; background: transparent; overflow: visible; }
+      table, tbody, tr, td { display: block; width: 100%; }
+      thead { display: none; }
+      tbody { display: grid; gap: 9px; }
+      tbody tr { padding: 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+      tbody tr:hover { background: var(--surface); }
+      td { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; padding: 4px 0; border: 0; }
+      td::before { content: attr(data-label); color: var(--muted); font-size: 12px; }
+      td.cell-actions { display: flex; margin-top: 7px; text-align: left; }
+      td.cell-actions::before { display: none; }
+      .package-option { grid-template-columns: 20px minmax(0, 1fr); }
+      .package-meta { grid-column: 2; text-align: left; }
+      .definition { grid-template-columns: 110px minmax(0, 1fr); }
+      .connection-row { grid-template-columns: 38px minmax(0, 1fr); }
+      .connection-row > :last-child { grid-column: 2; justify-self: start; }
+      .action-bar { align-items: center; flex-direction: row; }
+      .action-bar .action-copy { display: none; }
+      .action-bar .button { flex: 1; min-width: 0; width: auto; }
+      .receipt-grid { grid-template-columns: 115px minmax(0, 1fr); }
+      .gate-panel { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app" class="boot" aria-busy="true">
+    <div class="spinner" role="status" aria-label="正在载入 Workflow Delivery Center"></div>
+  </div>
+  <div id="announcer" class="sr-only" aria-live="polite"></div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    const BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
+    const OIDC = {
+      authority: String(BACKEND_CONSOLE_CONFIG.authority || ""),
+      clientId: String(BACKEND_CONSOLE_CONFIG.clientId || ""),
+      scope: String(BACKEND_CONSOLE_CONFIG.scope || ""),
+      storageKey: String(BACKEND_CONSOLE_CONFIG.storageKey || "")
+    };
+    OIDC.redirectUri = location.origin + "/auto/callback";
+
+    const TOKEN_KEY = OIDC.storageKey + ":token";
+    const PKCE_KEY = OIDC.storageKey + ":pkce";
+    const REFRESH_SKEW_MS = 60000;
+    const REFRESH_RETRY_MS = 30000;
+    const INSTALLATION_REFRESH_MS = 4000;
+    const PROJECTION_RETRY_MS = 500;
+    const PROJECTION_RETRY_ATTEMPTS = 20;
+    const PROJECTION_GRACE_MS = 90000;
+
+    const app = document.getElementById("app");
+    const announcer = document.getElementById("announcer");
+    let refreshPromise = null;
+    let refreshTimer = null;
+    let installationTimer = null;
+
+    const state = {
+      session: null,
+      route: null,
+      routeSequence: 0,
+      notice: null,
+      packages: [],
+      requests: [],
+      selectedPackageVersionId: "",
+      adminDraft: { targetScopeId: "", expiresAt: "", note: "" },
+      adminCreateIdempotencyKey: "",
+      adminBusy: false,
+      adminRevokingId: "",
+      adminCreated: null,
+      adminError: null,
+      listError: null,
+      customer: null
+    };
+
+    function h(tag, attrs) {
+      const element = document.createElement(tag);
+      const children = Array.prototype.slice.call(arguments, 2);
+      Object.keys(attrs || {}).forEach(function (key) {
+        const value = attrs[key];
+        if (value === undefined || value === null || value === false) return;
+        if (key === "className") {
+          element.className = value;
+        } else if (key === "text") {
+          element.textContent = value;
+        } else if (key === "htmlFor") {
+          element.htmlFor = value;
+        } else if (key === "dataset") {
+          Object.keys(value).forEach(function (name) { element.dataset[name] = value[name]; });
+        } else if (key === "style" && typeof value === "object") {
+          Object.assign(element.style, value);
+        } else if (key.indexOf("on") === 0 && typeof value === "function") {
+          element.addEventListener(key.slice(2).toLowerCase(), value);
+        } else if (key in element && ["role", "aria-label", "aria-live", "aria-busy", "aria-current", "aria-pressed", "aria-invalid"].indexOf(key) < 0) {
+          element[key] = value;
+        } else {
+          element.setAttribute(key, value === true ? "" : String(value));
+        }
+      });
+      children.flat(Infinity).forEach(function (child) {
+        if (child === undefined || child === null || child === false) return;
+        element.append(child instanceof Node ? child : document.createTextNode(String(child)));
+      });
+      return element;
+    }
+
+    function announce(message) {
+      announcer.textContent = "";
+      requestAnimationFrame(function () { announcer.textContent = message || ""; });
+    }
+
+    function text(value, fallback) {
+      return typeof value === "string" && value.trim() ? value.trim() : (fallback || "");
+    }
+
+    function array(value) {
+      return Array.isArray(value) ? value : [];
+    }
+
+    function object(value) {
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+
+    function first(source, keys, fallback) {
+      const value = object(source);
+      for (let index = 0; index < keys.length; index += 1) {
+        if (value[keys[index]] !== undefined && value[keys[index]] !== null) return value[keys[index]];
+      }
+      return fallback;
+    }
+
+    function items(source, keys) {
+      if (Array.isArray(source)) return source;
+      const value = object(source);
+      for (let index = 0; index < keys.length; index += 1) {
+        if (Array.isArray(value[keys[index]])) return value[keys[index]];
+      }
+      return [];
+    }
+
+    function formatDate(value) {
+      if (!value) return "未设置";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return new Intl.DateTimeFormat("zh-CN", {
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit"
+      }).format(date);
+    }
+
+    function safeHttpUrl(value) {
+      if (!text(value)) return "";
+      try {
+        const parsed = new URL(value, location.origin);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
+        return parsed.toString();
+      } catch (error) {
+        return "";
+      }
+    }
+
+    // The product console is a different host from this API. A console link must therefore
+    // be an absolute URL the server built from its configured console-web origin; resolving
+    // a relative path against this page's origin would produce a link that does not exist.
+    function absoluteHttpUrl(value) {
+      if (!text(value)) return "";
+      try {
+        const parsed = new URL(value);
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return "";
+        return parsed.toString();
+      } catch (error) {
+        return "";
+      }
+    }
+
+    function statusTone(status) {
+      const value = String(status || "").toLowerCase();
+      if (["ready", "completed", "connected", "active", "valid"].indexOf(value) >= 0) return "success";
+      if (["failed", "error", "rejected", "revoked", "expired"].indexOf(value) >= 0) return "danger";
+      if (["needs_action", "blocked", "partial", "unsupported", "warning"].indexOf(value) >= 0) return "warning";
+      if (["accepted", "accepted_for_dispatch", "pending", "processing", "running", "publishing", "validating", "provisioning_accepted", "provisioningaccepted", "awaiting_acceptance"].indexOf(value) >= 0) return "info";
+      return "";
+    }
+
+    function statusLabel(status) {
+      const value = String(status || "unknown").toLowerCase();
+      const labels = {
+        ready: "已就绪",
+        completed: "已完成",
+        connected: "已连接",
+        active: "生效",
+        valid: "校验通过",
+        accepted: "已受理",
+        accepted_for_dispatch: "已接受投递",
+        pending: "等待中",
+        pending_setup: "待配置",
+        waiting_for_customer: "等待客户",
+        processing: "处理中",
+        running: "运行中",
+        publishing: "发布中",
+        provisioning_accepted: "Provisioning 已受理",
+        provisioningaccepted: "Provisioning 已受理",
+        awaiting_acceptance: "等待验收",
+        validating: "校验中",
+        needs_action: "需要处理",
+        blocked: "已阻塞",
+        partial: "部分完成",
+        unsupported: "暂不支持",
+        failed: "失败",
+        error: "错误",
+        rejected: "已拒绝",
+        revoked: "已撤销",
+        expired: "已过期",
+        unknown: "未知"
+      };
+      return labels[value] || value;
+    }
+
+    function badge(status, label) {
+      return h("span", { className: "badge " + statusTone(status), text: label || statusLabel(status) });
+    }
+
+    function notice(tone, title, message) {
+      return h("div", { className: "notice " + (tone || ""), role: tone === "danger" ? "alert" : "status" },
+        h("span", { className: "notice-symbol", "aria-hidden": "true", text: tone === "success" ? "OK" : "!" }),
+        h("div", null,
+          h("strong", { text: title }),
+          message ? h("p", { text: message }) : null
+        )
+      );
+    }
+
+    function loadingBlock() {
+      return h("div", { className: "loading-lines", "aria-label": "正在载入" },
+        h("div", { className: "loading-line" }),
+        h("div", { className: "loading-line" }),
+        h("div", { className: "loading-line" })
+      );
+    }
+
+    function emptyBlock(title, message, action) {
+      return h("div", { className: "empty" },
+        h("div", null,
+          h("strong", { text: title }),
+          h("p", { text: message }),
+          action || null
+        )
+      );
+    }
+
+    function initials(name) {
+      const value = text(name, "A");
+      return value.slice(0, 2).toUpperCase();
+    }
+
+    function readToken() {
+      try {
+        const token = JSON.parse(localStorage.getItem(TOKEN_KEY) || "null");
+        return token && token.access_token ? token : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function writeToken(token) {
+      if (!token || !token.access_token) {
+        clearToken();
+        return;
+      }
+      localStorage.setItem(TOKEN_KEY, JSON.stringify(token));
+      scheduleTokenRefresh(token);
+    }
+
+    function clearToken() {
+      if (refreshTimer) window.clearTimeout(refreshTimer);
+      refreshTimer = null;
+      localStorage.removeItem(TOKEN_KEY);
+    }
+
+    function decodeJwt(token) {
+      try {
+        let part = String(token || "").split(".")[1];
+        if (!part) return {};
+        part = part.replace(/-/g, "+").replace(/_/g, "/");
+        part += "=".repeat((4 - part.length % 4) % 4);
+        const bytes = Uint8Array.from(atob(part), function (character) { return character.charCodeAt(0); });
+        return JSON.parse(new TextDecoder().decode(bytes));
+      } catch (error) {
+        return {};
+      }
+    }
+
+    function tokenExpiry(token) {
+      if (!token) return 0;
+      const claims = decodeJwt(token.access_token);
+      if (Number.isFinite(Number(claims.exp))) return Number(claims.exp) * 1000;
+      if (Number.isFinite(Number(token.obtained_at)) && Number.isFinite(Number(token.expires_in))) {
+        return Number(token.obtained_at) + Number(token.expires_in) * 1000;
+      }
+      return 0;
+    }
+
+    function refreshErrorMessage(body, status) {
+      const code = String(first(body, ["error", "code"], "")).toLowerCase();
+      const description = text(first(body, ["error_description", "message", "detail"], ""));
+      if (code === "invalid_grant") return "登录会话已失效，请重新使用 NyxID 登录。";
+      if (code.indexOf("inactive") >= 0 || description.toLowerCase().indexOf("inactive") >= 0) {
+        return "NyxID 登录客户端已停用，请联系管理员处理。";
+      }
+      return "无法续期 NyxID 会话（" + status + "）。";
+    }
+
+    async function refreshAccessToken(force) {
+      if (refreshPromise) return refreshPromise;
+      const active = readToken();
+      if (!active || !active.refresh_token) return null;
+      const expiry = tokenExpiry(active);
+      if (!force && expiry && expiry - Date.now() > REFRESH_SKEW_MS) return active;
+
+      const refreshToken = active.refresh_token;
+      refreshPromise = (async function () {
+        const form = new URLSearchParams();
+        form.set("grant_type", "refresh_token");
+        form.set("refresh_token", refreshToken);
+        form.set("client_id", OIDC.clientId);
+        let response;
+        try {
+          response = await fetch(OIDC.authority.replace(/\/+$/, "") + "/oauth/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: form.toString()
+          });
+        } catch (error) {
+          scheduleRefreshRetry();
+          throw new Error("暂时无法连接 NyxID 续期服务。");
+        }
+
+        let body = {};
+        try { body = await response.json(); } catch (error) { body = {}; }
+        const current = readToken();
+        if (!response.ok) {
+          if (current && current.refresh_token !== refreshToken) return current;
+          if (response.status === 400 || response.status === 401) clearToken();
+          throw new Error(refreshErrorMessage(body, response.status));
+        }
+        if (!body.access_token) throw new Error("NyxID 续期响应缺少 access_token。");
+        if (!current || current.refresh_token !== refreshToken) return current;
+        const merged = Object.assign({}, active, body, {
+          refresh_token: body.refresh_token || active.refresh_token,
+          obtained_at: Date.now()
+        });
+        writeToken(merged);
+        return merged;
+      })();
+
+      try {
+        return await refreshPromise;
+      } finally {
+        refreshPromise = null;
+      }
+    }
+
+    function scheduleRefreshRetry() {
+      if (refreshTimer) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(function () {
+        refreshAccessToken(true).catch(function () { scheduleRefreshRetry(); });
+      }, REFRESH_RETRY_MS);
+    }
+
+    function scheduleTokenRefresh(token) {
+      if (refreshTimer) window.clearTimeout(refreshTimer);
+      refreshTimer = null;
+      if (!token || !token.refresh_token) return;
+      const expiry = tokenExpiry(token);
+      if (!expiry) return;
+      const wait = Math.max(0, expiry - Date.now() - REFRESH_SKEW_MS);
+      refreshTimer = window.setTimeout(function () {
+        refreshAccessToken(true).catch(function () { scheduleRefreshRetry(); });
+      }, wait);
+    }
+
+    async function ensureAccessToken() {
+      const token = readToken();
+      if (!token) return null;
+      const expiry = tokenExpiry(token);
+      if (token.refresh_token && expiry && expiry - Date.now() <= REFRESH_SKEW_MS) {
+        try { return await refreshAccessToken(true) || token; }
+        catch (error) {
+          if (readToken()) scheduleRefreshRetry();
+          return readToken();
+        }
+      }
+      scheduleTokenRefresh(token);
+      return token;
+    }
+
+    function loginReturnTo() {
+      const validHash = location.hash.indexOf("#/") === 0 &&
+        /^#[A-Za-z0-9._~!$&'()*+,;=:@/?%-]*$/.test(location.hash);
+      return location.pathname + (validHash ? location.hash : "");
+    }
+
+    function base64Url(buffer) {
+      const value = btoa(String.fromCharCode.apply(null, new Uint8Array(buffer)));
+      return value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+
+    function randomHex(length) {
+      const bytes = new Uint8Array(length);
+      crypto.getRandomValues(bytes);
+      let result = "";
+      for (let index = 0; index < bytes.length; index += 1) {
+        result += ("0" + bytes[index].toString(16)).slice(-2);
+      }
+      return result.slice(0, length);
+    }
+
+    function newIdempotencyKey() {
+      return typeof crypto.randomUUID === "function" ? crypto.randomUUID() : randomHex(32);
+    }
+
+    async function beginLogin() {
+      if (!OIDC.authority || !OIDC.clientId) {
+        renderLoginGate("Backend Console 的 NyxID OIDC 配置缺失。");
+        return;
+      }
+      const verifier = randomHex(64);
+      const stateValue = randomHex(32);
+      const challenge = base64Url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+      sessionStorage.setItem(PKCE_KEY, JSON.stringify({
+        verifier: verifier,
+        state: stateValue,
+        returnTo: loginReturnTo(),
+        resources: [],
+        tokenPurpose: ""
+      }));
+      const url = new URL(OIDC.authority.replace(/\/+$/, "") + "/oauth/authorize");
+      url.searchParams.set("response_type", "code");
+      url.searchParams.set("client_id", OIDC.clientId);
+      url.searchParams.set("redirect_uri", OIDC.redirectUri);
+      url.searchParams.set("scope", OIDC.scope);
+      url.searchParams.set("state", stateValue);
+      url.searchParams.set("code_challenge", challenge);
+      url.searchParams.set("code_challenge_method", "S256");
+      location.assign(url.toString());
+    }
+
+    function logout() {
+      clearToken();
+      state.session = null;
+      stopInstallationRefresh();
+      renderLoginGate("已退出 NyxID。");
+    }
+
+    class ApiError extends Error {
+      constructor(status, message, body, code) {
+        super(message);
+        this.name = "ApiError";
+        this.status = status || 0;
+        this.body = object(body);
+        this.code = code || text(first(body, ["code", "errorCode", "type"], ""));
+      }
+    }
+
+    function apiErrorMessage(status, body) {
+      const direct = first(body, ["message", "detail", "title", "error_description"], "");
+      if (typeof direct === "string" && direct.trim()) return direct.trim();
+      if (status === 403) return "当前 NyxID 身份没有执行此操作的权限。";
+      if (status === 404) return "请求的交付资源不存在，或当前身份不可见。";
+      if (status === 409) return "资源状态已变化，请刷新后重试。";
+      if (status === 422) return "提交内容未通过服务端校验。";
+      if (status === 503) return "Delivery Backend 暂不可用，请稍后重试。";
+      return "请求失败（" + status + "）。";
+    }
+
+    class DeliveryApi {
+      async request(path, options) {
+        const settings = Object.assign({}, options || {});
+        const token = await ensureAccessToken();
+        if (!token || !token.access_token) throw new ApiError(401, "需要使用 NyxID 登录。");
+
+        const send = async function (activeToken) {
+          const headers = new Headers(settings.headers || {});
+          headers.set("Accept", "application/json");
+          headers.set("Authorization", "Bearer " + activeToken.access_token);
+          if (settings.body !== undefined && !(settings.body instanceof FormData) && !headers.has("Content-Type")) {
+            headers.set("Content-Type", "application/json");
+          }
+          const init = Object.assign({}, settings, { headers: headers });
+          return fetch(path, init);
+        };
+
+        let activeToken = token;
+        let response;
+        try {
+          response = await send(activeToken);
+        } catch (error) {
+          throw new ApiError(0, "无法连接 Delivery Backend，请检查网络后重试。", {}, "network_error");
+        }
+
+        if (response.status === 401) {
+          let replacement = readToken();
+          if (!replacement || replacement.access_token === activeToken.access_token) {
+            try { replacement = activeToken.refresh_token ? await refreshAccessToken(true) : null; }
+            catch (error) { replacement = null; }
+          }
+          if (replacement && replacement.access_token !== activeToken.access_token) {
+            activeToken = replacement;
+            try { response = await send(activeToken); }
+            catch (error) {
+              throw new ApiError(0, "无法连接 Delivery Backend，请检查网络后重试。", {}, "network_error");
+            }
+          }
+        }
+
+        let data = {};
+        const contentType = response.headers.get("content-type") || "";
+        try {
+          data = contentType.indexOf("json") >= 0
+            ? await response.json()
+            : { message: await response.text() };
+        } catch (error) {
+          data = {};
+        }
+
+        if (response.status === 401) {
+          const current = readToken();
+          if (!current || current.access_token === activeToken.access_token) clearToken();
+          throw new ApiError(401, "登录已过期，请重新使用 NyxID 登录。", data, "unauthorized");
+        }
+        if (!response.ok) {
+          throw new ApiError(response.status, apiErrorMessage(response.status, data), data);
+        }
+        return {
+          data: data,
+          status: response.status,
+          location: response.headers.get("Location") || ""
+        };
+      }
+
+      // GET /api/delivery/session is the only authority for UI role and scope.
+      session() { return this.request("/api/delivery/session"); }
+      packages() { return this.request("/api/delivery/packages"); }
+      requests() { return this.request("/api/delivery/requests"); }
+      getRequest(deliveryId) {
+        return this.request("/api/delivery/requests/" + encodeURIComponent(deliveryId));
+      }
+      validateAccess(deliveryId) {
+        return this.request(
+          "/api/delivery/requests/" + encodeURIComponent(deliveryId) + ":validate-access",
+          { method: "POST" }
+        );
+      }
+      createRequest(body) {
+        return this.request("/api/delivery/requests", { method: "POST", body: JSON.stringify(body) });
+      }
+      revokeRequest(deliveryId) {
+        return this.request(
+          "/api/delivery/requests/" + encodeURIComponent(deliveryId) + ":revoke",
+          { method: "POST", body: "{}" }
+        );
+      }
+      createConnectLink(scopeId, deliveryId, slotKey) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + "/connections/" + encodeURIComponent(slotKey) + ":connect",
+          { method: "POST" }
+        );
+      }
+      connectStatus(scopeId, deliveryId, slotKey) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + "/connections/" + encodeURIComponent(slotKey)
+        );
+      }
+      refreshConnectStatus(scopeId, deliveryId, slotKey) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + "/connections/" + encodeURIComponent(slotKey) + ":refresh",
+          { method: "POST" }
+        );
+      }
+      existingConnections(scopeId, deliveryId, slotKey) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + "/connections/" + encodeURIComponent(slotKey) + "/available"
+        );
+      }
+      attachExistingConnection(scopeId, deliveryId, slotKey, userServiceId) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + "/connections/" + encodeURIComponent(slotKey) + ":attach",
+          { method: "POST", body: JSON.stringify({ userServiceId: userServiceId }) }
+        );
+      }
+      teams(scopeId) {
+        return this.request("/api/scopes/" + encodeURIComponent(scopeId) + "/teams");
+      }
+      refreshAuthorizationCatalog() {
+        return this.request(
+          "/api/auth/nyxid/authorization-catalog:refresh",
+          { method: "POST" }
+        );
+      }
+      createTeam(scopeId, displayName) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/teams",
+          { method: "POST", body: JSON.stringify({ displayName: displayName }) }
+        );
+      }
+      validateConfig(scopeId, deliveryId, body) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + ":validate-config",
+          { method: "POST", body: JSON.stringify(body) }
+        );
+      }
+      publish(scopeId, deliveryId, body) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/delivery-requests/" +
+          encodeURIComponent(deliveryId) + ":publish",
+          { method: "POST", body: JSON.stringify(body) }
+        );
+      }
+      installation(scopeId, installationId) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/installations/" +
+          encodeURIComponent(installationId)
+        );
+      }
+      retry(scopeId, installationId) {
+        return this.request(
+          "/api/scopes/" + encodeURIComponent(scopeId) + "/installations/" +
+          encodeURIComponent(installationId) + ":retry",
+          { method: "POST", body: "{}" }
+        );
+      }
+    }
+
+    const api = new DeliveryApi();
+
+    function sessionViewer() {
+      const session = object(state.session);
+      const nested = object(first(session, ["viewer", "user", "account"], {}));
+      return Object.keys(nested).length ? nested : session;
+    }
+
+    function isAdminSession() {
+      const session = object(state.session);
+      if (session.isAdmin === true || session.canCreateDeliveries === true || session.canCreateDeliveryRequests === true) return true;
+      const roles = array(first(session, ["roles", "permissions"], [])).map(function (role) {
+        return typeof role === "string" ? role.toLowerCase() : "";
+      });
+      return roles.some(function (role) {
+        return ["admin", "aevatar_admin", "platform_admin", "fde", "delivery_admin"].indexOf(role) >= 0;
+      });
+    }
+
+    function parseRoute() {
+      const raw = location.hash || "";
+      if (!raw || raw === "#/" || raw === "#") return { name: "root" };
+      if (raw === "#/fde") return { name: "fde" };
+      if (raw === "#/customer") return { name: "customer-list" };
+      const prefix = "#/customer/";
+      if (raw.indexOf(prefix) === 0) {
+        const encoded = raw.slice(prefix.length);
+        if (!encoded || encoded.indexOf("/") >= 0) return { name: "not-found" };
+        try {
+          const deliveryId = decodeURIComponent(encoded);
+          return deliveryId ? { name: "customer-detail", deliveryId: deliveryId } : { name: "not-found" };
+        } catch (error) {
+          return { name: "not-found" };
+        }
+      }
+      return { name: "not-found" };
+    }
+
+    function routeHref(name, id) {
+      if (name === "fde") return "#/fde";
+      if (name === "customer-detail") return "#/customer/" + encodeURIComponent(id);
+      return "#/customer";
+    }
+
+    function restoreConnectReturnRoute() {
+      const parameters = new URLSearchParams(location.search);
+      const returnedDeliveryId = text(parameters.get("deliveryId"));
+      if (!returnedDeliveryId) return;
+      history.replaceState(null, "", location.pathname + routeHref("customer-detail", returnedDeliveryId));
+    }
+
+    function navLinks(active) {
+      const links = [];
+      if (isAdminSession()) links.push({ name: "fde", glyph: "AD", label: "交付管理" });
+      links.push({ name: "customer", glyph: "MY", label: "我的工作流" });
+      return links.map(function (link) {
+        const selected = link.name === active;
+        return h("a", {
+          className: "nav-link" + (selected ? " active" : ""),
+          href: link.name === "fde" ? routeHref("fde") : routeHref("customer-list"),
+          "aria-current": selected ? "page" : null
+        },
+          h("span", { className: "nav-glyph", "aria-hidden": "true", text: link.glyph }),
+          h("span", { text: link.label })
+        );
+      });
+    }
+
+    function renderShell(title, subtitle, active, content, options) {
+      const viewer = sessionViewer();
+      const displayName = text(first(viewer, ["displayName", "name", "email"], ""), "NyxID 用户");
+      const scopeId = text(first(state.session, ["scopeId", "currentScopeId", "targetScopeId"], ""));
+      const roleLabel = isAdminSession() ? "Aevatar 管理员" : "客户";
+      const headActions = array(options && options.actions);
+
+      app.className = "";
+      app.removeAttribute("aria-busy");
+      app.replaceChildren(
+        h("div", { className: "shell" },
+          h("header", { className: "topbar" },
+            h("a", { className: "brand", href: "/delivery" },
+              h("span", { className: "brand-mark", "aria-hidden": "true", text: "AV" }),
+              h("span", { text: "Workflow Delivery Center" })
+            ),
+            h("div", { className: "top-context", text: subtitle || "Workflow delivery operations" }),
+            h("div", { className: "account" },
+              h("div", { className: "account-copy" },
+                h("strong", { text: displayName }),
+                h("span", { text: roleLabel + (scopeId ? " · " + scopeId : "") })
+              ),
+              h("span", { className: "avatar", "aria-hidden": "true", text: initials(displayName) }),
+              h("button", { className: "button quiet", type: "button", onClick: logout, text: "退出" })
+            ),
+            h("nav", { className: "mobile-nav", "aria-label": "Delivery Center 导航" }, navLinks(active))
+          ),
+          h("aside", { className: "rail" },
+            h("div", { className: "rail-label", text: "Delivery" }),
+            h("nav", { className: "rail-nav", "aria-label": "Delivery Center 导航" }, navLinks(active))
+          ),
+          h("main", { className: "main" },
+            h("div", { className: "page" + ((options && options.narrow) ? " narrow" : "") },
+              h("div", { className: "page-head" },
+                h("div", null,
+                  h("h1", { text: title }),
+                  h("p", { text: subtitle })
+                ),
+                headActions.length ? h("div", { className: "page-actions" }, headActions) : null
+              ),
+              state.notice ? notice(state.notice.tone, state.notice.title, state.notice.message) : null,
+              content
+            )
+          )
+        )
+      );
+    }
+
+    function renderLoginGate(reason) {
+      app.className = "gate";
+      app.removeAttribute("aria-busy");
+      app.replaceChildren(
+        h("main", { className: "gate-panel" },
+          h("div", { className: "gate-mark", "aria-hidden": "true", text: "AV" }),
+          h("h1", { text: "Workflow Delivery Center" }),
+          h("p", { text: reason || "使用 NyxID 登录后查看交付给你的工作流。" }),
+          notice("info", "NyxID 身份边界", "链接本身不授予权限，交付范围由当前登录身份和服务端会话共同确定。"),
+          h("div", { className: "gate-actions" },
+            h("button", { className: "button primary", type: "button", onClick: beginLogin, text: "使用 NyxID 登录" })
+          )
+        )
+      );
+    }
+
+    function errorDescription(error) {
+      if (!(error instanceof ApiError)) {
+        return { tone: "danger", title: "页面载入失败", message: error && error.message ? error.message : String(error) };
+      }
+      // Ordinary Delivery login finalizes the NyxID binding server-side. A missing binding
+      // here therefore means that finalization or its committed projection is not ready yet.
+      if (error.code === "DELIVERY_AUTHORIZATION_BINDING_REQUIRED") {
+        return {
+          tone: "warning",
+          title: "NyxID 授权绑定尚未就绪",
+          message: "请稍后重试发布；若持续出现，请退出后使用同一个 NyxID 账号重新登录 Delivery Center。"
+        };
+      }
+      const states = {
+        403: { title: "没有访问权限", message: error.message },
+        404: { title: "交付不存在", message: error.message },
+        409: { title: "状态发生冲突", message: error.message },
+        422: { title: "配置未通过校验", message: error.message },
+        503: { title: "Delivery Backend 暂不可用", message: error.message }
+      };
+      return Object.assign({ tone: error.status === 403 || error.status === 404 ? "warning" : "danger" },
+        states[error.status] || { title: error.status ? "请求失败" : "无法连接服务", message: error.message });
+    }
+
+    function renderRouteError(error, retry, active) {
+      if (error instanceof ApiError && error.status === 401) {
+        renderLoginGate(error.message);
+        return;
+      }
+      const description = errorDescription(error);
+      renderShell(description.title, description.message, active || "customer",
+        h("div", { className: "panel" },
+          emptyBlock(description.title, description.message,
+            h("button", { className: "button secondary", type: "button", onClick: retry, text: "重试" }))
+        ),
+        { narrow: true }
+      );
+    }
+
+    function renderNotFound() {
+      renderShell("页面不存在", "这个 Delivery Center 路由无法识别。", "customer",
+        h("div", { className: "panel" },
+          emptyBlock("页面不存在", "请返回你的工作流列表。",
+            h("a", { className: "button primary", href: routeHref("customer-list"), text: "返回列表" }))
+        ),
+        { narrow: true }
+      );
+    }
+
+    async function loadRoute() {
+      stopInstallationRefresh();
+      const route = parseRoute();
+      state.route = route;
+      state.notice = null;
+      const sequence = ++state.routeSequence;
+
+      if (route.name === "root") {
+        location.replace(isAdminSession() ? routeHref("fde") : routeHref("customer-list"));
+        return;
+      }
+      if (route.name === "fde") {
+        if (!isAdminSession()) {
+          renderShell("没有访问权限", "只有 Aevatar 管理员可以创建交付。", "customer",
+            notice("warning", "管理员权限必需", "当前会话仍可查看交付给自己的工作流。"),
+            { narrow: true, actions: [h("a", { className: "button primary", href: routeHref("customer-list"), text: "查看我的工作流" })] }
+          );
+          return;
+        }
+        await loadAdmin(sequence);
+        return;
+      }
+      if (route.name === "customer-list") {
+        await loadCustomerList(sequence);
+        return;
+      }
+      if (route.name === "customer-detail") {
+        await loadCustomerDetail(route.deliveryId, sequence);
+        return;
+      }
+      renderNotFound();
+    }
+
+    function packageVersionId(pkg) {
+      return text(first(pkg, ["packageVersionId", "versionId", "id"], ""));
+    }
+
+    function packageName(pkg) {
+      return text(first(pkg, ["displayName", "workflowName", "name", "packageId"], ""), "未命名 Workflow");
+    }
+
+    function setAdminDraft(key, value) {
+      state.adminDraft[key] = value;
+      state.adminCreateIdempotencyKey = "";
+    }
+
+    function deliveryPackage(detail) {
+      return object(first(detail, ["package", "workflowPackage"], {}));
+    }
+
+    function deliveryAcceptancePolicy(detail) {
+      return object(first(deliveryPackage(detail), ["acceptancePolicy"], {}));
+    }
+
+    function eligibleTriggerOptions(detail) {
+      const options = array(first(detail, ["availableTriggerIntents"], []));
+      const policy = deliveryAcceptancePolicy(detail);
+      const automatic = first(policy, ["automaticAcceptanceSupported"], false) === true;
+      return automatic ? options : options.filter(function (option) {
+        return triggerOptionKind(option) === "none";
+      });
+    }
+
+    function deliveryValue(detail, keys, fallback) {
+      const own = first(detail, keys, undefined);
+      return own !== undefined ? own : first(deliveryPackage(detail), keys, fallback);
+    }
+
+    function deliveryId(request) {
+      return text(first(request, ["deliveryId", "id"], ""));
+    }
+
+    function renderAdminLoading() {
+      renderShell("交付管理", "从服务端白名单选择 Workflow package，并交付到明确的 NyxID scope。", "fde",
+        h("div", { className: "work-grid" },
+          h("div", { className: "panel" }, h("div", { className: "panel-body" }, loadingBlock())),
+          h("div", { className: "panel" }, h("div", { className: "panel-body" }, loadingBlock()))
+        )
+      );
+    }
+
+    async function loadAdmin(sequence) {
+      renderAdminLoading();
+      state.adminError = null;
+      try {
+        const results = await Promise.all([api.packages(), api.requests()]);
+        if (sequence !== state.routeSequence) return;
+        state.packages = items(results[0].data, ["items", "packages", "packageVersions"]);
+        state.requests = items(results[1].data, ["items", "requests", "deliveryRequests"]);
+        if (!state.packages.some(function (pkg) { return packageVersionId(pkg) === state.selectedPackageVersionId; })) {
+          state.selectedPackageVersionId = state.packages.length ? packageVersionId(state.packages[0]) : "";
+        }
+        renderAdmin();
+      } catch (error) {
+        if (sequence !== state.routeSequence) return;
+        state.adminError = error;
+        renderRouteError(error, loadRoute, "fde");
+      }
+    }
+
+    function packageSummary(pkg) {
+      const variables = fieldsFromSchema(first(pkg, ["variableSchema"], []));
+      const connections = array(first(pkg, ["connectionSlots"], []));
+      const version = text(first(pkg, ["version", "packageVersion"], ""), "version 未标注");
+      return version + " · " + variables.length + " 个客户变量 · " + connections.length + " 个连接";
+    }
+
+    function createdNoticeBlock() {
+      if (!state.adminCreated) return null;
+      const record = object(state.adminCreated.record);
+      const id = deliveryId(record);
+      const accepted = state.adminCreated.httpStatus === 202;
+      const block = notice(
+        accepted ? "info" : "success",
+        accepted ? "交付创建请求已受理" : "交付已创建",
+        accepted
+          ? "HTTP 202 不是完成状态；请刷新列表观察服务端提交结果。"
+          : (id ? "Delivery ID: " + id : "服务端已确认创建。")
+      );
+      if (id) {
+        block.lastElementChild.append(
+          h("div", { className: "inline-actions", style: { marginTop: "9px" } },
+            h("a", {
+              className: "button secondary",
+              href: routeHref("customer-detail", id),
+              text: "打开客户交付页"
+            })
+          )
+        );
+      }
+      return block;
+    }
+
+    function renderAdmin() {
+      const selected = state.packages.find(function (pkg) {
+        return packageVersionId(pkg) === state.selectedPackageVersionId;
+      });
+      const packagePanel = h("section", { className: "panel" },
+        h("div", { className: "panel-head" },
+          h("h2", { text: "允许交付的 Workflow" }),
+          h("p", { text: "列表只来自服务端配置白名单，页面不接受任意 YAML。" })
+        ),
+        state.packages.length
+          ? h("div", { className: "package-list" }, state.packages.map(function (pkg) {
+              const id = packageVersionId(pkg);
+              const selectedRow = id && id === state.selectedPackageVersionId;
+              return h("button", {
+                className: "package-option" + (selectedRow ? " selected" : ""),
+                type: "button",
+                "aria-pressed": selectedRow ? "true" : "false",
+                disabled: !id,
+                onClick: function () {
+                  state.selectedPackageVersionId = id;
+                  state.adminCreateIdempotencyKey = "";
+                  renderAdmin();
+                }
+              },
+                h("span", { className: "radio", "aria-hidden": "true" }),
+                h("span", null,
+                  h("strong", { text: packageName(pkg) }),
+                  h("p", { text: text(first(pkg, ["description", "summary"], ""), packageSummary(pkg)) })
+                ),
+                h("span", { className: "package-meta", text: packageSummary(pkg) })
+              );
+            }))
+          : emptyBlock("没有可交付的 Workflow", "配置白名单当前为空，创建操作已禁用。")
+      );
+
+      const scopeInput = h("input", {
+        className: "input",
+        id: "targetScopeId",
+        name: "targetScopeId",
+        type: "text",
+        autocomplete: "off",
+        required: true,
+        value: state.adminDraft.targetScopeId,
+        placeholder: "NyxID user/scope ID",
+        onInput: function (event) { setAdminDraft("targetScopeId", event.target.value); }
+      });
+      // Delivering to one's own scope is the normal way to rehearse a package end to end,
+      // and the scope id is otherwise only visible in the header. Written straight into the
+      // live input so the surrounding form is not re-rendered mid-edit.
+      const ownScopeId = text(first(state.session, ["scopeId", "currentScopeId", "targetScopeId"], ""));
+      const useOwnScopeButton = ownScopeId
+        ? h("button", {
+            className: "button secondary",
+            type: "button",
+            onClick: function () {
+              scopeInput.value = ownScopeId;
+              setAdminDraft("targetScopeId", ownScopeId);
+              announce("已填入当前账号的 scope");
+            },
+            text: "交付给我自己"
+          })
+        : null;
+      const expiresInput = h("input", {
+        className: "input",
+        id: "expiresAt",
+        name: "expiresAt",
+        type: "datetime-local",
+        value: state.adminDraft.expiresAt,
+        onInput: function (event) { setAdminDraft("expiresAt", event.target.value); }
+      });
+      const noteInput = h("textarea", {
+        className: "textarea",
+        id: "deliveryNote",
+        name: "note",
+        value: state.adminDraft.note,
+        maxlength: 1000,
+        placeholder: "交付说明（可选）",
+        onInput: function (event) { setAdminDraft("note", event.target.value); }
+      });
+      const createForm = h("form", {
+        className: "panel",
+        onSubmit: function (event) {
+          event.preventDefault();
+          createDeliveryRequest();
+        }
+      },
+        h("div", { className: "panel-head" },
+          h("h2", { text: "创建客户交付" }),
+          h("p", { text: selected ? packageName(selected) : "先选择一个白名单 Workflow" })
+        ),
+        h("div", { className: "panel-body" },
+          selected ? h("div", { className: "notice info" },
+            h("span", { className: "notice-symbol", "aria-hidden": "true", text: "i" }),
+            h("div", null,
+              h("strong", { text: packageName(selected) + " · " + text(first(selected, ["version"], ""), "未标注版本") }),
+              h("p", { text: text(first(selected, ["riskSummary"], ""), "服务端未返回额外风险摘要。") }),
+              array(first(selected, ["capabilities"], [])).length
+                ? h("div", { className: "inline-actions", style: { marginTop: "8px" } },
+                    array(first(selected, ["capabilities"], [])).map(function (capability) {
+                      return h("span", { className: "badge", text: String(capability) });
+                    }))
+                : null,
+              first(deliveryAcceptancePolicy({ package: selected }), ["automaticAcceptanceSupported"], false) === true
+                ? null
+                : h("p", {
+                    text: text(
+                      first(deliveryAcceptancePolicy({ package: selected }), ["limitation"], ""),
+                      "此 package 仅支持发布，当前不会自动完成验收。"
+                    )
+                  })
+            )
+          ) : null,
+          h("div", { className: "form-grid" },
+            h("div", { className: "field full" },
+              h("label", { htmlFor: "targetScopeId" }, "目标 Scope ", h("span", { className: "required", text: "*" })),
+              scopeInput,
+              useOwnScopeButton
+                ? h("div", { className: "inline-actions", style: { marginTop: "8px" } }, useOwnScopeButton)
+                : null,
+              h("small", { text: "必须是服务端可验证的 NyxID user/scope ID；交付链接本身不授予权限。" })
+            ),
+            h("div", { className: "field full" },
+              h("label", { htmlFor: "expiresAt", text: "到期时间" }),
+              expiresInput
+            ),
+            h("div", { className: "field full" },
+              h("label", { htmlFor: "deliveryNote", text: "交付说明" }),
+              noteInput
+            )
+          ),
+          h("div", { className: "inline-actions", style: { marginTop: "14px", justifyContent: "flex-end" } },
+            h("button", {
+              className: "button primary",
+              type: "submit",
+              disabled: state.adminBusy || !selected,
+              text: state.adminBusy ? "正在提交..." : "创建交付"
+            })
+          )
+        )
+      );
+
+      const requestTable = state.requests.length
+        ? h("div", { className: "table-wrap" },
+            h("table", null,
+              h("thead", null, h("tr", null,
+                h("th", { text: "Workflow" }),
+                h("th", { text: "Delivery ID" }),
+                h("th", { text: "目标 Scope" }),
+                h("th", { text: "状态" }),
+                h("th", { text: "到期" }),
+                h("th", { text: "" })
+              )),
+              h("tbody", null, state.requests.map(function (request) {
+                const id = deliveryId(request);
+                const requestStatus = String(first(request, ["status"], "unknown")).toLowerCase();
+                const revoking = id && state.adminRevokingId === id;
+                return h("tr", null,
+                  h("td", { "data-label": "Workflow" },
+                    h("div", { className: "cell-title", text: text(deliveryValue(request, ["displayName", "workflowName", "packageName"], ""), "Workflow") }),
+                    h("div", { className: "cell-sub", text: text(deliveryValue(request, ["version", "packageVersion"], "")) })
+                  ),
+                  h("td", { "data-label": "Delivery ID", className: "mono", text: id || "未返回" }),
+                  h("td", { "data-label": "目标 Scope", className: "mono", text: text(first(request, ["targetScopeId"], ""), "未返回") }),
+                  h("td", { "data-label": "状态" }, badge(requestStatus)),
+                  h("td", { "data-label": "到期", text: formatDate(first(request, ["expiresAt"], "")) }),
+                  h("td", { className: "cell-actions" },
+                    id ? h("a", {
+                      className: "button secondary",
+                      href: routeHref("customer-detail", id),
+                      text: "打开"
+                    }) : null,
+                    id && requestStatus === "active" ? h("button", {
+                      className: "button danger",
+                      type: "button",
+                      disabled: Boolean(state.adminRevokingId),
+                      onClick: function () { revokeDeliveryRequest(id); },
+                      text: revoking ? "正在撤销..." : "撤销"
+                    }) : null
+                  )
+                );
+              }))
+            )
+          )
+        : emptyBlock("尚无交付记录", "创建后的交付会由服务端读模型出现在这里。");
+
+      renderShell("交付管理", "从服务端白名单选择 Workflow package，并交付到明确的 NyxID scope。", "fde",
+        h("div", null,
+          createdNoticeBlock(),
+          h("div", { className: "work-grid section" }, packagePanel, createForm),
+          h("section", { className: "section" },
+            h("div", { className: "section-head" },
+              h("div", null, h("h2", { text: "最近交付" }), h("p", { text: "状态来自 Delivery Control Plane。" })),
+              h("button", { className: "button secondary", type: "button", onClick: loadRoute, text: "刷新" })
+            ),
+            requestTable
+          )
+        )
+      );
+    }
+
+    async function createDeliveryRequest() {
+      if (state.adminBusy) return;
+      const selected = state.packages.find(function (pkg) {
+        return packageVersionId(pkg) === state.selectedPackageVersionId;
+      });
+      const targetScopeId = text(state.adminDraft.targetScopeId);
+      if (!selected || !packageVersionId(selected) || !targetScopeId) {
+        state.notice = { tone: "warning", title: "信息不完整", message: "请选择 Workflow 并填写目标 Scope。" };
+        renderAdmin();
+        return;
+      }
+      const body = {
+        workflowName: text(first(selected, ["workflowName"], "")),
+        packageVersionId: packageVersionId(selected),
+        targetScopeId: targetScopeId,
+        idempotencyKey: state.adminCreateIdempotencyKey || newIdempotencyKey()
+      };
+      state.adminCreateIdempotencyKey = body.idempotencyKey;
+      if (!body.workflowName) {
+        state.notice = { tone: "danger", title: "Package 契约不完整", message: "服务端未返回 workflowName，创建操作已 fail closed。" };
+        renderAdmin();
+        return;
+      }
+      if (state.adminDraft.expiresAt) {
+        const expires = new Date(state.adminDraft.expiresAt);
+        if (Number.isNaN(expires.getTime())) {
+          state.notice = { tone: "warning", title: "到期时间无效", message: "请检查到期时间后重试。" };
+          renderAdmin();
+          return;
+        }
+        body.expiresAt = expires.toISOString();
+      }
+      if (text(state.adminDraft.note)) body.note = text(state.adminDraft.note);
+
+      state.adminBusy = true;
+      state.notice = null;
+      renderAdmin();
+      try {
+        const result = await api.createRequest(body);
+        const record = object(first(result.data, ["deliveryRequest", "request"], result.data));
+        state.adminCreated = { record: record, httpStatus: result.status };
+        const id = deliveryId(record);
+        if (id && !state.requests.some(function (item) { return deliveryId(item) === id; })) {
+          state.requests.unshift(record);
+        }
+        state.adminDraft = { targetScopeId: "", expiresAt: "", note: "" };
+        state.adminCreateIdempotencyKey = "";
+        announce(result.status === 202 ? "交付创建请求已受理" : "交付已创建");
+      } catch (error) {
+        const description = errorDescription(error);
+        state.notice = { tone: description.tone, title: description.title, message: description.message };
+      } finally {
+        state.adminBusy = false;
+        renderAdmin();
+      }
+    }
+
+    async function revokeDeliveryRequest(id) {
+      if (!id || state.adminRevokingId) return;
+      if (!window.confirm("撤销后客户将不能继续配置或发布此交付。确认提交撤销请求？")) return;
+      state.adminRevokingId = id;
+      state.notice = null;
+      renderAdmin();
+      try {
+        const result = await api.revokeRequest(id);
+        state.notice = {
+          tone: "info",
+          title: "撤销请求已受理",
+          message: result.status === 202
+            ? "HTTP 202 不是完成状态；请刷新列表观察服务端提交结果。"
+            : "服务端已确认撤销。"
+        };
+        announce("撤销请求已受理");
+      } catch (error) {
+        const description = errorDescription(error);
+        state.notice = { tone: description.tone, title: description.title, message: description.message };
+      } finally {
+        state.adminRevokingId = "";
+        renderAdmin();
+      }
+    }
+
+    function renderCustomerListLoading() {
+      renderShell("我的工作流", "查看交付给当前 NyxID scope 的 Workflow。", "customer",
+        h("div", { className: "panel" }, h("div", { className: "panel-body" }, loadingBlock())),
+        { narrow: true }
+      );
+    }
+
+    async function loadCustomerList(sequence) {
+      renderCustomerListLoading();
+      state.listError = null;
+      try {
+        const result = await api.requests();
+        if (sequence !== state.routeSequence) return;
+        state.requests = items(result.data, ["items", "requests", "deliveryRequests"]);
+        renderCustomerList();
+      } catch (error) {
+        if (sequence !== state.routeSequence) return;
+        state.listError = error;
+        renderRouteError(error, loadRoute, "customer");
+      }
+    }
+
+    function renderCustomerList() {
+      const content = state.requests.length
+        ? h("div", { className: "table-wrap" },
+            h("table", null,
+              h("thead", null, h("tr", null,
+                h("th", { text: "Workflow" }),
+                h("th", { text: "版本" }),
+                h("th", { text: "状态" }),
+                h("th", { text: "到期" }),
+                h("th", { text: "" })
+              )),
+              h("tbody", null, state.requests.map(function (request) {
+                const id = deliveryId(request);
+                return h("tr", null,
+                  h("td", { "data-label": "Workflow" },
+                    h("div", { className: "cell-title", text: text(deliveryValue(request, ["displayName", "workflowName", "packageName"], ""), "Workflow") }),
+                    h("div", { className: "cell-sub mono", text: id || "Delivery ID 未返回" })
+                  ),
+                  h("td", { "data-label": "版本", text: text(deliveryValue(request, ["version", "packageVersion"], ""), "未标注") }),
+                  h("td", { "data-label": "状态" }, badge(first(request, ["status"], "unknown"))),
+                  h("td", { "data-label": "到期", text: formatDate(first(request, ["expiresAt"], "")) }),
+                  h("td", { className: "cell-actions" },
+                    id ? h("a", { className: "button secondary", href: routeHref("customer-detail", id), text: "打开" }) : null
+                  )
+                );
+              }))
+            )
+          )
+        : emptyBlock("暂时没有交付", "当前 NyxID scope 尚未收到 Workflow 交付。");
+
+      renderShell("我的工作流", "查看交付给当前 NyxID scope 的 Workflow。", "customer", content,
+        {
+          narrow: true,
+          actions: [h("button", { className: "button secondary", type: "button", onClick: loadRoute, text: "刷新" })]
+        }
+      );
+    }
+
+    function fieldsFromSchema(schema) {
+      if (Array.isArray(schema)) {
+        return schema.map(function (field) { return object(field); }).filter(openCustomerField);
+      }
+      const root = object(schema);
+      const properties = object(root.properties);
+      const required = array(root.required);
+      return Object.keys(properties).map(function (key) {
+        return Object.assign({ key: key, required: required.indexOf(key) >= 0 }, object(properties[key]));
+      }).filter(openCustomerField);
+    }
+
+    function fieldKey(field) {
+      return text(first(field, ["key", "name", "id"], ""));
+    }
+
+    function fieldType(field) {
+      const raw = first(field, ["type", "kind", "valueType"], "string");
+      if (typeof raw === "number") {
+        return ({ 1: "string", 2: "integer", 3: "number", 4: "boolean" })[raw] || "string";
+      }
+      const normalized = String(raw || "string").toLowerCase();
+      if (/^[1-4]$/.test(normalized)) {
+        return ({ "1": "string", "2": "integer", "3": "number", "4": "boolean" })[normalized];
+      }
+      return normalized;
+    }
+
+    function openCustomerField(field) {
+      const key = fieldKey(field);
+      if (!key || key === "user_service_id") return false;
+      if (field.readOnly === true || field.customerEditable === false || field.system === true) return false;
+      const kind = String(first(field, ["kind", "source"], "")).toLowerCase();
+      return kind !== "connection" && kind !== "connection_slot";
+    }
+
+    function schemaDefaults(fields, existing) {
+      const values = Object.assign({}, object(existing));
+      fields.forEach(function (field) {
+        const key = fieldKey(field);
+        if (values[key] !== undefined) return;
+        const type = fieldType(field);
+        if (field.defaultValue !== undefined) values[key] = field.defaultValue;
+        else if (field.default !== undefined) values[key] = field.default;
+        else if (type === "boolean") values[key] = false;
+        else values[key] = "";
+        if (type === "boolean" && typeof values[key] === "string") {
+          values[key] = values[key].toLowerCase() === "true";
+        }
+      });
+      return values;
+    }
+
+    function customerDetailFromResponse(data) {
+      return object(first(data, ["deliveryRequest", "request", "item"], data));
+    }
+
+    function normalizeInstallation(data) {
+      return object(first(data, ["installation", "item"], data));
+    }
+
+    function deliveryStateVersion(value) {
+      const parsed = Number(first(value, ["deliveryStateVersion", "stateVersion"], 0));
+      return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+    }
+
+    function customerScopeId(detail) {
+      return text(first(detail, ["targetScopeId", "scopeId"], ""));
+    }
+
+    function customerInstallationId(detail) {
+      const installation = object(first(detail, ["installation", "latestInstallation"], {}));
+      return text(first(detail, ["installationId", "latestInstallationId"], "")) ||
+        text(first(installation, ["installationId", "id"], ""));
+    }
+
+    function initCustomerState(deliveryIdValue, detail) {
+      const fields = fieldsFromSchema(deliveryValue(detail, ["variableSchema"], []));
+      const existing = first(detail, ["customerConfig", "configuration"], {});
+      const selectedTeamId = text(first(detail, ["teamId", "selectedTeamId"], ""));
+      const existingTrigger = object(first(detail, ["triggerIntent"], {}));
+      const availableTriggers = eligibleTriggerOptions(detail);
+      let triggerIntent = text(first(existingTrigger, ["kind", "type"], first(detail, ["triggerIntentId"], "")));
+      if (triggerIntent && !availableTriggers.some(function (option) {
+        return triggerOptionKind(option) === triggerIntent;
+      })) {
+        triggerIntent = "";
+      }
+      if (!triggerIntent && availableTriggers.length) {
+        const preferred = availableTriggers.find(function (option) {
+          return triggerOptionKind(option) === "one_shot";
+        }) || availableTriggers[0];
+        triggerIntent = triggerOptionKind(preferred);
+      }
+      return {
+        deliveryId: deliveryIdValue,
+        detail: detail,
+        teams: [],
+        pendingTeams: Object.create(null),
+        teamsError: null,
+        fields: fields,
+        values: schemaDefaults(fields, existing),
+        selectedTeamId: selectedTeamId,
+        triggerIntent: triggerIntent,
+        triggerCron: text(first(existingTrigger, ["cron"], "")),
+        triggerTimeZone: text(first(existingTrigger, ["timeZone", "timezone"], "UTC"), "UTC"),
+        validation: null,
+        validationError: null,
+        confirmedRisks: new Set(),
+        installation: object(first(detail, ["installation", "latestInstallation"], {})),
+        installationId: customerInstallationId(detail),
+        installationError: null,
+        acceptedHttpStatus: 0,
+        acceptedAtMs: 0,
+        installationProjectionBaselineVersion: 0,
+        deliveryStateVersion: deliveryStateVersion(detail),
+        idempotencyKey: "",
+        connectionRuntime: Object.create(null),
+        connectionErrors: Object.create(null),
+        existingConnections: Object.create(null),
+        existingConnectionErrors: Object.create(null),
+        existingConnectionLoading: Object.create(null),
+        selectedExistingConnectionIds: Object.create(null),
+        consoleUrl: absoluteHttpUrl(first(detail, ["consoleUrl"], "")),
+        newTeamName: "",
+        busy: "",
+        clientError: ""
+      };
+    }
+
+    function renderCustomerDetailLoading() {
+      renderShell("Workflow 交付", "正在读取交付定义、Team 和安装状态。", "customer",
+        h("div", { className: "detail-grid" },
+          h("div", { className: "panel" }, h("div", { className: "panel-body" }, loadingBlock())),
+          h("div", { className: "panel" }, h("div", { className: "panel-body" }, loadingBlock()))
+        ),
+        { narrow: true }
+      );
+    }
+
+    async function loadCustomerDetail(deliveryIdValue, sequence) {
+      renderCustomerDetailLoading();
+      try {
+        let result = null;
+        for (let attempt = 0; attempt < PROJECTION_RETRY_ATTEMPTS; attempt += 1) {
+          try {
+            result = isAdminSession()
+              ? await api.getRequest(deliveryIdValue)
+              : await api.validateAccess(deliveryIdValue);
+            break;
+          } catch (error) {
+            const retryableProjectionMiss = error instanceof ApiError && error.status === 404 &&
+              attempt + 1 < PROJECTION_RETRY_ATTEMPTS;
+            if (!retryableProjectionMiss) throw error;
+            await new Promise(function (resolve) { window.setTimeout(resolve, PROJECTION_RETRY_MS); });
+            if (sequence !== state.routeSequence) return;
+          }
+        }
+        if (!result) {
+          throw new ApiError(503, "交付读模型暂不可用。", {}, "delivery_projection_unavailable");
+        }
+        if (sequence !== state.routeSequence) return;
+        const detail = customerDetailFromResponse(result.data);
+        const returnedId = deliveryId(detail);
+        if (returnedId && returnedId !== deliveryIdValue) {
+          throw new ApiError(409, "服务端返回的 Delivery ID 与当前路由不一致。", {}, "delivery_identity_mismatch");
+        }
+        const scopeId = customerScopeId(detail);
+        if (!scopeId) throw new ApiError(503, "交付响应缺少 targetScopeId，无法安全读取 Team。", {}, "missing_target_scope");
+        state.customer = initCustomerState(deliveryIdValue, detail);
+        renderCustomerDetail();
+
+        const tasks = [
+          loadTeams(scopeId, deliveryIdValue, sequence),
+          loadExistingConnections(scopeId, deliveryIdValue, sequence)
+        ];
+        if (state.customer.installationId) {
+          tasks.push(loadInstallation(scopeId, state.customer.installationId, sequence, true));
+        }
+        await Promise.all(tasks);
+      } catch (error) {
+        if (sequence !== state.routeSequence) return;
+        renderRouteError(error, loadRoute, "customer");
+      }
+    }
+
+    function normalizeCreatedTeam(data, expectedScopeId) {
+      const createdTeam = object(first(data, ["team", "item"], data));
+      const createdTeamId = teamId(createdTeam);
+      const createdScopeId = text(first(createdTeam, ["scopeId"], ""));
+      if (!createdTeamId) {
+        throw new ApiError(503, "创建 Team 的响应缺少 teamId，无法继续发布。", createdTeam, "missing_team_id");
+      }
+      if (!createdScopeId) {
+        throw new ApiError(503, "创建 Team 的响应缺少 scopeId，无法确认归属。", createdTeam, "missing_team_scope");
+      }
+      if (createdScopeId !== expectedScopeId) {
+        throw new ApiError(409, "创建 Team 的响应 scope 与当前交付不一致。", createdTeam, "team_scope_mismatch");
+      }
+      return createdTeam;
+    }
+
+    function mergeTeamRoster(authoritativeTeams, pendingTeams) {
+      const teams = array(authoritativeTeams).slice();
+      const seenTeamIds = new Set(teams.map(teamId).filter(Boolean));
+      Object.keys(object(pendingTeams)).forEach(function (id) {
+        if (seenTeamIds.has(id)) {
+          delete pendingTeams[id];
+          return;
+        }
+        teams.push(pendingTeams[id]);
+      });
+      return teams;
+    }
+
+    async function loadTeams(scopeId, deliveryIdValue, sequence) {
+      try {
+        const result = await api.teams(scopeId);
+        if (sequence !== state.routeSequence || !state.customer || state.customer.deliveryId !== deliveryIdValue) return;
+        state.customer.teams = mergeTeamRoster(
+          items(result.data, ["items", "teams"]),
+          state.customer.pendingTeams
+        );
+        state.customer.teamsError = null;
+        renderCustomerDetail();
+      } catch (error) {
+        if (sequence !== state.routeSequence || !state.customer) return;
+        if (Object.keys(state.customer.pendingTeams).length && state.customer.teams.length) {
+          state.customer.teamsError = null;
+          renderCustomerDetail();
+          return;
+        }
+        state.customer.teamsError = error;
+        renderCustomerDetail();
+      }
+    }
+
+    function fieldOptions(field) {
+      const raw = array(first(field, ["options", "enum", "values"], []));
+      return raw.map(function (option) {
+        if (option && typeof option === "object") {
+          return {
+            value: first(option, ["value", "id", "key"], ""),
+            label: text(first(option, ["label", "displayName", "name"], ""), String(first(option, ["value", "id", "key"], "")))
+          };
+        }
+        return { value: option, label: String(option) };
+      });
+    }
+
+    function fieldError(field) {
+      if (!state.customer || !state.customer.validation) return "";
+      const key = fieldKey(field);
+      const validation = object(state.customer.validation);
+      const map = object(first(validation, ["fieldErrors", "fields"], {}));
+      const direct = map[key];
+      if (typeof direct === "string") return direct;
+      if (Array.isArray(direct)) return direct.join(" ");
+      const match = array(validation.errors).find(function (error) {
+        return text(first(error, ["field", "key", "path"], "")) === key;
+      });
+      return match ? text(first(match, ["message", "detail"], "")) : "";
+    }
+
+    function invalidateValidation() {
+      if (!state.customer) return;
+      state.customer.validation = null;
+      state.customer.validationError = null;
+      state.customer.confirmedRisks.clear();
+      state.customer.idempotencyKey = "";
+      state.customer.clientError = "配置已变化，请重新校验后发布。";
+      const publishButton = document.getElementById("publishDelivery");
+      if (publishButton) publishButton.disabled = true;
+      const validationRegion = document.getElementById("validationRegion");
+      if (validationRegion) {
+        validationRegion.replaceChildren(notice("warning", "需要重新校验", state.customer.clientError));
+      }
+    }
+
+    function renderVariableField(field, index) {
+      const key = fieldKey(field);
+      const id = "variable-" + index;
+      const label = text(first(field, ["label", "title", "displayName"], ""), key);
+      const description = text(first(field, ["description", "helpText"], ""));
+      const type = fieldType(field);
+      const control = String(first(field, ["control", "format"], "")).toLowerCase();
+      const required = field.required === true;
+      const value = state.customer.values[key];
+      const error = fieldError(field);
+      const common = {
+        id: id,
+        name: key,
+        "aria-invalid": error ? "true" : "false",
+        onInput: function (event) {
+          if (type === "boolean") state.customer.values[key] = event.target.checked;
+          else state.customer.values[key] = event.target.value;
+          invalidateValidation();
+        }
+      };
+      let input;
+      const options = fieldOptions(field);
+      if (options.length) {
+        input = h("select", Object.assign({ className: "select", value: value === undefined ? "" : String(value) }, common),
+          h("option", { value: "", text: "请选择" }),
+          options.map(function (option) {
+            return h("option", { value: String(option.value), selected: String(option.value) === String(value), text: option.label });
+          })
+        );
+      } else if (type === "boolean" || control === "switch" || control === "checkbox") {
+        input = h("label", { className: "checkbox-row", htmlFor: id },
+          h("input", Object.assign({ type: "checkbox", checked: Boolean(value) }, common)),
+          h("span", { text: description || "启用此选项" })
+        );
+      } else if (type === "object" || type === "array" || control === "textarea" || control === "multiline") {
+        const rendered = (type === "object" || type === "array") && typeof value !== "string"
+          ? JSON.stringify(value, null, 2)
+          : String(value || "");
+        input = h("textarea", Object.assign({ className: "textarea", value: rendered }, common));
+      } else {
+        let inputType = "text";
+        if (type === "number" || type === "integer") inputType = "number";
+        else if (control === "date" || control === "datetime-local") inputType = control;
+        else if (control === "password" || control === "secret") inputType = "password";
+        input = h("input", Object.assign({
+          className: "input",
+          type: inputType,
+          value: value === undefined ? "" : String(value),
+          min: field.minimum,
+          max: field.maximum,
+          minlength: field.minLength,
+          maxlength: field.maxLength,
+          autocomplete: inputType === "password" ? "new-password" : "off"
+        }, common));
+      }
+
+      return h("div", { className: "field" },
+        h("label", { htmlFor: id }, label, required ? h("span", { className: "required", text: " *" }) : null),
+        input,
+        description && !(type === "boolean" || control === "switch" || control === "checkbox")
+          ? h("small", { text: description }) : null,
+        error ? h("div", { className: "field-error", text: error }) : null
+      );
+    }
+
+    function teamId(team) {
+      return text(first(team, ["teamId", "id"], ""));
+    }
+
+    function teamLifecycleStage(team) {
+      return text(first(team, ["lifecycleStage"], "")).toLowerCase();
+    }
+
+    function teamPublishability(team) {
+      const lifecycleStage = teamLifecycleStage(team);
+      if (lifecycleStage === "archived") {
+        return { canPublish: false, detail: "Team 已归档，不能发布。", status: "blocked", label: "已归档" };
+      }
+      if (lifecycleStage !== "active") {
+        return { canPublish: false, detail: "Team 当前状态不可发布。", status: "blocked", label: "不可发布" };
+      }
+      if (first(team, ["canPublish", "canWrite"], true) === false) {
+        return { canPublish: false, detail: "没有发布权限", status: "blocked", label: "只读" };
+      }
+      return {
+        canPublish: true,
+        detail: text(first(team, ["permission", "role"], ""), "可发布"),
+        status: "valid",
+        label: "可发布"
+      };
+    }
+
+    function teamCanPublish(team) {
+      return teamPublishability(team).canPublish;
+    }
+
+    function selectedTeamCanPublish() {
+      if (!state.customer || !state.customer.selectedTeamId) return false;
+      const selectedTeam = array(state.customer.teams).find(function (team) {
+        return teamId(team) === state.customer.selectedTeamId;
+      });
+      return Boolean(selectedTeam && teamCanPublish(selectedTeam));
+    }
+
+    function renderTeamSection() {
+      if (state.customer.teamsError) {
+        const description = errorDescription(state.customer.teamsError);
+        return notice(description.tone, description.title, description.message);
+      }
+      if (!state.customer.teams.length) {
+        // Publish requires an existing Team, and a brand-new scope has none. Without a way
+        // to create one here the delivery link is not self-sufficient, so the empty state
+        // owns the bootstrap instead of sending the customer to another product.
+        return emptyBlock(
+          "没有可发布的 Team",
+          "当前 scope 还没有 Team。Workflow 会安装到 Team 下，请先创建一个。",
+          h("div", { className: "form-grid", style: { marginTop: "12px", textAlign: "left" } },
+            h("div", { className: "field" },
+              h("label", { className: "label", htmlFor: "delivery-new-team-name", text: "Team 名称" }),
+              h("input", {
+                className: "input",
+                id: "delivery-new-team-name",
+                type: "text",
+                value: state.customer.newTeamName,
+                placeholder: "例如：HR 自动化",
+                disabled: state.customer.busy === "create-team",
+                onInput: function (event) { state.customer.newTeamName = event.currentTarget.value; }
+              })
+            ),
+            // Not disabled on empty input: every render replaces the whole document, so
+            // re-rendering per keystroke to recompute `disabled` would destroy focus
+            // mid-typing. The name is validated on submit instead.
+            h("button", {
+              className: "button primary",
+              type: "button",
+              disabled: state.customer.busy === "create-team",
+              onClick: createTeam,
+              text: state.customer.busy === "create-team" ? "正在创建..." : "创建 Team"
+            })
+          ));
+      }
+      return h("div", { className: "team-list" }, state.customer.teams.map(function (team) {
+        const id = teamId(team);
+        const publishability = teamPublishability(team);
+        const canPublish = publishability.canPublish;
+        const selected = canPublish && id && id === state.customer.selectedTeamId;
+        return h("button", {
+          className: "team-option" + (selected ? " selected" : ""),
+          type: "button",
+          disabled: !id || !canPublish,
+          "aria-pressed": selected ? "true" : "false",
+          onClick: function () {
+            state.customer.selectedTeamId = id;
+            invalidateValidation();
+            renderCustomerDetail();
+          }
+        },
+          h("span", { className: "radio", "aria-hidden": "true" }),
+          h("span", null,
+            h("strong", { text: text(first(team, ["displayName", "name"], ""), id || "未命名 Team") }),
+            h("p", { text: publishability.detail })
+          ),
+          badge(publishability.status, publishability.label)
+        );
+      }));
+    }
+
+    function connectionSlots() {
+      const detail = state.customer.detail;
+      const directDefinitions = first(detail, ["connectionSlots"], undefined);
+      const definitions = array(directDefinitions !== undefined
+        ? directDefinitions
+        : first(deliveryPackage(detail), ["connectionSlots"], []));
+      const snapshots = array(first(detail, ["connections"], []));
+      const merged = definitions.map(function (definition) {
+        const key = connectionSlotKey(definition);
+        const snapshot = snapshots.find(function (candidate) {
+          return connectionSlotKey(candidate) === key;
+        });
+        const runtime = state.customer ? object(state.customer.connectionRuntime[key]) : {};
+        return Object.assign({}, object(definition), object(snapshot), runtime);
+      });
+      snapshots.forEach(function (snapshot) {
+        const key = connectionSlotKey(snapshot);
+        const exists = merged.some(function (candidate) {
+          return connectionSlotKey(candidate) === key;
+        });
+        if (!exists) {
+          const runtime = state.customer ? object(state.customer.connectionRuntime[key]) : {};
+          merged.push(Object.assign({}, object(snapshot), runtime));
+        }
+      });
+      return merged;
+    }
+
+    function connectionSlotKey(slot) {
+      return text(first(slot, ["key", "slotKey", "slotId", "name"], ""));
+    }
+
+    function connectionReference(slot) {
+      return text(first(slot, ["connectionReference", "userServiceId", "reference"], ""));
+    }
+
+    function connectionStatus(slot) {
+      const explicit = text(first(slot, ["status", "connectionStatus"], "")).toLowerCase();
+      if (explicit) return explicit;
+      return connectionReference(slot) ? "connected" : "needs_action";
+    }
+
+    async function createConnection(slotKey) {
+      if (!state.customer || state.customer.busy || !slotKey) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
+      state.customer.busy = "connect:" + slotKey;
+      delete state.customer.connectionErrors[slotKey];
+      renderCustomerDetail();
+      try {
+        const result = await api.createConnectLink(
+          scopeId,
+          deliveryIdValue,
+          slotKey
+        );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        const response = object(first(result.data, ["connection", "result"], result.data));
+        const returnedSlot = text(first(response, ["slotKey", "key"], ""));
+        if (returnedSlot && returnedSlot !== slotKey) {
+          throw new ApiError(409, "服务端返回的连接 slot 与当前操作不一致。", response, "connection_slot_mismatch");
+        }
+        const expectedStatusUrl = "/api/scopes/" + encodeURIComponent(scopeId) +
+          "/delivery-requests/" + encodeURIComponent(deliveryIdValue) +
+          "/connections/" + encodeURIComponent(slotKey);
+        const receiptStatus = text(first(response, ["status"], ""));
+        const connectLinkId = text(first(response, ["connectLinkId", "connect_link_id"], ""));
+        const statusUrl = text(first(response, ["statusUrl", "status_url"], ""));
+        if (result.status !== 202 || receiptStatus !== "begin_accepted" || !connectLinkId ||
+            statusUrl !== expectedStatusUrl || result.location !== expectedStatusUrl) {
+          throw new ApiError(502, "服务端没有返回可对账的连接受理回执。", response, "invalid_connection_receipt");
+        }
+        const connectUrl = safeHttpUrl(first(response, ["connectUrl", "connect_url"], ""));
+        if (!connectUrl) {
+          throw new ApiError(503, "服务端未返回可用的 NyxID connectUrl。", response, "missing_connect_url");
+        }
+        state.customer.connectionRuntime[slotKey] = Object.assign({}, response, { connectUrl: connectUrl });
+        invalidateValidation();
+        state.notice = { tone: "info", title: "连接请求已受理", message: "请在 NyxID 完成连接，然后返回这里显式检查投影状态。" };
+      } catch (error) {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.connectionErrors[slotKey] = error;
+        }
+      } finally {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
+      }
+    }
+
+    async function loadExistingConnections(scopeId, deliveryIdValue, sequence) {
+      const slotKeys = connectionSlots().map(connectionSlotKey).filter(Boolean);
+      await Promise.all(slotKeys.map(async function (slotKey) {
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        state.customer.existingConnectionLoading[slotKey] = true;
+        delete state.customer.existingConnectionErrors[slotKey];
+        try {
+          const result = await api.existingConnections(scopeId, deliveryIdValue, slotKey);
+          if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+          const response = object(result.data);
+          const returnedSlot = text(first(response, ["slotKey", "key"], ""));
+          if (returnedSlot && returnedSlot !== slotKey) {
+            throw new ApiError(409, "服务端返回的已有连接 slot 与当前交付不一致。", response, "connection_slot_mismatch");
+          }
+          const candidates = items(response, ["items", "connections"]);
+          state.customer.existingConnections[slotKey] = candidates;
+          const selected = text(state.customer.selectedExistingConnectionIds[slotKey]);
+          if (!candidates.some(function (candidate) {
+            return text(first(candidate, ["userServiceId", "id"], "")) === selected;
+          })) {
+            state.customer.selectedExistingConnectionIds[slotKey] = candidates.length
+              ? text(first(candidates[0], ["userServiceId", "id"], ""))
+              : "";
+          }
+        } catch (error) {
+          if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+            state.customer.existingConnectionErrors[slotKey] = error;
+          }
+        } finally {
+          if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+            state.customer.existingConnectionLoading[slotKey] = false;
+            renderCustomerDetail();
+          }
+        }
+      }));
+    }
+
+    async function attachExistingConnection(slotKey) {
+      if (!state.customer || state.customer.busy || !slotKey) return;
+      const userServiceId = text(state.customer.selectedExistingConnectionIds[slotKey]);
+      if (!userServiceId) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
+      state.customer.busy = "attach:" + slotKey;
+      delete state.customer.connectionErrors[slotKey];
+      renderCustomerDetail();
+      try {
+        const result = await api.attachExistingConnection(
+          scopeId,
+          deliveryIdValue,
+          slotKey,
+          userServiceId
+        );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        const response = object(first(result.data, ["connection", "result"], result.data));
+        const returnedSlot = text(first(response, ["slotKey", "key"], ""));
+        const returnedUserServiceId = text(first(response, ["userServiceId", "id"], ""));
+        if (returnedSlot !== slotKey || returnedUserServiceId !== userServiceId ||
+            connectionStatus(response) !== "completed") {
+          throw new ApiError(502, "服务端没有确认所选的 NyxID 连接。", response, "invalid_attach_receipt");
+        }
+        state.customer.connectionRuntime[slotKey] = response;
+        invalidateValidation();
+        state.notice = {
+          tone: "success",
+          title: "已使用现有 NyxID 连接",
+          message: "所选 UserService 已绑定到当前交付，可以继续校验并发布。"
+        };
+      } catch (error) {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.connectionErrors[slotKey] = error;
+        }
+      } finally {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
+      }
+    }
+
+    function customerRouteIsCurrent(deliveryIdValue, sequence) {
+      return Boolean(state.customer) && state.routeSequence === sequence &&
+        state.customer.deliveryId === deliveryIdValue;
+    }
+
+    function connectionPollingIsTerminal(status) {
+      return ["completed", "connected", "ready", "active", "failed", "expired"].indexOf(status) >= 0;
+    }
+
+    async function recheckConnection(slotKey) {
+      if (!state.customer || state.customer.busy || !slotKey) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
+      state.customer.busy = "connection-status:" + slotKey;
+      delete state.customer.connectionErrors[slotKey];
+      renderCustomerDetail();
+      try {
+        const accepted = await api.refreshConnectStatus(
+          scopeId,
+          deliveryIdValue,
+          slotKey
+        );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        const acceptedBody = object(accepted.data);
+        if (accepted.status !== 202 || text(first(acceptedBody, ["status"], "")) !== "refresh_accepted") {
+          throw new ApiError(502, "服务端没有返回可验证的连接刷新受理回执。", acceptedBody, "invalid_refresh_receipt");
+        }
+
+        state.notice = {
+          tone: "info",
+          title: "连接刷新已受理",
+          message: "正在等待 Aevatar 投影确认 NyxID 状态；受理回执不会被当作已连接。"
+        };
+        renderCustomerDetail();
+
+        let response = null;
+        const prior = object(state.customer.connectionRuntime[slotKey]);
+        const expectedConnectLinkId = text(first(prior, ["connectLinkId", "connect_link_id"], ""));
+        for (let attempt = 0; attempt < PROJECTION_RETRY_ATTEMPTS; attempt += 1) {
+          if (attempt > 0) {
+            await new Promise(function (resolve) { window.setTimeout(resolve, PROJECTION_RETRY_MS); });
+            if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+          }
+          const result = await api.connectStatus(
+            scopeId,
+            deliveryIdValue,
+            slotKey
+          );
+          if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+          response = object(first(result.data, ["connection", "result"], result.data));
+          const returnedSlot = text(first(response, ["slotKey", "key"], ""));
+          if (returnedSlot && returnedSlot !== slotKey) {
+            throw new ApiError(409, "服务端返回的连接 slot 与当前操作不一致。", response, "connection_slot_mismatch");
+          }
+          const observedConnectLinkId = text(first(response, ["connectLinkId", "connect_link_id"], ""));
+          if (!observedConnectLinkId ||
+              (expectedConnectLinkId && observedConnectLinkId !== expectedConnectLinkId)) {
+            throw new ApiError(409, "连接状态属于另一个 NyxID connect link。", response, "connection_link_mismatch");
+          }
+          if (connectionPollingIsTerminal(connectionStatus(response))) {
+            break;
+          }
+        }
+
+        if (!response) {
+          throw new ApiError(503, "连接状态读模型暂不可用。", {}, "connection_projection_unavailable");
+        }
+        const returnedSlot = text(first(response, ["slotKey", "key"], ""));
+        if (returnedSlot && returnedSlot !== slotKey) {
+          throw new ApiError(409, "服务端返回的连接 slot 与当前操作不一致。", response, "connection_slot_mismatch");
+        }
+        state.customer.connectionRuntime[slotKey] = Object.assign({}, prior, response);
+        const refreshedStatus = connectionStatus(response);
+        if (["completed", "connected", "ready", "active"].indexOf(refreshedStatus) >= 0) {
+          delete state.customer.connectionRuntime[slotKey].connectUrl;
+          state.notice = { tone: "success", title: "NyxID 连接已确认", message: "连接引用由服务端保存，浏览器不会把它写入发布请求。" };
+        } else {
+          if (["failed", "expired"].indexOf(refreshedStatus) >= 0) {
+            delete state.customer.connectionRuntime[slotKey].connectUrl;
+          }
+          state.notice = { tone: "info", title: "连接尚未完成", message: "Aevatar 投影仍为 pending；页面不会根据刷新受理回执推进到 connected。" };
+        }
+        invalidateValidation();
+      } catch (error) {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.connectionErrors[slotKey] = error;
+        }
+      } finally {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
+      }
+    }
+
+    function renderConnections() {
+      const slots = connectionSlots();
+      if (!slots.length) return h("p", { style: { color: "var(--muted)" }, text: "此 Workflow 不需要外部连接。" });
+      const scopeKind = text(first(state.session, ["scopeKind"], "")).toLowerCase();
+      if (scopeKind && scopeKind !== "personal" && scopeKind !== "user") {
+        return notice(
+          "warning",
+          "组织 Scope 连接暂不支持",
+          "当前 NyxID connect-link contract 仅支持登录用户的个人 scope；此交付保持 needs_action。"
+        );
+      }
+      return h("div", { className: "connection-list" }, slots.map(function (slot) {
+        const slotKey = connectionSlotKey(slot);
+        const status = connectionStatus(slot);
+        const url = safeHttpUrl(first(slot, ["connectUrl", "connect_url"], ""));
+        const label = text(first(slot, ["label", "displayName", "provider", "key"], ""), "外部服务");
+        const reference = connectionReference(slot);
+        const connected = ["connected", "completed", "ready", "active"].indexOf(status) >= 0 || Boolean(reference);
+        const pending = status === "pending";
+        const honestStatus = connected ? "connected" : (pending ? "pending" : "needs_action");
+        const busy = state.customer.busy.endsWith(":" + slotKey);
+        const error = state.customer.connectionErrors[slotKey];
+        const inventoryError = state.customer.existingConnectionErrors[slotKey];
+        const inventoryLoading = state.customer.existingConnectionLoading[slotKey] === true;
+        const existing = array(state.customer.existingConnections[slotKey]);
+        const selectedExistingId = text(state.customer.selectedExistingConnectionIds[slotKey]);
+        const actions = [];
+        if (!connected && !pending && existing.length) {
+          actions.push(h("select", {
+            className: "select",
+            "aria-label": label + " 已有 NyxID 连接",
+            value: selectedExistingId,
+            disabled: busy,
+            style: { width: "min(260px, 100%)" },
+            onChange: function (event) {
+              state.customer.selectedExistingConnectionIds[slotKey] = event.target.value;
+            }
+          }, existing.map(function (candidate) {
+            const id = text(first(candidate, ["userServiceId", "id"], ""));
+            const candidateLabel = text(first(candidate, ["label", "displayName"], ""), id);
+            return h("option", { value: id, selected: id === selectedExistingId, text: candidateLabel + " · " + id });
+          })));
+          actions.push(h("button", {
+            className: "button secondary",
+            type: "button",
+            disabled: busy || !selectedExistingId,
+            onClick: function () { attachExistingConnection(slotKey); },
+            text: busy ? "正在验证..." : "使用已有连接"
+          }));
+        }
+        if (!connected && url) {
+          actions.push(h("a", {
+            className: "button secondary",
+            href: url,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            text: "前往 NyxID 连接"
+          }));
+        }
+        if (!connected && (pending || url)) {
+          actions.push(h("button", {
+            className: "button secondary",
+            type: "button",
+            disabled: busy,
+            onClick: function () { recheckConnection(slotKey); },
+            text: busy ? "正在检查..." : "检查连接状态"
+          }));
+        } else if (!connected) {
+          actions.push(h("button", {
+            className: "button secondary",
+            type: "button",
+            disabled: busy || !slotKey,
+            onClick: function () { createConnection(slotKey); },
+            text: busy ? "正在创建..." : "创建 NyxID 连接"
+          }));
+        }
+        return h("div", { className: "connection-row" },
+          h("span", { className: "connection-mark", "aria-hidden": "true", text: label.slice(0, 1).toUpperCase() }),
+          h("div", null,
+            h("strong", { text: label }),
+            h("p", {
+              text: connected
+                ? (reference ? "连接引用 " + reference : "服务端已确认连接")
+                : (url ? "请在 NyxID 完成个人连接后显式检查状态。" :
+                  (existing.length ? "可复用当前 NyxID 账号下已验证的个人连接。" :
+                    (inventoryLoading ? "正在检查已有 NyxID 连接。" : "needs_action：尚未创建可用的 NyxID 连接。")))
+            }),
+            error ? h("div", { className: "field-error", text: errorDescription(error).message }) : null,
+            inventoryError ? h("div", { className: "field-error", text: errorDescription(inventoryError).message }) : null
+          ),
+          h("div", { className: "inline-actions" }, badge(honestStatus), actions)
+        );
+      }));
+    }
+
+    function triggerOptions() {
+      return eligibleTriggerOptions(state.customer.detail);
+    }
+
+    function triggerOptionKind(option) {
+      return String(typeof option === "string"
+        ? option
+        : first(option, ["kind", "type", "key", "intentId"], "")).trim().toLowerCase();
+    }
+
+    function renderTriggerIntent() {
+      const options = triggerOptions();
+      const policy = deliveryAcceptancePolicy(state.customer.detail);
+      const automatic = first(policy, ["automaticAcceptanceSupported"], false) === true;
+      const manualNotice = automatic ? null : notice(
+        "warning",
+        "仅支持发布，自动验收不可用",
+        text(
+          first(policy, ["limitation"], ""),
+          "此 Workflow package 未声明自动验收能力；发布后不会自动进入 Ready。"
+        )
+      );
+      if (!options.length) {
+        return h("section", { className: "section" },
+          manualNotice,
+          emptyBlock("没有可用的触发方式", "服务端未返回与该验收策略匹配的 trigger intent。")
+        );
+      }
+      const select = h("select", {
+        className: "select",
+        id: "triggerIntent",
+        value: state.customer.triggerIntent,
+        onChange: function (event) {
+          state.customer.triggerIntent = event.target.value;
+          invalidateValidation();
+          renderCustomerDetail();
+        }
+      },
+        options.map(function (option) {
+          const value = triggerOptionKind(option);
+          const label = typeof option === "string" ? option : text(first(option, ["label", "displayName", "name"], ""), String(value));
+          return h("option", { value: String(value), selected: String(value) === state.customer.triggerIntent, text: label });
+        })
+      );
+      const cronFields = state.customer.triggerIntent === "cron"
+        ? h("div", { className: "form-grid", style: { marginTop: "12px" } },
+            h("div", { className: "field" },
+              h("label", { htmlFor: "triggerCron", text: "Cron" }),
+              h("input", {
+                className: "input mono",
+                id: "triggerCron",
+                type: "text",
+                autocomplete: "off",
+                required: true,
+                value: state.customer.triggerCron,
+                placeholder: "0 9 * * 1-5",
+                onInput: function (event) {
+                  state.customer.triggerCron = event.target.value;
+                  invalidateValidation();
+                }
+              })
+            ),
+            h("div", { className: "field" },
+              h("label", { htmlFor: "triggerTimeZone", text: "时区" }),
+              h("input", {
+                className: "input",
+                id: "triggerTimeZone",
+                type: "text",
+                autocomplete: "off",
+                required: true,
+                value: state.customer.triggerTimeZone,
+                placeholder: "Asia/Singapore",
+                onInput: function (event) {
+                  state.customer.triggerTimeZone = event.target.value;
+                  invalidateValidation();
+                }
+              })
+            )
+          )
+        : null;
+      return h("section", { className: "section" },
+        h("div", { className: "section-head" },
+          h("div", null, h("h2", { text: "触发方式" }), h("p", { text: "Schedule 是独立 trigger intent，不修改 Workflow YAML。" }))
+        ),
+        manualNotice,
+        h("div", { className: "field" }, h("label", { htmlFor: "triggerIntent", text: "Trigger intent" }), select),
+        cronFields
+      );
+    }
+
+    function riskConfirmations() {
+      if (!state.customer.validation) return [];
+      return array(first(state.customer.validation, ["requiredConfirmations", "riskConfirmations", "confirmations"], []));
+    }
+
+    function riskKey(risk) {
+      const callSiteId = text(first(risk, ["callSiteId"], ""));
+      const digest = text(first(risk, ["requestContractDigest"], ""));
+      const attestedRisk = text(first(risk, ["attestedRisk"], ""));
+      return callSiteId && digest && attestedRisk
+        ? callSiteId + "\u0000" + digest + "\u0000" + attestedRisk
+        : "";
+    }
+
+    function allRisksConfirmed() {
+      const risks = riskConfirmations();
+      return risks.every(function (risk) {
+        const key = riskKey(risk);
+        return key && state.customer.confirmedRisks.has(key);
+      });
+    }
+
+    function validationIsPublishable() {
+      if (!selectedTeamCanPublish()) return false;
+      const validation = object(state.customer.validation);
+      if (!state.customer.validation || validation.valid !== true) return false;
+      if (Number(validation._httpStatus) === 202) return false;
+      return Boolean(state.customer.idempotencyKey) && allRisksConfirmed();
+    }
+
+    function renderValidationRegion() {
+      const region = h("div", { id: "validationRegion" });
+      if (state.customer.validationError) {
+        const description = errorDescription(state.customer.validationError);
+        region.append(notice(description.tone, description.title, description.message));
+        const errors = array(first(state.customer.validationError.body, ["errors", "validationErrors"], []));
+        if (errors.length) {
+          region.append(h("ul", null, errors.map(function (error) {
+            return h("li", { text: typeof error === "string" ? error : text(first(error, ["message", "detail"], ""), "校验失败") });
+          })));
+        }
+        return region;
+      }
+      if (!state.customer.validation) {
+        if (state.customer.clientError) region.append(notice("warning", "需要重新校验", state.customer.clientError));
+        else region.append(notice("info", "尚未校验", "选择 Team 并完成客户配置后，先运行服务端校验。"));
+        return region;
+      }
+      const validation = state.customer.validation;
+      if (validation._httpStatus === 202) {
+        region.append(notice("info", "校验请求已受理", "HTTP 202 不代表校验通过。请重新读取交付状态后再发布。"));
+        return region;
+      }
+      if (validation.valid !== true) {
+        region.append(notice("warning", "配置未通过校验", "请按服务端返回的问题修改后重新校验。"));
+      } else {
+        region.append(notice("success", "服务端校验通过", "风险确认由服务端生成；本次配置使用稳定的发布幂等键。"));
+      }
+      const errors = array(first(validation, ["findings", "errors", "validationErrors"], []));
+      if (errors.length) {
+        region.append(h("ul", null, errors.map(function (error) {
+          return h("li", { text: typeof error === "string" ? error : text(first(error, ["message", "detail"], ""), "校验问题") });
+        })));
+      }
+      const risks = riskConfirmations();
+      if (validation.valid === true && risks.length) {
+        region.append(
+          h("div", { className: "risk-list", style: { marginTop: "12px" } }, risks.map(function (risk) {
+            const key = riskKey(risk);
+            const missingContract = !key;
+            const label = text(first(risk, ["summary", "label", "title", "description"], ""), "确认此高风险调用");
+            return h("label", { className: "risk-row" },
+              h("input", {
+                type: "checkbox",
+                checked: key && state.customer.confirmedRisks.has(key),
+                disabled: missingContract,
+                onChange: function (event) {
+                  if (!key) return;
+                  if (event.target.checked) state.customer.confirmedRisks.add(key);
+                  else state.customer.confirmedRisks.delete(key);
+                  const publish = document.getElementById("publishDelivery");
+                  if (publish) publish.disabled = !validationIsPublishable();
+                }
+              }),
+              h("span", null,
+                h("strong", { text: label }),
+                h("p", {
+                  text: missingContract
+                    ? "服务端未返回完整 confirmation contract，已 fail closed。"
+                    : "callSiteId、requestContractDigest 与 attestedRisk 将原样提交，页面不自行计算。"
+                })
+              )
+            );
+          }))
+        );
+      }
+      return region;
+    }
+
+    function collectCustomerConfig() {
+      const result = {};
+      state.customer.fields.forEach(function (field) {
+        const key = fieldKey(field);
+        let value = state.customer.values[key];
+        const type = fieldType(field);
+        if ((type === "object" || type === "array") && typeof value === "string") {
+          if (!value.trim()) value = type === "array" ? [] : {};
+          else {
+            try { value = JSON.parse(value); }
+            catch (error) { throw new Error("字段“" + text(first(field, ["label", "title"], ""), key) + "”不是有效 JSON。"); }
+          }
+        } else if (type === "number" || type === "integer") {
+          if (value === "") value = null;
+          else {
+            value = Number(value);
+            if (!Number.isFinite(value) || (type === "integer" && !Number.isInteger(value))) {
+              throw new Error("字段“" + text(first(field, ["label", "title"], ""), key) + "”不是有效" + (type === "integer" ? "整数" : "数字") + "。");
+            }
+          }
+        } else if (type === "boolean") {
+          value = Boolean(value);
+        }
+        result[key] = value;
+      });
+      return result;
+    }
+
+    function configurationBody() {
+      const body = {
+        teamId: state.customer.selectedTeamId,
+        customerConfig: collectCustomerConfig()
+      };
+      if (state.customer.triggerIntent) {
+        const selected = triggerOptions().find(function (option) {
+          return triggerOptionKind(option) === state.customer.triggerIntent;
+        });
+        body.triggerIntent = { kind: selected ? triggerOptionKind(selected) : state.customer.triggerIntent };
+        if (state.customer.triggerIntent === "cron") {
+          body.triggerIntent.cron = text(state.customer.triggerCron) || null;
+          body.triggerIntent.timeZone = text(state.customer.triggerTimeZone) || null;
+        } else if (state.customer.triggerIntent === "one_shot" && text(state.customer.triggerTimeZone)) {
+          body.triggerIntent.timeZone = text(state.customer.triggerTimeZone);
+        }
+      }
+      return body;
+    }
+
+    async function validateCustomerConfig() {
+      if (!state.customer || state.customer.busy) return;
+      if (!selectedTeamCanPublish()) {
+        state.customer.clientError = "请先选择一个 active 且具备发布权限的 Team。";
+        renderCustomerDetail();
+        return;
+      }
+      let body;
+      try { body = configurationBody(); }
+      catch (error) {
+        state.customer.clientError = error.message;
+        renderCustomerDetail();
+        return;
+      }
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
+      state.customer.busy = "validate";
+      state.customer.clientError = "";
+      state.customer.validationError = null;
+      state.customer.validation = null;
+      state.customer.confirmedRisks.clear();
+      renderCustomerDetail();
+      try {
+        const triggerKind = text(first(object(body.triggerIntent), ["kind"], "")).toLowerCase();
+        if (triggerKind === "one_shot" || triggerKind === "cron") {
+          const catalogRefresh = await api.refreshAuthorizationCatalog();
+          if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+          const catalog = object(catalogRefresh.data);
+          if (first(catalog, ["ready"], false) !== true) {
+            throw new ApiError(
+              503,
+              "NyxID 持久授权目录仍在同步，请稍后重试校验。",
+              catalog,
+              "authorization_catalog_pending"
+            );
+          }
+        }
+        const result = await api.validateConfig(
+          scopeId,
+          deliveryIdValue,
+          body
+        );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        const validation = object(first(result.data, ["validation", "result"], result.data));
+        validation._httpStatus = result.status;
+        state.customer.validation = validation;
+        if (result.status !== 202 && validation.valid === true) {
+          state.customer.idempotencyKey = newIdempotencyKey();
+        }
+        announce(result.status === 202 ? "校验请求已受理" : (validation.valid === true ? "配置校验通过" : "配置校验未通过"));
+      } catch (error) {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.validationError = error;
+        }
+      } finally {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
+      }
+    }
+
+    async function publishCustomerDelivery() {
+      if (!state.customer || state.customer.busy || !validationIsPublishable()) return;
+      let body;
+      try { body = configurationBody(); }
+      catch (error) {
+        state.customer.clientError = error.message;
+        renderCustomerDetail();
+        return;
+      }
+      const validation = object(state.customer.validation);
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
+      const idempotencyKey = text(state.customer.idempotencyKey);
+      if (!idempotencyKey) {
+        state.customer.clientError = "服务端校验未返回稳定 idempotencyKey，发布已 fail closed。";
+        renderCustomerDetail();
+        return;
+      }
+      body.idempotencyKey = idempotencyKey;
+      body.confirmations = riskConfirmations().map(function (risk) {
+        return {
+          callSiteId: text(first(risk, ["callSiteId"], "")),
+          requestContractDigest: text(first(risk, ["requestContractDigest"], "")),
+          attestedRisk: text(first(risk, ["attestedRisk"], ""))
+        };
+      });
+      const validationReceipt = first(validation, ["validationReceipt", "receipt", "validationId"], null);
+      if (validationReceipt !== null) body.validationReceipt = validationReceipt;
+
+      state.customer.busy = "publish";
+      state.customer.clientError = "";
+      const projectionBaselineVersion = state.customer.deliveryStateVersion;
+      renderCustomerDetail();
+      try {
+        const result = await api.publish(
+          scopeId,
+          deliveryIdValue,
+          body
+        );
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        const response = object(first(result.data, ["installation", "result"], result.data));
+        const installationIdValue = text(first(response, ["installationId", "id"], ""));
+        if (!installationIdValue) {
+          throw new ApiError(503, "发布响应缺少 installationId，无法读取真实安装状态。", response, "missing_installation_id");
+        }
+        state.customer.installationId = installationIdValue;
+        state.customer.acceptedHttpStatus = result.status;
+        state.customer.acceptedAtMs = result.status === 202 ? Date.now() : 0;
+        state.customer.installationProjectionBaselineVersion = result.status === 202
+          ? projectionBaselineVersion
+          : 0;
+        state.customer.installation = response;
+        state.customer.consoleUrl = absoluteHttpUrl(first(response, ["consoleUrl"], ""));
+        state.notice = result.status === 202
+          ? { tone: "info", title: "发布请求已受理", message: "HTTP 202 只表示进入处理队列；只有安装状态 ready 才表示成功。" }
+          : { tone: "info", title: "已获得安装记录", message: "正在读取服务端安装状态。" };
+        announce(result.status === 202 ? "发布请求已受理，尚未安装成功" : "已获得安装记录");
+        await loadInstallation(
+          scopeId,
+          installationIdValue,
+          sequence,
+          false
+        );
+      } catch (error) {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          const description = errorDescription(error);
+          state.notice = { tone: description.tone, title: description.title, message: description.message };
+        }
+      } finally {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
+      }
+    }
+
+    function installationStatus() {
+      return text(first(state.customer && state.customer.installation, ["status"], ""), "unknown").toLowerCase();
+    }
+
+    function installationNeedsRefresh(status) {
+      return ["accepted", "accepted_for_dispatch", "pending", "processing", "running", "publishing", "validating", "provisioning_accepted", "provisioningaccepted", "awaiting_acceptance"].indexOf(status) >= 0;
+    }
+
+    function installationObservationIsPreAcceptance(customer, observed) {
+      const observedStatus = text(first(observed, ["status"], "")).toLowerCase();
+      const observedVersion = deliveryStateVersion(observed);
+      return observedStatus !== "ready" && Boolean(customer) && customer.acceptedHttpStatus === 202 &&
+        customer.acceptedAtMs > 0 && Date.now() - customer.acceptedAtMs < PROJECTION_GRACE_MS &&
+        customer.installationProjectionBaselineVersion > 0 &&
+        (observedVersion === 0 || observedVersion <= customer.installationProjectionBaselineVersion);
+    }
+
+    function markInstallationAwaitingProjection(customer) {
+      customer.installationError = null;
+      customer.installation = Object.assign({}, object(customer.installation), {
+        status: "accepted",
+        stage: "awaiting_projection"
+      });
+    }
+
+    function stopInstallationRefresh() {
+      if (installationTimer) window.clearTimeout(installationTimer);
+      installationTimer = null;
+    }
+
+    function scheduleInstallationRefresh(scopeId, installationIdValue, sequence) {
+      stopInstallationRefresh();
+      if (!state.customer || !installationNeedsRefresh(installationStatus())) return;
+      installationTimer = window.setTimeout(function () {
+        loadInstallation(scopeId, installationIdValue, sequence, true);
+      }, INSTALLATION_REFRESH_MS);
+    }
+
+    async function loadInstallation(scopeId, installationIdValue, sequence, background) {
+      if (!state.customer || !installationIdValue) return;
+      if (!background) {
+        state.customer.installationError = null;
+        renderCustomerDetail();
+      }
+      try {
+        const result = await api.installation(scopeId, installationIdValue);
+        if (sequence !== state.routeSequence || !state.customer || state.customer.installationId !== installationIdValue) return;
+        const observed = normalizeInstallation(result.data);
+        if (installationObservationIsPreAcceptance(state.customer, observed)) {
+          markInstallationAwaitingProjection(state.customer);
+          renderCustomerDetail();
+          scheduleInstallationRefresh(scopeId, installationIdValue, sequence);
+          return;
+        }
+        state.customer.installation = observed;
+        state.customer.installationError = null;
+        const observedVersion = deliveryStateVersion(observed);
+        if (observedVersion > 0) state.customer.deliveryStateVersion = observedVersion;
+        state.customer.installationProjectionBaselineVersion = 0;
+        const observedStatus = text(first(observed, ["status"], "")).toLowerCase();
+        if (state.customer.acceptedHttpStatus !== 202 || !installationNeedsRefresh(observedStatus)) {
+          if (state.customer.acceptedHttpStatus === 202 && !installationNeedsRefresh(observedStatus)) {
+            state.notice = null;
+          }
+          state.customer.acceptedHttpStatus = 0;
+          state.customer.acceptedAtMs = 0;
+        }
+        renderCustomerDetail();
+        scheduleInstallationRefresh(scopeId, installationIdValue, sequence);
+      } catch (error) {
+        if (sequence !== state.routeSequence || !state.customer) return;
+        const awaitingProjection = error instanceof ApiError && error.status === 404 &&
+          state.customer.acceptedHttpStatus === 202 &&
+          state.customer.acceptedAtMs > 0 &&
+          Date.now() - state.customer.acceptedAtMs < PROJECTION_GRACE_MS;
+        if (awaitingProjection) {
+          markInstallationAwaitingProjection(state.customer);
+          renderCustomerDetail();
+          scheduleInstallationRefresh(scopeId, installationIdValue, sequence);
+          return;
+        }
+        state.customer.installationError = error;
+        stopInstallationRefresh();
+        renderCustomerDetail();
+      }
+    }
+
+    async function retryInstallation() {
+      if (!state.customer || state.customer.busy || !state.customer.installationId) return;
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      const scopeId = customerScopeId(state.customer.detail);
+      const installationIdValue = state.customer.installationId;
+      state.customer.busy = "retry";
+      const projectionBaselineVersion = state.customer.deliveryStateVersion;
+      renderCustomerDetail();
+      try {
+        const result = await api.retry(scopeId, installationIdValue);
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        const response = normalizeInstallation(result.data);
+        const returnedId = text(first(response, ["installationId", "id"], ""));
+        if (returnedId && returnedId !== state.customer.installationId) {
+          state.customer.installationId = returnedId;
+        }
+        state.customer.acceptedHttpStatus = result.status;
+        state.customer.acceptedAtMs = result.status === 202 ? Date.now() : 0;
+        state.customer.installationProjectionBaselineVersion = result.status === 202
+          ? projectionBaselineVersion
+          : 0;
+        state.customer.installation = result.status === 202
+          ? Object.assign({}, object(state.customer.installation), response, {
+              status: "accepted",
+              stage: "awaiting_projection"
+            })
+          : response;
+        state.notice = result.status === 202
+          ? { tone: "info", title: "重试请求已受理", message: "仍需等待服务端安装状态变为 ready。" }
+          : { tone: "info", title: "重试已提交", message: "正在读取服务端状态。" };
+        await loadInstallation(scopeId, state.customer.installationId, sequence, false);
+      } catch (error) {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          const description = errorDescription(error);
+          state.notice = { tone: description.tone, title: description.title, message: description.message };
+        }
+      } finally {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
+      }
+    }
+
+    async function createTeam() {
+      if (!state.customer || state.customer.busy) return;
+      const displayName = text(state.customer.newTeamName);
+      if (!displayName) {
+        state.notice = { tone: "warning", title: "请填写 Team 名称", message: "Team 名称不能为空。" };
+        renderCustomerDetail();
+        return;
+      }
+      state.customer.busy = "create-team";
+      renderCustomerDetail();
+      const scopeId = customerScopeId(state.customer.detail);
+      const deliveryIdValue = state.customer.deliveryId;
+      const sequence = state.routeSequence;
+      try {
+        const result = await api.createTeam(scopeId, displayName);
+        if (!customerRouteIsCurrent(deliveryIdValue, sequence)) return;
+        const createdTeam = normalizeCreatedTeam(result.data, scopeId);
+        const createdTeamId = teamId(createdTeam);
+        state.customer.pendingTeams[createdTeamId] = createdTeam;
+        state.customer.teams = mergeTeamRoster(state.customer.teams, state.customer.pendingTeams);
+        state.customer.selectedTeamId = createdTeamId;
+        state.customer.newTeamName = "";
+        state.notice = { tone: "success", title: "Team 已创建并选中", message: "现在可以继续配置并发布工作流。" };
+        announce("Team 已创建");
+        state.customer.busy = "";
+        await loadTeams(scopeId, deliveryIdValue, sequence);
+      } catch (error) {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          const description = errorDescription(error);
+          state.notice = { tone: description.tone, title: description.title, message: description.message };
+        }
+      } finally {
+        if (customerRouteIsCurrent(deliveryIdValue, sequence)) {
+          state.customer.busy = "";
+          renderCustomerDetail();
+        }
+      }
+    }
+
+    function copyButton(value, label) {
+      if (!text(value)) return null;
+      return h("button", {
+        className: "button secondary",
+        type: "button",
+        onClick: function (event) {
+          const button = event.currentTarget;
+          const original = label;
+          const done = function (ok) {
+            button.textContent = ok ? "已复制" : "复制失败";
+            announce(ok ? "已复制到剪贴板" : "复制失败，请手动选择文本");
+            window.setTimeout(function () { button.textContent = original; }, 2000);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value).then(function () { done(true); }, function () { done(false); });
+          } else {
+            done(false);
+          }
+        },
+        text: label
+      });
+    }
+
+    // Ready means the workflow is published and runnable — but the two places a customer
+    // actually uses it (the product console and a bound messaging channel) are separate
+    // surfaces this page cannot reach. Both entry points are therefore stated explicitly,
+    // and each is omitted rather than guessed when the server did not return it.
+    function renderUsageSection(consoleUrl, channelRunCommand, scopeId) {
+      const rows = [];
+      rows.push(
+        h("div", { className: "stage-row" },
+          h("span", { className: "stage-index", text: "1" }),
+          h("div", null,
+            h("strong", { text: "在 Aevatar Console 中运行" }),
+            consoleUrl
+              ? h("p", { text: "打开该 Team 成员的调用工作台，可手动运行已交付工作流并查看运行记录。" })
+              : h("p", { text: "服务端未配置 Aevatar:Delivery:ConsoleWebBaseUrl，无法生成 Console 链接；请联系交付管理员补充该配置。" })
+          ),
+          consoleUrl
+            ? h("a", {
+                className: "button primary",
+                href: consoleUrl,
+                target: "_blank",
+                rel: "noopener noreferrer",
+                text: "打开 Console"
+              })
+            : badge("warning", "未配置")
+        )
+      );
+      if (channelRunCommand) {
+        rows.push(
+          h("div", { className: "stage-row" },
+            h("span", { className: "stage-index", text: "2" }),
+            h("div", null,
+              h("strong", { text: "在已绑定的 Lark / 消息渠道中运行" }),
+              h("p", { text: "该指令在机器人注册所在的 scope 内解析 workflow，因此机器人必须注册在本次交付的目标 scope（" + text(scopeId, "本 scope") + "）下，否则会提示未找到 workflow。" }),
+              h("p", { className: "mono", text: channelRunCommand }),
+              h("p", { text: "在会话中发送 /workflow list 可列出该 scope 的 workflow 及其运行指令。" })
+            ),
+            copyButton(channelRunCommand, "复制指令")
+          )
+        );
+      }
+      return h("section", { className: "section", style: { marginTop: "16px" } },
+        h("div", { className: "section-head" },
+          h("div", null,
+            h("h2", { text: "现在如何使用" }),
+            h("p", { text: "安装已 ready，以下是本次交付真实可用的两个入口。" })
+          )
+        ),
+        h("div", { className: "stage-list" }, rows)
+      );
+    }
+
+    function installationStatusMessage(installation, status, acceptedHttpStatus) {
+      if (status === "ready") return "服务端 installation.status 已确认 ready。";
+      if (status === "failed") {
+        const failureCode = text(first(installation, ["errorCode", "code"], ""));
+        const failureMessage = text(first(installation, ["errorMessage", "error"], ""));
+        if (failureMessage) return failureCode ? failureCode + ": " + failureMessage : failureMessage;
+        return text(failureCode, "服务端报告安装失败。");
+      }
+      if (acceptedHttpStatus === 202) {
+        return "HTTP 202 仅表示已受理，当前仍以服务端状态为准。";
+      }
+      return text(first(installation, ["message", "nextAction"], ""), "尚未达到 ready。");
+    }
+
+    function renderInstallation() {
+      if (!state.customer.installationId) {
+        return notice("info", "尚未发布", "完成配置校验后可提交发布。");
+      }
+      if (state.customer.installationError) {
+        const description = errorDescription(state.customer.installationError);
+        return h("div", null,
+          notice(description.tone, description.title, description.message),
+          h("button", {
+            className: "button secondary",
+            type: "button",
+            onClick: function () {
+              loadInstallation(
+                customerScopeId(state.customer.detail),
+                state.customer.installationId,
+                state.routeSequence,
+                false
+              );
+            },
+            text: "重新读取"
+          })
+        );
+      }
+      const installation = object(state.customer.installation);
+      const status = text(first(installation, ["status"], ""), "unknown").toLowerCase();
+      const ready = status === "ready";
+      const stages = array(first(installation, ["stages", "steps"], []));
+      const stage = text(first(installation, ["stage"], ""));
+      const evidenceValue = first(installation, ["evidence", "acceptanceEvidence", "artifactEvidence"], {});
+      const evidence = object(evidenceValue);
+      const evidenceItems = array(evidenceValue);
+      const explicitRetryable = first(installation, ["retryable", "canRetry"], undefined);
+      const retryable = explicitRetryable === true || (explicitRetryable === undefined && status === "failed");
+      const consoleUrl = absoluteHttpUrl(first(installation, ["consoleUrl"], "")) ||
+        state.customer.consoleUrl;
+      const channelRunCommand = text(first(installation, ["channelRunCommand"], ""));
+      const installationScopeId = text(first(installation, ["scopeId"], ""));
+      const title = ready ? "安装已就绪" : (status === "failed" ? "安装失败" : "安装状态");
+      const message = installationStatusMessage(
+        installation,
+        status,
+        state.customer.acceptedHttpStatus
+      );
+      const header = notice(ready ? "success" : statusTone(status), title, message);
+      const body = h("div", null, header);
+      body.append(
+        h("dl", { className: "definition" },
+          h("dt", { text: "Installation ID" }), h("dd", { className: "mono", text: state.customer.installationId }),
+          h("dt", { text: "状态" }), h("dd", null, badge(status)),
+          stage ? h("dt", { text: "阶段" }) : null, stage ? h("dd", { text: stage }) : null,
+          h("dt", { text: "更新时间" }), h("dd", { text: formatDate(first(installation, ["updatedAt", "updatedAtUtc"], "")) })
+        )
+      );
+      if (ready) {
+        body.append(renderUsageSection(consoleUrl, channelRunCommand, installationScopeId));
+      }
+      if (stages.length) {
+        body.append(
+          h("div", { className: "stage-list", style: { marginTop: "12px" } }, stages.map(function (stage, index) {
+            const stageStatus = text(first(stage, ["status"], ""), "unknown");
+            return h("div", { className: "stage-row" },
+              h("span", { className: "stage-index", text: String(index + 1) }),
+              h("div", null,
+                h("strong", { text: text(first(stage, ["label", "name", "key"], ""), "安装阶段") }),
+                h("p", { text: text(first(stage, ["message", "detail"], ""), statusLabel(stageStatus)) })
+              ),
+              badge(stageStatus)
+            );
+          }))
+        );
+      }
+      const identities = [
+        ["Workflow ID", first(installation, ["workflowId"], "")],
+        ["Member ID", first(installation, ["memberId"], "")],
+        ["Published Service ID", first(installation, ["publishedServiceId"], "")],
+        ["Revision ID", first(installation, ["revisionId"], "")],
+        ["Schedule ID", first(installation, ["scheduleId"], "")],
+        ["Acceptance Run ID", first(installation, ["acceptanceRunId"], "")]
+      ].filter(function (entry) { return text(entry[1]); });
+      if (identities.length) {
+        body.append(
+          h("div", { className: "receipt-grid", style: { marginTop: "13px" } }, identities.map(function (entry) {
+            return [
+              h("div", { className: "receipt-label", text: entry[0] }),
+              h("div", { className: "receipt-value mono", text: String(entry[1]) })
+            ];
+          }))
+        );
+      }
+      const evidenceKeys = Object.keys(evidence);
+      if (evidenceKeys.length) {
+        body.append(
+          h("div", { className: "receipt-grid", style: { marginTop: "13px" } }, evidenceKeys.map(function (key) {
+            const value = evidence[key];
+            return [
+              h("div", { className: "receipt-label", text: key }),
+              h("div", { className: "receipt-value mono", text: typeof value === "object" ? JSON.stringify(value) : String(value) })
+            ];
+          }))
+        );
+      }
+      if (evidenceItems.length) {
+        body.append(
+          h("div", { className: "stage-list", style: { marginTop: "13px" } }, evidenceItems.map(function (item, index) {
+            if (!item || typeof item !== "object") {
+              return h("div", { className: "stage-row" },
+                h("span", { className: "stage-index", text: String(index + 1) }),
+                h("div", null,
+                  h("strong", { text: "Legacy artifact evidence" }),
+                  h("p", { className: "mono", text: String(item) })
+                ),
+                badge("unknown", "Legacy")
+              );
+            }
+            const artifact = object(item);
+            const kind = text(first(artifact, ["kind"], ""), "typed_artifact");
+            const artifactId = text(first(artifact, ["artifactId"], ""), "未返回 artifactId");
+            const verificationStatus = text(first(artifact, ["verificationStatus"], ""), "unknown");
+            const verificationReference = text(first(artifact, ["verificationReference"], ""));
+            const contentDigest = text(first(artifact, ["contentDigest"], ""));
+            return h("div", { className: "stage-row" },
+              h("span", { className: "stage-index", text: String(index + 1) }),
+              h("div", null,
+                h("strong", { text: kind }),
+                h("p", { className: "mono", text: "Artifact ID: " + artifactId }),
+                verificationReference
+                  ? h("p", { className: "mono", text: "Verification: " + verificationReference })
+                  : null,
+                contentDigest
+                  ? h("p", { className: "mono", text: "Digest: " + contentDigest })
+                  : null
+              ),
+              badge(verificationStatus)
+            );
+          }))
+        );
+      }
+      body.append(
+        h("div", { className: "inline-actions", style: { marginTop: "14px" } },
+          h("button", {
+            className: "button secondary",
+            type: "button",
+            onClick: function () {
+              loadInstallation(
+                customerScopeId(state.customer.detail),
+                state.customer.installationId,
+                state.routeSequence,
+                false
+              );
+            },
+            text: "刷新状态"
+          }),
+          retryable && !ready ? h("button", {
+            className: "button secondary",
+            type: "button",
+            disabled: state.customer.busy === "retry",
+            onClick: retryInstallation,
+            text: state.customer.busy === "retry" ? "正在重试..." : "重试"
+          }) : null,
+          consoleUrl ? h("a", {
+            className: "button primary",
+            href: consoleUrl,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            text: ready ? "在 Aevatar Console 打开" : "在 Aevatar Console 运行 / 检查验收"
+          }) : null
+        )
+      );
+      return body;
+    }
+
+    function renderCustomerDetail() {
+      if (!state.customer) return;
+      const detail = state.customer.detail;
+      const scopeId = customerScopeId(detail);
+      const fields = state.customer.fields;
+      const capabilities = array(deliveryValue(detail, ["capabilities", "capabilitySummary"], []));
+      const status = first(detail, ["status"], "unknown");
+      const deliveryTitle = text(deliveryValue(detail, ["displayName", "workflowName", "packageName", "name"], ""), "Workflow 交付");
+      const infoPanel = h("section", { className: "panel" },
+        h("div", { className: "panel-head" },
+          h("div", { className: "section-head", style: { marginBottom: "0" } },
+            h("div", null,
+              h("h2", { text: deliveryTitle }),
+              h("p", { text: text(first(detail, ["note"], ""), text(deliveryValue(detail, ["description"], ""), "由 Aevatar Delivery Control Plane 交付。")) })
+            ),
+            badge(status)
+          )
+        ),
+        h("div", { className: "panel-body" },
+          h("dl", { className: "definition" },
+            h("dt", { text: "Delivery ID" }), h("dd", { className: "mono", text: state.customer.deliveryId }),
+            h("dt", { text: "目标 Scope" }), h("dd", { className: "mono", text: scopeId }),
+            h("dt", { text: "版本" }), h("dd", { text: text(deliveryValue(detail, ["version", "packageVersion"], ""), "未标注") }),
+            h("dt", { text: "到期" }), h("dd", { text: formatDate(first(detail, ["expiresAt"], "")) })
+          ),
+          capabilities.length ? h("div", { className: "inline-actions", style: { marginTop: "12px" } }, capabilities.map(function (capability) {
+            const label = typeof capability === "string"
+              ? capability
+              : text(first(capability, ["label", "name", "capability"], ""), "Capability");
+            return h("span", { className: "badge", text: label });
+          })) : null
+        )
+      );
+
+      const configurationSections = h("div", null,
+        h("section", { className: "section" },
+          h("div", { className: "section-head" },
+            h("div", null, h("h2", { text: "1. 选择 Team" }), h("p", { text: "Team 列表来自目标 scope 的真实权限读模型。" }))
+          ),
+          renderTeamSection()
+        ),
+        h("section", { className: "section" },
+          h("div", { className: "section-head" },
+            h("div", null, h("h2", { text: "2. 客户配置" }), h("p", { text: "仅显示 package variableSchema 明确开放的字段。" }))
+          ),
+          fields.length
+            ? h("div", { className: "form-grid" }, fields.map(renderVariableField))
+            : h("p", { style: { color: "var(--muted)" }, text: "此 Workflow 没有客户可配置变量。" })
+        ),
+        h("section", { className: "section" },
+          h("div", { className: "section-head" },
+            h("div", null, h("h2", { text: "3. NyxID 连接" }), h("p", { text: "配置表单只接收服务端返回的 UserService 引用；外部服务 token、secret 和 OAuth credential 不进入页面状态。" }))
+          ),
+          renderConnections()
+        ),
+        renderTriggerIntent(),
+        h("section", { className: "section" },
+          h("div", { className: "section-head" },
+            h("div", null, h("h2", { text: "4. 校验与风险确认" }), h("p", { text: "callSiteId 和 requestContractDigest 必须由服务端生成。" }))
+          ),
+          renderValidationRegion()
+        )
+      );
+
+      const rightPanel = h("aside", { className: "panel" },
+        h("div", { className: "panel-head" },
+          h("h2", { text: "安装状态" }),
+          h("p", { text: "只读 durable installation read model。" })
+        ),
+        h("div", { className: "panel-body" }, renderInstallation())
+      );
+
+      const validateDisabled = Boolean(state.customer.busy) ||
+        !selectedTeamCanPublish() ||
+        Boolean(state.customer.teamsError);
+      const publishDisabled = Boolean(state.customer.busy) || !validationIsPublishable();
+      const actionBar = h("div", { className: "action-bar" },
+        h("div", { className: "action-copy", text: "HTTP 202 仅表示 accepted；安装成功以 installation.status = ready 为准。" }),
+        h("button", {
+          className: "button secondary",
+          type: "button",
+          disabled: validateDisabled,
+          onClick: validateCustomerConfig,
+          text: state.customer.busy === "validate" ? "正在校验..." : "校验配置"
+        }),
+        h("button", {
+          className: "button primary",
+          id: "publishDelivery",
+          type: "button",
+          disabled: publishDisabled,
+          onClick: publishCustomerDelivery,
+          text: state.customer.busy === "publish" ? "发布已提交..." : "发布到 Team"
+        })
+      );
+
+      renderShell(deliveryTitle, "配置并发布到当前交付授权的 scope。", "customer",
+        h("div", null,
+          infoPanel,
+          h("div", { className: "detail-grid", style: { marginTop: "16px" } },
+            configurationSections,
+            rightPanel
+          ),
+          actionBar
+        ),
+        {
+          narrow: true,
+          actions: [h("a", { className: "button secondary", href: routeHref("customer-list"), text: "返回列表" })]
+        }
+      );
+    }
+
+    async function boot() {
+      const token = readToken();
+      if (!token) {
+        renderLoginGate();
+        return;
+      }
+      try {
+        const result = await api.session();
+        state.session = object(first(result.data, ["session"], result.data));
+        if (state.session.authenticated === false) {
+          renderLoginGate("当前 NyxID 会话未通过 Delivery Backend 认证。");
+          return;
+        }
+        await loadRoute();
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          renderLoginGate(error.message);
+          return;
+        }
+        renderRouteError(error, boot, "customer");
+      }
+    }
+
+    window.addEventListener("hashchange", function () {
+      if (state.session) loadRoute();
+    });
+    window.addEventListener("storage", function (event) {
+      if (event.key !== TOKEN_KEY) return;
+      if (!event.newValue) {
+        state.session = null;
+        renderLoginGate("登录已在其他标签页退出。");
+      } else if (!state.session) {
+        boot();
+      }
+    });
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") {
+        ensureAccessToken().catch(function () {});
+        if (state.customer && state.customer.installationId && installationNeedsRefresh(installationStatus())) {
+          loadInstallation(
+            customerScopeId(state.customer.detail),
+            state.customer.installationId,
+            state.routeSequence,
+            true
+          );
+        }
+      }
+    });
+
+    restoreConnectReturnRoute();
+    boot();
+  })();
+  </script>
+</body>
+</html>

@@ -1,3 +1,4 @@
+using System.Text;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 
 namespace Aevatar.AI.ToolProviders.Ornn;
@@ -35,6 +36,7 @@ internal static class OrnnAgentProfileSkillPackageMapper
             .ToArray();
         if (skillMarkdownEntries.Length != 1 || string.IsNullOrWhiteSpace(skillMarkdownEntries[0].Value))
             return ExactOrnnSkillResolutionResult.Failure("INVALID_SKILL_PACKAGE");
+        var skillMarkdownUtf8Bytes = Encoding.UTF8.GetByteCount(skillMarkdownEntries[0].Value);
 
         var declaredTools = skillJson.Metadata?.Tools?
             .Select(static declaration => declaration.Tool?.Trim() ?? string.Empty)
@@ -50,6 +52,7 @@ internal static class OrnnAgentProfileSkillPackageMapper
             CanonicalName = detail.Name!,
             PublisherId = detail.CreatedBy!,
             SkillSha256 = skillSha256,
+            SkillMarkdownUtf8Bytes = skillMarkdownUtf8Bytes,
             DeclaredToolNames = declaredTools,
         });
     }

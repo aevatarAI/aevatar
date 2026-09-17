@@ -84,6 +84,33 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
     }
 
     [Fact]
+    public async Task GetAsync_ShouldUseCapabilityAdmissionExecutionMode_WhenProjectedExpectedModeMissing()
+    {
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "yaml",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var reader = CreateReader(
+            getDocumentAsync: (_, _) => Task.FromResult<WorkflowActorBindingDocument?>(new WorkflowActorBindingDocument
+            {
+                Id = "actor-legacy",
+                ActorId = "actor-legacy",
+                ActorKind = WorkflowActorKind.Definition,
+                DefinitionActorId = "actor-legacy",
+                WorkflowName = "legacy",
+                WorkflowYaml = "yaml",
+                CapabilityAdmissionPlan = capabilityAdmissionPlan,
+            }));
+
+        var result = await reader.GetAsync("actor-legacy", CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldUseProjectedDocumentKind_WhenRuntimeWouldInferDifferentKind()
     {
         var reader = CreateReader(

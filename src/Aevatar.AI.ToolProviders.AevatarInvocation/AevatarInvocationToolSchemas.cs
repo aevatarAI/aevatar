@@ -9,6 +9,13 @@ internal static class AevatarInvocationToolSchemas
             ["kind"] = ["text", "image", "audio", "video", "file"],
         };
 
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> AcceptedOnlyWaitValues =
+        new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            ["wait"] = ["ack", "stream"],
+            ["kind"] = ["text", "image", "audio", "video", "file"],
+        };
+
     public static readonly string InvokeGAgent = ProtoToolSchema.Build(
         InvokeGAgentToolRequest.Descriptor,
         requiredFields: new HashSet<string>(StringComparer.Ordinal) { "payload" },
@@ -37,7 +44,7 @@ internal static class AevatarInvocationToolSchemas
             "member_id",
             "payload",
         },
-        stringEnums: WaitValues);
+        stringEnums: AcceptedOnlyWaitValues);
 
     public static readonly string StartWorkflow = ProtoToolSchema.Build(
         StartWorkflowToolRequest.Descriptor,
@@ -46,7 +53,17 @@ internal static class AevatarInvocationToolSchemas
             "workflow_id",
             "inputs",
         },
-        stringEnums: WaitValues);
+        stringEnums: WaitValues,
+        fieldDescriptions: new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["workflow_id"] =
+                "Exact workflow id, resolved beforehand (for example via scope_workflows_get). Never guess.",
+            ["inputs.prompt"] =
+                "The workflow's run input. Typed workflows require a NON-EMPTY serialized JSON string " +
+                "matching the workflow's input contract, for example {\"period_label\":\"2026年8月\",\"submit\":false}. " +
+                "Build the JSON yourself from the user's request. Never pass an empty string, an unserialized " +
+                "object, or the user's natural-language sentence.",
+        });
 
     public static readonly string ObserveRun = ProtoToolSchema.Build(
         ObserveRunToolRequest.Descriptor,

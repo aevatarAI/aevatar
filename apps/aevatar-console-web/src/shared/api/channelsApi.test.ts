@@ -1,5 +1,5 @@
 import { authFetch } from '@/shared/auth/fetch';
-import { ChannelApiError, channelsApi } from './channelsApi';
+import { ChannelContractUnavailableError, channelsApi } from './channelsApi';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
 const fetchMock = jest.mocked(authFetch);
@@ -9,175 +9,150 @@ const response = (value: unknown, status = 200) =>
     status,
     json: async () => value,
   }) as Response;
-
-const registration = {
-  id: 'registration-alpha',
-  platform: 'telegram',
-  scope_id: 'scope-alpha',
+const bound = {
+  id: 'reg:one/a',
+  nyx_channel_bot_id: 'bot-one',
+  platform: 'discord',
+  label: 'Support',
+  binding_status: 'bound',
+  availability_status: 'available',
+  nyx_status: 'active',
   owned: true,
-  nyx_channel_bot_id: 'bot-alpha',
-  nyx_provider_slug: 'telegram-provider',
-  nyx_agent_api_key_id: 'key-alpha',
-  workflow_result_delivery_status: 'enabled',
+  skill_name: 'support',
+  authorization_mode: 'explicit_service_allowlist',
+  service_ids: ['us-work'],
+  state_version: 12,
 };
-
 afterEach(() => fetchMock.mockReset());
 
-describe('channel API boundary', () => {
-  it('reads the owner list and keeps only safe display fields with the exact typed skill', async () => {
-    fetchMock.mockResolvedValue(
-      response([
-        {
-          ...registration,
-          authorization_mode: 'explicit_service_allowlist',
-          service_ids: ['us-work', 'us-model'],
-          default_skill: { name: 'review.skill', version: '2.4' },
-          agent_key: { api_key_id: 'key-current', raw_key: 'TEST_ONLY_SECRET' },
-          runtime_config: { instructions: 'private instructions' },
-          access_token: 'TEST_ONLY_SECRET',
-          webhook_url: 'https://example.invalid/private',
-        },
-        { ...registration, id: 'registration-other-owner', owned: false },
-      ]),
-    );
-    const result = await channelsApi.list();
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/channels/registrations');
-    expect(result).toEqual([
+it('reads bound and unbound inventory without scope IDs and projects only safe fields', async () => {
+  fetchMock.mockResolvedValue(
+    response([
       {
-        id: 'registration-alpha',
-        platform: 'telegram',
-        scopeId: 'scope-alpha',
-        botId: 'bot-alpha',
-        providerSlug: 'telegram-provider',
-        agentKeyId: 'key-current',
-        skill: { name: 'review.skill', version: '2.4' },
-        workflowDeliveryStatus: 'enabled',
-        owned: true,
-        serviceAuthorization: {
-          kind: 'explicit',
-          serviceIds: ['us-work', 'us-model'],
-        },
+        ...bound,
+        access_token: 'TEST_SECRET',
+        webhook_url: 'TEST_SECRET',
+        runtime_config: { secret: 'TEST_SECRET' },
       },
-    ]);
-    expect(JSON.stringify(result)).not.toMatch(
-      /TEST_ONLY_SECRET|instructions|webhook/,
-    );
+      {
+        ...bound,
+        id: null,
+        nyx_channel_bot_id: 'bot-two',
+        binding_status: 'unbound',
+        authorization_mode: null,
+        skill_name: '',
+      },
+      { ...bound, owned: false },
+    ]),
+  );
+  const rows = await channelsApi.list();
+  expect(rows).toHaveLength(2);
+  expect(rows[0]).toMatchObject({
+    id: 'reg:one/a',
+    botId: 'bot-one',
+    label: 'Support',
+    skill: { name: 'support', version: null },
+    stateVersion: 12,
   });
+  expect(rows[1]).toMatchObject({
+    id: null,
+    bindingStatus: 'unbound',
+    skill: null,
+    serviceAuthorization: { kind: 'unavailable' },
+  });
+  expect(JSON.stringify(rows)).not.toMatch(
+    /TEST_SECRET|webhook|runtime_config|scope/,
+  );
+  fetchMock.mockResolvedValue(response([{ ...bound, id: null }]));
+  await expect(channelsApi.list()).rejects.toThrow();
+  fetchMock.mockResolvedValue(response({ registrations: [] }));
+  await expect(channelsApi.list()).rejects.toThrow();
+  fetchMock.mockResolvedValue(
+    response({ error: 'nyxid_channel_bots_unavailable' }, 502),
+  );
+  await expect(channelsApi.list()).rejects.toMatchObject({ status: 502 });
+  fetchMock.mockResolvedValue(
+    response([
+      { ...bound, binding_status: undefined, default_skill_name: 'support' },
+    ]),
+  );
+  await expect(channelsApi.list()).rejects.toBeInstanceOf(
+    ChannelContractUnavailableError,
+  );
+});
 
-  it('accepts the deployed name-only contract without inventing a version', async () => {
-    fetchMock.mockResolvedValue(
-      response([
-        { ...registration, default_skill_name: 'legacy-skill' },
-        {
-          ...registration,
-          id: 'registration-unset',
-          default_skill: { name: '', version: '7' },
-        },
-      ]),
-    );
-    expect((await channelsApi.list()).map((row) => row.skill)).toEqual([
-      { name: 'legacy-skill', version: null },
-      null,
-    ]);
+it('adopts and updates through the narrow contract and keeps admission separate from completion', async () => {
+  fetchMock.mockResolvedValue(
+    response(
+      {
+        status: 'accepted',
+        registration_id: bound.id,
+        command_id: 'command-one',
+        relay_callback_url: 'TEST_SECRET',
+        nyx_agent_api_key: 'TEST_SECRET',
+      },
+      202,
+    ),
+  );
+  const config = {
+    skillName: ' //Support ',
+    authorizationMode: 'explicit_service_allowlist' as const,
+    serviceIds: ['us-work'],
+  };
+  expect(await channelsApi.adopt('bot-one', config)).toEqual({
+    registrationId: bound.id,
+    commandId: 'command-one',
   });
+  expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+    nyx_channel_bot_id: 'bot-one',
+    skill_name: 'support',
+    authorization_mode: 'explicit_service_allowlist',
+    service_ids: ['us-work'],
+  });
+  await channelsApi.update(bound.id, config);
+  expect(fetchMock.mock.calls[1][0]).toBe(
+    '/api/channels/registrations/reg%3Aone%2Fa',
+  );
+  expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+    skill_name: 'support',
+    authorization_mode: 'explicit_service_allowlist',
+    service_ids: ['us-work'],
+  });
+  fetchMock.mockResolvedValue(
+    response(
+      { error: 'ambiguous_channel_bot_route', secret: 'TEST_SECRET' },
+      409,
+    ),
+  );
+  await expect(channelsApi.adopt('bot-one', config)).rejects.toMatchObject({
+    reason: 'conflict',
+  });
+  fetchMock.mockRejectedValue(new Error('TEST_SECRET'));
+  await expect(channelsApi.adopt('bot-one', config)).rejects.toMatchObject({
+    reason: 'uncertain',
+  });
+});
 
-  it('rejects malformed list responses instead of presenting an empty collection', async () => {
-    fetchMock.mockResolvedValue(response({ registrations: [] }));
-    await expect(channelsApi.list()).rejects.toThrow();
+it('requires exact owned detail identity and strips removal diagnostics', async () => {
+  fetchMock.mockResolvedValue(response(bound));
+  expect(await channelsApi.get(bound.id)).toMatchObject({
+    id: bound.id,
+    stateVersion: 12,
   });
-
-  it('distinguishes explicit empty, NyxID default, missing and unknown service authorization', async () => {
-    fetchMock.mockResolvedValue(
-      response([
-        {
-          ...registration,
-          authorization_mode: 'explicit_service_allowlist',
-          service_ids: [],
-        },
-        { ...registration, authorization_mode: 'nyxid_default' },
-        { ...registration, authorization_mode: 'explicit_service_allowlist' },
-        {
-          ...registration,
-          authorization_mode: 'future_mode',
-          service_ids: ['us-work'],
-        },
-      ]),
-    );
-    expect(
-      (await channelsApi.list()).map((row) => row.serviceAuthorization),
-    ).toEqual([
-      { kind: 'explicit', serviceIds: [] },
-      { kind: 'nyxidDefault' },
-      { kind: 'unavailable' },
-      { kind: 'unavailable' },
-    ]);
+  fetchMock.mockResolvedValue(response({ ...bound, id: 'reg-other' }));
+  await expect(channelsApi.get(bound.id)).rejects.toMatchObject({
+    status: 404,
   });
-
-  it('rejects malformed saved service IDs rather than inventing an authorization list', async () => {
-    fetchMock.mockResolvedValue(
-      response([
-        {
-          ...registration,
-          authorization_mode: 'explicit_service_allowlist',
-          service_ids: ['us-work', null],
-        },
-      ]),
-    );
-    await expect(channelsApi.list()).rejects.toThrow(
-      'Invalid authorized service identity.',
-    );
+  fetchMock.mockResolvedValue(response({ ...bound, owned: false }));
+  await expect(channelsApi.get(bound.id)).rejects.toMatchObject({
+    status: 404,
   });
-
-  it('encodes opaque registration IDs and rejects a status for a different registration', async () => {
-    const id = 'registration:alpha/one + two';
-    fetchMock.mockResolvedValue(
-      response({
-        registration_id: id,
-        status: 'new_backend_state',
-        workflow_result_delivery_status: 'enabled',
-      }),
-    );
-    expect(await channelsApi.status(id)).toEqual({
-      registrationId: id,
-      status: 'new_backend_state',
-      workflowDeliveryStatus: 'enabled',
-    });
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      '/api/channels/registrations/registration%3Aalpha%2Fone%20%2B%20two/status',
-    );
-    fetchMock.mockResolvedValue(
-      response({ registration_id: 'registration-other', status: 'active' }),
-    );
-    await expect(channelsApi.status(id)).rejects.toThrow('identity mismatch');
-  });
-
-  it('uses the registration identity for deletion and discards cleanup diagnostics', async () => {
-    fetchMock.mockResolvedValue(
-      response({ status: 'deleted', warnings: ['TEST_ONLY_SECRET'] }),
-    );
-    await expect(channelsApi.remove('registration:alpha/one')).resolves.toEqual(
-      { hasWarnings: true },
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/channels/registrations/registration%3Aalpha%2Fone',
-      expect.objectContaining({ method: 'DELETE' }),
-    );
-    fetchMock.mockResolvedValue(response({ status: 'accepted' }, 202));
-    await expect(channelsApi.remove('registration-alpha')).rejects.toThrow(
-      'not confirmed',
-    );
-  });
-
-  it('preserves HTTP failure classification without retaining backend secret material', async () => {
-    const json = jest.fn().mockResolvedValue({ message: 'TEST_ONLY_SECRET' });
-    fetchMock.mockResolvedValue({
-      ok: false,
-      status: 404,
-      json,
-    } as unknown as Response);
-    await expect(channelsApi.status('registration-alpha')).rejects.toEqual(
-      new ChannelApiError(404),
-    );
-    expect(json).not.toHaveBeenCalled();
-  });
+  fetchMock.mockResolvedValue(
+    response({ status: 'deleted', warnings: ['TEST_SECRET'] }),
+  );
+  expect(await channelsApi.remove(bound.id)).toEqual({ hasWarnings: true });
+  expect(fetchMock.mock.calls.at(-1)).toEqual([
+    '/api/channels/registrations/reg%3Aone%2Fa',
+    expect.objectContaining({ method: 'DELETE' }),
+  ]);
 });

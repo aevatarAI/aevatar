@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using FluentAssertions;
+using Google.Protobuf;
 
 namespace Aevatar.AI.Tests;
 
@@ -17,6 +18,12 @@ public sealed class AgentToolReceiptWireContractTests
         ((int)AgentToolReceiptApprovalMode.NeverRequire).Should().Be(1);
         ((int)AgentToolReceiptApprovalMode.AlwaysRequire).Should().Be(2);
         ((int)AgentToolReceiptApprovalMode.Auto).Should().Be(3);
+        ((int)AgentToolReceiptMutationStage.Unspecified).Should().Be(0);
+        ((int)AgentToolReceiptMutationStage.Accepted).Should().Be(1);
+        ((int)AgentToolReceiptMutationStage.ReadModelObserved).Should().Be(2);
+        ((int)AgentToolFailureOutcome.Unspecified).Should().Be(0);
+        ((int)AgentToolFailureOutcome.CalleeConfirmed).Should().Be(1);
+        ((int)AgentToolFailureOutcome.OutcomeUncertain).Should().Be(2);
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
@@ -37,7 +44,26 @@ public sealed class AgentToolReceiptWireContractTests
                 (14, "result_json"),
                 (15, "managed_workflow_handoff"),
                 (16, "workflow_run_delivery"),
-                (17, "authorization_required"));
+                (17, "authorization_required"),
+                (18, "effect"),
+                (19, "provider_resource_id"),
+                (20, "nyx_id_approval_decision_mode"),
+                (21, "mutation_stage"),
+                (22, "nyx_id_approval_terminal_outcome"),
+                (23, "exact_service_approval"),
+                (24, "failure_outcome"));
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "call-uncertain",
+            Status = AgentToolReceiptStatus.Error,
+            FailureOutcome = AgentToolFailureOutcome.OutcomeUncertain,
+        };
+        AgentToolReceipt.Parser.ParseFrom(receipt.ToByteArray()).FailureOutcome.Should()
+            .Be(AgentToolFailureOutcome.OutcomeUncertain);
+        ((int)NyxIdApprovalTerminalOutcome.Unspecified).Should().Be(0);
+        ((int)NyxIdApprovalTerminalOutcome.Rejected).Should().Be(1);
+        ((int)NyxIdApprovalTerminalOutcome.Expired).Should().Be(2);
+        ((int)NyxIdApprovalTerminalOutcome.TimedOut).Should().Be(3);
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)
             .Should()

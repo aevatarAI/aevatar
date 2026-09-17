@@ -8,6 +8,7 @@ namespace Aevatar.CQRS.Projection.Providers.Neo4j.Stores;
 
 public sealed partial class Neo4jProjectionGraphStore
     : IProjectionGraphStore,
+      IVersionedProjectionGraphStore,
       IAsyncDisposable
 {
     private const string ProviderName = "Neo4j";
@@ -15,7 +16,10 @@ public sealed partial class Neo4jProjectionGraphStore
     private readonly string _database;
     private readonly string _nodeLabel;
     private readonly string _edgeType;
-    private readonly bool _autoCreateConstraints;
+    private readonly string _versionedOwnerStateLabel;
+    private readonly string _versionedEventLabel;
+    private readonly string _versionedEdgeIdentityLabel;
+    private readonly bool _autoCreateSchema;
     private readonly int _maxTraversalDepth;
     private readonly ILogger<Neo4jProjectionGraphStore> _logger;
     private readonly SemaphoreSlim _schemaLock = new(1, 1);
@@ -24,6 +28,7 @@ public sealed partial class Neo4jProjectionGraphStore
         PropertyNameCaseInsensitive = true,
     };
     private bool _schemaInitialized;
+    private int _disposeState;
 
     public Neo4jProjectionGraphStore(
         Neo4jProjectionGraphStoreOptions options,
@@ -37,7 +42,16 @@ public sealed partial class Neo4jProjectionGraphStore
         _edgeType = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
             options.EdgeType,
             "PROJECTION_REL");
-        _autoCreateConstraints = options.AutoCreateConstraints;
+        _versionedOwnerStateLabel = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
+            $"{_nodeLabel}OwnerState",
+            "ProjectionGraphOwnerState");
+        _versionedEventLabel = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
+            $"{_nodeLabel}OwnerEvent",
+            "ProjectionGraphOwnerEvent");
+        _versionedEdgeIdentityLabel = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeLabel(
+            $"{_nodeLabel}EdgeIdentity",
+            "ProjectionGraphEdgeIdentity");
+        _autoCreateSchema = options.AutoCreateSchema;
         _maxTraversalDepth = Math.Clamp(options.MaxTraversalDepth, 1, 8);
         _logger = logger ?? NullLogger<Neo4jProjectionGraphStore>.Instance;
 
@@ -48,17 +62,27 @@ public sealed partial class Neo4jProjectionGraphStore
             config.WithConnectionTimeout(TimeSpan.FromMilliseconds(Math.Max(1000, options.RequestTimeoutMs))));
     }
 
-    public async Task ReplaceOwnerGraphAsync(
+    public Task ReplaceOwnerGraphAsync(
         ProjectionOwnedGraph graph,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        Neo4jProjectionGraphStoreTelemetry.ObserveWriteAsync(
+            _logger,
+            Neo4jProjectionGraphWriteTelemetryContext.ForReplaceOwnerGraph(graph),
+            ct,
+            () => ReplaceOwnerGraphCoreAsync(graph, ct));
+
+    private async Task ReplaceOwnerGraphCoreAsync(
+        ProjectionOwnedGraph graph,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(graph);
         ct.ThrowIfCancellationRequested();
 
+        var projectionKind = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(graph.ProjectionKind);
         var scope = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(graph.Scope);
         var ownerId = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(graph.OwnerId);
-        if (scope.Length == 0 || ownerId.Length == 0)
-            throw new InvalidOperationException("Owned graph requires non-empty scope and ownerId.");
+        if (projectionKind.Length == 0 || scope.Length == 0 || ownerId.Length == 0)
+            throw new InvalidOperationException("Owned graph requires non-empty projectionKind, scope and ownerId.");
 
         var nodes = graph.Nodes
             .Select(node => new Dictionary<string, object?>
@@ -104,7 +128,14 @@ public sealed partial class Neo4jProjectionGraphStore
         await ExecuteWriteTransactionAsync(cypher, parameters, ct);
     }
 
-    public async Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default)
+    public Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default) =>
+        Neo4jProjectionGraphStoreTelemetry.ObserveWriteAsync(
+            _logger,
+            Neo4jProjectionGraphWriteTelemetryContext.ForUpsertNode(node),
+            ct,
+            () => UpsertNodeCoreAsync(node, ct));
+
+    private async Task UpsertNodeCoreAsync(ProjectionGraphNode node, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(node);
         ct.ThrowIfCancellationRequested();
@@ -137,7 +168,14 @@ public sealed partial class Neo4jProjectionGraphStore
         await ExecuteWriteAsync(cypher, parameters, ct);
     }
 
-    public async Task UpsertEdgeAsync(ProjectionGraphEdge edge, CancellationToken ct = default)
+    public Task UpsertEdgeAsync(ProjectionGraphEdge edge, CancellationToken ct = default) =>
+        Neo4jProjectionGraphStoreTelemetry.ObserveWriteAsync(
+            _logger,
+            Neo4jProjectionGraphWriteTelemetryContext.ForUpsertEdge(edge),
+            ct,
+            () => UpsertEdgeCoreAsync(edge, ct));
+
+    private async Task UpsertEdgeCoreAsync(ProjectionGraphEdge edge, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(edge);
         ct.ThrowIfCancellationRequested();
@@ -174,7 +212,14 @@ public sealed partial class Neo4jProjectionGraphStore
         await ExecuteWriteAsync(cypher, parameters, ct);
     }
 
-    public async Task DeleteNodeAsync(string scope, string nodeId, CancellationToken ct = default)
+    public Task DeleteNodeAsync(string scope, string nodeId, CancellationToken ct = default) =>
+        Neo4jProjectionGraphStoreTelemetry.ObserveWriteAsync(
+            _logger,
+            Neo4jProjectionGraphWriteTelemetryContext.ForDeleteNode(scope, nodeId),
+            ct,
+            () => DeleteNodeCoreAsync(scope, nodeId, ct));
+
+    private async Task DeleteNodeCoreAsync(string scope, string nodeId, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var scopeValue = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(scope);
@@ -192,7 +237,14 @@ public sealed partial class Neo4jProjectionGraphStore
         await ExecuteWriteAsync(cypher, parameters, ct);
     }
 
-    public async Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default)
+    public Task DeleteEdgeAsync(string scope, string edgeId, CancellationToken ct = default) =>
+        Neo4jProjectionGraphStoreTelemetry.ObserveWriteAsync(
+            _logger,
+            Neo4jProjectionGraphWriteTelemetryContext.ForDeleteEdge(scope, edgeId),
+            ct,
+            () => DeleteEdgeCoreAsync(scope, edgeId, ct));
+
+    private async Task DeleteEdgeCoreAsync(string scope, string edgeId, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         var scopeValue = Neo4jProjectionGraphStoreNormalizationSupport.NormalizeToken(scope);
@@ -386,6 +438,9 @@ public sealed partial class Neo4jProjectionGraphStore
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposeState, 1) != 0)
+            return;
+
         _schemaLock.Dispose();
         await _driver.DisposeAsync();
     }

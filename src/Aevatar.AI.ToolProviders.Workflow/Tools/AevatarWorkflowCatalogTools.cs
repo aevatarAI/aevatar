@@ -39,15 +39,7 @@ internal sealed class ListAevatarWorkflowTemplatesTool : IAgentTool
             if (!WorkflowCatalogToolJson.TryParseObject(argumentsJson, [], out _, out var error))
                 return WorkflowCatalogToolJson.Error("invalid_arguments", error);
 
-            var workflows = await _catalog.ListWorkflowCatalogAsync(ct);
-            // Enumerate only entries published to the shared library, the same public-catalog
-            // contract the Console enforces (apps/aevatar-console-web/src/shared/workflows/
-            // catalogVisibility.ts filters showInLibrary). This keeps internal primitive/demo
-            // examples out of the agent-facing listing. Scope-owned private definitions never reach
-            // this readmodel — they are excluded at projection time — so what remains is the public
-            // template gallery, addressable in full detail only by exact name via
-            // aevatar_get_workflow_template.
-            var publicTemplates = workflows.Where(item => item.ShowInLibrary).ToArray();
+            var publicTemplates = (await _catalog.ListPublicWorkflowCatalogAsync(ct)).ToArray();
             return WorkflowCatalogToolJson.Serialize(
                 new WorkflowTemplateCatalogListJson(
                     publicTemplates.Select(WorkflowCatalogToolJson.ToJson).ToArray(),
@@ -121,7 +113,7 @@ internal sealed class GetAevatarWorkflowTemplateTool : IAgentTool
                 return WorkflowCatalogToolJson.Error("invalid_arguments", error);
             }
 
-            var detail = await _catalog.GetWorkflowDetailAsync(templateName, ct);
+            var detail = await _catalog.GetPublicWorkflowDetailAsync(templateName, ct);
             return detail is null
                 ? WorkflowCatalogToolJson.Error(
                     "workflow_template_not_found",

@@ -15,4 +15,10 @@ public sealed class GAgentAttribute : Attribute
     }
 
     public string Kind { get; }
+
+    /// <summary>
+    /// Highest persisted business-state schema version this implementation can
+    /// activate. Version zero is the legacy protobuf-compatible baseline.
+    /// </summary>
+    public int StateSchemaVersion { get; set; }
 }

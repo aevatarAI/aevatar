@@ -61,6 +61,7 @@ public sealed class ServiceRunCurrentStateProjectorTests
         doc.ServiceId.Should().Be("svc-1");
         doc.ActorId.Should().Be("service-run:run-1");
         doc.ScheduleId.Should().Be("schedule-1");
+        doc.ScheduleOperationId.Should().Be("operation-1");
         doc.ImplementationKind.Should().Be((int)ServiceImplementationKind.Workflow);
         doc.TargetActorId.Should().Be("workflow-run:abc");
         doc.Status.Should().Be((int)ServiceRunStatus.Accepted);
@@ -246,6 +247,7 @@ public sealed class ServiceRunCurrentStateProjectorTests
 
         results.Select(x => x.RunId).Should().Equal("run-a");
         results.Single().ScheduleId.Should().Be("schedule-a");
+        results.Single().ScheduleOperationId.Should().Be("operation-1");
     }
 
     [Fact]
@@ -313,7 +315,8 @@ public sealed class ServiceRunCurrentStateProjectorTests
         string targetActorId,
         DateTimeOffset? createdAt = null,
         ServiceRunStatus status = ServiceRunStatus.Accepted,
-        string scheduleId = "schedule-1") =>
+        string scheduleId = "schedule-1",
+        string scheduleOperationId = "operation-1") =>
         new()
         {
             ScopeId = scopeId,
@@ -329,6 +332,7 @@ public sealed class ServiceRunCurrentStateProjectorTests
             DeploymentId = "dep-1",
             Status = status,
             ScheduleId = scheduleId,
+            ScheduleOperationId = scheduleOperationId,
             CreatedAt = createdAt.HasValue ? Timestamp.FromDateTimeOffset(createdAt.Value) : null,
             UpdatedAt = createdAt.HasValue ? Timestamp.FromDateTimeOffset(createdAt.Value) : null,
             Identity = new ServiceIdentity

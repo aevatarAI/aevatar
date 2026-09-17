@@ -6,6 +6,8 @@ using Aevatar.Workflow.Application.Runs;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using AppWorkflowCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
+using AppWorkflowCallerNyxIdAuthority = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority;
 
 namespace Aevatar.Workflow.Application.Tests;
 
@@ -48,14 +50,34 @@ public sealed class WorkflowChatRunRequestSeedTests
             CompletionNotificationTarget: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCompletionNotificationTarget(
                 ActorId: "delivery-actor-1",
                 DeliveryId: "delivery-1",
-                ExpiresAtUnixMs: 1710000000000));
+                ExpiresAtUnixMs: 1710000000000),
+            ResolvedDefinitionBinding: new WorkflowDefinitionBinding(
+                "definition-internal",
+                "direct",
+                "name: direct\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                ExternalCapabilityExecutionMode.Interactive,
+                SourceKind: "service_revision",
+                CapabilityAdmissionPlan: new WorkflowCapabilityAdmissionPlan
+                {
+                    AdmissionDigest = "internal-digest",
+                },
+                WorkflowId: "workflow-internal",
+                RevisionId: "revision-internal"),
+            CurrentTurnId: "turn-internal");
 
         var json = JsonSerializer.Serialize(request);
 
         json.Should().NotContain("TargetSeed");
         json.Should().NotContain("CompletionNotificationTarget");
+        json.Should().NotContain("ResolvedDefinitionBinding");
+        json.Should().NotContain("CurrentTurnId");
         json.Should().NotContain("run-1");
         json.Should().NotContain("delivery-actor-1");
+        json.Should().NotContain("definition-internal");
+        json.Should().NotContain("internal-digest");
+        json.Should().NotContain("workflow-internal");
+        json.Should().NotContain("turn-internal");
     }
 
     [Fact]
@@ -94,6 +116,99 @@ public sealed class WorkflowChatRunRequestSeedTests
         payload.ExternalIngress.AuthScheme.Should().Be("hmac-sha256");
         payload.ExternalIngress.PrincipalSubject.Should().Be("lark");
         payload.Metadata.Should().NotContainKey("external_ingress");
+    }
+
+    [Fact]
+    public void WorkflowChatRequestEnvelopeFactory_ShouldMapExactUnattendedAuthorityWithoutBearer()
+    {
+        var authorization = new WorkflowUnattendedEffectAuthorization
+        {
+            SchemaVersion = WorkflowUnattendedEffectAuthorizationIntegrity.SchemaVersion,
+            DefinitionActorId = "definition-alpha",
+            ScopeId = "scope-alpha",
+            WorkflowId = "workflow-alpha",
+            RevisionId = "revision-alpha",
+            DefinitionVersion = 7,
+            AuthorizationDigest = "sha256:authorization-alpha",
+        };
+        var request = new WorkflowChatRunRequest(
+            Prompt: "start",
+            Source: WorkflowChatSource.DefinitionActor("definition-alpha", "workflow-alpha"),
+            CallerCredential: new AppWorkflowCallerCredential(
+                BearerToken: null,
+                NyxIdAuthority: new AppWorkflowCallerNyxIdAuthority(
+                    "nyxid",
+                    "tenant-alpha",
+                    "user-alpha",
+                    "proxy",
+                    "binding-alpha"),
+                Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken: null,
+                UnattendedEffectAuthorization: authorization),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Durable,
+            ExternalIngress: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowExternalIngressContext(
+                "route-alpha",
+                "nyxid",
+                "delivery-alpha",
+                1710000000000,
+                "application/json",
+                "sha256:payload-alpha",
+                "hmac-sha256",
+                "nyxid"));
+
+        var payload = new WorkflowChatRequestEnvelopeFactory().CreateEnvelope(
+            request,
+            new CommandContext(
+                "command-alpha",
+                "correlation-alpha",
+                "target-alpha",
+                new Dictionary<string, string>(StringComparer.Ordinal)))
+            .Payload.Unpack<WorkflowChatRequestEvent>();
+
+        payload.CallerCredential.BearerToken.Should().BeEmpty();
+        payload.CallerCredential.SourceReadableUserBearerToken.Should().BeEmpty();
+        payload.CallerCredential.Kind.Should().Be(NyxIdCallerCredentialKind.ProxyDelegation);
+        payload.CallerCredential.NyxIdAuthority.BindingId.Should().Be("binding-alpha");
+        payload.CallerCredential.UnattendedEffectAuthorization.AuthorizationDigest
+            .Should().Be("sha256:authorization-alpha");
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void WorkflowChatRequestEnvelopeFactory_ShouldRejectIncompleteUnattendedAuthority(
+        bool includeBindingId,
+        bool includeAuthorization)
+    {
+        var request = new WorkflowChatRunRequest(
+            Prompt: "start",
+            Source: WorkflowChatSource.DefinitionActor("definition-alpha", "workflow-alpha"),
+            CallerCredential: new AppWorkflowCallerCredential(
+                BearerToken: null,
+                NyxIdAuthority: new AppWorkflowCallerNyxIdAuthority(
+                    "nyxid",
+                    "tenant-alpha",
+                    "user-alpha",
+                    "proxy",
+                    includeBindingId ? "binding-alpha" : null),
+                Kind: NyxIdCallerCredentialKind.ProxyDelegation,
+                SourceReadableUserBearerToken: null,
+                UnattendedEffectAuthorization: includeAuthorization
+                    ? new WorkflowUnattendedEffectAuthorization
+                    {
+                        SchemaVersion = WorkflowUnattendedEffectAuthorizationIntegrity.SchemaVersion,
+                    }
+                    : null),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Durable);
+
+        FluentActions.Invoking(() => new WorkflowChatRequestEnvelopeFactory().CreateEnvelope(
+                request,
+                new CommandContext(
+                    "command-alpha",
+                    "correlation-alpha",
+                    "target-alpha",
+                    new Dictionary<string, string>(StringComparer.Ordinal))))
+            .Should().Throw<ArgumentException>();
     }
 
     [Fact]
@@ -150,7 +265,8 @@ public sealed class WorkflowChatRunRequestSeedTests
                         Content: "Choose a Team: team01 or team02."),
                 ],
                 Truncated: false,
-                MaxMessageCount: 24));
+                MaxMessageCount: 24,
+                CurrentTurnId: "turn-current"));
 
         var envelope = factory.CreateEnvelope(
             request,
@@ -166,11 +282,35 @@ public sealed class WorkflowChatRunRequestSeedTests
         payload.ConversationContext.StateVersion.Should().Be(7);
         payload.ConversationContext.Truncated.Should().BeFalse();
         payload.ConversationContext.MaxMessageCount.Should().Be(24);
+        payload.ConversationContext.CurrentTurnId.Should().Be("turn-current");
         payload.ConversationContext.Messages.Select(static message => (message.Sequence, message.TurnId, message.Role, message.Content))
             .Should()
             .Equal(
                 (1, "turn-1", WorkflowConversationRole.User, "Create a workflow that generates fund analysis reports."),
                 (2, "turn-1", WorkflowConversationRole.Assistant, "Choose a Team: team01 or team02."));
         payload.Metadata.Should().NotContainKey("conversation_context");
+    }
+
+    [Fact]
+    public void WorkflowChatRequestEnvelopeFactory_ShouldMapCurrentTurnIdWithoutConversationContext()
+    {
+        var factory = new WorkflowChatRequestEnvelopeFactory();
+        var request = new WorkflowChatRunRequest(
+            Prompt: "connect twitter",
+            Source: WorkflowChatSource.CatalogWorkflow("studio"),
+            ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
+            CurrentTurnId: "turn-studio-alpha");
+
+        var envelope = factory.CreateEnvelope(
+            request,
+            new CommandContext(
+                "command-alpha",
+                "correlation-alpha",
+                "target-alpha",
+                new Dictionary<string, string>(StringComparer.Ordinal)));
+        var payload = envelope.Payload.Unpack<WorkflowChatRequestEvent>();
+
+        payload.CurrentTurnId.Should().Be("turn-studio-alpha");
+        payload.ConversationContext.Should().BeNull();
     }
 }

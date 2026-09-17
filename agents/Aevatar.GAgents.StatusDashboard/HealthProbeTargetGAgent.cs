@@ -19,8 +19,6 @@ namespace Aevatar.GAgents.StatusDashboard;
 [GAgent("status.dashboard.health-probe-target")]
 public sealed class HealthProbeTargetGAgent : GAgentBase<HealthProbeTargetState>
 {
-    internal const string LegacyProjectionKind = "health-probe-target";
-
     internal const int RetainedOutcomeCount = 120;
     private static readonly TimeSpan RetainedOutcomeWindow = TimeSpan.FromHours(2);
 

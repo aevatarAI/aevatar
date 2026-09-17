@@ -47,13 +47,19 @@ public sealed class AssignModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = true,
             Output = resolvedValue,
+            OutputProvenance = value.StartsWith('$')
+                ? WorkflowStepOutputProvenance.ForwardedInput
+                : WorkflowStepOutputProvenance.Produced,
         };
         if (!string.IsNullOrWhiteSpace(target))
         {
             completed.AssignedVariable = target;
             completed.AssignedValue = resolvedValue;
+            completed.AssignedValueProvenance =
+                WorkflowStepAssignedValueProvenance.ReferencesOutput;
         }
 
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);

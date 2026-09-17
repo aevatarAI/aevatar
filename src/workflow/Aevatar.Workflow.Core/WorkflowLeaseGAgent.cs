@@ -255,7 +255,7 @@ public sealed class WorkflowLeaseGAgent : GAgentBase<WorkflowLeaseState>
             : State.LeaseKey;
 
         if (!string.Equals(State.LeaseKey, leaseKey, StringComparison.Ordinal) ||
-            !string.Equals(State.HolderToken, fired.HolderToken, StringComparison.Ordinal) ||
+            !string.Equals(State.HolderToken, fired.HolderFenceId, StringComparison.Ordinal) ||
             State.Generation != fired.Generation ||
             State.ExpiresAtUnixMs != fired.ExpiresAtUnixMs ||
             State.ExpiresAtUnixMs > nowUnixMs)
@@ -408,7 +408,7 @@ public sealed class WorkflowLeaseGAgent : GAgentBase<WorkflowLeaseState>
             new WorkflowLeaseExpirationFiredEvent
             {
                 LeaseKey = State.LeaseKey,
-                HolderToken = State.HolderToken,
+                HolderFenceId = State.HolderToken,
                 Generation = State.Generation,
                 ExpiresAtUnixMs = State.ExpiresAtUnixMs,
             },

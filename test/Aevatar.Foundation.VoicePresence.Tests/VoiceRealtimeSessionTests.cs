@@ -118,7 +118,7 @@ public class VoiceRealtimeSessionTests
     [Fact]
     public async Task ExecuteAsync_should_return_capability_not_ready_when_auto_enable_commits_but_does_not_materialize()
     {
-        // Auto-enable committed the enable, but the capability read model has not caught up within the
+        // Auto-enable accepted the enable dispatch, but the capability read model has not caught up within the
         // bounded re-read window (enable is read-model-asynchronous). That is a retryable materialization
         // lag, not a genuinely missing capability — surface the typed retryable 503 (CapabilityNotReady) so
         // the client re-attaches, NOT a permanent 404.

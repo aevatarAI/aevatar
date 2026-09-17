@@ -28,6 +28,7 @@
   <ItemGroup>
     <Protobuf Include="projection_scope_messages.proto" GrpcServices="None" AdditionalImportDirs="..\Aevatar.Foundation.Abstractions" />
     <Protobuf Include="projection_scope_status_readmodel.proto" GrpcServices="None" AdditionalImportDirs=".;..\Aevatar.Foundation.Abstractions" />
+    <Protobuf Include="projection_scope_status_terminal.proto" GrpcServices="None" AdditionalImportDirs=".;..\Aevatar.Foundation.Abstractions" />
     <Protobuf Include="projection_session_event_transport.proto" GrpcServices="None" />
   </ItemGroup>
   <ItemGroup>

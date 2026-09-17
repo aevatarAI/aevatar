@@ -8,9 +8,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.GAgents.NyxidChat;
 
 /// <summary>
-/// Resolves the transient token used by <c>use_skill</c>. Bound turns use only
-/// the verified sender token or a capability issued for the exact typed NyxID
+/// Resolves the transient token used by the remote-skill tools
+/// (<c>use_skill</c>, <c>ornn_search_skills</c>). Bound turns use only the
+/// verified sender token or a capability issued for the exact typed NyxID
 /// authority; they never fall through to ambient bot-owner credentials.
+/// Failures stay typed so the caller can tell the user whether to bind,
+/// re-bind, or simply retry.
 /// </summary>
 public sealed class ChannelRemoteSkillAccessTokenResolver : IRemoteSkillAccessTokenResolver
 {
@@ -25,30 +28,45 @@ public sealed class ChannelRemoteSkillAccessTokenResolver : IRemoteSkillAccessTo
         _logger = logger ?? NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance;
     }
 
-    public async Task<string?> ResolveAsync(string skillName, CancellationToken ct = default)
+    public async Task<RemoteSkillAccessTokenResolution> ResolveAsync(string skillName, CancellationToken ct = default)
     {
         var context = AgentToolRequestContext.Current;
         var bindingId = Normalize(context?.SenderBinding.BindingId);
         if (bindingId is null)
-            return AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials);
+        {
+            var sourceToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials);
+            return sourceToken is null
+                ? RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.ChannelBindingRequired)
+                : RemoteSkillAccessTokenResolution.Resolved(sourceToken);
+        }
 
         var senderToken = Normalize(context!.Credentials.SenderNyxIdAccessToken);
         if (senderToken is not null)
-            return senderToken;
+            return RemoteSkillAccessTokenResolution.Resolved(senderToken);
 
         if (_capabilityIssuer is null || !TryBuildSubject(context, out var subject))
-            return null;
+            return RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.Unavailable);
 
         try
         {
             var capability = await _capabilityIssuer
                 .IssueByBindingIdAsync(subject, bindingId, ct)
                 .ConfigureAwait(false);
-            return Normalize(capability.AccessToken);
+            return RemoteSkillAccessTokenResolution.FromAccessToken(capability.AccessToken);
         }
         catch (OperationCanceledException)
         {
             throw;
+        }
+        catch (Exception ex) when (IsBindingStateFailure(ex))
+        {
+            _logger.LogWarning(
+                "NyxID remote-skill capability rejected the sender binding. skill={SkillName}, platform={Platform}, failure={FailureType}",
+                Normalize(skillName) ?? "unknown",
+                subject.Platform,
+                ex.GetType().Name);
+            return RemoteSkillAccessTokenResolution.Failed(
+                RemoteSkillAccessTokenFailureKind.ChannelBindingRefreshRequired);
         }
         catch (Exception ex)
         {
@@ -57,9 +75,15 @@ public sealed class ChannelRemoteSkillAccessTokenResolver : IRemoteSkillAccessTo
                 Normalize(skillName) ?? "unknown",
                 subject.Platform,
                 ex.GetType().Name);
-            return null;
+            return RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.Unavailable);
         }
     }
+
+    private static bool IsBindingStateFailure(Exception ex) =>
+        ex is BindingRevokedException
+            or BindingNotFoundException
+            or BindingScopeMismatchException
+            or BindingServiceAccessMismatchException;
 
     private static bool TryBuildSubject(
         AgentToolExecutionContext context,

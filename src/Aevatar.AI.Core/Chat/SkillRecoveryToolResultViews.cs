@@ -147,13 +147,25 @@ internal static class SkillRecoveryToolResultViews
     private static SkillLoadToolResultView ParseStructuredLoadResult(JsonElement root, string fallbackDisplayText)
     {
         var loaded = TryGetBoolean(root, "loaded");
+        var workflowMount = root.TryGetProperty("workflow_mount", out var workflowMountElement) &&
+                            workflowMountElement.ValueKind == JsonValueKind.Object
+            ? workflowMountElement
+            : default;
         return new SkillLoadToolResultView(
             Status: ParseStatus(root, hasMatchesFallback: loaded),
             SkillName: TryGetString(root, "skill_name"),
             Loaded: loaded,
             Error: TryGetString(root, "error"),
             HttpStatus: TryGetInt32(root, "http_status"),
-            DisplayText: TryGetString(root, "text") ?? fallbackDisplayText);
+            DisplayText: TryGetString(root, "text") ?? fallbackDisplayText,
+            WorkflowMountStatus: workflowMount.ValueKind == JsonValueKind.Object
+                ? TryGetString(workflowMount, "status")
+                : null,
+            WorkflowMounted: workflowMount.ValueKind == JsonValueKind.Object &&
+                             TryGetBoolean(workflowMount, "mounted"),
+            WorkflowMountConfirmationToken: workflowMount.ValueKind == JsonValueKind.Object
+                ? TryGetString(workflowMount, "confirmation_token")
+                : null);
     }
 
     private static SkillSearchToolResultView ParseLegacySearchResult(string rawToolResult)

@@ -39,9 +39,8 @@ internal static class VoiceToolExecutionContextMapper
 
         return context with
         {
-            ToolVisibility = voiceContext.AllowedToolNames.Count == 0
-                ? AgentToolVisibilityScope.Unrestricted
-                : AgentToolVisibilityScope.FromAllowedToolNames(voiceContext.AllowedToolNames),
+            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(
+                voiceContext.AllowedToolNames),
         };
     }
 

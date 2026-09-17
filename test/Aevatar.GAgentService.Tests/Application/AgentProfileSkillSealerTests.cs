@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
@@ -128,8 +129,42 @@ public sealed class AgentProfileSkillSealerTests
     }
 
     [Theory]
+    [InlineData(AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes, true)]
+    [InlineData(AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes + 1, false)]
+    public async Task ResolveAndSealAsync_ShouldEnforceSelectedSkillBodyBudget(
+        int skillMarkdownUtf8Bytes,
+        bool expectedSuccess)
+    {
+        var resolver = new RecordingResolver(Package() with
+        {
+            SkillMarkdownUtf8Bytes = skillMarkdownUtf8Bytes,
+        });
+
+        var result = await NewSealer(resolver).ResolveAndSealAsync(Identity(), Draft(), Context());
+
+        result.IsSuccess.Should().Be(expectedSuccess);
+        if (expectedSuccess)
+        {
+            result.Diagnostics.Should().BeEmpty();
+        }
+        else
+        {
+            result.Diagnostics.Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "ORNN_SKILL_BODY_TOO_LARGE" &&
+                diagnostic.Field.EndsWith(".skillRef", StringComparison.Ordinal) &&
+                diagnostic.Message.Contains(
+                    $"{AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes + 1}",
+                    StringComparison.Ordinal) &&
+                diagnostic.Message.Contains(
+                    $"{AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes}",
+                    StringComparison.Ordinal));
+        }
+    }
+
+    [Theory]
     [InlineData("task-name")]
     [InlineData("task-ref")]
+    [InlineData("task-selector-risk")]
     [InlineData("recovery-name")]
     [InlineData("recovery-ref")]
     public async Task ResolveAndSealAsync_ShouldRequireTaskAndRecoveryPoliciesWithinMaximum(string violation)
@@ -142,6 +177,12 @@ public sealed class AgentProfileSkillSealerTests
                 break;
             case "task-ref":
                 draft.RuntimeProfile.Members[0].TaskToolPolicy.ToolSetRefs.Add("task.extra");
+                break;
+            case "task-selector-risk":
+                draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(
+                    Selector("api-github", AgentToolOperationRiskPayload.ReadOnly));
+                draft.RuntimeProfile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(
+                    Selector("api-github", AgentToolOperationRiskPayload.Write));
                 break;
             case "recovery-name":
                 draft.RuntimeProfile.RecoveryToolPolicy.ToolNames.Add("admin");
@@ -160,6 +201,184 @@ public sealed class AgentProfileSkillSealerTests
         resolver.Requests.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("invalid-slug", "PROFILE_CONNECTED_SERVICE_SLUG_INVALID")]
+    [InlineData("empty-risks", "PROFILE_CONNECTED_SERVICE_RISKS_REQUIRED")]
+    [InlineData("destructive", "PROFILE_CONNECTED_SERVICE_RISK_INVALID")]
+    [InlineData("duplicate", "PROFILE_CONNECTED_SERVICE_SELECTOR_DUPLICATE")]
+    [InlineData("invalid-endpoint", "PROFILE_CONNECTED_SERVICE_ENDPOINT_INVALID")]
+    public async Task ResolveAndSealAsync_ShouldRejectInvalidConnectedServiceSelectors(
+        string violation,
+        string expectedCode)
+    {
+        var draft = Draft();
+        var selector = violation switch
+        {
+            "invalid-slug" => Selector("API-GitHub", AgentToolOperationRiskPayload.ReadOnly),
+            "empty-risks" => Selector("api-github"),
+            "destructive" => Selector("api-github", AgentToolOperationRiskPayload.Destructive),
+            _ => Selector("api-github", AgentToolOperationRiskPayload.ReadOnly),
+        };
+        if (violation == "invalid-endpoint")
+            selector.EndpointId = " endpoint-read";
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(selector);
+        if (violation == "duplicate")
+        {
+            draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(
+                Selector("api-github", AgentToolOperationRiskPayload.Write));
+        }
+        var resolver = new RecordingResolver();
+
+        var result = await NewSealer(resolver).ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().Contain(diagnostic => diagnostic.Code == expectedCode);
+        resolver.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveAndSealAsync_BroadMaximumSelector_ShouldAllowExactTaskEndpoint()
+    {
+        var draft = Draft();
+        var maximum = Selector("api-github", AgentToolOperationRiskPayload.ReadOnly);
+        var task = maximum.Clone();
+        task.EndpointId = "endpoint-read";
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(maximum);
+        draft.RuntimeProfile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(task);
+
+        var result = await NewSealer(new RecordingResolver())
+            .ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeTrue();
+        result.Snapshot!.RuntimeProfile.Members[0].TaskToolPolicy.ConnectedServiceSelectors[0].EndpointId
+            .Should().Be("endpoint-read");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("endpoint-write")]
+    public async Task ResolveAndSealAsync_ExactMaximumSelector_ShouldRejectBroaderOrDifferentTaskEndpoint(
+        string taskEndpointId)
+    {
+        var draft = Draft();
+        var maximum = Selector("api-github", AgentToolOperationRiskPayload.ReadOnly);
+        maximum.EndpointId = "endpoint-read";
+        var task = maximum.Clone();
+        task.EndpointId = taskEndpointId;
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(maximum);
+        draft.RuntimeProfile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(task);
+
+        var result = await NewSealer(new RecordingResolver())
+            .ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "PROFILE_TOOL_POLICY_EXCEEDS_MAXIMUM");
+    }
+
+    [Fact]
+    public async Task ResolveAndSealAsync_ShouldRejectNonCanonicalReadinessScopes()
+    {
+        var draft = Draft();
+        var selector = Selector("api-github", AgentToolOperationRiskPayload.ReadOnly);
+        selector.Readiness = new AgentProfileConnectedServiceReadiness
+        {
+            RequestedScopes = { "repo", " repo" },
+        };
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(selector);
+
+        var result = await NewSealer(new RecordingResolver())
+            .ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == "PROFILE_CONNECTED_SERVICE_READINESS_SCOPES_INVALID");
+    }
+
+    [Fact]
+    public async Task ResolveAndSealAsync_ShouldRejectEmptyReadinessScopes()
+    {
+        var draft = Draft();
+        var selector = Selector("api-github", AgentToolOperationRiskPayload.ReadOnly);
+        selector.Readiness = new AgentProfileConnectedServiceReadiness();
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(selector);
+
+        var result = await NewSealer(new RecordingResolver())
+            .ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "PROFILE_CONNECTED_SERVICE_READINESS_SCOPES_INVALID" &&
+            diagnostic.Field.EndsWith(".readiness.requestedScopes", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ResolveAndSealAsync_ShouldKeepTaskReadinessScopesWithinMaximum()
+    {
+        var draft = Draft();
+        var maximum = Selector("api-github", AgentToolOperationRiskPayload.ReadOnly);
+        maximum.Readiness = new AgentProfileConnectedServiceReadiness
+        {
+            RequestedScopes = { "repo" },
+        };
+        var task = maximum.Clone();
+        task.Readiness.RequestedScopes.Add("read:user");
+        draft.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add(maximum);
+        draft.RuntimeProfile.Members[0].TaskToolPolicy.ConnectedServiceSelectors.Add(task);
+
+        var result = await NewSealer(new RecordingResolver())
+            .ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "PROFILE_TOOL_POLICY_EXCEEDS_MAXIMUM");
+    }
+
+    [Fact]
+    public void NormalizeDraft_ShouldCanonicalizeConnectedServiceSelectorsAndRisks()
+    {
+        var left = Draft();
+        left.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add([
+            Selector(
+                "api-slack",
+                AgentToolOperationRiskPayload.Write,
+                AgentToolOperationRiskPayload.ReadOnly),
+            Selector("api-github", AgentToolOperationRiskPayload.ReadOnly),
+        ]);
+        left.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors[1].Readiness =
+            new AgentProfileConnectedServiceReadiness
+            {
+                RequestedScopes = { "repo", "read:user" },
+            };
+        var right = Draft();
+        right.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors.Add([
+            Selector("api-github", AgentToolOperationRiskPayload.ReadOnly),
+            Selector(
+                "api-slack",
+                AgentToolOperationRiskPayload.ReadOnly,
+                AgentToolOperationRiskPayload.Write),
+        ]);
+        right.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors[0].Readiness =
+            new AgentProfileConnectedServiceReadiness
+            {
+                RequestedScopes = { "read:user", "repo" },
+            };
+
+        var normalized = AgentProfileDeterminism.NormalizeDraft(left);
+
+        AgentProfileDeterminism.ComputeDraftDigest(left)
+            .Should().Equal(AgentProfileDeterminism.ComputeDraftDigest(right));
+        normalized.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors
+            .Select(static selector => selector.CatalogServiceSlug)
+            .Should().Equal("api-github", "api-slack");
+        normalized.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors[1].AllowedRisks
+            .Should().Equal(
+                AgentToolOperationRiskPayload.ReadOnly,
+                AgentToolOperationRiskPayload.Write);
+        normalized.RuntimeProfile.MaximumToolPolicy.ConnectedServiceSelectors[0]
+            .Readiness.RequestedScopes.Should().Equal("read:user", "repo");
+    }
+
     [Fact]
     public async Task ResolveAndSealAsync_ShouldRejectUnsupportedRouteToolSetBeforeResolution()
     {
@@ -170,6 +389,27 @@ public sealed class AgentProfileSkillSealerTests
         var result = await NewSealer(resolver).ResolveAndSealAsync(Identity(), draft, Context());
 
         result.Diagnostics.Should().ContainSingle(diagnostic => diagnostic.Code == "UNSUPPORTED_ROUTE_TOOL_SET");
+        resolver.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("classifier", "PROFILE_CLASSIFIER_TIMEOUT_INVALID")]
+    [InlineData("exact-skill", "PROFILE_EXACT_SKILL_TIMEOUT_INVALID")]
+    public async Task ResolveAndSealAsync_ShouldRejectLegacySubsecondTurnBudgets(
+        string budget,
+        string expectedCode)
+    {
+        var draft = Draft();
+        if (budget == "classifier")
+            draft.RuntimeProfile.ClassifierTimeoutMs = 600;
+        else
+            draft.RuntimeProfile.ExactSkillFetchTimeoutMs = 1_500;
+        var resolver = new RecordingResolver();
+
+        var result = await NewSealer(resolver).ResolveAndSealAsync(Identity(), draft, Context());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().ContainSingle(diagnostic => diagnostic.Code == expectedCode);
         resolver.Requests.Should().BeEmpty();
     }
 
@@ -248,9 +488,11 @@ public sealed class AgentProfileSkillSealerTests
             RouteToolSetRef = AgentProfilePolicies.NyxIdChatRouteToolSet,
             MaxPlanSteps = 4,
             HandoffTtlSeconds = 900,
-            ClassifierTimeoutMs = 600,
-            ExactSkillFetchTimeoutMs = 1_500,
-            MaxSelectedSkillBytes = 24_576,
+            ClassifierTimeoutMs = 15_000,
+            ExactSkillFetchTimeoutMs = 15_000,
+            MaxSelectedSkillBytes = AgentProfileValidationLimits.RequiredMaxSelectedSkillBytes,
+            MaxOwnedToolCount = 8,
+            MaxSchemaBytes = 48 * 1024,
             MaximumToolPolicy = new AgentProfileToolPolicy
             {
                 ToolNames = { "lookup", "search" },
@@ -284,6 +526,14 @@ public sealed class AgentProfileSkillSealerTests
         },
     };
 
+    private static AgentProfileConnectedServiceSelector Selector(
+        string catalogServiceSlug,
+        params AgentToolOperationRiskPayload[] allowedRisks) => new()
+    {
+        CatalogServiceSlug = catalogServiceSlug,
+        AllowedRisks = { allowedRisks },
+    };
+
     private static ResolvedOrnnSkillPackage Package(string? mismatch = null) => new()
     {
         SkillGuid = mismatch == "guid"
@@ -295,6 +545,7 @@ public sealed class AgentProfileSkillSealerTests
         SkillSha256 = mismatch == "hash"
             ? ByteString.CopyFrom(Enumerable.Repeat((byte)0xff, 32).ToArray())
             : SkillSha256,
+        SkillMarkdownUtf8Bytes = 1_024,
         DeclaredToolNames = mismatch == "tools" ? ["admin"] : ["lookup", "search"],
     };
 

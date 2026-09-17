@@ -101,9 +101,12 @@ public abstract class WorkflowGAgentTestBase
                 scopeId,
                 runOrigin,
                 scheduleId,
+                workflowId: null,
+                revisionId: null,
+                definitionVersion: 0,
                 capabilityAdmissionPlan,
                 ExternalCapabilityExecutionMode.Interactive,
-                ct);
+                ct: ct);
 
         internal static async Task<WorkflowGAgent> CreateRegisteredDefinitionAgentAsync(
             RecordingActorRuntime runtime,
@@ -612,17 +615,35 @@ public abstract class WorkflowGAgentTestBase
 
         internal sealed class CancellationWorkflowIntentLlmProvider : WorkflowIntentLlmProviderBase
         {
+            private readonly TaskCompletionSource _streamStarted =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _cancellationObserved =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _neverCompletes =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public Task StreamStarted => _streamStarted.Task;
+            public Task CancellationObserved => _cancellationObserved.Task;
+
             public override async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
                 LLMRequest request,
                 [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
             {
                 _ = request;
-                while (!ct.IsCancellationRequested)
-                    Thread.Yield();
-                await Task.CompletedTask;
-                if (ct.IsCancellationRequested)
-                    throw new OperationCanceledException(ct);
-                yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+                _streamStarted.TrySetResult();
+                try
+                {
+                    await _neverCompletes.Task.WaitAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    _cancellationObserved.TrySetResult();
+                    throw;
+                }
+
+                var emit = false;
+                if (emit)
+                    yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
             }
         }
 

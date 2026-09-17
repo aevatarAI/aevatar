@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.EventSourcing;
@@ -27,13 +28,15 @@ public sealed class AevatarOAuthClientProjectionRebuildTests : IAsyncLifetime
     private const string ConfiguredClientId = "17cecaad-214b-4521-9dba-d435462e4095";
 
     private readonly CapturingCommittedStatePublicationHook _publications = new();
+    private readonly OverrideableVersionEventStore _eventStore =
+        new(new IdentityGAgentTestHarness.InMemoryEventStore());
     private AevatarOAuthClientGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
 
     public async Task InitializeAsync()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IEventStore, IdentityGAgentTestHarness.InMemoryEventStore>();
+        services.AddSingleton<IEventStore>(_eventStore);
         services.AddSingleton<ISecretVault>(new InMemorySecretVault());
         services.AddSingleton<EventSourcingRuntimeOptions>();
         services.AddTransient(
@@ -101,6 +104,105 @@ public sealed class AevatarOAuthClientProjectionRebuildTests : IAsyncLifetime
         _agent.EventSourcing!.CurrentVersion.Should().Be(0);
     }
 
+    [Fact]
+    public async Task RepairCommand_WhenExpectedVersionMatches_ReemitsExactCommittedState()
+    {
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = ConfiguredClientId,
+            NyxidAuthority = "https://nyx.example.test",
+        });
+        var committedVersion = _agent.EventSourcing!.CurrentVersion;
+        _publications.Captured.Clear();
+
+        await _agent.HandleRepairProjection(new RepairAevatarOAuthClientProjectionCommand
+        {
+            ExpectedStateVersion = committedVersion,
+            RepairRequestId = "repair-1",
+        });
+
+        _agent.EventSourcing.CurrentVersion.Should().Be(committedVersion);
+        _publications.Captured.Should().ContainSingle();
+        _publications.Captured[0].Published.StateEvent.Version.Should().Be(committedVersion);
+    }
+
+    [Fact]
+    public async Task RepairCommand_WhenActorIsNewerAndMatchesCommittedStore_ReemitsCurrentState()
+    {
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = ConfiguredClientId,
+            NyxidAuthority = "https://nyx.example.test",
+        });
+        var committedVersion = _agent.EventSourcing!.CurrentVersion;
+        _publications.Captured.Clear();
+
+        await _agent.HandleRepairProjection(new RepairAevatarOAuthClientProjectionCommand
+        {
+            ExpectedStateVersion = committedVersion - 1,
+            RepairRequestId = "repair-1",
+        });
+
+        _publications.Captured.Should().ContainSingle();
+        _publications.Captured[0].Published.StateEvent.Version.Should().Be(committedVersion);
+        _agent.EventSourcing.CurrentVersion.Should().Be(committedVersion);
+    }
+
+    [Fact]
+    public async Task RepairCommand_WhenActorIsOlderThanManifest_RejectsWithoutRepublish()
+    {
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = ConfiguredClientId,
+            NyxidAuthority = "https://nyx.example.test",
+        });
+        var committedVersion = _agent.EventSourcing!.CurrentVersion;
+        _publications.Captured.Clear();
+
+        var act = () => _agent.HandleRepairProjection(new RepairAevatarOAuthClientProjectionCommand
+        {
+            ExpectedStateVersion = committedVersion + 1,
+            RepairRequestId = "repair-1",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*source version changed*");
+        _publications.Captured.Should().BeEmpty();
+        _agent.EventSourcing.CurrentVersion.Should().Be(committedVersion);
+    }
+
+    [Fact]
+    public async Task RepairCommand_WhenActorIsAheadOfCommittedStore_RejectsWithoutRepublish()
+    {
+        await _agent.HandleProvision(new ProvisionAevatarOAuthClientCommand
+        {
+            ClientId = ConfiguredClientId,
+            NyxidAuthority = "https://nyx.example.test",
+        });
+        var actorVersion = _agent.EventSourcing!.CurrentVersion;
+        _publications.Captured.Clear();
+
+        _eventStore.ReportedVersion = actorVersion - 1;
+        try
+        {
+            var act = () => _agent.HandleRepairProjection(new RepairAevatarOAuthClientProjectionCommand
+            {
+                ExpectedStateVersion = actorVersion,
+                RepairRequestId = "repair-1",
+            });
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*does not match the committed source*");
+        }
+        finally
+        {
+            _eventStore.ReportedVersion = null;
+        }
+
+        _publications.Captured.Should().BeEmpty();
+        _agent.EventSourcing.CurrentVersion.Should().Be(actorVersion);
+    }
+
     private static void SetActorId(GAgentBase agent, string id)
     {
         var method = typeof(GAgentBase).GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -117,5 +219,34 @@ public sealed class AevatarOAuthClientProjectionRebuildTests : IAsyncLifetime
             Captured.Add(context);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class OverrideableVersionEventStore(IEventStore inner) : IEventStore
+    {
+        public long? ReportedVersion { get; set; }
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            ReportedVersion.HasValue
+                ? Task.FromResult(ReportedVersion.Value)
+                : inner.GetVersionAsync(agentId, ct);
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default) =>
+            inner.AppendAsync(agentId, events, expectedVersion, ct);
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
 }

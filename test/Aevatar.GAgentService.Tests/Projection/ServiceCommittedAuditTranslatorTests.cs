@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
 using Aevatar.Audit.Core.CommittedFacts;
+using Aevatar.Audit.Core.Sanitization;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -109,6 +110,29 @@ public sealed class ServiceCommittedAuditTranslatorTests
         var records = translator.Translate(Context(), Any.Pack(new StringValue { Value = "wrong" }));
 
         records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ScheduledDispatchDeletedTranslator_ShouldProduceSanitizableRecord_ForOpaqueActorId()
+    {
+        const string scheduleId = "provision-member-wf-acceptance";
+        var translator = new ScheduledDispatchDeletedAuditTranslator();
+        var evt = new ScheduledDispatchDeletedEvent
+        {
+            Reason = "cleanup",
+            ScheduleId = scheduleId,
+            ScopeId = "scope-acceptance",
+        };
+
+        var record = Translate(
+            translator,
+            evt,
+            $"scheduled-dispatch:{scheduleId}");
+
+        record.Target.Id.Should().Be(scheduleId);
+        record.ScopeId.Should().Be("scope-acceptance");
+        record.CommittedFactRef.ActorId.Should().Be($"scheduled-dispatch:{scheduleId}");
+        new AuditRecordSanitizer().Sanitize(record).Should().NotBeNull();
     }
 
     [Fact]
@@ -437,29 +461,44 @@ public sealed class ServiceCommittedAuditTranslatorTests
         yield return
         [
             new ScheduledDispatchEnabledAuditTranslator(),
-            new ScheduledDispatchEnabledEvent { Reason = "resume" },
+            new ScheduledDispatchEnabledEvent
+            {
+                Reason = "resume",
+                ScheduleId = "schedule-1",
+                ScopeId = "scope-from-event",
+            },
             "scheduled.dispatch.enabled",
             "scheduled_dispatch",
-            "actor-1",
-            DefaultExpected,
+            "schedule-1",
+            ScheduleExpected(isDestructive: false),
         ];
         yield return
         [
             new ScheduledDispatchDisabledAuditTranslator(),
-            new ScheduledDispatchDisabledEvent { Reason = "pause" },
+            new ScheduledDispatchDisabledEvent
+            {
+                Reason = "pause",
+                ScheduleId = "schedule-1",
+                ScopeId = "scope-from-event",
+            },
             "scheduled.dispatch.disabled",
             "scheduled_dispatch",
-            "actor-1",
-            RestrictedDestructiveExpected,
+            "schedule-1",
+            ScheduleExpected(isDestructive: true),
         ];
         yield return
         [
             new ScheduledDispatchDeletedAuditTranslator(),
-            new ScheduledDispatchDeletedEvent { Reason = "cleanup" },
+            new ScheduledDispatchDeletedEvent
+            {
+                Reason = "cleanup",
+                ScheduleId = "schedule-1",
+                ScopeId = "scope-from-event",
+            },
             "scheduled.dispatch.deleted",
             "scheduled_dispatch",
-            "actor-1",
-            RestrictedDestructiveExpected,
+            "schedule-1",
+            ScheduleExpected(isDestructive: true),
         ];
         yield return
         [
@@ -718,20 +757,11 @@ public sealed class ServiceCommittedAuditTranslatorTests
     private static IReadOnlyDictionary<string, string> EmptyAnnotations { get; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
 
-    private static ExpectedAuditFields DefaultExpected { get; } =
+    private static ExpectedAuditFields ScheduleExpected(bool isDestructive) =>
         new(
-            "",
-            AuditSensitivityLevel.Confidential,
-            false,
-            "command-1",
-            "request-1",
-            EmptyAnnotations);
-
-    private static ExpectedAuditFields RestrictedDestructiveExpected { get; } =
-        new(
-            "",
-            AuditSensitivityLevel.Restricted,
-            true,
+            "scope-from-event",
+            isDestructive ? AuditSensitivityLevel.Restricted : AuditSensitivityLevel.Confidential,
+            isDestructive,
             "command-1",
             "request-1",
             EmptyAnnotations);
@@ -814,13 +844,16 @@ public sealed class ServiceCommittedAuditTranslatorTests
         record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Succeeded);
     }
 
-    private static AuditRecord Translate(IAuditCommittedEventTranslator translator, IMessage evt)
+    private static AuditRecord Translate(
+        IAuditCommittedEventTranslator translator,
+        IMessage evt,
+        string originActorId = "actor-1")
     {
-        var records = translator.Translate(Context(), Any.Pack(evt));
+        var records = translator.Translate(Context(originActorId), Any.Pack(evt));
         return records.Should().ContainSingle().Subject;
     }
 
-    private static CommittedAuditTranslationContext Context() =>
+    private static CommittedAuditTranslationContext Context(string originActorId = "actor-1") =>
         new(
             new EventEnvelope
             {
@@ -833,11 +866,11 @@ public sealed class ServiceCommittedAuditTranslatorTests
             new CommittedStateEventPublished(),
             new StateEvent
             {
-                AgentId = "actor-1",
+                AgentId = originActorId,
                 EventId = "state-event-1",
                 Version = 17,
             },
-            "actor-1",
+            originActorId,
             "type.googleapis.com/test",
             DateTimeOffset.Parse("2026-07-03T09:00:00+00:00"),
             "command-1",

@@ -49,7 +49,10 @@ public sealed class ProjectionAuditTrailAppender : IAuditTrailAppender
             var existing = await _store.GetAsync(auditId, ct);
             if (existing != null)
             {
-                return string.Equals(existing.ContentHash, contentHash, StringComparison.Ordinal)
+                var isDuplicate = string.Equals(existing.ContentHash, contentHash, StringComparison.Ordinal) ||
+                                  existing.Record is not null &&
+                                  AuditRecordSemanticComparer.AreEquivalent(existing.Record, sanitized);
+                return isDuplicate
                     ? AuditTrailAppendResult.Duplicate(auditId)
                     : AuditTrailAppendResult.Conflict(auditId, "Audit id already exists with different content.");
             }

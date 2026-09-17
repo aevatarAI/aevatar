@@ -15,6 +15,8 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdCodexExecToolTests
 {
     private const string CatalogId = "3e64c683-4289-427e-b599-f7eaf6c01fb1";
+    private const string ManagedArgumentsJson = """{"target":{"kind":"managed_sandbox"}}""";
+    private const string PrivateSshArgumentsJson = """{"target":{"kind":"private_ssh"}}""";
 
     [Fact]
     public void Metadata_ExposesSeparatePrivateSshAndManagedTargets()
@@ -24,8 +26,11 @@ public sealed class NyxIdCodexExecToolTests
         tool.Name.Should().Be("codex_exec");
         tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         tool.RequiresApproval("{}").Should().BeTrue();
-        tool.Description.Should().Contain("private NyxID-backed SSH");
-        tool.Description.Should().Contain("managed isolated sandbox");
+        tool.Description.Should().Contain("Delegate a natural-language task to Codex");
+        tool.Description.Should().Contain("managed_sandbox for the fixed isolated runtime without human approval");
+        tool.Description.Should().Contain("private_ssh for a real user host");
+        tool.Description.Should().Contain("private_ssh requires approval");
+        tool.Description.Should().NotContain("always requires approval");
         tool.ParametersSchema.Should().Contain("\"private_ssh\"");
         tool.ParametersSchema.Should().Contain("\"managed_sandbox\"");
         tool.ParametersSchema.Should().Contain("\"empty_git\"");
@@ -45,13 +50,24 @@ public sealed class NyxIdCodexExecToolTests
     [Fact]
     public void ApprovalPolicy_RequiresPrivateSshButAllowsManagedSandbox()
     {
-        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+        IAgentTool tool = new NyxIdCodexExecTool(CreateDummyClient());
 
         tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
         tool.RequiresApproval("""{"target":{"kind":"private_ssh"}}""").Should().BeTrue();
         tool.RequiresApproval("""{"target":{"kind":"managed_sandbox"}}""").Should().BeFalse();
         tool.RequiresApproval("{}").Should().BeTrue();
         tool.RequiresApproval("""{"target":{"kind":"unknown"}}""").Should().BeTrue();
+        tool.GetCallSafety(PrivateSshArgumentsJson).RequiresApproval.Should().BeTrue();
+        tool.GetCallSafety(ManagedArgumentsJson).RequiresApproval.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ReplayContract_ManagedAndPrivateTargets_AreNonReplayable()
+    {
+        IAgentTool tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        tool.ResolveReplayPolicy(ManagedArgumentsJson).Should().Be(AgentToolReplayPolicy.NonReplayable);
+        tool.ResolveReplayPolicy(PrivateSshArgumentsJson).Should().Be(AgentToolReplayPolicy.NonReplayable);
     }
 
     [Fact]
@@ -209,6 +225,33 @@ public sealed class NyxIdCodexExecToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenManagedExecutionExitsNonzero_PreservesTerminalEvidence()
+    {
+        var tool = new NyxIdCodexExecTool(
+            [new NonzeroManagedPort()],
+            new NyxIdToolOptions());
+
+        var result = await tool.ExecuteAsync("""
+            {
+              "target": { "kind": "managed_sandbox" },
+              "workspace": { "kind": "empty_git" },
+              "prompt": "task"
+            }
+            """);
+
+        using var resultJson = JsonDocument.Parse(result);
+        var root = resultJson.RootElement;
+        root.GetProperty("status").GetString().Should().Be("failed");
+        root.GetProperty("output").GetString().Should().Be("command failed");
+        root.GetProperty("exit_code").GetInt32().Should().Be(17);
+        root.GetProperty("code").GetString().Should().Be("managed_execution_nonzero_exit");
+        root.GetProperty("message").GetString().Should()
+            .Be("Managed Codex execution exited unsuccessfully.");
+        root.GetProperty("diagnostic_id").GetString().Should().Be("managed-diag");
+        root.GetProperty("elapsed_ms").GetInt64().Should().Be(9);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ManagedTargetUsesSourceReadableBearerInsteadOfProxyDelegation()
     {
         var port = new RecordingManagedPort();
@@ -317,13 +360,33 @@ public sealed class NyxIdCodexExecToolTests
         var receipt = tool.CreateResultReceipt(
             "call-1",
             "codex_exec",
-            "{}",
+            ManagedArgumentsJson,
             """{"status":"succeeded","target":"managed_sandbox","output":"done","exit_code":0,"diagnostic_id":"diag","elapsed_ms":42}""");
 
         receipt.Should().NotBeNull();
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         receipt.CallId.Should().Be("call-1");
         receipt.ToolName.Should().Be("codex_exec");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WhenManagedResultFailed_PreservesEvidenceInTypedError()
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+        const string resultJson =
+            """{"status":"failed","target":"managed_sandbox","output":"command failed","exit_code":17,"error":"managed_execution_nonzero_exit","code":"managed_execution_nonzero_exit","message":"Managed Codex execution exited unsuccessfully.","diagnostic_id":"managed-diag","elapsed_ms":9}""";
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            "codex_exec",
+            ManagedArgumentsJson,
+            resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("managed_execution_nonzero_exit");
+        receipt.ErrorMessage.Should().Be("Managed Codex execution exited unsuccessfully.");
+        receipt.ResultJson.Should().Be(resultJson);
     }
 
     [Fact]
@@ -334,7 +397,7 @@ public sealed class NyxIdCodexExecToolTests
         var receipt = tool.CreateResultReceipt(
             "call-1",
             "codex_exec",
-            "{}",
+            PrivateSshArgumentsJson,
             """{"exit_code":0,"stdout":"done","stderr":"","duration_ms":42,"timed_out":false}""");
 
         receipt.Should().NotBeNull();
@@ -353,7 +416,7 @@ public sealed class NyxIdCodexExecToolTests
     [InlineData(
         """{"error":"No NyxID access token available. User must be authenticated."}""",
         "codex_exec_failed",
-        "No NyxID access token available. User must be authenticated.")]
+        "Codex execution failed.")]
     public void CreateResultReceipt_WhenToolReturnedErrorJson_CarriesStableFailureCode(
         string resultJson,
         string expectedCode,
@@ -361,13 +424,49 @@ public sealed class NyxIdCodexExecToolTests
     {
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
-        var receipt = tool.CreateResultReceipt("call-1", "codex_exec", "{}", resultJson);
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            "codex_exec",
+            PrivateSshArgumentsJson,
+            resultJson);
 
         receipt.Should().NotBeNull();
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
         receipt.ErrorCode.Should().Be(expectedCode);
         receipt.ErrorMessage.Should().Be(expectedMessage);
         receipt.ResultJson.Should().Contain(expectedCode);
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WhenManagedFailureOmitsTerminalShape_StaysUnknown()
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        tool.CreateResultReceipt(
+                "call-malformed-managed",
+                "codex_exec",
+                ManagedArgumentsJson,
+                """{"error":"managed_execution_nonzero_exit"}""")
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WhenProviderReturnsUnknownSnakeCaseCode_UsesGenericFailure()
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-hostile-provider",
+            "codex_exec",
+            PrivateSshArgumentsJson,
+            """{"error":"unknown_provider_code","detail":"untrusted"}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be("codex_exec_failed");
+        receipt.ErrorCode.Should().NotBe("unknown_provider_code");
+        receipt.ErrorMessage.Should().Be("Codex execution failed.");
+        receipt.ResultJson.Should().NotContain("unknown_provider_code");
+        receipt.ResultJson.Should().NotContain("untrusted");
     }
 
     [Theory]
@@ -379,7 +478,11 @@ public sealed class NyxIdCodexExecToolTests
     {
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
-        var receipt = tool.CreateResultReceipt("call-1", "codex_exec", "{}", resultJson);
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            "codex_exec",
+            PrivateSshArgumentsJson,
+            resultJson);
 
         receipt.Should().NotBeNull();
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
@@ -399,6 +502,47 @@ public sealed class NyxIdCodexExecToolTests
         var tool = new NyxIdCodexExecTool(CreateDummyClient());
 
         tool.CreateResultReceipt("call-1", "codex_exec", "{}", resultJson).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("""{"status":"failed","target":"managed_sandbox","output":"failed","error":"managed_execution_nonzero_exit","code":"managed_execution_nonzero_exit","message":"failed"}""")]
+    [InlineData("""{"status":"failed","target":"managed_sandbox","output":"failed","exit_code":0,"error":"managed_execution_nonzero_exit","code":"managed_execution_nonzero_exit","message":"failed"}""")]
+    [InlineData("""{"status":"failed","target":"managed_sandbox","exit_code":7,"error":"managed_execution_nonzero_exit","code":"managed_execution_nonzero_exit","message":"failed"}""")]
+    [InlineData("""{"status":"failed","target":"private_ssh","output":"failed","exit_code":7,"error":"managed_execution_nonzero_exit","code":"managed_execution_nonzero_exit","message":"failed"}""")]
+    [InlineData("""{"status":"succeeded","target":"managed_sandbox","output":"done","exit_code":1}""")]
+    public void CreateResultReceipt_WhenManagedTerminalShapeIsInvalid_StaysUnknown(string resultJson)
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+
+        tool.CreateResultReceipt(
+                "call-1",
+                "codex_exec",
+                ManagedArgumentsJson,
+                resultJson)
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WhenResultShapeBelongsToAnotherTarget_StaysUnknown()
+    {
+        var tool = new NyxIdCodexExecTool(CreateDummyClient());
+        const string managedResult =
+            """{"status":"succeeded","target":"managed_sandbox","output":"done","exit_code":0}""";
+        const string privateResult =
+            """{"exit_code":0,"stdout":"done","stderr":"","timed_out":false}""";
+
+        tool.CreateResultReceipt(
+                "call-1",
+                "codex_exec",
+                PrivateSshArgumentsJson,
+                managedResult)
+            .Should().BeNull();
+        tool.CreateResultReceipt(
+                "call-2",
+                "codex_exec",
+                ManagedArgumentsJson,
+                privateResult)
+            .Should().BeNull();
     }
 
     private static string DecodePrompt(string command)
@@ -506,6 +650,25 @@ public sealed class NyxIdCodexExecToolTests
                 CodexExecutionFailureKind.ProvisioningFailed,
                 "sandbox_provisioning_failed",
                 "provisioning failed"));
+        }
+    }
+
+    private sealed class NonzeroManagedPort : ICodexExecutionPort
+    {
+        public CodexExecutionTarget.TargetOneofCase TargetKind =>
+            CodexExecutionTarget.TargetOneofCase.ManagedSandbox;
+
+        public async IAsyncEnumerable<CodexExecutionEvent> ExecuteAsync(
+            CodexExecutionRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
+            yield return CodexExecutionEvent.Completed(new CodexExecutionResult(
+                "command failed",
+                ExitCode: 17,
+                DiagnosticId: "managed-diag",
+                ElapsedMilliseconds: 9));
         }
     }
 }

@@ -22,11 +22,13 @@
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Application.Abstractions\Aevatar.Workflow.Application.Abstractions.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.WorkOrder\Aevatar.GAgents.WorkOrder.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.WorkflowDelivery\Aevatar.GAgents.WorkflowDelivery.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ContentArtifacts\Aevatar.GAgents.ContentArtifacts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="YamlDotNet" />
     <PackageReference Include="Grpc.Tools">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

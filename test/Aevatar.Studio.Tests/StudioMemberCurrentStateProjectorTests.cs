@@ -28,7 +28,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
         var clock = new FixedProjectionClock(DateTimeOffset.Parse("2026-04-27T00:00:00Z"));
-        var projector = new StudioMemberCurrentStateProjector(dispatcher, clock);
+        var projector = CreateProjector(dispatcher, clock);
 
         var state = new StudioMemberState
         {
@@ -39,6 +39,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
             ImplementationKind = StudioMemberImplementationKind.Workflow,
             PublishedServiceId = "member-m-1",
             LifecycleStage = StudioMemberLifecycleStage.BindReady,
+            AuthorizationRevision = 7,
             CreatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow.AddDays(-1)),
             UpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             ImplementationRef = new StudioMemberImplementationRef
@@ -64,6 +65,23 @@ public sealed class StudioMemberCurrentStateProjectorTests
                 LastTerminalBindingRunId = "bind-1",
                 UpdatedAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
             },
+            WorkflowScheduleProvisioning = new StudioMemberWorkflowScheduleProvisioningState
+            {
+                Intent = new StudioMemberWorkflowScheduleProvisioningIntent
+                {
+                    ProvisioningId = "schedule-provisioning-1",
+                    RevisionId = "rev-9",
+                },
+                Status = StudioMemberWorkflowScheduleProvisioningStatus.RetryPending,
+                AttemptCount = 2,
+                Failure = new StudioMemberWorkflowScheduleProvisioningFailure
+                {
+                    Code = "workflow_authorization_evidence_not_found",
+                    Message = "projection pending",
+                },
+                UpdatedAtUtc = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.Parse("2026-04-27T00:00:00Z")),
+            },
         };
 
         var envelope = WrapCommitted(
@@ -81,6 +99,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.Id.Should().Be(RootActorId);
         written.ActorId.Should().Be(RootActorId);
         written.StateVersion.Should().Be(5);
+        written.AuthorizationRevision.Should().Be(7);
         written.LastEventId.Should().Be("evt-9");
 
         // Denormalized roster fields are written so the query port doesn't
@@ -110,13 +129,26 @@ public sealed class StudioMemberCurrentStateProjectorTests
         written.BindingCurrentStatus.Should().Be(StudioMemberBindingRunStatusNames.Succeeded);
         written.BindingLastTerminalRunId.Should().Be("bind-1");
         written.BindingUpdatedAt.Should().NotBeNull();
+
+        // Durable schedule continuation status is queryable independently of
+        // the eventual schedule identity.
+        written.ScheduleProvisioningId.Should().Be("schedule-provisioning-1");
+        written.ScheduleProvisioningStatus.Should().Be("retry_pending");
+        written.ScheduleProvisioningRevisionId.Should().Be("rev-9");
+        written.ScheduleProvisioningScheduleId.Should().BeEmpty();
+        written.ScheduleProvisioningOperationId.Should().BeEmpty();
+        written.ScheduleProvisioningAttemptCount.Should().Be(2);
+        written.ScheduleProvisioningFailureCode.Should()
+            .Be("workflow_authorization_evidence_not_found");
+        written.ScheduleProvisioningFailureMessage.Should().Be("projection pending");
+        written.ScheduleProvisioningUpdatedAt.Should().NotBeNull();
     }
 
     [Fact]
     public async Task ProjectAsync_ShouldDenormalizeScriptImplementation()
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
-        var projector = new StudioMemberCurrentStateProjector(
+        var projector = CreateProjector(
             dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
 
         var state = new StudioMemberState
@@ -151,7 +183,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     public async Task ProjectAsync_ShouldProjectRenamedDisplayName()
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
-        var projector = new StudioMemberCurrentStateProjector(
+        var projector = CreateProjector(
             dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var updatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-05-01T12:00:00Z"));
         var state = new StudioMemberState
@@ -192,7 +224,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     public async Task ProjectAsync_ShouldDeleteDocument_WhenMemberStateIsDeleted()
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
-        var projector = new StudioMemberCurrentStateProjector(
+        var projector = CreateProjector(
             dispatcher, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var deletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-09T06:40:00Z"));
         var state = new StudioMemberState
@@ -236,7 +268,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
         var clock = new FixedProjectionClock(DateTimeOffset.UtcNow);
-        var projector = new StudioMemberCurrentStateProjector(dispatcher, clock);
+        var projector = CreateProjector(dispatcher, clock);
 
         // A bare event envelope without the CommittedStateEventPublished
         // wrapper must not produce a write — the projector is downstream of
@@ -258,7 +290,7 @@ public sealed class StudioMemberCurrentStateProjectorTests
     {
         var dispatcher = new RecordingWriteDispatcher<StudioMemberCurrentStateDocument>();
         var clock = new FixedProjectionClock(DateTimeOffset.UtcNow);
-        var projector = new StudioMemberCurrentStateProjector(dispatcher, clock);
+        var projector = CreateProjector(dispatcher, clock);
 
         await FluentActions
             .Awaiting(() => projector.ProjectAsync(null!, new EventEnvelope()).AsTask())
@@ -275,12 +307,21 @@ public sealed class StudioMemberCurrentStateProjectorTests
         var clock = new FixedProjectionClock(DateTimeOffset.UtcNow);
 
         FluentActions
-            .Invoking(() => new StudioMemberCurrentStateProjector(null!, clock))
+            .Invoking(() => new StudioMemberCurrentStateProjector(
+                null!,
+                clock))
             .Should().Throw<ArgumentNullException>();
         FluentActions
-            .Invoking(() => new StudioMemberCurrentStateProjector(dispatcher, null!))
+            .Invoking(() => new StudioMemberCurrentStateProjector(
+                dispatcher,
+                null!))
             .Should().Throw<ArgumentNullException>();
     }
+
+    private static StudioMemberCurrentStateProjector CreateProjector(
+        RecordingWriteDispatcher<StudioMemberCurrentStateDocument> dispatcher,
+        IProjectionClock clock) =>
+        new(dispatcher, clock);
 
     private static StudioMaterializationContext NewContext() => new()
     {

@@ -123,6 +123,16 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
     protected virtual Task OnCommittedStateChangedAsync(TState state, CancellationToken ct) =>
         OnStateChangedAsync(state, ct);
 
+    /// <summary>
+    /// Invoked after a runtime retry has republished and checkpointed committed facts from the
+    /// original handler attempt. Implementations may only schedule actor-owned continuation work;
+    /// the original business handler is not executed again.
+    /// </summary>
+    protected virtual Task OnCommittedStatePublicationRecoveredAsync(
+        EventEnvelope envelope,
+        CancellationToken ct) =>
+        Task.CompletedTask;
+
     /// <summary>Activation hook for subclass initialization.</summary>
     protected virtual Task OnActivateAsync(CancellationToken ct) => Task.CompletedTask;
 
@@ -143,10 +153,15 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         _unconfirmedPublications = [];
         await PublishAndCheckpointAsync(pending, ct);
 
-        return !string.Equals(
+        var publicationRetry = string.Equals(
             envelope.Runtime?.Retry?.LastErrorType,
             nameof(CommittedStatePublicationException),
             StringComparison.Ordinal);
+        if (!publicationRetry)
+            return true;
+
+        await OnCommittedStatePublicationRecoveredAsync(envelope, ct);
+        return false;
     }
 
     /// <summary>

@@ -27,9 +27,7 @@ public sealed record ScheduledInvocationAuthorizationRequest(
     AuthorizationGrantRequirement ServiceGrantRequirement,
     DateTimeOffset ExpiresAtUtc,
     DateTimeOffset EvaluatedAtUtc,
-    IReadOnlyList<AuthorizationSourceStamp>? SourceStamps = null,
-    ScheduledInvocationMemberEvidence? TrustedMemberEvidence = null,
-    ScheduledInvocationWorkflowEvidence? TrustedWorkflowEvidence = null)
+    IReadOnlyList<AuthorizationSourceStamp>? SourceStamps = null)
 {
     public AuthorizationOwnerIdentity Owner => OwnerContext.Owner;
 }
@@ -104,8 +102,30 @@ public static class ScheduledInvocationAuthorizationPlanIntegrity
     }
 }
 
+public enum NyxIdAuthorizationServiceAuthorityWindowStatus
+{
+    Unspecified = 0,
+    Ready = 1,
+    Incomplete = 2,
+    InvalidInterval = 3,
+    ProviderClockSkewExceeded = 4,
+    ObservedInFuture = 5,
+    Expired = 6,
+}
+
+public sealed record NyxIdAuthorizationServiceAuthorityWindowResult(
+    NyxIdAuthorizationServiceAuthorityWindowStatus Status,
+    DateTimeOffset ObservedAtUtc,
+    DateTimeOffset FreshUntilUtc,
+    DateTimeOffset ProviderEvaluatedAtUtc)
+{
+    public bool Ready => Status == NyxIdAuthorizationServiceAuthorityWindowStatus.Ready;
+}
+
 public static class NyxIdAuthorizationCatalogIntegrity
 {
+    public static readonly TimeSpan MaximumProviderClockSkew = TimeSpan.FromSeconds(30);
+
     public static string ComputeContentDigest(
         AuthorizationOwnerIdentity owner,
         IEnumerable<NyxIdAuthorizationServiceEvidence> services,
@@ -121,6 +141,154 @@ public static class NyxIdAuthorizationCatalogIntegrity
             content.GatewayLlmTarget = gatewayLLMTarget.Clone();
         return Convert.ToHexStringLower(SHA256.HashData(content.ToByteArray()));
     }
+
+    public static bool TryResolveServiceAuthorityWindow(
+        NyxIdAuthorizationCatalogSnapshot snapshot,
+        NyxIdAuthorizationServiceEvidence service,
+        out DateTimeOffset observedAtUtc,
+        out DateTimeOffset freshUntilUtc)
+    {
+        var result = ResolveServiceAuthorityWindow(snapshot, service);
+        observedAtUtc = result.ObservedAtUtc;
+        freshUntilUtc = result.FreshUntilUtc;
+        return result.Ready;
+    }
+
+    public static NyxIdAuthorizationServiceAuthorityWindowResult EvaluateServiceAuthorityWindow(
+        NyxIdAuthorizationCatalogSnapshot snapshot,
+        NyxIdAuthorizationServiceEvidence service,
+        DateTimeOffset evaluatedAtUtc)
+    {
+        var result = ResolveServiceAuthorityWindow(snapshot, service);
+        if (!result.Ready)
+            return result;
+        if (result.ObservedAtUtc > evaluatedAtUtc)
+        {
+            return result with
+            {
+                Status = NyxIdAuthorizationServiceAuthorityWindowStatus.ObservedInFuture,
+            };
+        }
+        if (result.FreshUntilUtc <= evaluatedAtUtc)
+        {
+            return result with
+            {
+                Status = NyxIdAuthorizationServiceAuthorityWindowStatus.Expired,
+            };
+        }
+
+        return result;
+    }
+
+    public static bool IsProviderEvaluationWithinRequestWindow(
+        DateTimeOffset requestStartedAtUtc,
+        DateTimeOffset responseReceivedAtUtc,
+        DateTimeOffset providerEvaluatedAtUtc)
+    {
+        if (requestStartedAtUtc == default ||
+            responseReceivedAtUtc == default ||
+            providerEvaluatedAtUtc == default ||
+            responseReceivedAtUtc < requestStartedAtUtc)
+        {
+            return false;
+        }
+
+        return providerEvaluatedAtUtc >= requestStartedAtUtc.Subtract(MaximumProviderClockSkew) &&
+               providerEvaluatedAtUtc <= responseReceivedAtUtc.Add(MaximumProviderClockSkew);
+    }
+
+    public static bool HasServiceAuthorityStamp(NyxIdAuthorizationServiceEvidence service)
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        return service.ObservedAt != null ||
+               service.FreshUntil != null ||
+               service.EvaluatedAt != null ||
+               !string.IsNullOrWhiteSpace(service.AuthorityContractVersion) ||
+               !string.IsNullOrWhiteSpace(service.AuthorityPolicyVersion);
+    }
+
+    public static NyxIdAuthorizationServiceAuthorityWindowResult ResolveServiceAuthorityStamp(
+        NyxIdAuthorizationServiceEvidence service)
+    {
+        ArgumentNullException.ThrowIfNull(service);
+        if (service.ObservedAt == null ||
+            service.FreshUntil == null ||
+            service.EvaluatedAt == null ||
+            string.IsNullOrWhiteSpace(service.AuthorityContractVersion) ||
+            string.IsNullOrWhiteSpace(service.AuthorityPolicyVersion))
+        {
+            return AuthorityWindowResult(
+                NyxIdAuthorizationServiceAuthorityWindowStatus.Incomplete);
+        }
+
+        return ResolveAuthorityWindow(
+            service.ObservedAt.ToDateTimeOffset(),
+            service.FreshUntil.ToDateTimeOffset(),
+            service.EvaluatedAt.ToDateTimeOffset());
+    }
+
+    private static NyxIdAuthorizationServiceAuthorityWindowResult ResolveServiceAuthorityWindow(
+        NyxIdAuthorizationCatalogSnapshot snapshot,
+        NyxIdAuthorizationServiceEvidence service)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(service);
+
+        if (!HasServiceAuthorityStamp(service))
+        {
+            return ResolveAuthorityWindow(
+                snapshot.ObservedAtUtc,
+                snapshot.FreshUntilUtc,
+                snapshot.EvaluatedAtUtc);
+        }
+
+        return ResolveServiceAuthorityStamp(service);
+    }
+
+    private static NyxIdAuthorizationServiceAuthorityWindowResult ResolveAuthorityWindow(
+        DateTimeOffset observedAtUtc,
+        DateTimeOffset freshUntilUtc,
+        DateTimeOffset providerEvaluatedAtUtc)
+    {
+        if (observedAtUtc == default || providerEvaluatedAtUtc == default)
+        {
+            return AuthorityWindowResult(
+                NyxIdAuthorizationServiceAuthorityWindowStatus.Incomplete,
+                observedAtUtc,
+                freshUntilUtc,
+                providerEvaluatedAtUtc);
+        }
+        if (freshUntilUtc <= observedAtUtc)
+        {
+            return AuthorityWindowResult(
+                NyxIdAuthorizationServiceAuthorityWindowStatus.InvalidInterval,
+                observedAtUtc,
+                freshUntilUtc,
+                providerEvaluatedAtUtc);
+        }
+        if (providerEvaluatedAtUtc > observedAtUtc &&
+            providerEvaluatedAtUtc - observedAtUtc > MaximumProviderClockSkew)
+        {
+            return AuthorityWindowResult(
+                NyxIdAuthorizationServiceAuthorityWindowStatus.ProviderClockSkewExceeded,
+                observedAtUtc,
+                freshUntilUtc,
+                providerEvaluatedAtUtc);
+        }
+
+        return AuthorityWindowResult(
+            NyxIdAuthorizationServiceAuthorityWindowStatus.Ready,
+            observedAtUtc,
+            freshUntilUtc,
+            providerEvaluatedAtUtc);
+    }
+
+    private static NyxIdAuthorizationServiceAuthorityWindowResult AuthorityWindowResult(
+        NyxIdAuthorizationServiceAuthorityWindowStatus status,
+        DateTimeOffset observedAtUtc = default,
+        DateTimeOffset freshUntilUtc = default,
+        DateTimeOffset providerEvaluatedAtUtc = default) =>
+        new(status, observedAtUtc, freshUntilUtc, providerEvaluatedAtUtc);
 }
 
 public sealed record ScheduledInvocationAuthorizationValidationResult(
@@ -310,7 +478,7 @@ public sealed record NyxIdAuthorizationCatalogRefreshResult(
 }
 
 public sealed record ScheduledInvocationMemberEvidence(
-    long StateVersion,
+    long AuthorizationRevision,
     string DraftWorkflowId,
     string WorkflowRevisionId,
     string PublishedServiceId);
@@ -319,7 +487,8 @@ public sealed record ScheduledInvocationWorkflowEvidence(
     long StateVersion,
     IReadOnlyList<ExternalWorkflowCapabilityRef> ExternalCapabilities,
     bool OwnerLLMRouteRequired,
-    AuthorizationGrantRequirement ServiceGrantRequirement);
+    AuthorizationGrantRequirement ServiceGrantRequirement,
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null);
 
 public sealed record ScheduledInvocationConnectorEvidence(
     long StateVersion,
@@ -455,6 +624,12 @@ public interface INyxIdAuthorizationCatalogVisibilityPort
     Task<NyxIdAuthorizationCatalogVisibilityResult> ResolveAsync(
         AuthorizationOwnerIdentity owner,
         long requiredStateVersion,
+        CancellationToken ct = default);
+
+    Task<NyxIdAuthorizationCatalogVisibilityResult> ResolveRequiredServicesAsync(
+        AuthorizationOwnerIdentity owner,
+        long requiredStateVersion,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
         CancellationToken ct = default);
 }
 

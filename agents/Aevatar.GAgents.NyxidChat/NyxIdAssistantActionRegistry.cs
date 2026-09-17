@@ -1,5 +1,7 @@
 using System.Collections.Frozen;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Aevatar.AI.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -18,42 +20,150 @@ public sealed record NyxIdAssistantActionValidation(
     NyxIdAssistantActionDefinitionSnapshot Definition,
     NyxIdAssistantActionParams Params);
 
+public sealed record NyxIdAssistantActionRegistrySkip(string WireAction, string Code);
+
 /// <summary>
 /// Immutable, startup-pinned view of the NyxID action manifest. External JSON
 /// schema stays at this adapter boundary; validated requests are converted to
 /// closed protobuf action definitions and params before actor dispatch.
+/// The served manifest is additive and deploys independently of Aevatar:
+/// schema_version is the only registry-wide compatibility gate, the revision
+/// string is an observability label, and a descriptor that is unknown,
+/// malformed, or divergent from its pinned contract is skipped on its own
+/// without disabling the remaining actions.
 /// </summary>
 public sealed class NyxIdAssistantActionRegistry
 {
     public const int SupportedSchemaVersion = 4;
-    public const string SupportedRegistryRevision = "nyxid-assistant-actions.v4";
+    public const string ServiceAccessReviewRegistryRevision =
+        "aevatar-nyxid-actions.v1";
+
+    private const string ServiceAccessReviewWireAction = "service.access_review";
 
     private const string SchemaUnsupported = "NYXID_ACTION_SCHEMA_UNSUPPORTED";
-    private const string RevisionUnsupported = "NYXID_ACTION_REGISTRY_REVISION_UNSUPPORTED";
     private const string ActionUnsupported = "NYXID_ACTION_UNSUPPORTED";
     private const string TierUnsupported = "NYXID_ACTION_TIER_UNSUPPORTED";
     private const string ParamsInvalid = "NYXID_ACTION_PARAMS_INVALID";
     private const string PolicyCallerOwned = "NYXID_ACTION_POLICY_CALLER_OWNED";
     private const string RegistryInvalid = "NYXID_ACTION_REGISTRY_INVALID";
 
+    private const string ServiceConnectParamsSchema = """
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["catalogService"],
+              "properties": {
+                "catalogService": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["serviceSlug"],
+                  "properties": {
+                    "serviceSlug": {"type": "string"},
+                    "requestedScopes": {"type": "array", "items": {"type": "string"}},
+                    "viaNodeId": {"type": "string"},
+                    "targetOrgId": {"type": "string"}
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["customService"],
+              "properties": {
+                "customService": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name", "endpointUrl", "authMethod"],
+                  "properties": {
+                    "name": {"type": "string"},
+                    "endpointUrl": {"type": "string"},
+                    "authMethod": {"type": "string"},
+                    "authKeyName": {"type": "string"},
+                    "viaNodeId": {"type": "string"},
+                    "targetOrgId": {"type": "string"}
+                  }
+                }
+              }
+            }
+          ]
+        }
+        """;
+
+    private const string ServiceReauthorizeParamsSchema = """
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["userServiceId", "requestedScopes"],
+          "properties": {
+            "userServiceId": {"type": "string"},
+            "requestedScopes": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+        """;
+
+    private const string KeyCreateParamsSchema = """
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "platform", "allowedServiceIds"],
+          "properties": {
+            "name": {"type": "string"},
+            "platform": {"type": "string"},
+            "allowedServiceIds": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": {"type": "string"}
+            }
+          }
+        }
+        """;
+
+    private const string KeyRotateParamsSchema = """
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["keyId"],
+          "properties": {
+            "keyId": {"type": "string"}
+          }
+        }
+        """;
+
     private static readonly FrozenDictionary<string, ActionContract> SupportedActions =
         new Dictionary<string, ActionContract>(StringComparer.Ordinal)
         {
             ["service.connect"] = new(
                 NyxIdAssistantActionKind.ServiceConnect,
-                ParseServiceConnect),
+                ParseServiceConnect,
+                ServiceConnectParamsSchema,
+                NyxIdAssistantActionRisk.Grant,
+                true),
             ["service.reauthorize"] = new(
                 NyxIdAssistantActionKind.ServiceReauthorize,
-                ParseServiceReauthorize),
+                ParseServiceReauthorize,
+                ServiceReauthorizeParamsSchema,
+                NyxIdAssistantActionRisk.Grant,
+                false),
             ["provider.set_app_credentials"] = new(
                 NyxIdAssistantActionKind.ProviderSetAppCredentials,
                 ParseProviderSetAppCredentials),
             ["key.create"] = new(
                 NyxIdAssistantActionKind.KeyCreate,
-                ParseKeyCreate),
+                ParseKeyCreate,
+                KeyCreateParamsSchema,
+                NyxIdAssistantActionRisk.Grant,
+                false),
             ["key.rotate"] = new(
                 NyxIdAssistantActionKind.KeyRotate,
-                ParseKeyRotate),
+                ParseKeyRotate,
+                KeyRotateParamsSchema,
+                NyxIdAssistantActionRisk.Grant,
+                false),
             ["node.register_token"] = new(
                 NyxIdAssistantActionKind.NodeRegisterToken,
                 ParseNodeRegisterToken),
@@ -84,31 +194,93 @@ public sealed class NyxIdAssistantActionRegistry
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     // A manifest contract can be known without being executable by Aevatar.
-    // V1 exposes only actions that have both a typed producer and a typed
-    // postcondition reader on the canonical actor path.
-    private static readonly FrozenSet<string> ExecutableActions =
-        new[] { "service.connect" }.ToFrozenSet(StringComparer.Ordinal);
+    // Only actions with a typed producer, wire mapper, and typed postcondition
+    // reader on the canonical actor path may be emitted; the served manifest is
+    // an additive superset and never widens this set.
+    private static readonly FrozenSet<string> ExecutableWireActions = new[]
+    {
+        "service.connect",
+        "key.create",
+        "key.rotate",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    private static readonly NyxIdAssistantActionDefinitionSnapshot ServiceAccessReviewDefinition =
+        new()
+        {
+            SchemaVersion = SupportedSchemaVersion,
+            RegistryRevision = ServiceAccessReviewRegistryRevision,
+            Action = NyxIdAssistantActionKind.ServiceAccessReview,
+            WireAction = ServiceAccessReviewWireAction,
+            Description = "Review access to one exact connected NyxID service.",
+            AdvisoryRisk = NyxIdAssistantActionRisk.Grant,
+            Tier = NyxIdAssistantActionTier.V1,
+            RememberEligible = false,
+        };
 
     private readonly FrozenDictionary<string, RegistryEntry> _entries;
+    private readonly FrozenSet<string> _executableActions;
 
     private NyxIdAssistantActionRegistry(
         int schemaVersion,
         string registryRevision,
-        IReadOnlyDictionary<string, RegistryEntry> entries)
+        IReadOnlyDictionary<string, RegistryEntry> entries,
+        IReadOnlyList<NyxIdAssistantActionRegistrySkip> skippedActions,
+        bool isStartupFallback = false)
     {
         SchemaVersion = schemaVersion;
         RegistryRevision = registryRevision;
         _entries = entries.ToFrozenDictionary(StringComparer.Ordinal);
+        _executableActions = ExecutableWireActions
+            .Where(_entries.ContainsKey)
+            .ToFrozenSet(StringComparer.Ordinal);
+        SkippedActions = skippedActions;
+        IsStartupFallback = isStartupFallback;
     }
 
     public int SchemaVersion { get; }
     public string RegistryRevision { get; }
 
+    /// <summary>
+    /// Known actions whose served descriptor failed contract validation and
+    /// were degraded individually instead of failing the whole registry.
+    /// </summary>
+    public IReadOnlyList<NyxIdAssistantActionRegistrySkip> SkippedActions { get; }
+
+    /// <summary>
+    /// True only for the disabled placeholder pinned when startup could not
+    /// obtain a served registry; recovery may replace exactly such a registry.
+    /// </summary>
+    internal bool IsStartupFallback { get; }
+
     internal static NyxIdAssistantActionRegistry CreateDisabled() =>
         new(
             SupportedSchemaVersion,
-            SupportedRegistryRevision,
-            new Dictionary<string, RegistryEntry>(StringComparer.Ordinal));
+            string.Empty,
+            new Dictionary<string, RegistryEntry>(StringComparer.Ordinal),
+            [],
+            isStartupFallback: true);
+
+    internal static bool IsActionExecutable(
+        string revision,
+        NyxIdAssistantActionKind action)
+    {
+        if (string.Equals(
+                revision,
+                ServiceAccessReviewRegistryRevision,
+                StringComparison.Ordinal))
+        {
+            return action == NyxIdAssistantActionKind.ServiceAccessReview;
+        }
+
+        var wireAction = action switch
+        {
+            NyxIdAssistantActionKind.ServiceConnect => "service.connect",
+            NyxIdAssistantActionKind.KeyCreate => "key.create",
+            NyxIdAssistantActionKind.KeyRotate => "key.rotate",
+            _ => null,
+        };
+        return wireAction is not null && ExecutableWireActions.Contains(wireAction);
+    }
 
     public static NyxIdAssistantActionRegistry Load(string registryJson)
     {
@@ -120,72 +292,106 @@ public sealed class NyxIdAssistantActionRegistry
             if (schemaVersion != SupportedSchemaVersion)
                 throw Error(SchemaUnsupported, "The NyxID action schema version is not supported.");
 
-            var revision = ReadRequiredString(root, "revision", 128);
-            if (!string.Equals(revision, SupportedRegistryRevision, StringComparison.Ordinal))
-                throw Error(RevisionUnsupported, "The NyxID action registry revision is not supported.");
-
+            var revision = ReadRevisionLabel(root);
             var actions = RequireProperty(root, "actions");
             if (actions.ValueKind != JsonValueKind.Array)
                 throw Error(RegistryInvalid, "The NyxID action registry actions field must be an array.");
 
             var entries = new Dictionary<string, RegistryEntry>(StringComparer.Ordinal);
+            var skippedActions = new List<NyxIdAssistantActionRegistrySkip>();
             foreach (var item in actions.EnumerateArray())
             {
-                var descriptor = RequireObject(item);
-                var wireAction = ReadRequiredString(descriptor, "action", 128);
-                if (!SupportedActions.TryGetValue(wireAction, out var contract))
-                    continue;
-
-                var tier = ParseTier(ReadRequiredString(descriptor, "tier", 32));
-                if (tier != NyxIdAssistantActionTier.V1)
-                    throw Error(TierUnsupported, "Only NyxID Assistant v1 actions are supported.");
-
-                var risk = ParseRisk(ReadRequiredString(descriptor, "risk", 32));
-                var rememberEligible = RequireBoolean(descriptor, "remember_eligible");
-                if (risk == NyxIdAssistantActionRisk.Destructive && rememberEligible)
-                    throw Error(RegistryInvalid, "Destructive actions cannot be remember eligible.");
-
-                var paramsSchema = RequireProperty(descriptor, "params_schema").Clone();
-                ValidateSchema(paramsSchema);
-                var definition = new NyxIdAssistantActionDefinitionSnapshot
+                string? wireAction = null;
+                try
                 {
-                    SchemaVersion = schemaVersion,
-                    RegistryRevision = revision,
-                    Action = contract.Action,
-                    WireAction = wireAction,
-                    Description = ReadRequiredString(descriptor, "description", 2048),
-                    AdvisoryRisk = risk,
-                    Tier = tier,
-                    RememberEligible = rememberEligible,
-                };
-                if (!entries.TryAdd(
-                        wireAction,
-                        new RegistryEntry(definition, paramsSchema, contract.Parser)))
+                    var descriptor = RequireObject(item);
+                    var candidateAction = ReadRequiredString(descriptor, "action", 128);
+                    if (!SupportedActions.TryGetValue(candidateAction, out var contract))
+                        continue;
+
+                    wireAction = candidateAction;
+                    var tier = ParseTier(ReadRequiredString(descriptor, "tier", 32));
+                    if (tier != NyxIdAssistantActionTier.V1)
+                        throw Error(TierUnsupported, "Only NyxID Assistant v1 actions are supported.");
+
+                    var risk = ParseRisk(ReadRequiredString(descriptor, "risk", 32));
+                    var rememberEligible = RequireBoolean(descriptor, "remember_eligible");
+                    if (risk == NyxIdAssistantActionRisk.Destructive && rememberEligible)
+                        throw Error(RegistryInvalid, "Destructive actions cannot be remember eligible.");
+
+                    var paramsSchema = RequireProperty(descriptor, "params_schema").Clone();
+                    ValidateSchema(paramsSchema);
+                    ValidatePinnedContract(
+                        contract,
+                        paramsSchema,
+                        risk,
+                        rememberEligible);
+                    var definition = new NyxIdAssistantActionDefinitionSnapshot
+                    {
+                        SchemaVersion = schemaVersion,
+                        RegistryRevision = revision,
+                        Action = contract.Action,
+                        WireAction = wireAction,
+                        Description = ReadRequiredString(descriptor, "description", 2048),
+                        AdvisoryRisk = risk,
+                        Tier = tier,
+                        RememberEligible = rememberEligible,
+                    };
+                    if (!entries.TryAdd(
+                            wireAction,
+                            new RegistryEntry(definition, paramsSchema, contract.Parser)))
+                    {
+                        throw Error(RegistryInvalid, "The NyxID action registry contains a duplicate action.");
+                    }
+                }
+                catch (NyxIdAssistantActionRegistryException exception)
                 {
-                    throw Error(RegistryInvalid, "The NyxID action registry contains a duplicate action.");
+                    RecordSkip(skippedActions, wireAction, exception.Code);
+                }
+                catch (NyxIdActionSecretPolicyException exception)
+                {
+                    RecordSkip(skippedActions, wireAction, exception.Code);
                 }
             }
 
-            if (!ExecutableActions.All(entries.ContainsKey))
-            {
-                throw Error(
-                    ActionUnsupported,
-                    "The NyxID action registry is missing an action required by this Aevatar version.");
-            }
-
-            return new NyxIdAssistantActionRegistry(schemaVersion, revision, entries);
-        }
-        catch (NyxIdAssistantActionRegistryException)
-        {
-            throw;
-        }
-        catch (NyxIdActionSecretPolicyException)
-        {
-            throw;
+            return new NyxIdAssistantActionRegistry(
+                schemaVersion,
+                revision,
+                entries,
+                skippedActions);
         }
         catch (JsonException)
         {
             throw Error(RegistryInvalid, "The NyxID action registry must be valid JSON.");
+        }
+    }
+
+    private static void RecordSkip(
+        List<NyxIdAssistantActionRegistrySkip> skippedActions,
+        string? wireAction,
+        string code)
+    {
+        // Descriptors whose action name could not even be read stay anonymous;
+        // unknown action names are additive manifest noise and are not recorded.
+        if (wireAction is not null)
+            skippedActions.Add(new NyxIdAssistantActionRegistrySkip(wireAction, code));
+    }
+
+    private static string ReadRevisionLabel(JsonElement root)
+    {
+        if (!root.TryGetProperty("revision", out var property) ||
+            property.ValueKind != JsonValueKind.String)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return NormalizeString(property.GetString(), 128, required: false);
+        }
+        catch (NyxIdAssistantActionRegistryException)
+        {
+            return string.Empty;
         }
     }
 
@@ -194,7 +400,16 @@ public sealed class NyxIdAssistantActionRegistry
         out NyxIdAssistantActionDefinitionSnapshot definition)
     {
         var normalizedAction = wireAction?.Trim() ?? string.Empty;
-        if (ExecutableActions.Contains(normalizedAction) &&
+        if (string.Equals(
+                normalizedAction,
+                ServiceAccessReviewWireAction,
+                StringComparison.Ordinal))
+        {
+            definition = ServiceAccessReviewDefinition.Clone();
+            return true;
+        }
+
+        if (_executableActions.Contains(normalizedAction) &&
             _entries.TryGetValue(normalizedAction, out var entry))
         {
             definition = entry.Definition.Clone();
@@ -219,7 +434,7 @@ public sealed class NyxIdAssistantActionRegistry
         }
 
         var normalizedAction = wireAction?.Trim() ?? string.Empty;
-        if (!ExecutableActions.Contains(normalizedAction) ||
+        if (!_executableActions.Contains(normalizedAction) ||
             !_entries.TryGetValue(normalizedAction, out var entry))
             throw Error(ActionUnsupported, "The NyxID action is not present in the pinned registry.");
 
@@ -281,6 +496,124 @@ public sealed class NyxIdAssistantActionRegistry
             new NyxIdAssistantActionParams { CatalogServiceConnect = value });
     }
 
+    public NyxIdAssistantActionValidation ResolveServiceAccessReview(
+        string userServiceId,
+        string serviceSlug,
+        string resourceUri)
+    {
+        var normalizedUserServiceId = NormalizeString(userServiceId, 256, required: true);
+        if (!string.Equals(userServiceId, normalizedUserServiceId, StringComparison.Ordinal) ||
+            normalizedUserServiceId.Any(char.IsWhiteSpace))
+        {
+            throw Error(ParamsInvalid, "The service access identity is invalid.");
+        }
+
+        var normalizedSlug = NormalizeString(serviceSlug, 128, required: true);
+        if (!string.Equals(serviceSlug, normalizedSlug, StringComparison.Ordinal) ||
+            !normalizedSlug.All(static character =>
+                char.IsAsciiLetterOrDigit(character) ||
+                character is '-' or '_' or '.'))
+        {
+            throw Error(ParamsInvalid, "The service access slug is invalid.");
+        }
+
+        var normalizedResourceUri = NormalizeString(resourceUri, 512, required: true);
+        var expectedPathSuffix =
+            $"/api/v1/proxy/s/{Uri.EscapeDataString(normalizedSlug)}";
+        if (!string.Equals(resourceUri, normalizedResourceUri, StringComparison.Ordinal) ||
+            !Uri.TryCreate(normalizedResourceUri, UriKind.Absolute, out var parsedResourceUri) ||
+            !string.Equals(parsedResourceUri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal) ||
+            !string.IsNullOrEmpty(parsedResourceUri.UserInfo) ||
+            !string.IsNullOrEmpty(parsedResourceUri.Query) ||
+            !string.IsNullOrEmpty(parsedResourceUri.Fragment) ||
+            !parsedResourceUri.AbsolutePath.EndsWith(
+                expectedPathSuffix,
+                StringComparison.Ordinal))
+        {
+            throw Error(ParamsInvalid, "The service access resource URI is invalid.");
+        }
+
+        return new NyxIdAssistantActionValidation(
+            ServiceAccessReviewDefinition.Clone(),
+            new NyxIdAssistantActionParams
+            {
+                ServiceAccessReview = new NyxIdServiceAccessReviewParams
+                {
+                    UserServiceId = normalizedUserServiceId,
+                    ServiceSlug = normalizedSlug,
+                    ResourceUri = normalizedResourceUri,
+                },
+            });
+    }
+
+    public NyxIdAssistantActionValidation ResolveKeyCreate(
+        NyxIdKeyCreateActionRequirement requirement)
+    {
+        ArgumentNullException.ThrowIfNull(requirement);
+        if (!_entries.TryGetValue("key.create", out var entry) ||
+            !_executableActions.Contains("key.create") ||
+            entry.Definition.Action != NyxIdAssistantActionKind.KeyCreate)
+        {
+            throw Error(ActionUnsupported, "Key creation is not present in the pinned registry.");
+        }
+
+        var name = NormalizeString(requirement.Name, 256, required: true);
+        var platform = NormalizeString(requirement.Platform, 128, required: true);
+        if (requirement.AllowedServiceIds.Count is < 1 or > 64)
+            throw Error(ParamsInvalid, "Key creation requires an exact nonempty service set.");
+
+        var allowedServiceIds = new List<string>(requirement.AllowedServiceIds.Count);
+        var distinct = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var serviceId in requirement.AllowedServiceIds)
+        {
+            var normalized = NormalizeString(serviceId, 256, required: true);
+            if (!string.Equals(serviceId, normalized, StringComparison.Ordinal) ||
+                !distinct.Add(normalized))
+            {
+                throw Error(ParamsInvalid, "The key creation service identities are invalid.");
+            }
+
+            allowedServiceIds.Add(normalized);
+        }
+
+        var value = new NyxIdKeyCreateParams
+        {
+            Name = name,
+            Platform = platform,
+        };
+        value.AllowedServiceIds.Add(allowedServiceIds);
+        return new NyxIdAssistantActionValidation(
+            entry.Definition.Clone(),
+            new NyxIdAssistantActionParams { KeyCreate = value });
+    }
+
+    public NyxIdAssistantActionValidation ResolveKeyRotate(
+        NyxIdKeyRotateActionRequirement requirement)
+    {
+        ArgumentNullException.ThrowIfNull(requirement);
+        if (!_entries.TryGetValue("key.rotate", out var entry) ||
+            !_executableActions.Contains("key.rotate") ||
+            entry.Definition.Action != NyxIdAssistantActionKind.KeyRotate)
+        {
+            throw Error(ActionUnsupported, "Key rotation is not present in the pinned registry.");
+        }
+
+        var keyId = NormalizeString(requirement.KeyId, 256, required: true);
+        if (!string.Equals(requirement.KeyId, keyId, StringComparison.Ordinal) ||
+            keyId.Any(char.IsWhiteSpace) ||
+            keyId.Any(static character => character is '/' or '\\' or '?' or '#'))
+        {
+            throw Error(ParamsInvalid, "The key rotation identity is invalid.");
+        }
+
+        return new NyxIdAssistantActionValidation(
+            entry.Definition.Clone(),
+            new NyxIdAssistantActionParams
+            {
+                KeyRotate = new NyxIdKeyRotateParams { KeyId = keyId },
+            });
+    }
+
     private static NyxIdAssistantActionParams ParseServiceConnect(JsonElement root)
     {
         EnsureOnlyProperties(root, "catalogService", "customService");
@@ -339,12 +672,12 @@ public sealed class NyxIdAssistantActionRegistry
         };
     }
 
-    private static NyxIdAssistantActionParams ParseServiceReauthorize(JsonElement root)
+    internal static NyxIdAssistantActionParams ParseServiceReauthorize(JsonElement root)
     {
-        EnsureOnlyProperties(root, "keyId", "requestedScopes");
+        EnsureOnlyProperties(root, "userServiceId", "requestedScopes");
         var value = new NyxIdServiceReauthorizeParams
         {
-            KeyId = ReadRequiredString(root, "keyId", 256),
+            UserServiceId = ReadRequiredString(root, "userServiceId", 256),
         };
         value.RequestedScopes.AddRange(ReadStringArray(root, "requestedScopes", 64, 256));
         return new NyxIdAssistantActionParams { ServiceReauthorize = value };
@@ -362,15 +695,29 @@ public sealed class NyxIdAssistantActionRegistry
         };
     }
 
-    private static NyxIdAssistantActionParams ParseKeyCreate(JsonElement root)
+    internal static NyxIdAssistantActionParams ParseKeyCreate(JsonElement root)
     {
         EnsureOnlyProperties(root, "name", "platform", "allowedServiceIds");
+        var allowedServiceIds = ReadStringArray(
+            root,
+            "allowedServiceIds",
+            64,
+            256,
+            rejectDuplicates: true,
+            rejectNormalizationChanges: true);
+        if (allowedServiceIds.Count == 0)
+        {
+            throw Error(
+                ParamsInvalid,
+                "Key creation requires at least one exact allowed service identity.");
+        }
+
         var value = new NyxIdKeyCreateParams
         {
             Name = ReadRequiredString(root, "name", 256),
             Platform = ReadRequiredString(root, "platform", 128),
         };
-        value.AllowedServiceIds.AddRange(ReadStringArray(root, "allowedServiceIds", 128, 256));
+        value.AllowedServiceIds.AddRange(allowedServiceIds);
         return new NyxIdAssistantActionParams { KeyCreate = value };
     }
 
@@ -506,6 +853,28 @@ public sealed class NyxIdAssistantActionRegistry
         ValidateSchemaNode(schema);
     }
 
+    private static void ValidatePinnedContract(
+        ActionContract contract,
+        JsonElement paramsSchema,
+        NyxIdAssistantActionRisk risk,
+        bool rememberEligible)
+    {
+        var pinnedParamsSchema = contract.PinnedParamsSchema;
+        if (pinnedParamsSchema is null)
+            return;
+
+        var expectedSchema = JsonNode.Parse(pinnedParamsSchema);
+        var actualSchema = JsonNode.Parse(paramsSchema.GetRawText());
+        if (!JsonNode.DeepEquals(expectedSchema, actualSchema) ||
+            risk != contract.PinnedRisk ||
+            rememberEligible != contract.PinnedRememberEligible)
+        {
+            throw Error(
+                RegistryInvalid,
+                "The NyxID action descriptor does not match the pinned registry contract.");
+        }
+    }
+
     private static void ValidateSchemaNode(JsonElement schema)
     {
         if (schema.ValueKind != JsonValueKind.Object)
@@ -545,6 +914,15 @@ public sealed class NyxIdAssistantActionRegistry
 
         if (string.Equals(type, "array", StringComparison.Ordinal))
         {
+            var minItems = ReadOptionalSchemaCount(schema, "minItems");
+            var maxItems = ReadOptionalSchemaCount(schema, "maxItems");
+            if (minItems.HasValue && maxItems.HasValue && minItems > maxItems)
+                throw Error(RegistryInvalid, "Action params_schema contains an invalid array range.");
+            if (schema.TryGetProperty("uniqueItems", out var uniqueItems) &&
+                uniqueItems.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                throw Error(RegistryInvalid, "Action params_schema uniqueItems must be a boolean.");
+            }
             ValidateSchemaNode(RequireProperty(schema, "items"));
             return;
         }
@@ -606,6 +984,23 @@ public sealed class NyxIdAssistantActionRegistry
             case "array":
                 if (instance.ValueKind != JsonValueKind.Array)
                     throw Error(ParamsInvalid, $"{path} must be an array.");
+                var itemCount = instance.GetArrayLength();
+                var minItems = ReadOptionalSchemaCount(schema, "minItems");
+                var maxItems = ReadOptionalSchemaCount(schema, "maxItems");
+                if ((minItems.HasValue && itemCount < minItems) ||
+                    (maxItems.HasValue && itemCount > maxItems))
+                {
+                    throw Error(ParamsInvalid, $"{path} contains an invalid number of items.");
+                }
+                if (schema.TryGetProperty("uniqueItems", out var uniqueItems) &&
+                    uniqueItems.ValueKind == JsonValueKind.True)
+                {
+                    var values = instance.EnumerateArray()
+                        .Select(static item => item.GetRawText())
+                        .ToArray();
+                    if (values.Distinct(StringComparer.Ordinal).Count() != values.Length)
+                        throw Error(ParamsInvalid, $"{path} contains duplicate items.");
+                }
                 var items = RequireProperty(schema, "items");
                 foreach (var item in instance.EnumerateArray())
                     ValidateAgainstSchema(item, items, path);
@@ -681,19 +1076,41 @@ public sealed class NyxIdAssistantActionRegistry
         JsonElement element,
         string name,
         int maxCount,
-        int maxItemLength)
+        int maxItemLength,
+        bool rejectDuplicates = false,
+        bool rejectNormalizationChanges = false)
     {
         if (!element.TryGetProperty(name, out var property))
             return [];
         if (property.ValueKind != JsonValueKind.Array || property.GetArrayLength() > maxCount)
             throw Error(ParamsInvalid, "An action string array is invalid.");
 
-        return property.EnumerateArray()
-            .Select(item => item.ValueKind == JsonValueKind.String
-                ? NormalizeString(item.GetString(), maxItemLength, required: true)
-                : throw Error(ParamsInvalid, "An action string array item is invalid."))
-            .Distinct(StringComparer.Ordinal)
+        var values = property.EnumerateArray()
+            .Select(item =>
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                    throw Error(ParamsInvalid, "An action string array item is invalid.");
+
+                var raw = item.GetString();
+                var normalized = NormalizeString(raw, maxItemLength, required: true);
+                if (rejectNormalizationChanges && !string.Equals(raw, normalized, StringComparison.Ordinal))
+                    throw Error(ParamsInvalid, "An action string array item is not canonical.");
+                return normalized;
+            })
             .ToArray();
+        var distinctValues = values.Distinct(StringComparer.Ordinal).ToArray();
+        if (rejectDuplicates && distinctValues.Length != values.Length)
+            throw Error(ParamsInvalid, "An action string array contains duplicate identities.");
+        return distinctValues;
+    }
+
+    private static int? ReadOptionalSchemaCount(JsonElement schema, string name)
+    {
+        if (!schema.TryGetProperty(name, out var property))
+            return null;
+        if (!property.TryGetInt32(out var value) || value < 0)
+            throw Error(RegistryInvalid, "Action params_schema contains an invalid array count.");
+        return value;
     }
 
     private static string ReadEnumString(
@@ -742,7 +1159,10 @@ public sealed class NyxIdAssistantActionRegistry
 
     private sealed record ActionContract(
         NyxIdAssistantActionKind Action,
-        Func<JsonElement, NyxIdAssistantActionParams> Parser);
+        Func<JsonElement, NyxIdAssistantActionParams> Parser,
+        string? PinnedParamsSchema = null,
+        NyxIdAssistantActionRisk? PinnedRisk = null,
+        bool? PinnedRememberEligible = null);
 
     private sealed record RegistryEntry(
         NyxIdAssistantActionDefinitionSnapshot Definition,

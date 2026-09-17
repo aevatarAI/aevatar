@@ -16,7 +16,7 @@ public static class NyxIdAuthorityResolver
     /// hidden config dependencies. Override via the environment variable
     /// <c>AEVATAR_NYXID_AUTHORITY</c> for staging / dev / test deploys.
     /// </summary>
-    public const string DefaultAuthority = "https://nyx.chrono-ai.fun";
+    public const string DefaultAuthority = "https://nyx-api.chrono-ai.fun";
 
     public const string OverrideEnvVar = "AEVATAR_NYXID_AUTHORITY";
 

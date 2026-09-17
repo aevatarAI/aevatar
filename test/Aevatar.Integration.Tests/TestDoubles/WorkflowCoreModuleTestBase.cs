@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
 using Google.Protobuf;
@@ -38,6 +39,66 @@ public abstract class WorkflowCoreModuleTestBase
 
         internal static ToolCallModule CreateToolCallModule(IReadOnlyList<IWorkflowToolSource> toolSources) =>
             new(toolSources, NullLogger<ToolCallModule>.Instance);
+
+        internal static async Task ExecuteToolCallToCompletionAsync(
+            ToolCallModule module,
+            StepRequestEvent request,
+            TestEventHandlerContext ctx,
+            CancellationToken ct = default)
+        {
+            if (string.IsNullOrWhiteSpace(request.RunId))
+                request.RunId = ctx.RunId;
+            if (string.IsNullOrWhiteSpace(request.ExecutionId))
+                request.ExecutionId = $"exec-{Guid.NewGuid():N}";
+
+            await module.HandleAsync(Envelope(request), ctx, ct);
+            await DrainToolCallContinuationsAsync(module, request, ctx, ct);
+        }
+
+        internal static async Task DrainToolCallContinuationsAsync(
+            ToolCallModule module,
+            StepRequestEvent request,
+            TestEventHandlerContext ctx,
+            CancellationToken ct = default)
+        {
+            while (true)
+            {
+                var matchingPending = ctx.LoadState<ToolCallModuleState>("tool_call")
+                    .PendingExecutions.Values.Where(candidate =>
+                        string.Equals(candidate.RunId, request.RunId, StringComparison.Ordinal) &&
+                        string.Equals(candidate.StepId, request.StepId, StringComparison.Ordinal) &&
+                        string.Equals(candidate.ExecutionId, request.ExecutionId, StringComparison.Ordinal))
+                    .ToList();
+                if (matchingPending.Count == 0)
+                    break;
+                if (matchingPending.Count != 1)
+                    throw new InvalidOperationException("Expected exactly one pending tool-call execution.");
+
+                var pending = matchingPending[0];
+                if (pending.ExecutionPhase != WorkflowToolCallExecutionPhase.ExecutionPending)
+                    break;
+
+                var continuation = await ctx.WaitForPublishedAsync<WorkflowToolCallAttemptCompletedEvent>(candidate =>
+                        string.Equals(candidate.CallId, pending.CallId, StringComparison.Ordinal) &&
+                        string.Equals(candidate.ExecutionId, pending.ExecutionId, StringComparison.Ordinal) &&
+                        candidate.Attempt == pending.Attempt &&
+                        string.Equals(candidate.ContinuationId, pending.ContinuationId, StringComparison.Ordinal),
+                    ct);
+                var envelope = ctx.CreatePublishedEnvelope(continuation);
+                ctx.RemovePublished(continuation);
+                await module.HandleAsync(envelope, ctx, ct);
+            }
+
+            var completed = ctx.GetPublishedSnapshot()
+                .Select(static item => item.evt)
+                .OfType<StepCompletedEvent>()
+                .Count(candidate =>
+                    string.Equals(candidate.RunId, request.RunId, StringComparison.Ordinal) &&
+                    string.Equals(candidate.StepId, request.StepId, StringComparison.Ordinal) &&
+                    string.Equals(candidate.ExecutionId, request.ExecutionId, StringComparison.Ordinal));
+            if (completed != 1)
+                throw new InvalidOperationException("Expected exactly one terminal step completion for the tool call.");
+        }
 
         internal sealed class FakeAgentTool(string name, Func<string, string> execute) : IWorkflowTool
         {

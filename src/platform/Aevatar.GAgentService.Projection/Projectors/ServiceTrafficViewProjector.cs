@@ -71,7 +71,13 @@ public sealed class ServiceTrafficViewProjector
                 })
                 .ToList(),
         };
-        await _storeDispatcher.UpsertAsync(readModel, ct);
+        var result = await _storeDispatcher.UpsertAsync(readModel, ct);
+        if (result.IsRejected)
+        {
+            throw new InvalidOperationException(
+                $"Service traffic-view projection '{serviceKey}' rejected state version " +
+                $"{stateVersion}: {result.Disposition}.");
+        }
     }
 
 }

@@ -87,12 +87,15 @@ public sealed record WorkflowDefinitionBinding(
     string SourceKind = "",
     WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
     string WorkflowId = "",
-    string RevisionId = "");
+    string RevisionId = "",
+    long DefinitionVersion = 0,
+    string ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion);
 
 public sealed record WorkflowRunCreationReceipt(
     string ActorId,
     string DefinitionActorId,
-    IReadOnlyList<string> CreatedActorIds);
+    IReadOnlyList<string> CreatedActorIds,
+    string RunId = "");
 
 public sealed record WorkflowDefinitionProvisioningReceipt(
     string ActorId,
@@ -115,7 +118,9 @@ public sealed record WorkflowActorBinding(
     string SourceKind = "",
     WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
     string WorkflowId = "",
-    string RevisionId = "")
+    string RevisionId = "",
+    string ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+    string CatalogPublicationContractVersion = WorkflowCatalogPublicationContracts.LegacyV0)
 {
     public static WorkflowActorBinding Unsupported(string actorId) =>
         new(
@@ -126,7 +131,9 @@ public sealed record WorkflowActorBinding(
             string.Empty,
             string.Empty,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-            ExternalCapabilityExecutionMode.Unspecified);
+            ExternalCapabilityExecutionMode.Unspecified,
+            ToolCatalogPolicyVersion: WorkflowToolCatalogPolicies.LegacyV0,
+            CatalogPublicationContractVersion: WorkflowCatalogPublicationContracts.LegacyV0);
 
     public bool IsWorkflowCapable => ActorKind != WorkflowActorKind.Unsupported;
 
@@ -161,7 +168,12 @@ public sealed record WorkflowRunForkSeedView(
     string FinalError,
     string ScopeId = "",
     IReadOnlyDictionary<string, WorkflowStepIdempotencyView>? IdempotencyByStepId = null,
-    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null)
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null,
+    string WorkflowId = "",
+    string RevisionId = "",
+    long DefinitionVersion = 0,
+    string OriginalRunId = "",
+    WorkflowNormalizedExecutionSeed? NormalizedValues = null)
 {
     public WorkflowRunForkSeedView()
         : this(
@@ -176,6 +188,11 @@ public sealed record WorkflowRunForkSeedView(
             string.Empty,
             string.Empty,
             new Dictionary<string, WorkflowStepIdempotencyView>(StringComparer.Ordinal),
+            null,
+            string.Empty,
+            string.Empty,
+            0,
+            string.Empty,
             null)
     {
     }
@@ -320,6 +337,18 @@ public interface IWorkflowRunIdentityExecutionPort
         CancellationToken ct = default);
 }
 
+public interface IWorkflowRunLineageRecordingPort
+{
+    Task RecordForkChildAsync(
+        string sourceRunId,
+        string childRunId,
+        string childActorId,
+        string originalRunId,
+        string startAtStepId,
+        int attempt,
+        CancellationToken ct = default);
+}
+
 public interface IWorkflowDefinitionParser
 {
     /// <summary>
@@ -329,7 +358,21 @@ public interface IWorkflowDefinitionParser
         string workflowYaml,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Parses a definition for a new publication/binding. Unlike legacy replay parsing, this
+    /// applies the current workflow tool-catalog policy gate.
+    /// </summary>
+    Task<WorkflowYamlParseResult> ParseWorkflowYamlForPublicationAsync(
+        string workflowYaml,
+        CancellationToken ct = default) =>
+        ParseWorkflowYamlAsync(workflowYaml, ct);
+
     Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
         IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
         CancellationToken ct = default);
+
+    Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleForPublicationAsync(
+        IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+        CancellationToken ct = default) =>
+        ParseInlineWorkflowBundleAsync(inlineWorkflowDocuments, ct);
 }

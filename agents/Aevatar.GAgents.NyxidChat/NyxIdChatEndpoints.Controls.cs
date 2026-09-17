@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -30,6 +31,9 @@ public static partial class NyxIdChatEndpoints
         group.MapPost(
             "/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:skip",
             HandleSkipControlAsync);
+        group.MapPost(
+            "/{scopeId}/nyxid-chat/conversations/{actorId}:arm-effect-fault-canary",
+            HandleCanaryEffectFaultArmControlAsync);
     }
 
     private static async Task<IResult> HandleStopControlAsync(
@@ -130,6 +134,7 @@ public static partial class NyxIdChatEndpoints
             LlmControl = control.ToPayload(),
             ToolContext = BuildControlToolContext(
                 normalizedScopeId,
+                normalizedActorId,
                 turnId,
                 requestId,
                 credentials!,
@@ -172,6 +177,12 @@ public static partial class NyxIdChatEndpoints
         var accessToken = credentials?.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(
+                http.User,
+                out var ownerSubject))
+        {
+            return Results.Unauthorized();
+        }
         var admissionError = await AuthorizeConversationAsync(
             admissionPort,
             identity.ScopeId,
@@ -194,13 +205,15 @@ public static partial class NyxIdChatEndpoints
             ClientRequestId = identity.ClientRequestId,
             CommandId = commandId,
             CorrelationId = correlationId,
+            OwnerSubject = ownerSubject,
             ExpectedOperationGeneration = request.ExpectedOperationGeneration,
             ExpectedStateVersion = request.ExpectedStateVersion,
             LlmControl = control.ToPayload(),
-            ToolContext = BuildControlToolContext(
+            ToolContext = BuildAuthenticatedOwnerControlToolContext(
                 identity.ScopeId,
-                identity.TurnId,
+                identity.ActorId,
                 identity.RequestId,
+                ownerSubject,
                 credentials!,
                 control),
         }, ct).ConfigureAwait(false);
@@ -361,8 +374,81 @@ public static partial class NyxIdChatEndpoints
         return AcceptedControl(http, identity.ScopeId, identity.ActorId, receipt);
     }
 
+    private static async Task<IResult> HandleCanaryEffectFaultArmControlAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        NyxIdChatCanaryEffectFaultArmRequest request,
+        [FromServices] IScopeResourceAdmissionPort admissionPort,
+        [FromServices] INyxIdChatControlCommandPort commandPort,
+        [FromServices] INyxIdChatCanaryEffectFaultAuthorizationPolicy canaryAuthorization,
+        CancellationToken ct)
+    {
+        if (!AevatarPrincipalSubjectResolver.TryResolveNyxIdSubject(
+                http.User,
+                out var ownerSubject) ||
+            !canaryAuthorization.CanArm(ownerSubject))
+        {
+            return Results.NotFound();
+        }
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+        if (!TryValidateControlIdentity(scopeId, out var normalizedScopeId) ||
+            !TryValidateControlIdentity(actorId, out var normalizedActorId) ||
+            !TryValidateControlIdentity(request.ArmId, out var armId) ||
+            !TryValidateControlIdentity(request.ClientRequestId, out var clientRequestId) ||
+            !TryValidateControlIdentity(request.SourceTurnId, out var sourceTurnId) ||
+            !TryValidateControlIdentity(request.SourceTaskId, out var sourceTaskId) ||
+            !TryValidateControlIdentity(request.SourceStepId, out var sourceStepId) ||
+            !TryValidateControlIdentity(request.SourceOperationId, out var sourceOperationId) ||
+            !TryValidateControlIdentity(request.ServiceInstanceId, out var serviceInstanceId) ||
+            request.SourceOperationGeneration <= 0 ||
+            request.ExpectedStateVersion < 0 ||
+            request.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            return InvalidControlRequest();
+        }
+
+        var admissionError = await AuthorizeConversationAsync(
+            admissionPort,
+            normalizedScopeId,
+            normalizedActorId,
+            ScopeResourceOperation.Control,
+            ct).ConfigureAwait(false);
+        if (admissionError is not null)
+            return admissionError;
+
+        var (commandId, correlationId) = CreateControlTraceIdentity();
+        var receipt = await commandPort.DispatchCanaryEffectFaultArmAsync(
+            new NyxIdChatCanaryEffectFaultArmCommand
+            {
+                ScopeId = normalizedScopeId,
+                ConversationActorId = normalizedActorId,
+                ArmId = armId,
+                ClientRequestId = clientRequestId,
+                SourceOperationKey = new NyxIdChatOperationKey
+                {
+                    ConversationActorId = normalizedActorId,
+                    TurnId = sourceTurnId,
+                    TaskId = sourceTaskId,
+                    StepId = sourceStepId,
+                    OperationId = sourceOperationId,
+                    OperationGeneration = request.SourceOperationGeneration,
+                },
+                ServiceInstanceId = serviceInstanceId,
+                OwnerSubject = ownerSubject,
+                ExpiresAt = Timestamp.FromDateTimeOffset(request.ExpiresAt),
+                ExpectedStateVersion = request.ExpectedStateVersion,
+                CommandId = commandId,
+                CorrelationId = correlationId,
+            },
+            ct).ConfigureAwait(false);
+        return AcceptedControl(http, normalizedScopeId, normalizedActorId, receipt);
+    }
+
     private static AgentToolExecutionContextPayload BuildControlToolContext(
         string scopeId,
+        string conversationActorId,
         string turnId,
         string requestId,
         AgentToolCredentials credentials,
@@ -374,8 +460,42 @@ public static partial class NyxIdChatEndpoints
             Credentials = credentials,
             Caller = new AgentToolCallerContext(scopeId, scopeId, turnId),
             Channel = new AgentToolChannelContext("nyxid-chat", null, scopeId, null, null),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(conversationActorId),
         };
         return control.ToToolContext(context).ToPayload();
+    }
+
+    private static AgentToolExecutionContextPayload BuildAuthenticatedOwnerControlToolContext(
+        string scopeId,
+        string conversationActorId,
+        string requestId,
+        string ownerSubject,
+        AgentToolCredentials credentials,
+        LLMControlContext? control = null)
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, null),
+            Credentials = credentials,
+            Caller = new AgentToolCallerContext(
+                scopeId,
+                ownerSubject,
+                requestId,
+                scopeId),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                scopeId,
+                null,
+                null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "nyxid",
+                string.Empty,
+                ownerSubject,
+                "proxy"),
+            ExecutionOwner = AgentToolExecutionOwners.Actor(conversationActorId),
+        };
+        return (control ?? LLMControlContext.Empty).ToToolContext(context).ToPayload();
     }
 
     private static AgentToolExecutionContextPayload ToToolContextPayload(AgentToolCredentials credentials) =>
@@ -594,4 +714,17 @@ public static partial class NyxIdChatEndpoints
         bool Approved,
         string? Reason,
         long ExpectedStateVersion);
+
+    public sealed record NyxIdChatCanaryEffectFaultArmRequest(
+        string? ArmId,
+        string? ClientRequestId,
+        string? SourceTurnId,
+        string? SourceTaskId,
+        string? SourceStepId,
+        string? SourceOperationId,
+        long SourceOperationGeneration,
+        string? ServiceInstanceId,
+        DateTimeOffset ExpiresAt,
+        long ExpectedStateVersion);
+
 }

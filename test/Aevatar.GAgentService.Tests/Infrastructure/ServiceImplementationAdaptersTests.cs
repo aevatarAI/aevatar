@@ -572,6 +572,8 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                    WorkflowId = "wf-inferred",
                     WorkflowYaml = "name: inferred-workflow",
                     ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                 },
@@ -644,6 +646,8 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                    WorkflowId = "wf-bundle",
                     WorkflowYaml = workflowYaml,
                     InlineWorkflowYamls = { ["child"] = "name: child" },
                     CapabilityAdmissionPlan = admissionPlan,
@@ -657,6 +661,42 @@ public sealed class ServiceImplementationAdaptersTests
             .Which.Should().BeEquivalentTo(admittedCapability);
         artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ServiceGrantRequirement.Should()
             .Be(Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Required);
+    }
+
+    [Fact]
+    public async Task WorkflowAdapter_WithoutPersistedPlanAndMode_ShouldRepairAsInteractive()
+    {
+        const string workflowYaml = "name: legacy-interactive-workflow\nsteps: []";
+        var workflowPort = new RecordingWorkflowRunActorPort
+        {
+            ParseResult = CreateSuccessfulWorkflowParse("legacy-interactive-workflow"),
+        };
+        var admission = new RecordingWorkflowCapabilityAdmissionService();
+        var adapter = new WorkflowServiceImplementationAdapter(workflowPort, admission);
+
+        var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "rev-legacy-interactive",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                    WorkflowId = "wf-legacy-interactive",
+                    WorkflowYaml = workflowYaml,
+                },
+            },
+        });
+
+        admission.LiveRequest.Should().NotBeNull();
+        admission.LiveRequest!.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+        artifact.DeploymentPlan.WorkflowPlan.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+        artifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
     }
 
     [Fact]
@@ -678,6 +718,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowYaml = "invalid",
                 },
             },
@@ -712,6 +753,8 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                    WorkflowId = "wf-provided",
                     WorkflowName = "provided-workflow",
                     WorkflowYaml = "name: ignored",
                     DefinitionActorId = "workflow-definition-1",
@@ -730,7 +773,7 @@ public sealed class ServiceImplementationAdaptersTests
         admission.PersistedRequest!.Plan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
         admission.PersistedRequest.ExpectedExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Interactive);
-        workflowPort.ParseCalls.Should().ContainSingle("name: ignored");
+        workflowPort.ParseCalls.Should().Equal("name: ignored", "name: child");
     }
 
     [Fact]
@@ -807,6 +850,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowId = "wf-alpha",
                     WorkflowYaml = workflowYaml,
                     CapabilityAdmissionPlan = persistedPlan,
@@ -857,6 +901,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowYaml = workflowYaml,
                     CapabilityAdmissionPlan = persistedPlan,
                 },
@@ -903,6 +948,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowYaml = LegacyWorkflowYaml,
                     CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
                     {
@@ -949,6 +995,8 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                    WorkflowId = "wf-rebound",
                     WorkflowYaml = LegacyWorkflowYaml,
                     ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                 },
@@ -986,6 +1034,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "provided-workflow",
                     WorkflowYaml = "invalid",
                 },
@@ -1015,6 +1064,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "provided-workflow",
                     WorkflowYaml = "name: yaml-workflow",
                 },
@@ -1041,6 +1091,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "wf",
                     WorkflowYaml = string.Empty,
                 },
@@ -1106,6 +1157,8 @@ public sealed class ServiceImplementationAdaptersTests
 
         public PersistedWorkflowCapabilityAdmissionRequest? PersistedRequest { get; private set; }
 
+        public RefreshPersistedWorkflowCapabilityAdmissionRequest? RefreshRequest { get; private set; }
+
         public WorkflowCapabilityAdmissionPlan? Result { get; init; }
 
         public Exception? Failure { get; init; }
@@ -1134,6 +1187,16 @@ public sealed class ServiceImplementationAdaptersTests
             if (Failure is not null)
                 return Task.FromException<WorkflowCapabilityAdmissionPlan>(Failure);
             return Task.FromResult(Result?.Clone() ?? request.Plan.Clone());
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RefreshPersistedAsync(
+            RefreshPersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            RefreshRequest = request;
+            if (Failure is not null)
+                return Task.FromException<WorkflowCapabilityAdmissionPlan>(Failure);
+            return Task.FromResult(Result?.Clone() ?? request.Persisted.Plan.Clone());
         }
     }
 

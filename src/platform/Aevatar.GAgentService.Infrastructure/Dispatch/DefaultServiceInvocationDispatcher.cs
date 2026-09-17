@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
@@ -142,7 +143,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         if (plan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
             !System.Enum.IsDefined(plan.ExecutionMode))
         {
-            throw new InvalidOperationException("Workflow service deployment execution mode is required.");
+            throw CreateWorkflowExecutionModeRebindRequired(plan.ExecutionMode);
         }
         var bindingIdentity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
             target.Artifact,
@@ -164,7 +165,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             SourceKind: "service_revision",
             CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone(),
             WorkflowId: bindingIdentity.WorkflowId,
-            RevisionId: bindingIdentity.RevisionId);
+            RevisionId: bindingIdentity.RevisionId,
+            ToolCatalogPolicyVersion: plan.ToolCatalogPolicyVersion);
         var requestedRunId = request.RequestedRunId?.Trim() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(requestedRunId))
         {
@@ -205,6 +207,33 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
 
         return CreateReceipt(target, run.ActorId, commandId, correlationId, serviceRunId);
     }
+
+    private static WorkflowExternalCapabilityAdmissionException CreateWorkflowExecutionModeRebindRequired(
+        ExternalCapabilityExecutionMode executionMode) =>
+        new(new ExternalCapabilityReadiness
+        {
+            ExecutionMode = executionMode,
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+            Blockers =
+            {
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                    Code = WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode,
+                    SafeMessage =
+                        "Saved workflow deployment is missing an explicit execution mode. " +
+                        "Re-publish the workflow and reprovision schedules that reference it.",
+                },
+            },
+            Remediations =
+            {
+                new ExternalCapabilityRemediation
+                {
+                    ActionKind = ExternalCapabilityRemediationActionKind.RebindWorkflow,
+                    Label = "Re-publish workflow and reprovision schedule",
+                },
+            },
+        });
 
     private async Task<ServiceInvocationAcceptedReceipt> DispatchExactWorkflowRunAsync(
         ServiceInvocationResolvedTarget target,
@@ -464,16 +493,23 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
     {
         if (source.CallerDurableCredential != null)
         {
-            if (string.IsNullOrWhiteSpace(invocationRequest.ScheduleId))
+            var isScheduledDispatch = !string.IsNullOrWhiteSpace(invocationRequest.ScheduleId);
+            var isChannelAgentKey =
+                source.CallerDurableCredential.SourceKind ==
+                DurableCallerCredentialSourceKind.ChannelRegistration;
+            if (!isScheduledDispatch &&
+                (!isChannelAgentKey || !IsTrustedChannelAgentKeyProjection(source)))
             {
                 throw new InvalidOperationException(
-                    "caller_durable_credential is accepted only from scheduled dispatch.");
+                    "caller_durable_credential is accepted only from scheduled dispatch or a trusted channel Agent Key projection.");
             }
 
             if (!string.IsNullOrWhiteSpace(source.ConnectorHttpAuthorization) ||
                 !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdAccessToken) ||
                 !string.IsNullOrWhiteSpace(source.LlmControl?.NyxIdOrgToken) ||
-                !string.IsNullOrWhiteSpace(source.CallerSourceReadableNyxIdBearerToken))
+                !string.IsNullOrWhiteSpace(source.LlmControl?.SenderNyxIdAccessToken) ||
+                !string.IsNullOrWhiteSpace(source.CallerSourceReadableNyxIdBearerToken) ||
+                HasNyxIdBearerMaterial(source.ToolContext?.Credentials))
             {
                 throw new InvalidOperationException(
                     "caller_durable_credential must not be combined with raw workflow caller credentials.");
@@ -492,6 +528,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                     ? source.CallerDurableCredential.Clone()
                     : null,
                 NyxIdAuthority = authority,
+                Kind = ResolveDurableCredentialKind(source.CallerDurableCredential),
             };
         }
 
@@ -502,7 +539,11 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 source.CallerSourceReadableNyxIdBearerToken,
                 source.CallerNyxIdCredentialKind);
             if (!string.IsNullOrWhiteSpace(connectorCredential.BearerToken))
+            {
+                if (connectorCredential.Kind == NyxIdCallerCredentialKind.ProxyDelegation)
+                    connectorCredential.NyxIdAuthority = BuildWorkflowCallerNyxIdAuthority(source.ToolContext);
                 return connectorCredential;
+            }
         }
 
         return BuildWorkflowCallerCredentialFromToken(source.LlmControl?.NyxIdAccessToken);
@@ -558,6 +599,15 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                         sourceReadable.NormalizedBearerToken ?? string.Empty;
                 }
                 break;
+            case AgentToolNyxIdCredentialKindPayload.AgentKey:
+                if (sourceReadable.IsValid)
+                {
+                    throw new ArgumentException(
+                        "An Agent Key cannot be combined with a supplemental source-readable caller credential.",
+                        nameof(sourceReadableUserBearerToken));
+                }
+                credential.Kind = NyxIdCallerCredentialKind.AgentKey;
+                break;
             case AgentToolNyxIdCredentialKindPayload.Unspecified:
                 if (sourceReadable.IsValid)
                 {
@@ -587,6 +637,56 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
     private static bool HasDurableCallerCredential(DurableCallerCredentialRef? reference) =>
         reference != null && !string.IsNullOrWhiteSpace(reference.Ref);
 
+    private static NyxIdCallerCredentialKind ResolveDurableCredentialKind(
+        DurableCallerCredentialRef credential)
+    {
+        if (DurableCallerAgentKeyContract.Matches(credential))
+        {
+            return NyxIdCallerCredentialKind.AgentKey;
+        }
+
+        return credential.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch
+            ? NyxIdCallerCredentialKind.ProxyDelegation
+            : NyxIdCallerCredentialKind.Unspecified;
+    }
+
+    private static bool HasNyxIdBearerMaterial(AgentToolCredentialsPayload? credentials) =>
+        !string.IsNullOrWhiteSpace(credentials?.NyxIdAccessToken) ||
+        !string.IsNullOrWhiteSpace(credentials?.NyxIdOrgToken) ||
+        !string.IsNullOrWhiteSpace(credentials?.SenderNyxIdAccessToken) ||
+        !string.IsNullOrWhiteSpace(credentials?.SourceReadableNyxIdAccessToken);
+
+    private static bool IsTrustedChannelAgentKeyProjection(ChatRequestEvent source)
+    {
+        var durable = source.CallerDurableCredential;
+        var toolContext = source.ToolContext;
+        var channelCredential = toolContext?.Channel?.WorkflowResultDeliveryCredential;
+        var reference = channelCredential?.SecretReference;
+        return durable != null &&
+               durable.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration &&
+               toolContext?.ExecutionOwner?.Kind == AgentToolExecutionOwnerKind.ChannelRegistration &&
+               toolContext.Channel != null &&
+               !string.IsNullOrWhiteSpace(toolContext.ExecutionOwner.OwnerId) &&
+               string.Equals(
+                   toolContext.ExecutionOwner.OwnerId,
+                   toolContext.Channel.BotRegistrationId,
+                   StringComparison.Ordinal) &&
+               channelCredential != null &&
+               reference != null &&
+               !string.IsNullOrWhiteSpace(reference.Ref) &&
+               string.Equals(
+                   reference.Purpose,
+                   CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                   StringComparison.Ordinal) &&
+               string.Equals(reference.OwnerScopeKey, toolContext.Channel.RegistrationScopeId, StringComparison.Ordinal) &&
+               string.Equals(durable.Ref, reference.Ref, StringComparison.Ordinal) &&
+               string.Equals(durable.Purpose, reference.Purpose, StringComparison.Ordinal) &&
+               string.Equals(durable.OwnerScopeKey, reference.OwnerScopeKey, StringComparison.Ordinal) &&
+               string.Equals(durable.SubjectId, channelCredential.SubjectId, StringComparison.Ordinal) &&
+               durable.SecretReference != null &&
+               durable.SecretReference.Equals(reference);
+    }
+
     private static Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority? ToWorkflowCallerNyxIdAuthority(
         ScheduledCallerNyxIdAuthority? source)
     {
@@ -614,10 +714,32 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         };
     }
 
+    private static Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority? BuildWorkflowCallerNyxIdAuthority(
+        AgentToolExecutionContextPayload? source)
+    {
+        var authority = source?.NyxIdAuthority;
+        var platform = authority?.Platform?.Trim() ?? string.Empty;
+        var externalUserId = authority?.ExternalUserId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(platform) || string.IsNullOrWhiteSpace(externalUserId))
+            return null;
+
+        return new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
+        {
+            Platform = platform,
+            Tenant = authority?.Tenant?.Trim() ?? string.Empty,
+            ExternalUserId = externalUserId,
+            Scope = string.IsNullOrWhiteSpace(authority?.Scope) ? "proxy" : authority.Scope.Trim(),
+            BindingId = source?.SenderBinding?.BindingId?.Trim() ?? string.Empty,
+        };
+    }
+
     private static string ResolveCallerCredentialSourceKind(
         Aevatar.Workflow.Abstractions.WorkflowCallerCredential credential) =>
         credential.DurableCallerCredential?.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch
             ? "scheduled_dispatch"
+            : credential.DurableCallerCredential?.SourceKind ==
+              DurableCallerCredentialSourceKind.ChannelRegistration
+                ? "channel_agent_key"
             : !string.IsNullOrWhiteSpace(credential.BearerToken)
                 ? "bearer_token"
                 : string.Empty;
@@ -647,6 +769,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             DeploymentId = target.Service.DeploymentId ?? string.Empty,
             Status = ServiceRunStatus.Accepted,
             ScheduleId = request.ScheduleId ?? string.Empty,
+            ScheduleOperationId = request.ScheduleOperationId ?? string.Empty,
             Identity = request.Identity?.Clone(),
         };
         if (request.ServiceRunCompletionNotificationTarget != null)

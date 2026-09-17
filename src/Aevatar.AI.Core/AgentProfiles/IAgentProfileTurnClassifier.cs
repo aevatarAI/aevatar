@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.AI.Core.AgentProfiles;
 
@@ -10,7 +11,9 @@ public sealed record AgentProfileTurnClassificationCandidate(
 public sealed record AgentProfileTurnClassificationRequest(
     string UserMessage,
     IReadOnlyList<AgentProfileTurnClassificationCandidate> Candidates,
-    TimeSpan Timeout);
+    TimeSpan Timeout,
+    LLMControlContext? LlmControl = null,
+    string? RequestId = null);
 
 public enum AgentProfileTurnClassificationStatus
 {

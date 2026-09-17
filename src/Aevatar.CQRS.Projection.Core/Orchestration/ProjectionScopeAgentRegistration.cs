@@ -1,3 +1,4 @@
+using System.Reflection;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core.TypeSystem;
 
@@ -6,11 +7,42 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 internal static class ProjectionScopeAgentRegistration
 {
     public static AgentRegistration Create<TScopeAgent>()
-        where TScopeAgent : IAgent =>
-        new(
-            Kind: BuildKind(typeof(TScopeAgent)),
-            ImplementationType: typeof(TScopeAgent),
+        where TScopeAgent : IAgent
+    {
+        var scopeAgentType = typeof(TScopeAgent);
+        if (!scopeAgentType.IsGenericType &&
+            scopeAgentType.GetCustomAttribute<GAgentAttribute>(inherit: false) != null)
+        {
+            var declaredRegistration = AgentRegistration.FromAgentType(scopeAgentType);
+            return scopeAgentType == typeof(ProjectionScopeStatusGAgent)
+                ? declaredRegistration with
+                {
+                    StateMigrationTypes =
+                    [
+                        typeof(ProjectionScopeStatusTerminalStateV0ToV1Migration),
+                    ],
+                }
+                : declaredRegistration;
+        }
+
+        var registration = new AgentRegistration(
+            Kind: BuildKind(scopeAgentType),
+            ImplementationType: scopeAgentType,
             StateContractType: typeof(ProjectionScopeState));
+        return scopeAgentType.IsGenericType &&
+               scopeAgentType.GetGenericTypeDefinition() == typeof(ProjectionMaterializationScopeGAgent<>)
+            ? registration with
+            {
+                StateSchemaVersion = 1,
+                PrebuiltStateMigrationSteps =
+                [
+                    ProjectionScopeStateActivationSealMigration.Create(
+                        registration.Kind,
+                        fromStateVersion: 0),
+                ],
+            }
+            : registration;
+    }
 
     private static string BuildKind(Type scopeAgentType)
     {

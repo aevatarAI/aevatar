@@ -29,7 +29,8 @@ Modes:
                     after a backend restart.
   persistent-local  Orleans + Garnet + in-memory projections. keeps actor state
                     across restarts, but read models are still ephemeral.
-  distributed       Orleans + Kafka + Elasticsearch/Neo4j profile.
+  distributed       Orleans + Kafka + Elasticsearch profile. Graph projection
+                    is disabled unless a graph provider is explicitly enabled.
 
 Environment:
   AEVATAR_APP_CONFIGURATION   dotnet configuration, default: Debug
@@ -261,14 +262,14 @@ case "${APP_MODE}" in
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=Development"
       "DOTNET_ENVIRONMENT=Development"
-      "AEVATAR_Aevatar__Authentication__Enabled=false"
+      "AEVATAR_Aevatar__Authentication__Enabled=${AEVATAR_Aevatar__Authentication__Enabled:-false}"
       "AEVATAR_Aevatar__NyxId__ApiBaseUrl=${AEVATAR_Aevatar__NyxId__ApiBaseUrl:-${API_URL}}"
       "AEVATAR_Audit__ActorIdentityHasher__ActiveKeyId=${AEVATAR_Audit__ActorIdentityHasher__ActiveKeyId:-local-development-key}"
       "AEVATAR_Audit__ActorIdentityHasher__Keys__0__KeyId=${AEVATAR_Audit__ActorIdentityHasher__Keys__0__KeyId:-local-development-key}"
       "AEVATAR_Audit__ActorIdentityHasher__Keys__0__Key=${AEVATAR_Audit__ActorIdentityHasher__Keys__0__Key:-local-development-audit-identity-key}"
       "AEVATAR_ActorRuntime__Provider=InMemory"
       "AEVATAR_ActorRuntime__SecretStoreBackend=InMemory"
-      "AEVATAR_ChannelIdentity__OAuthClient__Bootstrap__Enabled=false"
+      "AEVATAR_ChannelIdentity__OAuthClient__Bootstrap__Enabled=${AEVATAR_ChannelIdentity__OAuthClient__Bootstrap__Enabled:-false}"
       "AEVATAR_Projection__Document__Providers__InMemory__Enabled=true"
       "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled=false"
       "AEVATAR_Projection__Graph__Providers__InMemory__Enabled=true"
@@ -292,14 +293,14 @@ case "${APP_MODE}" in
     ;;
   persistent-local)
     effective_environment_name="PersistentLocal"
-    effective_neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-false}"
+    effective_neo4j_enabled="${Projection__Graph__Providers__Neo4j__Enabled:-${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-false}}"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=PersistentLocal"
     )
     ;;
   distributed)
     effective_environment_name="Distributed"
-    effective_neo4j_enabled="${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-true}"
+    effective_neo4j_enabled="${Projection__Graph__Providers__Neo4j__Enabled:-${AEVATAR_Projection__Graph__Providers__Neo4j__Enabled:-false}}"
     launch_env+=(
       "ASPNETCORE_ENVIRONMENT=Distributed"
     )

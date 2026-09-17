@@ -36,8 +36,9 @@ EventEnvelope
 | `StartWorkflowRunEventEnvelopeMappingHandler` | 0 | `StartWorkflowEvent` | `RunStarted` |
 | `StepRequestRunEventEnvelopeMappingHandler` | 10 | `StepRequestEvent` | `StepStarted` + `Custom` |
 | `StepCompletedRunEventEnvelopeMappingHandler` | 20 | `StepCompletedEvent` | `StepFinished` + `Custom` |
-| `AITextStreamRunEventEnvelopeMappingHandler` | 30 | `TextMessageStart/Content/End`、`ChatResponse`、`MediaContentEvent`、`WorkflowLlmStreamChunkEvent.DeltaContent` | `TextMessageStart/Content/End` 或 `Custom` |
-| `AIReasoningRunEventEnvelopeMappingHandler` | 35 | `ReasoningContentEvent`、`WorkflowLlmStreamChunkEvent.DeltaReasoningContent` | `Custom` |
+| `RoleChatSessionProgressRunEventEnvelopeMappingHandler` | 25 | committed `RoleChatSessionProgressedEvent`、`RoleChatSessionCompletedEvent.terminal_progress` | text/reasoning/media/tool/usage presentation events |
+| `AITextStreamRunEventEnvelopeMappingHandler` | 30 | `TextMessageStart/Content/End`、`ChatResponse`、`MediaContentEvent` | `TextMessageStart/Content/End` 或 `Custom` |
+| `AIReasoningRunEventEnvelopeMappingHandler` | 35 | `ReasoningContentEvent` | `Custom` |
 | `WorkflowCompletedRunEventEnvelopeMappingHandler` | 40 | `WorkflowCompletedEvent` | `RunFinished` 或 `RunError` |
 | `WorkflowStoppedRunEventEnvelopeMappingHandler` | 45 | `WorkflowStoppedEvent` | `RunFinished` 或 `RunError` |
 | `ToolCallRunEventEnvelopeMappingHandler` | 50 | `ToolCallEvent`/`ToolResultEvent` | `ToolCallStart/End` |
@@ -74,7 +75,7 @@ services.AddWorkflowExecutionAGUIAdapter();
 
 注册内容：
 - `IEventEnvelopeToWorkflowRunEventMapper`（组合 mapper）
-- 默认 workflow run-event handler（`WorkflowRunExecutionStarted`/`StartWorkflow`/`StepRequest`/`StepCompleted`/`AITextStream`/`AIReasoning`/`WorkflowCompleted`/`WorkflowStopped`/`ToolCall`/`WorkflowSuspended`/`WorkflowWaitingSignal`/`WorkflowSignalBuffered`）
+- 默认 workflow run-event handler（`WorkflowRunExecutionStarted`/`StartWorkflow`/`StepRequest`/`StepCompleted`/`RoleChatSessionProgress`/`AITextStream`/`AIReasoning`/`WorkflowCompleted`/`WorkflowStopped`/`ToolCall`/`WorkflowSuspended`/`WorkflowWaitingSignal`/`WorkflowSignalBuffered`）
 
 ## 分层边界
 

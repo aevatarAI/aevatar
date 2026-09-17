@@ -141,6 +141,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.ScheduleMode,
             command.OneShotFireAt,
             command.TeamAutomationOwner,
+            expectedServiceTarget: null,
             isCreate: true);
 
     [EventHandler]
@@ -160,6 +161,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.ScheduleMode,
             command.OneShotFireAt,
             command.TeamAutomationOwner,
+            command.ExpectedServiceTarget,
             isCreate: false);
 
     [EventHandler]
@@ -183,6 +185,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 command.ScheduleMode,
                 command.OneShotFireAt,
                 command.TeamAutomationOwner,
+                expectedServiceTarget: null,
                 isCreate: true);
             return;
         }
@@ -214,6 +217,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             command.ScheduleMode,
             command.OneShotFireAt,
             command.TeamAutomationOwner,
+            expectedServiceTarget: null,
             isCreate: false);
     }
 
@@ -232,6 +236,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         ScheduledDispatchScheduleModeState scheduleMode,
         Timestamp? oneShotFireAt,
         TeamMemberAutomationOwnerState? teamAutomationOwner,
+        ScheduledDispatchExpectedServiceTargetState? expectedServiceTarget,
         bool isCreate)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -241,6 +246,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' already exists.");
         if (!isCreate && !IsConfigured())
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is not configured.");
+        if (!isCreate)
+            EnsureExpectedServiceTargetAccess(expectedServiceTarget);
         EnsureTeamAutomationOwnerAccess(teamAutomationOwner, "configure", allowUnconfiguredOwner: isCreate);
         if (!isCreate &&
             State.TeamAutomationOwner != null &&
@@ -311,6 +318,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     public async Task HandleEnableAsync(ScheduledDispatchEnableCommand command)
     {
         EnsureConfiguredForWrite("enable");
+        EnsureExpectedServiceTargetAccess(command.ExpectedServiceTarget);
         EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "enable");
         if (HasTeamCredentialLifecycle() &&
             State.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatusState.Active)
@@ -322,6 +330,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             Reason = NormalizeOptional(command.Reason),
             EnabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ScheduleId = ResolveScheduleId(),
+            ScopeId = ResolveScheduleScopeId(),
         });
         await EnsureNextFireScheduledAsync(DateTimeOffset.UtcNow, CancellationToken.None);
     }
@@ -330,12 +340,15 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     public async Task HandleDisableAsync(ScheduledDispatchDisableCommand command)
     {
         EnsureConfiguredForWrite("disable");
+        EnsureExpectedServiceTargetAccess(command.ExpectedServiceTarget);
         EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "disable");
         var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
         await PersistDomainEventAsync(new ScheduledDispatchDisabledEvent
         {
             Reason = NormalizeOptional(command.Reason),
             DisabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ScheduleId = ResolveScheduleId(),
+            ScopeId = ResolveScheduleScopeId(),
         });
         await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
     }
@@ -355,6 +368,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private async Task HandleDeleteCoreAsync(ScheduledDispatchDeleteCommand command)
     {
+        EnsureExpectedServiceTargetAccess(command.ExpectedServiceTarget);
         var normalizedReason = NormalizeOptional(command.Reason);
         var exactDeleteReplayState =
             State.TeamAutomationOperationKind ==
@@ -397,6 +411,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 {
                     Reason = normalizedReason,
                     DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                    ScheduleId = ResolveScheduleId(),
+                    ScopeId = ResolveScheduleScopeId(),
                 });
             }
             await PurgeDurableCallbacksAsync(CancellationToken.None);
@@ -449,6 +465,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             Reason = normalizedReason,
             DeletedAt = Timestamp.FromDateTimeOffset(deletedAt),
+            ScheduleId = ResolveScheduleId(),
+            ScopeId = ResolveScheduleScopeId(),
         });
         await PersistDomainEventsAsync(deletionEvents);
         await PurgeDurableCallbacksAsync(CancellationToken.None);
@@ -471,6 +489,41 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             TeamAutomationOperationObservationStages.Begin,
             command.ObservationRequestId,
             () => HandleBeginTeamAutomationCredentialOperationCoreAsync(command));
+    }
+
+    [EventHandler]
+    public Task HandleRetryTeamAutomationCredentialOperationAsync(
+        RetryTeamAutomationCredentialOperationCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return ExecuteObservedTeamAutomationCommandAsync(
+            ResolveScheduleId(),
+            command.OperationId,
+            command.IdempotencyKey,
+            TeamAutomationOperationObservationStages.Begin,
+            command.ObservationRequestId,
+            () => HandleRetryTeamAutomationCredentialOperationCoreAsync(command));
+    }
+
+    private async Task HandleRetryTeamAutomationCredentialOperationCoreAsync(
+        RetryTeamAutomationCredentialOperationCommand command)
+    {
+        var owner = NormalizeTeamAutomationOwner(command.Owner);
+        EnsureObservedTeamAutomationOwnerAccess(owner);
+        EnsureCurrentTeamAutomationOperation(command.OperationId, command.IdempotencyKey);
+        if (State.TeamAutomationLifecycleStatus is not (
+                TeamAutomationLifecycleStatusState.ProvisioningPending or
+                TeamAutomationLifecycleStatusState.ReplacementPending))
+        {
+            throw TeamAutomationCommandRejectedException.Conflict(
+                "team_automation_operation_not_pending");
+        }
+
+        await PersistTeamAutomationObservationAsync(
+            TeamAutomationOperationObservationStages.Begin,
+            CanClaimTeamAutomationEffectAttempt(_timeProvider.GetUtcNow()),
+            CancellationToken.None,
+            observationRequestId: command.ObservationRequestId);
     }
 
     private async Task HandleBeginTeamAutomationCredentialOperationCoreAsync(
@@ -963,11 +1016,15 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         EnsureConfiguredForWrite(command.Manual ? "manual fire" : "fire");
+        if (command.Manual)
+            EnsureExpectedServiceTargetAccess(command.ExpectedServiceTarget);
         if (await RetireUnmarkedEnvelopeTargetAsync(ct, rejectManualFire: command.Manual))
             return;
 
         if (command.Manual)
+        {
             EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "manual fire");
+        }
 
         var scheduledFireAt = ResolveScheduledFireAt(command);
         var callbackFiredAt = command.Manual ? (DateTimeOffset?)null : ResolveCallbackFiredAt(inboundEnvelope);
@@ -1074,7 +1131,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         try
         {
             var prepared = await BuildDispatchEnvelopeAsync(scheduledFireAt, idempotencyKey, ct);
-            var receipt = await DispatchPreparedTargetAsync(prepared, ct);
+            var receipt = await DispatchPreparedTargetAsync(prepared, scheduledFireAt, ct);
             if (!receipt.Accepted)
             {
                 await PersistFireFailedAsync(
@@ -1167,6 +1224,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private async Task<ScheduledDispatchReceipt> DispatchPreparedTargetAsync(
         ScheduledDispatchEnvelope prepared,
+        DateTimeOffset scheduledFireAt,
         CancellationToken ct)
     {
         if (prepared.TargetKind == ScheduledDispatchTargetKindState.ServiceInvocation)
@@ -1226,7 +1284,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     ProjectNyxIdAccessTokenToWorkflowCallerCredential:
                         State.ScheduleKind == ScheduledDispatchScheduleKindState.Workflow,
                     ScheduleId: ResolveScheduleId(),
-                    AuthorizationFact: ToRuntimeAuthorizationFact(effectiveAuthorizationFact)),
+                    AuthorizationFact: ToRuntimeAuthorizationFact(effectiveAuthorizationFact),
+                    FireContext: new ScheduledDispatchFireContext(
+                        scheduledFireAt,
+                        State.Timezone),
+                    ScheduleOperationId: State.TeamAutomationOperationId),
                 ct);
             return new ScheduledDispatchReceipt(
                 receipt.Accepted,
@@ -1640,6 +1702,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             {
                 Reason = LegacyUnmarkedEnvelopeRetiredReason,
                 DisabledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                ScheduleId = ResolveScheduleId(),
+                ScopeId = ResolveScheduleScopeId(),
             }, ct);
         }
 
@@ -2071,6 +2135,29 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (!IsConfigured())
             throw new InvalidOperationException(
                 $"Scheduled dispatch '{ResolveScheduleId()}' cannot {operation} because it is not configured.");
+    }
+
+    private void EnsureExpectedServiceTargetAccess(
+        ScheduledDispatchExpectedServiceTargetState? expected)
+    {
+        if (expected == null)
+            return;
+
+        var currentInvocation = State.Target?.ServiceInvocation;
+        var expectedIdentity = expected.ServiceIdentity;
+        var currentIdentity = currentInvocation?.Identity;
+        if (State.ScheduleKind != expected.ScheduleKind ||
+            State.Target?.Kind != expected.TargetKind ||
+            currentIdentity == null ||
+            expectedIdentity == null ||
+            !string.Equals(currentInvocation?.EndpointId, expected.ServiceEndpointId, StringComparison.Ordinal) ||
+            !string.Equals(currentIdentity.TenantId, expectedIdentity.TenantId, StringComparison.Ordinal) ||
+            !string.Equals(currentIdentity.AppId, expectedIdentity.AppId, StringComparison.Ordinal) ||
+            !string.Equals(currentIdentity.Namespace, expectedIdentity.Namespace, StringComparison.Ordinal) ||
+            !string.Equals(currentIdentity.ServiceId, expectedIdentity.ServiceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("scheduled_dispatch_expected_service_target_mismatch");
+        }
     }
 
     private void EnsureTeamAutomationOwnerAccess(
@@ -2642,6 +2729,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw TeamAutomationCommandRejectedException.InvalidRequest(
                 "team_automation_activation_decision_invalid");
         }
+
+        var promptValidation = ScheduledDispatchPromptTemplate.ValidatePayload(decision.Payload);
+        if (!promptValidation.Succeeded)
+        {
+            throw TeamAutomationCommandRejectedException.InvalidRequest(
+                "team_automation_activation_decision_invalid");
+        }
     }
 
     private static TeamAutomationActivationDecisionState CreateTeamAutomationActivationDecision(
@@ -2928,6 +3022,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (target == null || target.Kind == ScheduledDispatchTargetKindState.Unspecified)
             throw new ArgumentException("Scheduled dispatch typed target is required.", nameof(target));
         var normalizedTarget = NormalizeTarget(target, scheduleKind);
+        var promptValidation = ScheduledDispatchPromptTemplate.ValidatePayload(
+            normalizedTarget.ServiceInvocation?.Payload);
+        if (!promptValidation.Succeeded)
+            throw new ArgumentException(promptValidation.Error, nameof(target));
         if (normalizedTarget.Kind == ScheduledDispatchTargetKindState.Envelope &&
             !HasTrustedInternalEnvelopeAuthority(normalizedTarget))
         {
@@ -3810,6 +3908,24 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private static string NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
+    private string ResolveScheduleScopeId()
+    {
+        var ownerScopeId = NormalizeOptional(State.TeamAutomationOwner?.ScopeId);
+        if (ownerScopeId.Length > 0)
+            return ownerScopeId;
+
+        if (State.Headers.TryGetValue("scope_id", out var snakeScopeId) &&
+            !string.IsNullOrWhiteSpace(snakeScopeId))
+        {
+            return snakeScopeId.Trim();
+        }
+
+        return State.Headers.TryGetValue("scopeId", out var camelScopeId) &&
+               !string.IsNullOrWhiteSpace(camelScopeId)
+            ? camelScopeId.Trim()
+            : string.Empty;
+    }
 
     private static IReadOnlyDictionary<string, string> NormalizeHeaders(
         IEnumerable<KeyValuePair<string, string>>? source)

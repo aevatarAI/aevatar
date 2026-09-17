@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core;
 using Aevatar.GAgentService.Infrastructure.Activation;
@@ -7,6 +8,7 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core;
 using FluentAssertions;
 
 namespace Aevatar.GAgentService.Tests.Infrastructure;
@@ -60,6 +62,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -198,6 +201,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -300,6 +304,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -353,6 +358,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,
@@ -376,6 +382,80 @@ public sealed class DefaultServiceRuntimeActivatorTests
         workflowPort.CreateDefinitionCalls.Should().ContainSingle("workflow-definition-1:deployment-actor:r1");
         workflowPort.BindCalls.Should().ContainSingle();
         workflowPort.ExplicitBindCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_AfterWorkflowBindCommitFailure_ShouldConvergeAcrossFreshRetries()
+    {
+        const string revisionId = "rev-durable-retry";
+        const string workflowId = "wf-durable-retry";
+        const string workflowYaml = "name: workflow\nroles: []\nsteps: []\n";
+        const string definitionActorId =
+            "workflow-definition-retry:deployment-actor:rev-durable-retry";
+        var eventStore = new InMemoryEventStore();
+        var workflowPort = new RehydratingWorkflowDefinitionProvisioningPort(
+            eventStore,
+            throwAfterFirstCommit: true);
+        var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            ExternalCapabilityExecutionMode.Durable,
+            [],
+            [],
+            workflowId: workflowId,
+            revisionId: revisionId);
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+                    WorkflowName = "workflow",
+                    WorkflowYaml = workflowYaml,
+                    ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                    DefinitionActorId = "workflow-definition-retry",
+                    WorkflowId = workflowId,
+                    RevisionId = revisionId,
+                    CapabilityAdmissionPlan = admissionPlan,
+                },
+            },
+        };
+        var request = new ServiceRuntimeActivationRequest(
+            GAgentServiceTestKit.CreateIdentity(),
+            artifact,
+            revisionId,
+            "deployment-actor",
+            ActivationAttemptId: "attempt-durable-retry",
+            ActivationOperationId: "operation-durable-retry");
+
+        DefaultServiceRuntimeActivator CreateFreshActivator() =>
+            new(
+                new RecordingActorRuntime(),
+                new RecordingScriptDefinitionSnapshotPort(),
+                new RecordingScriptRuntimeProvisioningPort(),
+                workflowPort);
+
+        await FluentActions.Awaiting(() => CreateFreshActivator().ActivateAsync(request))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("workflow bind committed before simulated caller failure");
+
+        var retryResults = await Task.WhenAll(
+            CreateFreshActivator().ActivateAsync(request),
+            CreateFreshActivator().ActivateAsync(request));
+
+        retryResults.Should().OnlyContain(result =>
+            result.DeploymentId == "deployment-actor:rev-durable-retry" &&
+            result.PrimaryActorId == definitionActorId &&
+            result.Status == "active");
+        retryResults[0].Should().Be(retryResults[1]);
+        workflowPort.RehydrationCount.Should().Be(3);
+        (await eventStore.GetEventsAsync(definitionActorId))
+            .Should().ContainSingle(evt => evt.EventData.Is(BindWorkflowDefinitionEvent.Descriptor));
+        (await eventStore.GetVersionAsync(definitionActorId)).Should().Be(1);
     }
 
     [Fact]
@@ -629,6 +709,92 @@ public sealed class DefaultServiceRuntimeActivatorTests
         }
     }
 
+    private sealed class RehydratingWorkflowDefinitionProvisioningPort(
+        InMemoryEventStore eventStore,
+        bool throwAfterFirstCommit) : IWorkflowDefinitionProvisioningPort
+    {
+        private readonly SemaphoreSlim _actorInbox = new(1, 1);
+        private int _throwAfterCommit = throwAfterFirstCommit ? 1 : 0;
+
+        public int RehydrationCount { get; private set; }
+
+        public async Task<WorkflowDefinitionProvisioningReceipt> EnsureDefinitionAsync(
+            WorkflowDefinitionBinding definition,
+            string? preferredActorId = null,
+            CancellationToken ct = default)
+        {
+            var actorId = preferredActorId ?? definition.DefinitionActorId;
+            await _actorInbox.WaitAsync(ct);
+            try
+            {
+                var versionBefore = await eventStore.GetVersionAsync(actorId, ct);
+                var agent = GAgentServiceTestKit.CreateStatefulAgent<WorkflowGAgent, WorkflowState>(
+                    eventStore,
+                    actorId,
+                    static () => new WorkflowGAgent());
+                RehydrationCount++;
+                await agent.ActivateAsync(ct);
+                await agent.BindWorkflowDefinitionAsync(
+                    definition.WorkflowYaml,
+                    definition.WorkflowName,
+                    definition.InlineWorkflowYamls,
+                    definition.ScopeId,
+                    definition.SourceKind,
+                    definition.CapabilityAdmissionPlan,
+                    definition.WorkflowId,
+                    definition.RevisionId,
+                    definition.ExpectedExecutionMode,
+                    ct);
+
+                if (Interlocked.Exchange(ref _throwAfterCommit, 0) == 1)
+                {
+                    throw new InvalidOperationException(
+                        "workflow bind committed before simulated caller failure");
+                }
+
+                return new WorkflowDefinitionProvisioningReceipt(
+                    actorId,
+                    CreatedNow: versionBefore == 0);
+            }
+            finally
+            {
+                _actorInbox.Release();
+            }
+        }
+
+        public Task DestroyAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public async Task BindWorkflowDefinitionAsync(
+            string actorId,
+            string workflowYaml,
+            string workflowName,
+            IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+            string? scopeId,
+            string? sourceKind,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan,
+            string? workflowId,
+            string? revisionId,
+            ExternalCapabilityExecutionMode expectedExecutionMode,
+            CancellationToken ct = default)
+        {
+            await EnsureDefinitionAsync(
+                new WorkflowDefinitionBinding(
+                    actorId,
+                    workflowName,
+                    workflowYaml,
+                    inlineWorkflowYamls ?? new Dictionary<string, string>(StringComparer.Ordinal),
+                    expectedExecutionMode,
+                    ScopeId: scopeId ?? string.Empty,
+                    SourceKind: sourceKind ?? string.Empty,
+                    CapabilityAdmissionPlan: capabilityAdmissionPlan,
+                    WorkflowId: workflowId ?? string.Empty,
+                    RevisionId: revisionId ?? string.Empty),
+                actorId,
+                ct);
+        }
+    }
+
     private static PreparedServiceRevisionArtifact CreateExplicitWorkflowArtifact(
         string artifactRevisionId,
         string planRevisionId)
@@ -649,6 +815,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
                     WorkflowName = "workflow",
                     WorkflowYaml = "name: workflow",
                     ExecutionMode = ExternalCapabilityExecutionMode.Durable,

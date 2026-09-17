@@ -28,22 +28,21 @@ internal static class NyxIdIdentityAssertionAuthentication
                 _ => { });
         builder.Services.AddHttpContextAccessor();
 
-        // Keep the existing bearer/DPoP path authoritative during the rollout. Once NyxID stops
-        // forwarding the access token, Bearer transparently forwards authentication to the scoped
-        // identity assertion scheme whenever the proxy-injected header is present.
+        // The proxy-signed assertion is authoritative for caller identity whenever present.
+        // Authorization remains on the request so workflow execution can reuse the delegated bearer.
         builder.Services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
         {
             var previousSelector = options.ForwardDefaultSelector;
             options.ForwardDefaultSelector = context =>
             {
+                if (context.Request.Headers.ContainsKey(HeaderName))
+                    return Scheme;
+
                 var previousSelection = previousSelector?.Invoke(context);
                 if (!string.IsNullOrWhiteSpace(previousSelection))
                     return previousSelection;
 
-                if (!string.IsNullOrWhiteSpace(context.Request.Headers.Authorization.FirstOrDefault()))
-                    return null;
-
-                return context.Request.Headers.ContainsKey(HeaderName) ? Scheme : null;
+                return null;
             };
         });
 

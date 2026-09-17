@@ -36,7 +36,10 @@ public sealed class ScheduledWorkflowAgentCreationPort : IScheduledWorkflowAgent
         await _catalogCommandPort.UpsertAsync(request.CatalogEntry, ct);
 
         if (request.RunImmediately && receipt.Accepted)
-            await _scheduleActorPort.DispatchRunNowAsync(receipt.ScheduleActorId, DateTimeOffset.UtcNow, ct);
+            await _scheduleActorPort.DispatchRunNowAsync(
+                receipt.ScheduleActorId,
+                DateTimeOffset.UtcNow,
+                ct: ct);
 
         return new ScheduledWorkflowAgentCreationReceipt(
             receipt.ScheduleId,

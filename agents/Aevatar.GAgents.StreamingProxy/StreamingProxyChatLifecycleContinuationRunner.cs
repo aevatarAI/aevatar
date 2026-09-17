@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
-internal sealed class StreamingProxyChatLifecycleContinuationRunner : IHostedService, IAsyncDisposable
+internal sealed class StreamingProxyChatLifecycleContinuationRunner : BackgroundService, IAsyncDisposable
 {
     private readonly IStreamProvider _streamProvider;
     private readonly IActorEventSubscriptionProvider _subscriptionProvider;
@@ -30,48 +30,44 @@ internal sealed class StreamingProxyChatLifecycleContinuationRunner : IHostedSer
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _streamProvider.GetStream(StreamingProxyGAgent.ChatLifecycleContinuationRunnerStreamId);
         _subscription = await _subscriptionProvider.SubscribeAsync<StreamingProxyChatLifecycleContinuationRequested>(
             StreamingProxyGAgent.ChatLifecycleContinuationRunnerStreamId,
             HandleAsync,
-            cancellationToken);
+            stoppingToken);
         _replySubscription = await _subscriptionProvider.SubscribeAsync<StreamingProxyChatParticipantReplyRequested>(
             StreamingProxyGAgent.ChatLifecycleContinuationRunnerStreamId,
             HandleReplyRequestAsync,
-            cancellationToken);
+            stoppingToken);
+        _logger.LogInformation(
+            "Streaming proxy chat lifecycle continuation subscriptions are ready. streamId={StreamId}",
+            StreamingProxyGAgent.ChatLifecycleContinuationRunnerStreamId);
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
+    public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        _ = cancellationToken;
-        if (_subscription is not null)
-        {
-            await _subscription.DisposeAsync();
-            _subscription = null;
-        }
-
-        if (_replySubscription is not null)
-        {
-            await _replySubscription.DisposeAsync();
-            _replySubscription = null;
-        }
+        await base.StopAsync(cancellationToken);
+        await DisposeSubscriptionsAsync();
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_subscription is not null)
-        {
-            await _subscription.DisposeAsync();
-            _subscription = null;
-        }
+        base.Dispose();
+        await DisposeSubscriptionsAsync();
+        GC.SuppressFinalize(this);
+    }
 
-        if (_replySubscription is not null)
-        {
-            await _replySubscription.DisposeAsync();
-            _replySubscription = null;
-        }
+    private async Task DisposeSubscriptionsAsync()
+    {
+        var subscription = Interlocked.Exchange(ref _subscription, null);
+        if (subscription is not null)
+            await subscription.DisposeAsync();
+
+        var replySubscription = Interlocked.Exchange(ref _replySubscription, null);
+        if (replySubscription is not null)
+            await replySubscription.DisposeAsync();
     }
 
     private Task HandleAsync(StreamingProxyChatLifecycleContinuationRequested request) =>

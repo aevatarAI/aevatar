@@ -36,6 +36,8 @@ public sealed class WorkflowCapabilityHmacSecretValidationTests
             [$"{WorkflowWebhookIngressOptions.SectionName}:Enabled"] = "true",
             [$"{WorkflowWebhookIngressOptions.SectionName}:Bindings:0:RouteKey"] = "primary",
             [$"{WorkflowWebhookIngressOptions.SectionName}:Bindings:0:HmacSecret"] = SufficientSecret,
+            [$"{WorkflowWebhookIngressOptions.SectionName}:Bindings:0:DeliveryIdJsonPath"] = "event_id",
+            [$"{WorkflowWebhookIngressOptions.SectionName}:Bindings:0:PromptJsonPath"] = "prompt",
         });
 
         var act = () => BuildAndValidate(configuration);

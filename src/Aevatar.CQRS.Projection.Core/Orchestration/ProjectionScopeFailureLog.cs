@@ -37,11 +37,31 @@ internal static class ProjectionScopeFailureLog
 
     public static IReadOnlyList<ProjectionScopeFailure> GetPendingFailures(
         ProjectionScopeState state,
-        int maxItems)
+        int maxItems,
+        bool includeRetryExhausted = true)
     {
         return state.Failures
+            .Where(failure => includeRetryExhausted || !failure.RetryExhausted)
             .Take(Math.Max(1, maxItems))
             .ToList();
+    }
+
+    public static ProjectionScopeFailureSummary BuildSummary(
+        IEnumerable<ProjectionScopeFailure> failures)
+    {
+        ArgumentNullException.ThrowIfNull(failures);
+
+        var materialized = failures as IReadOnlyCollection<ProjectionScopeFailure> ?? failures.ToArray();
+        var oldest = materialized
+            .Where(static failure => failure.OccurredAtUtc != null)
+            .OrderBy(static failure => failure.OccurredAtUtc)
+            .FirstOrDefault();
+        return new ProjectionScopeFailureSummary
+        {
+            UnresolvedFailureCount = materialized.Count,
+            RetryExhaustedFailureCount = materialized.Count(static failure => failure.RetryExhausted),
+            OldestUnresolvedFailureAtUtc = oldest?.OccurredAtUtc?.Clone(),
+        };
     }
 
     public static ProjectionScopeFailureReplayedEvent BuildReplayResultEvent(

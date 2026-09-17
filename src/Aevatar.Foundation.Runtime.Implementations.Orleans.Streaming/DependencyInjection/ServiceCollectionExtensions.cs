@@ -12,7 +12,13 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.Replace(ServiceDescriptor.Singleton<IStreamForwardingRegistry, OrleansDistributedStreamForwardingRegistry>());
+        services.Replace(ServiceDescriptor.Singleton<
+            OrleansDistributedStreamForwardingRegistry,
+            OrleansDistributedStreamForwardingRegistry>());
+        services.Replace(ServiceDescriptor.Singleton<IStreamForwardingRegistry>(sp =>
+            sp.GetRequiredService<OrleansDistributedStreamForwardingRegistry>()));
+        services.Replace(ServiceDescriptor.Singleton<IStreamForwardingBindingAuthority>(sp =>
+            sp.GetRequiredService<OrleansDistributedStreamForwardingRegistry>()));
         services.AddAevatarOrleansStreamProviderAdapter();
         return services;
     }

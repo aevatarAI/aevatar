@@ -354,7 +354,13 @@ public sealed partial class ConnectorCallModule
         CancellationToken ct)
     {
         var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
-        if (!credential.Found || string.IsNullOrWhiteSpace(credential.Credential.BearerToken))
+        if (!credential.Found)
+            throw new InvalidOperationException("Workflow caller credential is unavailable for remote approval.");
+        var resolved = await WorkflowCallerAccessTokenResolver.ResolveAsync(
+            credential.Credential,
+            _callerAccessTokenProvider,
+            ct);
+        if (string.IsNullOrWhiteSpace(resolved.BearerToken))
             throw new InvalidOperationException("Workflow caller credential is unavailable for remote approval.");
         if (!MatchesCurrentApprovalAuthority(plan, ctx))
             throw new InvalidOperationException("Workflow caller authority no longer matches the approval plan.");
@@ -364,9 +370,11 @@ public sealed partial class ConnectorCallModule
         {
             Request = new AgentToolRequestIdentity(plan.ActionId, plan.ActionId, plan.IdempotencyKey),
             Credentials = new AgentToolCredentials(
-                credential.Credential.BearerToken,
+                resolved.BearerToken,
                 NyxIdOrgToken: null,
-                SenderNyxIdAccessToken: null),
+                SenderNyxIdAccessToken: null,
+                NyxIdCredentialKind: ResolveAgentToolCredentialKind(resolved.Kind)),
+            DurableNyxIdCredential = resolved.DurableCallerCredential?.Clone(),
             Caller = new AgentToolCallerContext(
                 provenance.ScopeId,
                 provenance.PrincipalSubject,
@@ -380,6 +388,19 @@ public sealed partial class ConnectorCallModule
         using var scope = AgentToolContextScope.Push(toolContext);
         return await operation();
     }
+
+    private static AgentToolNyxIdCredentialKind ResolveAgentToolCredentialKind(
+        NyxIdCallerCredentialKind kind) =>
+        kind switch
+        {
+            NyxIdCallerCredentialKind.SourceReadableUserBearer =>
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            NyxIdCallerCredentialKind.ProxyDelegation =>
+                AgentToolNyxIdCredentialKind.ProxyDelegation,
+            NyxIdCallerCredentialKind.AgentKey =>
+                AgentToolNyxIdCredentialKind.AgentKey,
+            _ => AgentToolNyxIdCredentialKind.Unspecified,
+        };
 
     private static RemoteToolApprovalRequest BuildRemoteApprovalRequest(WorkflowExternalActionPlan plan) =>
         new(

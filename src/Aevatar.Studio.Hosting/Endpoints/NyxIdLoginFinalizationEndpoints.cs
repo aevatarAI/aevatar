@@ -10,6 +10,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -85,12 +86,38 @@ public static class NyxIdLoginFinalizationEndpoints
 
         try
         {
-            var result = await catalogRefresh
-                .RefreshPersonalAsync(subject.Trim(), bearerToken, ct)
-                .ConfigureAwait(false);
             var owner = PersonalCatalogOwner(subject);
+            var targetedRequest = await ReadCatalogRefreshRequestAsync(http.Request, ct)
+                .ConfigureAwait(false);
+            var requiredServices = targetedRequest == null
+                ? null
+                : (targetedRequest.RequiredUserServiceIds ?? [])
+                    .Select(static userServiceId => new NyxIdUserServiceCapabilityRef
+                    {
+                        UserServiceId = userServiceId,
+                    })
+                    .ToArray();
+            var result = targetedRequest == null
+                ? await catalogRefresh
+                    .RefreshPersonalAsync(subject.Trim(), bearerToken, ct)
+                    .ConfigureAwait(false)
+                : await catalogRefresh
+                    .RefreshAsync(
+                        owner,
+                        bearerToken,
+                        new NyxIdAuthorizationCatalogRefreshRequest(
+                            requiredServices!,
+                            LLMTarget: null),
+                        ct)
+                    .ConfigureAwait(false);
             var visibility = result.Success
-                ? await catalogVisibilityPort.ResolveAsync(owner, result.StateVersion, ct).ConfigureAwait(false)
+                ? requiredServices == null
+                    ? await catalogVisibilityPort
+                        .ResolveAsync(owner, result.StateVersion, ct)
+                        .ConfigureAwait(false)
+                    : await catalogVisibilityPort
+                        .ResolveRequiredServicesAsync(owner, result.StateVersion, requiredServices, ct)
+                        .ConfigureAwait(false)
                 : new NyxIdAuthorizationCatalogVisibilityResult(
                     NyxIdAuthorizationCatalogVisibilityStatus.Unspecified,
                     0,
@@ -143,6 +170,17 @@ public static class NyxIdLoginFinalizationEndpoints
         }
     }
 
+    private static async Task<NyxIdAuthorizationCatalogRefreshHttpRequest?> ReadCatalogRefreshRequestAsync(
+        HttpRequest request,
+        CancellationToken ct)
+    {
+        if (request.ContentLength is null or 0)
+            return null;
+
+        return await request.ReadFromJsonAsync<NyxIdAuthorizationCatalogRefreshHttpRequest>(ct)
+            .ConfigureAwait(false);
+    }
+
     internal static async Task<IResult> HandleConfigAsync(
         [FromServices] IAevatarOAuthClientProvider oauthClientProvider,
         CancellationToken ct = default)
@@ -189,11 +227,19 @@ public static class NyxIdLoginFinalizationEndpoints
         if (string.IsNullOrWhiteSpace(request.RedirectUri))
             return LoginFinalizationProblem(StatusCodes.Status400BadRequest, "redirect_uri_missing", "The login redirect URI is required.");
 
+        var resourceUris = request.ServiceAccessReview
+            ? NormalizeResourceUris(request.ResourceUris)
+            : Array.Empty<string>();
         BrokerAuthorizationCodeResult exchange;
         try
         {
             exchange = await brokerCallback
-                .ExchangeAuthorizationCodeAsync(request.Code.Trim(), request.CodeVerifier.Trim(), request.RedirectUri.Trim(), ct)
+                .ExchangeAuthorizationCodeAsync(
+                    request.Code.Trim(),
+                    request.CodeVerifier.Trim(),
+                    request.RedirectUri.Trim(),
+                    resourceUris,
+                    ct)
                 .ConfigureAwait(false);
         }
         catch (NyxIdRequiredServiceAccessException ex)
@@ -270,6 +316,15 @@ public static class NyxIdLoginFinalizationEndpoints
         };
         var ownerScopeId = user.Sub.Trim();
 
+        if (!AccessTokenGrantsRequiredUserServices(exchange.AccessToken!, request.RequiredUserServiceIds))
+        {
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            return LoginFinalizationProblem(
+                StatusCodes.Status409Conflict,
+                "required_service_access_missing",
+                "Return to NyxID and keep every service marked as required by Aevatar selected.");
+        }
+
         var existingBinding = await bindingQueryPort.ResolveAsync(subject, ct).ConfigureAwait(false);
         if (existingBinding != null)
         {
@@ -290,6 +345,7 @@ public static class NyxIdLoginFinalizationEndpoints
                     false,
                     catalogRefreshLifecycle,
                     catalogVisibilityPort,
+                    request.RequiredUserServiceIds,
                     logger,
                     ct);
             }
@@ -307,6 +363,7 @@ public static class NyxIdLoginFinalizationEndpoints
                         false,
                         catalogRefreshLifecycle,
                         catalogVisibilityPort,
+                        request.RequiredUserServiceIds,
                         logger,
                         ct);
                 }
@@ -359,6 +416,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 true,
                 catalogRefreshLifecycle,
                 catalogVisibilityPort,
+                request.RequiredUserServiceIds,
                 logger,
                 ct);
         }
@@ -397,6 +455,7 @@ public static class NyxIdLoginFinalizationEndpoints
             true,
             catalogRefreshLifecycle,
             catalogVisibilityPort,
+            request.RequiredUserServiceIds,
             logger,
             ct);
     }
@@ -407,9 +466,12 @@ public static class NyxIdLoginFinalizationEndpoints
         bool bindingDispatchAccepted,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefreshLifecycle,
         INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort,
+        IReadOnlyList<string>? requiredUserServiceIds,
         ILogger logger,
         CancellationToken ct)
     {
+        var owner = PersonalCatalogOwner(user.Sub);
+        var requiredServices = BuildRequiredServiceRefs(requiredUserServiceIds);
         NyxIdAuthorizationCatalogRefreshResult catalogRefresh;
         if (catalogRefreshLifecycle is null)
         {
@@ -421,9 +483,17 @@ public static class NyxIdLoginFinalizationEndpoints
         {
             try
             {
-                catalogRefresh = await catalogRefreshLifecycle
-                    .RefreshPersonalAsync(user.Sub, exchange.AccessToken!, ct)
-                    .ConfigureAwait(false);
+                catalogRefresh = requiredServices == null
+                    ? await catalogRefreshLifecycle
+                        .RefreshPersonalAsync(user.Sub, exchange.AccessToken!, ct)
+                        .ConfigureAwait(false)
+                    : await catalogRefreshLifecycle
+                        .RefreshAsync(
+                            owner,
+                            exchange.AccessToken!,
+                            new NyxIdAuthorizationCatalogRefreshRequest(requiredServices, LLMTarget: null),
+                            ct)
+                        .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -454,11 +524,18 @@ public static class NyxIdLoginFinalizationEndpoints
             {
                 try
                 {
-                    visibility = await catalogVisibilityPort.ResolveAsync(
-                            PersonalCatalogOwner(user.Sub),
-                            catalogRefresh.StateVersion,
-                            ct)
-                        .ConfigureAwait(false);
+                    visibility = requiredServices == null
+                        ? await catalogVisibilityPort.ResolveAsync(
+                                owner,
+                                catalogRefresh.StateVersion,
+                                ct)
+                            .ConfigureAwait(false)
+                        : await catalogVisibilityPort.ResolveRequiredServicesAsync(
+                                owner,
+                                catalogRefresh.StateVersion,
+                                requiredServices,
+                                ct)
+                            .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
@@ -732,6 +809,91 @@ public static class NyxIdLoginFinalizationEndpoints
         OwnerSubject = ownerSubject.Trim(),
     };
 
+    private static IReadOnlyList<NyxIdUserServiceCapabilityRef>? BuildRequiredServiceRefs(
+        IReadOnlyList<string>? requiredUserServiceIds)
+    {
+        var serviceIds = (requiredUserServiceIds ?? [])
+            .Select(static serviceId => serviceId?.Trim() ?? string.Empty)
+            .Where(static serviceId => !string.IsNullOrWhiteSpace(serviceId))
+            .Distinct(StringComparer.Ordinal)
+            .Select(static serviceId => new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = serviceId,
+            })
+            .ToArray();
+        return serviceIds.Length == 0 ? null : serviceIds;
+    }
+
+    private static string[] NormalizeResourceUris(IReadOnlyList<string>? resourceUris) =>
+        (resourceUris ?? [])
+            .Select(static resourceUri => resourceUri?.Trim() ?? string.Empty)
+            .Where(static resourceUri => !string.IsNullOrWhiteSpace(resourceUri))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static bool AccessTokenGrantsRequiredUserServices(
+        string accessToken,
+        IReadOnlyList<string>? requiredUserServiceIds)
+    {
+        var required = (requiredUserServiceIds ?? [])
+            .Select(static serviceId => serviceId?.Trim() ?? string.Empty)
+            .Where(static serviceId => !string.IsNullOrWhiteSpace(serviceId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (required.Length == 0)
+            return true;
+
+        var parts = accessToken.Split('.');
+        if (parts.Length != 3)
+            return false;
+
+        try
+        {
+            var payload = parts[1]
+                .Replace('-', '+')
+                .Replace('_', '/');
+            payload = payload.PadRight(payload.Length + ((4 - payload.Length % 4) % 4), '=');
+            using var document = JsonDocument.Parse(Convert.FromBase64String(payload));
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("allow_all_services", out var allowAllServices) &&
+                allowAllServices.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+                allowAllServices.GetBoolean())
+            {
+                return true;
+            }
+
+            var allowedServiceIds = ReadStringSet(root, "allowed_service_ids", out var hasAllowedServiceIds);
+            if (hasAllowedServiceIds)
+                return required.All(allowedServiceIds.Contains);
+
+            ReadStringSet(root, "resources", out var hasResourceRestriction);
+            return !hasResourceRestriction;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static HashSet<string> ReadStringSet(JsonElement owner, string propertyName, out bool present)
+    {
+        present = owner.TryGetProperty(propertyName, out var values)
+                  && values.ValueKind == JsonValueKind.Array;
+        return present
+            ? values.EnumerateArray()
+                .Where(static item => item.ValueKind == JsonValueKind.String)
+                .Select(static item => item.GetString()!)
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .Select(static value => value.Trim())
+                .ToHashSet(StringComparer.Ordinal)
+            : [];
+    }
+
     private static string ToCatalogRefreshStatus(NyxIdAuthorizationCatalogRefreshStatus status) => status switch
     {
         NyxIdAuthorizationCatalogRefreshStatus.Observed => "observed",
@@ -879,12 +1041,17 @@ public sealed record NyxIdAuthorizationCatalogRefreshResponse(
     long RequiredStateVersion = 0,
     long VisibleStateVersion = 0);
 
+public sealed record NyxIdAuthorizationCatalogRefreshHttpRequest(
+    IReadOnlyList<string>? RequiredUserServiceIds);
+
 public sealed record NyxIdLoginFinalizationRequest
 {
     public string? Code { get; init; }
     public string? CodeVerifier { get; init; }
     public string? RedirectUri { get; init; }
     public bool ServiceAccessReview { get; init; }
+    public IReadOnlyList<string>? ResourceUris { get; init; }
+    public IReadOnlyList<string>? RequiredUserServiceIds { get; init; }
 }
 
 public sealed record NyxIdLoginFinalizationResponse(

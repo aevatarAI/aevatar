@@ -58,6 +58,12 @@ internal static class StudioExternalCapabilityAdmissionHttpMapper
                         null,
                         readiness.SelectedSelector.HostConnector.OperationId,
                         readiness.SelectedSelector.HostConnector.ConnectorCapabilityRef);
+                case ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution:
+                    return new StudioExternalCapabilitySelectionResponse(
+                        readiness.SelectedCapability?.CodeExecution?.UserServiceId,
+                        null,
+                        null,
+                        null);
             }
         }
 
@@ -75,6 +81,12 @@ internal static class StudioExternalCapabilityAdmissionHttpMapper
                     null,
                     readiness.SelectedCapability.HostConnector.OperationId,
                     readiness.SelectedCapability.HostConnector.ConnectorCapabilityRef),
+            ExternalWorkflowCapabilityRef.CapabilityOneofCase.CodeExecution =>
+                new StudioExternalCapabilitySelectionResponse(
+                    readiness.SelectedCapability.CodeExecution.UserServiceId,
+                    null,
+                    null,
+                    null),
             _ => null,
         };
     }

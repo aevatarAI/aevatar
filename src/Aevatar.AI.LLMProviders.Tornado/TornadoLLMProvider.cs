@@ -125,6 +125,7 @@ public sealed class TornadoLLMProvider : ILLMProvider
                 Model = request.Model,
                 Temperature = request.Temperature,
                 MaxTokens = request.MaxTokens,
+                AllowMultipleToolCalls = request.AllowMultipleToolCalls,
                 ResponseFormat = request.ResponseFormat,
             };
         }
@@ -180,6 +181,7 @@ public sealed class TornadoLLMProvider : ILLMProvider
                 Model = request.Model,
                 Temperature = request.Temperature,
                 MaxTokens = request.MaxTokens,
+                AllowMultipleToolCalls = request.AllowMultipleToolCalls,
                 ResponseFormat = request.ResponseFormat,
             };
     }

@@ -25,10 +25,15 @@ All scoped routes remove the `workflow-activity-vnext` segment:
 | Activity | `/scopes/:scopeId/activity` |
 | Run detail | `/scopes/:scopeId/activity/:runId` |
 | Channels | `/scopes/:scopeId/channels` |
-| Connect Telegram | `/scopes/:scopeId/channels/connect/telegram` |
+| Bind a NyxID bot | `/scopes/:scopeId/channels/bind/:botId` |
 | Channel connection result | `/scopes/:scopeId/channels/:registrationId` |
 | Edit Channel | `/scopes/:scopeId/channels/:registrationId/edit` |
 | Settings | `/scopes/:scopeId/settings` |
+
+The 2026-09-17 bot-adoption update replaces direct Telegram creation with
+binding an existing NyxID bot. Keep that flow, its Ornn skill selector, and
+Channel editing on these canonical URLs. The old `channels/connect/telegram`
+entry is retired along with its replaced page.
 
 `/workflows` retains the account-owned home behavior: fetch the current auth
 profile, resolve its scope, and open that scope's Workflow list. `/`,

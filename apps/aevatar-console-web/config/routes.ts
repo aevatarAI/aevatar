@@ -39,7 +39,7 @@ export default [
     'activity',
     'activity/:runId',
     'channels',
-    'channels/connect/telegram',
+    'channels/bind/:botId',
     'channels/:registrationId/edit',
     'channels/:registrationId',
     'settings',

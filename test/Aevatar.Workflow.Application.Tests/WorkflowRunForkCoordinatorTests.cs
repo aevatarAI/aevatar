@@ -49,10 +49,43 @@ public sealed class WorkflowRunForkCoordinatorTests
         command.ScopeId.Should().Be("scope-1");
     }
 
-    private static CommittedStatePublicationContext CreateContext(IMessage evt) =>
+    [Fact]
+    public async Task BeforePublishAsync_WhenForkAccepted_ShouldLeaveLineageRecordingToForkCommandDispatch()
+    {
+        var forkDispatchService = new RecordingForkDispatchService
+        {
+            Receipt = new WorkflowForkRunAcceptedReceipt(
+                "run-source-gamma",
+                "actor-child-delta",
+                "wf",
+                true,
+                "cmd",
+                "corr",
+                DateTimeOffset.UtcNow,
+                "run-child-beta",
+                "run-original-alpha"),
+        };
+        var coordinator = new WorkflowRunForkCoordinator(
+            new Lazy<ICommandDispatchService<WorkflowForkRunCommand, WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>>(
+                () => forkDispatchService));
+
+        await coordinator.BeforePublishAsync(
+            CreateContext(new WorkflowRunForkRequestedEvent
+            {
+                SourceRunId = "run-source-gamma",
+                StartAtStepId = "step-retry",
+                Attempt = 4,
+                ScopeId = "scope-alpha",
+            }, actorId: "actor-source-epsilon"),
+            CancellationToken.None);
+
+        forkDispatchService.Commands.Should().ContainSingle();
+    }
+
+    private static CommittedStatePublicationContext CreateContext(IMessage evt, string actorId = "run-source") =>
         new()
         {
-            ActorId = "run-source",
+            ActorId = actorId,
             ActorType = typeof(object),
             Published = new CommittedStateEventPublished
             {
@@ -73,6 +106,8 @@ public sealed class WorkflowRunForkCoordinatorTests
     {
         public List<WorkflowForkRunCommand> Commands { get; } = [];
 
+        public WorkflowForkRunAcceptedReceipt? Receipt { get; init; }
+
         public Task<CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>> DispatchAsync(
             WorkflowForkRunCommand command,
             CancellationToken ct = default)
@@ -80,7 +115,7 @@ public sealed class WorkflowRunForkCoordinatorTests
             ct.ThrowIfCancellationRequested();
             Commands.Add(command);
             return Task.FromResult(CommandDispatchResult<WorkflowForkRunAcceptedReceipt, WorkflowForkRunStartError>.Success(
-                new WorkflowForkRunAcceptedReceipt(
+                Receipt ?? new WorkflowForkRunAcceptedReceipt(
                     command.SourceRunId,
                     "new-run",
                     "wf",
@@ -90,4 +125,18 @@ public sealed class WorkflowRunForkCoordinatorTests
                     DateTimeOffset.UtcNow)));
         }
     }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<RecordedDispatch> Dispatched { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Dispatched.Add(new RecordedDispatch(actorId, envelope));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed record RecordedDispatch(string ActorId, EventEnvelope Envelope);
 }

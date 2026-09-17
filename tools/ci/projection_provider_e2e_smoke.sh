@@ -14,6 +14,7 @@ NEO4J_URI="bolt://${NEO4J_HOST}:${NEO4J_PORT}"
 NEO4J_USERNAME="neo4j"
 NEO4J_PASSWORD="password"
 RESULTS_DIR=""
+BENCHMARK_REPORT_FILE="${REPO_ROOT}/artifacts/ci/workflow-report-artifact-write-cost.txt"
 export NEO4J_PASSWORD
 
 cleanup() {
@@ -109,6 +110,7 @@ mkdir -p "${REPO_ROOT}/artifacts/ci"
 RESULTS_DIR="$(mktemp -d "${REPO_ROOT}/artifacts/ci/projection-provider-e2e.XXXXXX")"
 RESULTS_FILE_CORE="${RESULTS_DIR}/projection-provider-core-e2e.trx"
 RESULTS_FILE_SCRIPTING="${RESULTS_DIR}/projection-provider-scripting-e2e.trx"
+RESULTS_FILE_WORKFLOW="${RESULTS_DIR}/projection-provider-workflow-e2e.trx"
 
 if ! host_can_reach_providers; then
   echo "Projection providers are ready in Docker, but host cannot reach ${ELASTICSEARCH_ENDPOINT} / ${NEO4J_URI}."
@@ -120,6 +122,8 @@ export AEVATAR_TEST_ELASTICSEARCH_ENDPOINT="${ELASTICSEARCH_ENDPOINT}"
 export AEVATAR_TEST_NEO4J_URI="${NEO4J_URI}"
 export AEVATAR_TEST_NEO4J_USERNAME="${NEO4J_USERNAME}"
 export AEVATAR_TEST_NEO4J_PASSWORD="${NEO4J_PASSWORD}"
+export AEVATAR_TEST_WORKFLOW_REPORT_BENCHMARK_PATH="${BENCHMARK_REPORT_FILE}"
+rm -f "${BENCHMARK_REPORT_FILE}"
 
 run_provider_integration_tests_on_host \
   "test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj" \
@@ -127,6 +131,11 @@ run_provider_integration_tests_on_host \
 run_provider_integration_tests_on_host \
   "test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj" \
   "projection-provider-scripting-e2e.trx"
+# Workflow read-model write-cost benchmark: the only lane that measures a real Elasticsearch
+# write for the 263-event large-parameter run (#3477).
+run_provider_integration_tests_on_host \
+  "test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj" \
+  "projection-provider-workflow-e2e.trx"
 
 validate_trx() {
   local file="$1"
@@ -159,5 +168,14 @@ validate_trx() {
 
 validate_trx "${RESULTS_FILE_CORE}" "Projection provider core e2e"
 validate_trx "${RESULTS_FILE_SCRIPTING}" "Projection provider scripting e2e"
+validate_trx "${RESULTS_FILE_WORKFLOW}" "Projection provider workflow read-model e2e"
+
+if [ ! -s "${BENCHMARK_REPORT_FILE}" ]; then
+  echo "Workflow report-artifact benchmark output is missing: ${BENCHMARK_REPORT_FILE}"
+  exit 1
+fi
+
+echo "Workflow report-artifact benchmark output:"
+cat "${BENCHMARK_REPORT_FILE}"
 
 echo "Projection provider e2e smoke test passed."

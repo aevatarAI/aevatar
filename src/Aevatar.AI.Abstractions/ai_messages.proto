@@ -7,6 +7,7 @@ import "Protos/voice_presence.proto";
 import "ToolProviders/agent_tool_admission.proto";
 import "Tools/tool_presentation.proto";
 import "google/protobuf/timestamp.proto";
+import "llm_selection.proto";
 
 enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_UNSPECIFIED = 0;
@@ -105,6 +106,7 @@ message LLMControlContextPayload {
   string nyx_id_route_preference = 5;
   optional int32 max_tool_rounds_override = 6;
   string user_memory_prompt = 7;
+  LLMRouteTarget route_target = 8;
 }
 
 enum TelegramBridgeOperation {
@@ -165,6 +167,10 @@ message AgentToolExecutionContextPayload {
   repeated ChatFileRef input_file_refs = 16;
   AgentChatInvocationContextPayload chat = 17;
   aevatar.ai.tool_providers.AgentToolExecutionOwner execution_owner = 18;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 19;
+  // Server-sealed NyxID credential handle inherited by nested workflow/service calls.
+  // Never contains raw bearer or Agent Key material.
+  aevatar.credentials.DurableCallerCredentialRef durable_nyx_id_credential = 20;
 }
 
 enum AgentChatInvocationSurfacePayload {
@@ -208,6 +214,11 @@ message AgentSkillRecoveryContextPayload {
   int32 max_ornn_search_attempts = 6;
   string command_arguments = 7;
   bool discovery_requested = 8;
+  // Explicit named-skill invocations must not inherit prior assistant/tool output
+  // that could satisfy a new invocation without creating a new workflow run.
+  bool isolate_prior_conversation_history = 9;
+  // True only when the caller explicitly requested mounting the skill's workflows.
+  bool mount_workflows_requested = 10;
 }
 
 message AgentToolVisibilityScopePayload {
@@ -220,6 +231,20 @@ message AgentToolRequestIdentityPayload {
   string idempotency_key = 3;
   int64 issued_at_unix_ms = 4;
   string operation_id = 5;
+  int64 operation_generation = 6;
+}
+
+message NyxIdExactServiceApprovalAuthority {
+  string request_id = 1;
+  string user_service_id = 2;
+  string endpoint_id = 3;
+  string catalog_digest = 4;
+  string endpoint_contract_digest = 5;
+  string operation_digest = 6;
+  string operation_id = 7;
+  int64 operation_generation = 8;
+  string idempotency_key = 9;
+  google.protobuf.Timestamp expires_at = 10;
 }
 
 // Recovery-safe subset of tool execution context. Credential material and
@@ -246,6 +271,8 @@ message AgentToolRecoveryContextPayload {
   bool requires_nyx_id_org_token = 18;
   bool requires_sender_nyx_id_access_token = 19;
   bool requires_source_readable_nyx_id_access_token = 20;
+  aevatar.ai.tool_providers.AgentToolOperationAdmissionPayload operation_admission = 21;
+  AgentToolNyxIdCredentialAuthorityPayload nyx_id_credential_authority = 22;
 }
 
 message AgentSkillRecoveryCheckpointPayload {
@@ -255,12 +282,20 @@ message AgentSkillRecoveryCheckpointPayload {
   string primary_skill_name = 4;
   int32 max_ornn_search_attempts = 5;
   bool discovery_requested = 6;
+  bool isolate_prior_conversation_history = 7;
+  bool mount_workflows_requested = 8;
 }
 
 enum AgentToolNyxIdCredentialKindPayload {
   AGENT_TOOL_NYX_ID_CREDENTIAL_KIND_PAYLOAD_UNSPECIFIED = 0;
   AGENT_TOOL_NYX_ID_CREDENTIAL_KIND_PAYLOAD_SOURCE_READABLE_USER_BEARER = 1;
   AGENT_TOOL_NYX_ID_CREDENTIAL_KIND_PAYLOAD_PROXY_DELEGATION = 2;
+  AGENT_TOOL_NYX_ID_CREDENTIAL_KIND_PAYLOAD_AGENT_KEY = 3;
+}
+
+enum AgentToolNyxIdCredentialAuthorityPayload {
+  AGENT_TOOL_NYX_ID_CREDENTIAL_AUTHORITY_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_NYX_ID_CREDENTIAL_AUTHORITY_PAYLOAD_TOOL_EXECUTION_CONTEXT = 1;
 }
 
 message AgentToolCredentialsPayload {
@@ -269,6 +304,7 @@ message AgentToolCredentialsPayload {
   string sender_nyx_id_access_token = 3;
   AgentToolNyxIdCredentialKindPayload nyx_id_credential_kind = 4;
   string source_readable_nyx_id_access_token = 5;
+  AgentToolNyxIdCredentialAuthorityPayload nyx_id_credential_authority = 6;
 }
 
 message AgentToolCallerContextPayload {
@@ -301,6 +337,7 @@ message WorkflowLlmToolApprovalContinuation {
   // The role-chat session whose committed ContinuationPrepared checkpoint
   // directly owns this continuation target. This is not the workflow session id.
   string direct_parent_role_chat_session_id = 13;
+  string tool_catalog_policy_version = 14;
 }
 
 message WorkflowLlmCompletionDeliveryContext {
@@ -353,6 +390,7 @@ message LLMRequestRoutingContextPayload {
   string nyx_id_route_preference = 2;
   optional int32 max_tool_rounds_override = 3;
   string user_memory_prompt = 4;
+  LLMRouteTarget route_target = 5;
 }
 
 message AgentToolConnectedServicesContextPayload {
@@ -400,6 +438,37 @@ enum AgentToolReceiptApprovalMode {
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_AUTO = 3;
 }
 
+enum AgentToolReceiptEffect {
+  AGENT_TOOL_RECEIPT_EFFECT_UNSPECIFIED = 0;
+  AGENT_TOOL_RECEIPT_EFFECT_READ_ONLY = 1;
+  AGENT_TOOL_RECEIPT_EFFECT_MUTATING = 2;
+}
+
+enum AgentToolReceiptMutationStage {
+  AGENT_TOOL_RECEIPT_MUTATION_STAGE_UNSPECIFIED = 0;
+  AGENT_TOOL_RECEIPT_MUTATION_STAGE_ACCEPTED = 1;
+  AGENT_TOOL_RECEIPT_MUTATION_STAGE_READ_MODEL_OBSERVED = 2;
+}
+
+enum AgentToolFailureOutcome {
+  AGENT_TOOL_FAILURE_OUTCOME_UNSPECIFIED = 0;
+  AGENT_TOOL_FAILURE_OUTCOME_CALLEE_CONFIRMED = 1;
+  AGENT_TOOL_FAILURE_OUTCOME_OUTCOME_UNCERTAIN = 2;
+}
+
+enum NyxIdApprovalDecisionMode {
+  NYX_ID_APPROVAL_DECISION_MODE_UNSPECIFIED = 0;
+  NYX_ID_APPROVAL_DECISION_MODE_PER_REQUEST = 1;
+  NYX_ID_APPROVAL_DECISION_MODE_GRANT = 2;
+}
+
+enum NyxIdApprovalTerminalOutcome {
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_UNSPECIFIED = 0;
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_REJECTED = 1;
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_EXPIRED = 2;
+  NYX_ID_APPROVAL_TERMINAL_OUTCOME_TIMED_OUT = 3;
+}
+
 message NyxIdAuthorizationRequiredEvent {
   string service_slug = 1;
   optional string service_label = 2;
@@ -407,6 +476,19 @@ message NyxIdAuthorizationRequiredEvent {
   string reason_code = 4;
   string safe_message = 5;
   optional string user_service_id = 6;
+  repeated string requested_scopes = 7;
+  NyxIdKeyCreateActionRequirement key_create = 8;
+  NyxIdKeyRotateActionRequirement key_rotate = 9;
+}
+
+message NyxIdKeyCreateActionRequirement {
+  string name = 1;
+  string platform = 2;
+  repeated string allowed_service_ids = 3;
+}
+
+message NyxIdKeyRotateActionRequirement {
+  string key_id = 1;
 }
 
 message AgentToolReceipt {
@@ -427,6 +509,52 @@ message AgentToolReceipt {
   ManagedWorkflowHandoffReceipt managed_workflow_handoff = 15;
   WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 16;
   NyxIdAuthorizationRequiredEvent authorization_required = 17;
+  AgentToolReceiptEffect effect = 18;
+  // Opaque identity assigned by the external provider to the affected resource.
+  // Raw provider responses remain transient; reconciliation persists only this ID.
+  string provider_resource_id = 19;
+  // NyxID-owned approval semantics. This is intentionally separate from the
+  // local tool approval mode above; omitted boundary data remains unknown.
+  NyxIdApprovalDecisionMode nyx_id_approval_decision_mode = 20;
+  AgentToolReceiptMutationStage mutation_stage = 21;
+  NyxIdApprovalTerminalOutcome nyx_id_approval_terminal_outcome = 22;
+  NyxIdExactServiceApprovalAuthority exact_service_approval = 23;
+  AgentToolFailureOutcome failure_outcome = 24;
+}
+
+enum AgentToolCancellationAuditOutcomeKind {
+  AGENT_TOOL_CANCELLATION_AUDIT_OUTCOME_KIND_UNSPECIFIED = 0;
+  AGENT_TOOL_CANCELLATION_AUDIT_OUTCOME_KIND_EXECUTED = 1;
+  AGENT_TOOL_CANCELLATION_AUDIT_OUTCOME_KIND_FAILED = 2;
+}
+
+enum AgentToolCancellationAuditFailureStage {
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_UNSPECIFIED = 0;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_NONE = 1;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_REQUEST_VALIDATION = 2;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_CLASSIFICATION = 3;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_CREDENTIAL_POLICY = 4;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_APPROVAL = 5;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_ADMISSION = 6;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_TERMINAL_EXECUTION = 7;
+  AGENT_TOOL_CANCELLATION_AUDIT_FAILURE_STAGE_TERMINAL_AUDIT = 8;
+}
+
+// Adapter-owned payload persisted opaquely by the workflow actor. It freezes every
+// tool/audit semantic that must survive callback redelivery without re-running the provider.
+message AgentToolCancellationAuditIntentPayload {
+  string result_json = 1;
+  AgentToolReceipt receipt = 2;
+  bool is_mutation = 3;
+  string failure_code = 4;
+  string safe_message = 5;
+  bool terminal_invoked = 6;
+  bool retryable = 7;
+  optional bool requires_approval = 8;
+  bool is_read_only = 9;
+  bool is_destructive = 10;
+  AgentToolCancellationAuditOutcomeKind outcome_kind = 11;
+  AgentToolCancellationAuditFailureStage failure_stage = 12;
 }
 
 message ManagedWorkflowHandoffReceipt {
@@ -653,6 +781,30 @@ message RoleChatToolCompletedProgress {
   ToolResultEvent result = 1;
   string tool_name = 2;
   string operation_id = 3;
+  string safe_arguments_json = 4;
+}
+
+message RoleChatModelStartedProgress {
+  string operation_id = 1;
+  int32 round = 2;
+  string model = 3;
+  string provider = 4;
+  string input_summary = 5;
+  repeated string available_tool_names = 6;
+  AgentTurnToolCatalogProofPayload tool_catalog_proof = 7;
+  string tool_catalog_policy_version = 8;
+}
+
+message RoleChatModelCompletedProgress {
+  string operation_id = 1;
+  int32 round = 2;
+  string model = 3;
+  string content = 4;
+  string reasoning_content = 5;
+  TokenUsagePayload usage = 6;
+  string finish_reason = 7;
+  bool success = 8;
+  string error = 9;
 }
 
 message RoleChatUsageProgress {
@@ -700,6 +852,8 @@ message RoleChatSessionProgressedEvent {
     RoleChatTerminalProgress terminal = 19;
     RoleChatReplayProgress replay = 20;
     RoleChatToolApprovalRequiredProgress tool_approval_required = 21;
+    RoleChatModelStartedProgress model_started = 22;
+    RoleChatModelCompletedProgress model_completed = 23;
   }
 }
 
@@ -843,9 +997,28 @@ message ExactRemoteSkillsetRef {
   string literal_version = 2;
 }
 
+message AgentProfileConnectedServiceSelector {
+  // Stable catalog identity shared by caller-specific UserService instances.
+  string catalog_service_slug = 1;
+  // Only READ_ONLY and WRITE are valid Profile policy values.
+  repeated aevatar.ai.tool_providers.AgentToolOperationRiskPayload allowed_risks = 2;
+  // Optional sealed recovery authority used only when this selector matches no
+  // caller-visible exact operation. Presence opts into deterministic typed
+  // readiness; requested scopes are copied unchanged into the readiness call.
+  AgentProfileConnectedServiceReadiness readiness = 3;
+  // Optional exact published operation identity. Empty keeps the selector at
+  // the catalog-service boundary; a value narrows it to one published endpoint.
+  string endpoint_id = 4;
+}
+
+message AgentProfileConnectedServiceReadiness {
+  repeated string requested_scopes = 1;
+}
+
 message AgentProfileToolPolicy {
   repeated string tool_names = 1;
   repeated string tool_set_refs = 2;
+  repeated AgentProfileConnectedServiceSelector connected_service_selectors = 3;
 }
 
 enum AgentProfileSideEffectClass {
@@ -893,8 +1066,52 @@ message AgentProfileSnapshot {
   AgentProfileActivationMode activation_mode = 16;
   string instructions = 17;
   int64 published_revision = 18;
+  // Sealed upper bounds for the final Aevatar-owned catalog. Presence is required
+  // for newly published profiles; legacy pinned snapshots remain readable.
+  optional int32 max_owned_tool_count = 20;
+  optional int32 max_schema_bytes = 21;
   reserved 19;
   reserved "published_snapshot_sha256";
+}
+
+enum AgentTurnToolOriginPayload {
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_AGENT_RUNTIME = 1;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_ROUTE_TOOL_SET = 2;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_AGENT_PROFILE = 3;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_CONNECTED_SERVICE = 4;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_RESPONSES_STATE = 5;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_CALLER_FORWARDED = 6;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_WORKFLOW = 7;
+  AGENT_TURN_TOOL_ORIGIN_PAYLOAD_VOICE = 8;
+}
+
+message AgentTurnToolCatalogBudgetPayload {
+  int32 maximum_tool_count = 1;
+  int32 maximum_schema_bytes = 2;
+  int32 maximum_connected_read_tool_count = 3;
+  int32 maximum_connected_write_tool_count = 4;
+}
+
+message AgentTurnToolDescriptorPayload {
+  string name = 1;
+  string description = 2;
+  bytes canonical_schema_json = 3;
+  string schema_sha256 = 4;
+  AgentTurnToolOriginPayload origin = 5;
+  string selector_digest = 6;
+}
+
+// Durable, replayable proof for one immutable Aevatar-owned model tool catalog.
+// It intentionally contains no credentials, caller identity, arguments, time, or randomness.
+message AgentTurnToolCatalogProofPayload {
+  repeated AgentTurnToolDescriptorPayload tool_descriptors = 1;
+  AgentTurnToolCatalogBudgetPayload budget = 2;
+  int32 tool_count = 3;
+  int32 schema_bytes = 4;
+  int32 connected_read_tool_count = 5;
+  int32 connected_write_tool_count = 6;
+  string catalog_digest = 7;
 }
 
 message AgentProfileBoundEvent {
@@ -932,6 +1149,9 @@ enum AgentProfileTurnDegradationReason {
   AGENT_PROFILE_TURN_DEGRADATION_REASON_LEGACY_AUTHORITY_MISSING = 13;
   AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZER_UNAVAILABLE = 14;
   AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZATION_FAILED = 15;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_CATALOG_NEEDS_DISAMBIGUATION = 16;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_CATALOG_OVER_BUDGET = 17;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_SCHEMA_INVALID = 18;
 }
 
 message AgentProfileTurnReconciliationKey {

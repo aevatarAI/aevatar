@@ -10,4 +10,5 @@ public enum ProjectionDocumentFilterOperator
     Lt = 5,
     Lte = 6,
     EqOrMissing = 7,
+    ContainsText = 8,
 }

@@ -243,6 +243,16 @@ public sealed class ToolAuditRecordFactoryTests
     [InlineData("NYXID_PROXY_HTTP_502")]
     [InlineData("NYXID_PROXY_UNAUTHORIZED")]
     [InlineData("NYXID_PROXY_FORBIDDEN")]
+    [InlineData("code_execution_request_invalid")]
+    [InlineData("code_execution_response_invalid")]
+    [InlineData("code_execution_failed")]
+    [InlineData("DEPENDENCY_INSTALL_FAILED")]
+    [InlineData("EXECUTION_FAILED")]
+    [InlineData("SANDBOX_CREATION_FAILED")]
+    [InlineData("SANDBOX_TIMEOUT")]
+    [InlineData("managed_execution_nonzero_exit")]
+    [InlineData("managed_response_invalid")]
+    [InlineData("managed_upstream_codex_turn_failed")]
     [InlineData("WEB_FETCH_HTTP_503")]
     [InlineData("WEB_FETCH_DNS_FAILURE")]
     [InlineData("WEB_FETCH_TLS_FAILURE")]
@@ -256,16 +266,143 @@ public sealed class ToolAuditRecordFactoryTests
         record.Failure.Code.Should().Be(failureCode);
         record.Failure.SanitizedMessage.Should().Be(failureCode);
         record.TerminalOutcome.Should().Be(
-            failureCode == "WEB_FETCH_TIMEOUT"
+            failureCode is "WEB_FETCH_TIMEOUT" or "SANDBOX_TIMEOUT"
                 ? AuditTerminalOutcome.TimedOut
                 : AuditTerminalOutcome.Failed);
         record.ToString().Should().NotContain("provider-secret-must-not-appear");
     }
 
     [Theory]
+    [InlineData("FORBIDDEN")]
+    [InlineData("UNAUTHENTICATED")]
+    public void Create_CodeExecuteAuthorizationFailure_ShouldPreserveExactCode(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(failureCode, "code_execute");
+
+        record.ErrorCode.Should().Be(failureCode);
+        record.Failure.Code.Should().Be(failureCode);
+    }
+
+    [Theory]
+    [InlineData("FORBIDDEN")]
+    [InlineData("UNAUTHENTICATED")]
+    public void Create_UnrelatedProviderAuthorizationCode_ShouldRemainUntrusted(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(
+            failureCode,
+            actualToolName: "provider_tool",
+            reportedToolName: "code_execute");
+
+        record.ErrorCode.Should().Be("tool_error");
+        record.Failure.Code.Should().Be("tool_error");
+        record.ToString().Should().NotContain(failureCode);
+    }
+
+    [Theory]
+    [InlineData("code_execution_timed_out")]
+    [InlineData("SANDBOX_TIMEOUT")]
+    [InlineData("managed_proxy_timeout")]
+    [InlineData("managed_upstream_codex_execution_timeout")]
+    public void Create_OwnedTimeoutCode_ShouldMapTimeoutSemantics(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(failureCode);
+
+        record.Outcome.Should().Be(AuditOutcome.Error);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.TimedOut);
+        record.Failure.Category.Should().Be(AuditFailureCategory.Timeout);
+    }
+
+    [Theory]
+    [InlineData("code_execution_submit_recovery_expired")]
+    [InlineData("OPERATION_EXPIRED")]
+    public void Create_DurableCodeExecuteTimeoutCode_ShouldMapTimeoutSemantics(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(failureCode, "code_execute");
+
+        record.ErrorCode.Should().Be(failureCode);
+        record.Outcome.Should().Be(AuditOutcome.Error);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.TimedOut);
+        record.Failure.Category.Should().Be(AuditFailureCategory.Timeout);
+    }
+
+    [Theory]
+    [InlineData("code_execution_cancelled")]
+    [InlineData("EXECUTION_CANCELLED")]
+    [InlineData("managed_execution_cancelled")]
+    public void Create_OwnedCancellationCode_ShouldMapCancellationSemantics(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(failureCode, "code_execute");
+
+        record.ErrorCode.Should().Be(failureCode);
+        record.Outcome.Should().Be(AuditOutcome.Cancelled);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Cancelled);
+        record.Failure.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("code_execution_cancel_outcome_uncertain")]
+    [InlineData("code_execution_durable_context_invalid")]
+    [InlineData("code_execution_cancellation_requested")]
+    [InlineData("code_execution_cancellation_unconfirmed")]
+    [InlineData("code_execution_durable_transport_unavailable")]
+    [InlineData("code_execution_outcome_uncertain")]
+    [InlineData("code_execution_route_not_ready")]
+    [InlineData("durable_code_execution_operation_not_found")]
+    [InlineData("durable_code_execution_operation_request_invalid")]
+    [InlineData("durable_code_execution_public_api_not_configured")]
+    [InlineData("durable_code_execution_response_too_large")]
+    [InlineData("durable_code_execution_result_invalid")]
+    [InlineData("durable_code_execution_status_etag_missing")]
+    [InlineData("durable_code_execution_status_invalid")]
+    [InlineData("durable_code_execution_target_not_found")]
+    [InlineData("EXECUTION_PAYLOAD_TOO_LARGE")]
+    [InlineData("EXECUTION_RESULT_TOO_LARGE")]
+    [InlineData("EXECUTION_STORED_DATA_INVALID")]
+    [InlineData("IDEMPOTENCY_KEY_REUSE")]
+    [InlineData("OUTCOME_UNCERTAIN")]
+    public void Create_DurableCodeExecuteFailureCode_ShouldPreserveExactCode(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(failureCode, "code_execute");
+
+        record.ErrorCode.Should().Be(failureCode);
+        record.ErrorSummary.Should().Be(failureCode);
+        record.Failure.Code.Should().Be(failureCode);
+        record.Failure.SanitizedMessage.Should().Be(failureCode);
+        record.Outcome.Should().Be(AuditOutcome.Error);
+        record.LifecyclePhase.Should().Be(AuditLifecyclePhase.Terminal);
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        record.Failure.Category.Should().Be(AuditFailureCategory.Execution);
+    }
+
+    [Theory]
+    [InlineData("durable_code_execution_result_invalid")]
+    [InlineData("EXECUTION_CANCELLED")]
+    [InlineData("IDEMPOTENCY_KEY_REUSE")]
+    [InlineData("OPERATION_EXPIRED")]
+    [InlineData("OUTCOME_UNCERTAIN")]
+    public void Create_UnrelatedDurableCodeExecuteCode_ShouldRemainUntrusted(string failureCode)
+    {
+        var record = CreateProviderFailureRecord(
+            failureCode,
+            actualToolName: "provider_tool",
+            reportedToolName: "code_execute");
+
+        record.ErrorCode.Should().Be("tool_error");
+        record.Failure.Code.Should().Be("tool_error");
+        record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
+        record.ToString().Should().NotContain(failureCode);
+    }
+
+    [Theory]
     [InlineData("NYXID_PROXY_HTTP_502_suffix")]
     [InlineData("NYXID_PROXY_HTTP_50")]
     [InlineData("NYXID_PROXY_UNAUTHORIZED_suffix")]
+    [InlineData("CODE_EXECUTE_FAILED")]
+    [InlineData("code_execution_response_invalid_suffix")]
+    [InlineData("durable_code_execution_result_invalid_suffix")]
+    [InlineData("EXECUTION_CANCELLED_suffix")]
+    [InlineData("managed_upstream_codex_not_allowlisted")]
+    [InlineData("OPERATION_EXPIRED_suffix")]
     [InlineData("WEB_FETCH_HTTP_503_suffix")]
     [InlineData("WEB_FETCH_HTTP_50")]
     [InlineData("WEB_FETCH_TIMEOUT_suffix")]
@@ -306,12 +443,16 @@ public sealed class ToolAuditRecordFactoryTests
     private static ToolAuditRecordFactory CreateFactory() =>
         new(new StableIdentityHasher(), new FixedTimeProvider(Now));
 
-    private static AuditRecord CreateProviderFailureRecord(string failureCode)
+    private static AuditRecord CreateProviderFailureRecord(
+        string failureCode,
+        string actualToolName = "provider_tool",
+        string? reportedToolName = null)
     {
+        var toolName = reportedToolName ?? actualToolName;
         var receipt = new AgentToolReceipt
         {
             CallId = "call-provider",
-            ToolName = "provider_tool",
+            ToolName = toolName,
             Status = AgentToolReceiptStatus.Error,
             ErrorCode = failureCode,
             ErrorMessage = "provider-secret-must-not-appear",
@@ -320,8 +461,8 @@ public sealed class ToolAuditRecordFactoryTests
         return CreateFactory().Create(
             "audit-provider-failure",
             AuditToolExecutionPhase.Terminal,
-            new TestTool("provider_tool"),
-            "provider_tool",
+            new TestTool(actualToolName),
+            toolName,
             "call-provider",
             "arguments-hash",
             new AgentToolCallSafety(false, true, false),

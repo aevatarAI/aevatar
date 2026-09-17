@@ -21,6 +21,7 @@ public sealed record ResolvedOrnnSkillPackage
     public required string CanonicalName { get; init; }
     public required string PublisherId { get; init; }
     public required ByteString SkillSha256 { get; init; }
+    public required int SkillMarkdownUtf8Bytes { get; init; }
     public IReadOnlyList<string> DeclaredToolNames { get; init; } = [];
 }
 

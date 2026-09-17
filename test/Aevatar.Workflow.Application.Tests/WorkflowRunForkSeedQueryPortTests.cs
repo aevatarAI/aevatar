@@ -12,6 +12,42 @@ namespace Aevatar.Workflow.Application.Tests;
 
 public sealed class WorkflowRunForkSeedQueryPortTests
 {
+    // Serialized by the schema-v0 WorkflowRunState descriptor. Keep this as a
+    // fixed wire fixture so current generated code cannot rewrite the input.
+    private const string LegacyWorkflowRunStateAnyBase64 =
+        "CjV0eXBlLmdvb2dsZWFwaXMuY29tL2FldmF0YXIud29ya2Zsb3cuV29ya2Zsb3dSdW5TdGF0ZRL/AgoR" +
+        "ZGVmaW5pdGlvbi1sZWdhY3kSFm5hbWU6IGxlZ2FjeQpzdGVwczogW10aBmxlZ2FjeSABOgpsZWdhY3kt" +
+        "cnVuQgZmYWlsZWRKDGxlZ2FjeS1pbnB1dFoObGVnYWN5IGZhaWx1cmVihgIKGXdvcmtmbG93X2V4ZWN1" +
+        "dGlvbl9rZXJuZWwS6AEKQXR5cGUuZ29vZ2xlYXBpcy5jb20vYWV2YXRhci53b3JrZmxvdy5Xb3JrZmxv" +
+        "d0V4ZWN1dGlvbktlcm5lbFN0YXRlEqIBGgZzdGVwLWIiFGxlZ2FjeS1jdXJyZW50LWlucHV0KhUKBWlu" +
+        "cHV0EgxsZWdhY3ktaW5wdXQqDwoGc3RlcC1hEgVhbHBoYTIKCgZzdGVwLWIQAVoXCgZzdGVwLWISDWxl" +
+        "Z2FjeS1leGVjLWJ6NQoGc3RlcC1iEisKCmxlZ2FjeS1ydW4SBnN0ZXAtYhgCIhNsZWdhY3ktcnVuOnN0" +
+        "ZXAtYjoykgEMc2NvcGUtbGVnYWN5";
+
+    [Fact]
+    public void ForkSeedReadModelMapper_ShouldBuildLegacySeedFromFixedSchemaV0WireFixture()
+    {
+        var packed = Any.Parser.ParseFrom(Convert.FromBase64String(LegacyWorkflowRunStateAnyBase64));
+        packed.Is(WorkflowRunState.Descriptor).Should().BeTrue();
+        var state = packed.Unpack<WorkflowRunState>();
+        var mapper = new WorkflowRunForkSeedReadModelMapper();
+
+        var snapshot = mapper.ToProjectionSnapshot(state);
+        var view = mapper.ToSeedView(BuildDocument(state, snapshot));
+
+        snapshot.NormalizedValues.Should().BeNull();
+        snapshot.Variables.Should().Contain("input", "legacy-input");
+        snapshot.Variables.Should().Contain("step-a", "alpha");
+        snapshot.CompletedStepIds.Should().Equal("step-a");
+        snapshot.LastFailedStepId.Should().Be("step-b");
+        snapshot.IdempotencyByStepId["step-b"].IdempotencyKey
+            .Should().Be("legacy-run:step-b:2");
+        view.SourceRunId.Should().Be("legacy-run");
+        view.Status.Should().Be("failed");
+        view.Variables.Should().Contain("step-a", "alpha");
+        view.NormalizedValues.Should().BeNull();
+    }
+
     [Fact]
     public void ForkSeedReadModelMapper_ShouldMapCompletedRunForkSeed()
     {
@@ -56,8 +92,129 @@ public sealed class WorkflowRunForkSeedQueryPortTests
         view.LastFailedStepId.Should().BeEmpty();
         view.FinalError.Should().BeEmpty();
         view.ScopeId.Should().Be("scope-1");
+        view.WorkflowId.Should().Be("wf-alpha");
+        view.RevisionId.Should().Be("rev-alpha");
         view.IdempotencyByStepId.Should().ContainKey("step-b");
         view.IdempotencyByStepId!["step-b"].IdempotencyKey.Should().Be("run-completed:step-b:1");
+    }
+
+    [Fact]
+    public void ForkSeedReadModelMapper_ShouldUseKernelAsOnlyForEachChildOutputSource()
+    {
+        var state = BuildWorkflowRunState("run-foreach", "failed", "foreach failed");
+        state.ExecutionStates["kernel-state"] = Any.Pack(new WorkflowExecutionKernelState
+        {
+            CurrentStepId = "foreach-parent",
+            Variables =
+            {
+                ["input"] = "source-input",
+                ["foreach-parent_item_0"] = "kernel-wins",
+                ["foreach-parent_item_1"] = "kernel-output-1",
+                ["foreach-parent_item_2"] = "kernel-output-2",
+            },
+        });
+        var forEachState = new ForEachModuleState
+        {
+            CompletedChildOutputsRunId = "run-foreach",
+            CompletedChildOutputs =
+            {
+                ["foreach-parent_item_0"] = "completed-must-not-overwrite-kernel",
+                ["foreach-parent_item_1"] = "completed-output",
+                ["foreach-parent_item_2"] = "older-completed-output",
+            },
+        };
+        forEachState.Parents["run-foreach:foreach-parent:execution:active"] = new ForEachParentState
+        {
+            ParentRunId = "run-foreach",
+            Collected =
+            {
+                new ForEachItemResult
+                {
+                    StepId = "foreach-parent_item_2",
+                    Index = 2,
+                    Success = true,
+                    Output = "active-output",
+                },
+                new ForEachItemResult
+                {
+                    Index = 3,
+                    Success = true,
+                    Output = "legacy-result-without-step-id",
+                },
+            },
+        };
+        forEachState.Parents["stale-run:foreach-parent:execution:stale"] = new ForEachParentState
+        {
+            ParentRunId = "stale-run",
+            Collected =
+            {
+                new ForEachItemResult
+                {
+                    StepId = "stale-child",
+                    Index = 0,
+                    Success = true,
+                    Output = "stale-output",
+                },
+            },
+        };
+        state.ExecutionStates["foreach-state"] = Any.Pack(forEachState);
+
+        var snapshot = new WorkflowRunForkSeedReadModelMapper().ToProjectionSnapshot(state);
+
+        snapshot.Variables.Should().Contain("foreach-parent_item_0", "kernel-wins");
+        snapshot.Variables.Should().Contain("foreach-parent_item_1", "kernel-output-1");
+        snapshot.Variables.Should().Contain("foreach-parent_item_2", "kernel-output-2");
+        snapshot.Variables.Should().NotContainValue("legacy-result-without-step-id");
+        snapshot.Variables.Should().NotContainKey("stale-child");
+        snapshot.CompletedStepIds.Should().Equal(
+            "foreach-parent_item_0",
+            "foreach-parent_item_1",
+            "foreach-parent_item_2");
+    }
+
+    [Fact]
+    public void ForkSeedReadModelMapper_ShouldIgnoreCompletedForEachOutputsFromAnotherRun()
+    {
+        var state = BuildWorkflowRunState("current-run", "failed", "failed");
+        state.ExecutionStates["foreach-state"] = Any.Pack(new ForEachModuleState
+        {
+            CompletedChildOutputsRunId = "previous-run",
+            CompletedChildOutputs =
+            {
+                ["previous-child"] = "previous-output",
+            },
+        });
+
+        var snapshot = new WorkflowRunForkSeedReadModelMapper().ToProjectionSnapshot(state);
+
+        snapshot.Variables.Should().BeEmpty();
+        snapshot.CompletedStepIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ForkSeedReadModelMapper_ShouldCarryOriginalRunIdFromLineage()
+    {
+        var mapper = new WorkflowRunForkSeedReadModelMapper();
+
+        var view = mapper.ToSeedView(new WorkflowExecutionCurrentStateDocument
+        {
+            RunId = "run-source-gamma",
+            Status = "failed",
+            ScopeId = "scope-alpha",
+            Lineage = new WorkflowRunLineage
+            {
+                Availability = WorkflowRunLineageAvailability.Available,
+                RetryFork = new WorkflowRunRetryForkLineage
+                {
+                    Availability = WorkflowRunLineageAvailability.Available,
+                    SourceRunId = "run-source-gamma",
+                    OriginalRunId = "run-original-alpha",
+                },
+            },
+        });
+
+        view.SourceRunId.Should().Be("run-source-gamma");
+        view.OriginalRunId.Should().Be("run-original-alpha");
     }
 
     [Fact]
@@ -184,6 +341,8 @@ public sealed class WorkflowRunForkSeedQueryPortTests
             WorkflowYaml = "name: demo\nsteps: []",
             FinalError = finalError,
             ScopeId = "scope-1",
+            WorkflowId = "wf-alpha",
+            RevisionId = "rev-alpha",
             InlineWorkflowYamls = { ["child"] = "name: child" },
         };
 
@@ -198,6 +357,8 @@ public sealed class WorkflowRunForkSeedQueryPortTests
             WorkflowName = state.WorkflowName,
             Status = state.Status,
             ScopeId = seedSnapshot.ScopeId,
+            WorkflowId = state.WorkflowId,
+            RevisionId = state.RevisionId,
             FinalError = state.FinalError,
             WorkflowYaml = seedSnapshot.WorkflowYaml,
             InlineWorkflowYamls = seedSnapshot.InlineWorkflowYamls.ToDictionary(

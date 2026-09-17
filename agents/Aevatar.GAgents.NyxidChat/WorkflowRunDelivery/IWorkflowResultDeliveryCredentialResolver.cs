@@ -4,7 +4,7 @@ using Aevatar.Foundation.Abstractions.Credentials;
 namespace Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
 
 /// <summary>
-/// Narrow resolution port for the channel workflow terminal-result delivery agent key.
+/// Narrow resolution port for the channel workflow delivery agent key.
 /// Resolves only vault handles minted for
 /// <see cref="CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey"/> under the
 /// handle's own owner scope and api-key subject; every other credential shape resolves to
@@ -50,7 +50,7 @@ public sealed class SecretVaultWorkflowResultDeliveryCredentialResolver
                     CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
                     secretReference.OwnerScopeKey,
                     credential.SubjectId,
-                    "workflow-run-delivery-terminal-reply"),
+                    "workflow-run-delivery-reply"),
                 ct)
             .ConfigureAwait(false);
         return string.IsNullOrWhiteSpace(resolved.Secret) ? null : resolved.Secret.Trim();

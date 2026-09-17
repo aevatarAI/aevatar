@@ -79,6 +79,18 @@ Create versus continue is explicit in the delivery reservation. A create reserva
 
 Query paths consume this document directly. The detail query returns the complete committed transcript while the conversation is active; prompt-window selection is a separate continuation-admission concern. Queries do not unpack `state_root`, read actor internals, replay events, or prime projection during query execution.
 
+An acknowledged create reservation remains readable while its conversation current-state document is not yet materialized. The detail query uses the scope-bound `ChatHistoryCreateRecoveryCurrentStateDocument` as read-only reservation evidence and returns:
+
+```json
+{
+  "messages": [],
+  "stateVersion": 0,
+  "projectionStatus": "pending"
+}
+```
+
+`stateVersion` stays `0` in this pending response because the recovery document belongs to the delivery actor and its version must not impersonate the conversation actor's authoritative version. Once `ChatConversationCurrentStateDocument` is visible, the same query returns `projectionStatus: "current"`, the conversation actor's source version, and its committed terminal turns. A missing conversation document without matching scope-bound create-reservation evidence remains `404`; query handling never creates actors, replays events, or primes projection.
+
 ## Actor Identity And Ownership
 
 `ChatConversationGAgent` actor IDs are opaque server identities. New writes derive the conversation actor from an injective encoding of the `(scope_id, conversation_id)` tuple, so tuples such as `(tenant, admin-c1)` and `(tenant-admin, c1)` cannot resolve to the same actor.
@@ -177,6 +189,6 @@ To continue an existing Conversation under the authenticated scope, the client s
 
 Chat History integration owns the canonical `conversationId` for create and owns every persistent `turnId`. A blank `conversation.conversationId` is invalid. A nonblank `conversation.conversationId` that is absent, deleted, or outside the trusted scope returns `CONVERSATION_NOT_FOUND`; it must not fall back to create.
 
-When a persisted `/api/chat` request is accepted, the SSE stream first emits `aevatar.chat.context` with `WorkflowChatContextPayload(scope_id, conversation_id, turn_id)`, then emits the existing `aevatar.run.context` frame. `aevatar.chat.context` means the identities were allocated and the terminal delivery reservation was established; it does not mean the Conversation read model is already visible or that the terminal turn has committed.
+When a persisted `/api/chat` request is accepted, the SSE stream first emits `aevatar.chat.context` with `WorkflowChatContextPayload(scope_id, conversation_id, turn_id)`, then emits the existing `aevatar.run.context` frame. Before workflow dispatch and acknowledgement, the create path waits for the scope-bound reservation read model to be observable through the same conversation lookup used by Chat History. If it does not become visible within the bounded observation window, the reservation is abandoned and the run is not dispatched. `aevatar.chat.context` therefore means the identities were allocated, the terminal delivery reservation was established, and the acknowledged `conversation_id` is already a readable resource: before the Conversation read model is visible, its detail endpoint returns an empty transcript with `projectionStatus: "pending"`; after terminal materialization it returns `projectionStatus: "current"` with the committed turn.
 
 `prompt` remains the workflow execution prompt and is the archived user text for backend terminal append. `sessionId` remains runtime correlation only and is never used as Conversation identity.

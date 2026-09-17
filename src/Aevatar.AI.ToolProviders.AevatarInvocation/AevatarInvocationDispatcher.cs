@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
@@ -20,6 +21,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using WorkflowRunCallerCredential = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential;
+using WorkflowRunCallerNyxIdAuthority = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority;
 
 namespace Aevatar.AI.ToolProviders.AevatarInvocation;
 
@@ -28,9 +30,12 @@ public sealed class AevatarInvocationDispatcher
     private const string DirectGAgentPublisherId = "aevatar.tools.invoke_gagent";
     private const string DeletedGAgentActorNameAlias = "actor_name";
     private const string WorkflowBackgroundDeliveryBindingDegradedCode = "binding_degraded";
+    private const string WorkflowStartReadModelUnavailableCode = "workflow_start_read_model_unavailable";
     private const string DefaultMemberEndpointId = "chat";
     private const string ChannelWorkflowDeliveryUnavailableMessage =
         "This channel bot is not provisioned for workflow result delivery, so the workflow was not started. Open /channels, select this registration, and choose Repair workflow replies. This repairs Aevatar's workflow result delivery binding; provider webhook settings usually do not need changes. You can also start the workflow from a surface that can observe its result.";
+    private const string ChannelAgentKeyNotReadyMessage =
+        "The channel bot Agent Key could not be prepared for NyxID workflow access, so the workflow was not started. Open /channels, select this registration, and choose Repair workflow replies. The workflow will not fall back to a short-lived user token.";
     private const string WorkflowBackgroundDeliveryReservationFailedMessage =
         "Workflow result delivery could not be prepared, so the workflow was not started. Retry from this chat, or start the workflow from a surface that can observe its result.";
     private static readonly TimeSpan WorkflowBackgroundDeliveryReservationLifetime = TimeSpan.FromDays(30);
@@ -86,7 +91,9 @@ public sealed class AevatarInvocationDispatcher
     private readonly IServiceRunQueryPort _serviceRunQueryPort;
     private readonly IGAgentRunTerminalQueryPort _terminalQueryPort;
     private readonly IWorkflowExecutionQueryApplicationService _workflowQueryService;
+    private readonly WorkflowStartReadModelObserver _workflowStartReadModelObserver;
     private readonly IWorkflowRunBackgroundDeliveryRegistrationPort? _workflowRunDeliveryRegistrationPort;
+    private readonly IChannelNyxIdAgentKeyReadinessPort? _channelAgentKeyReadinessPort;
     private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
     private readonly ILogger<AevatarInvocationDispatcher> _logger;
 
@@ -105,7 +112,9 @@ public sealed class AevatarInvocationDispatcher
         IWorkflowExecutionQueryApplicationService workflowQueryService,
         IWorkflowRunBackgroundDeliveryRegistrationPort? workflowRunDeliveryRegistrationPort = null,
         ILogger<AevatarInvocationDispatcher>? logger = null,
-        IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null)
+        IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
+        TimeSpan? workflowStartObservationTimeout = null,
+        IChannelNyxIdAgentKeyReadinessPort? channelAgentKeyReadinessPort = null)
     {
         _actorDispatchPort = actorDispatchPort ?? throw new ArgumentNullException(nameof(actorDispatchPort));
         _actorRegistryQueryPort = actorRegistryQueryPort ?? throw new ArgumentNullException(nameof(actorRegistryQueryPort));
@@ -119,7 +128,11 @@ public sealed class AevatarInvocationDispatcher
         _serviceRunQueryPort = serviceRunQueryPort ?? throw new ArgumentNullException(nameof(serviceRunQueryPort));
         _terminalQueryPort = terminalQueryPort ?? throw new ArgumentNullException(nameof(terminalQueryPort));
         _workflowQueryService = workflowQueryService ?? throw new ArgumentNullException(nameof(workflowQueryService));
+        _workflowStartReadModelObserver = new WorkflowStartReadModelObserver(
+            _workflowQueryService,
+            workflowStartObservationTimeout);
         _workflowRunDeliveryRegistrationPort = workflowRunDeliveryRegistrationPort;
+        _channelAgentKeyReadinessPort = channelAgentKeyReadinessPort;
         _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
         _logger = logger ?? NullLogger<AevatarInvocationDispatcher>.Instance;
     }
@@ -218,7 +231,8 @@ public sealed class AevatarInvocationDispatcher
         var payload = request.Payload;
         var endpointId = ResolveMemberEndpointId(request.EndpointId);
         var error = ProtoToolArguments.Require(request.MemberId, "member_id", "member_id is required.") ??
-                    ProtoToolArguments.RequirePayload(payload, "payload");
+                    ProtoToolArguments.RequirePayload(payload, "payload") ??
+                    RejectMemberCompleteWait(request.Wait);
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
@@ -236,8 +250,19 @@ public sealed class AevatarInvocationDispatcher
                 memberResolution.ScopeId,
                 memberResolution.MemberId,
                 memberResolution.PublishedServiceId);
-            var invocationRequest = BuildServiceInvocationRequest(resolution, payload, endpointId);
-            var target = await _serviceInvocationResolutionPort.ResolveAsync(invocationRequest, ct);
+            var resolutionRequest = BuildServiceInvocationRequest(
+                resolution,
+                payload,
+                endpointId,
+                toolContext: null);
+            var target = await _serviceInvocationResolutionPort.ResolveAsync(resolutionRequest, ct);
+            var invocationRequest = target.Artifact.ImplementationKind == ServiceImplementationKind.Workflow
+                ? BuildServiceInvocationRequest(
+                    resolution,
+                    payload,
+                    endpointId,
+                    AgentToolRequestContext.Current)
+                : resolutionRequest;
             await _admissionAuthorizer.AuthorizeAsync(
                 target.Service.ServiceKey,
                 target.Service.DeploymentId,
@@ -318,8 +343,19 @@ public sealed class AevatarInvocationDispatcher
                 teamResolution.ScopeId,
                 teamResolution.EntryMemberId,
                 teamResolution.PublishedServiceId);
-            var invocationRequest = BuildServiceInvocationRequest(resolution, payload, request.EndpointId);
-            var target = await _serviceInvocationResolutionPort.ResolveAsync(invocationRequest, ct);
+            var resolutionRequest = BuildServiceInvocationRequest(
+                resolution,
+                payload,
+                request.EndpointId,
+                toolContext: null);
+            var target = await _serviceInvocationResolutionPort.ResolveAsync(resolutionRequest, ct);
+            var invocationRequest = target.Artifact.ImplementationKind == ServiceImplementationKind.Workflow
+                ? BuildServiceInvocationRequest(
+                    resolution,
+                    payload,
+                    request.EndpointId,
+                    AgentToolRequestContext.Current)
+                : resolutionRequest;
             await _admissionAuthorizer.AuthorizeAsync(
                 target.Service.ServiceKey,
                 target.Service.DeploymentId,
@@ -398,20 +434,40 @@ public sealed class AevatarInvocationDispatcher
 
         var request = parsed.Value!;
         var wait = ResolveWait(request.Wait);
+        var toolContext = AgentToolRequestContext.Current;
+        var isManagedWorkflowRuntime = TryGetManagedWorkflowRuntimeContext(toolContext, out var workflowRuntimeContext);
+        var workflowInputParts = request.Inputs == null || isManagedWorkflowRuntime
+            ? null
+            : ToWorkflowInputParts(request.Inputs, toolContext);
+        var firstWorkflowInputFileRef = FirstWorkflowInputFileRef(workflowInputParts);
+        _logger.LogWarning(
+            "Start workflow input file refs resolved: workflowId={WorkflowId} managedRuntime={ManagedRuntime} explicitInputPartCount={ExplicitInputPartCount} explicitInputFileRefCount={ExplicitInputFileRefCount} ambientToolContextFileRefCount={AmbientToolContextFileRefCount} workflowInputPartCount={WorkflowInputPartCount} workflowInputFileRefCount={WorkflowInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            request.WorkflowId ?? string.Empty,
+            isManagedWorkflowRuntime,
+            request.Inputs?.InputParts.Count ?? 0,
+            CountExplicitInputFileRefs(request.Inputs),
+            toolContext?.InputFileRefs.Count ?? 0,
+            workflowInputParts?.Count ?? 0,
+            CountWorkflowInputFileRefs(workflowInputParts),
+            firstWorkflowInputFileRef?.FileId ?? string.Empty,
+            firstWorkflowInputFileRef?.ArtifactId ?? string.Empty,
+            firstWorkflowInputFileRef?.MediaType ?? string.Empty);
         var error = ProtoToolArguments.Require(request.WorkflowId, "workflow_id", "workflow_id is required.") ??
-                    ProtoToolArguments.RequirePayload(request.Inputs, "inputs");
+                    (isManagedWorkflowRuntime
+                        ? ProtoToolArguments.RequirePayload(request.Inputs, "inputs")
+                        : RequireWorkflowInputs(request.Inputs, workflowInputParts));
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
+        var inputs = request.Inputs!;
         var workflowYamls = request.WorkflowYamls.Count == 0
             ? null
             : request.WorkflowYamls
                 .Where(static item => !string.IsNullOrWhiteSpace(item))
                 .Select(static item => item.Trim())
                 .ToArray();
-        var workflowName = request.WorkflowId.Trim();
-        var actorId = string.IsNullOrWhiteSpace(request.ActorId) ? null : request.ActorId.Trim();
-        if (TryGetManagedWorkflowRuntimeContext(AgentToolRequestContext.Current, out var workflowRuntimeContext))
+        var workflowName = request.WorkflowId!.Trim();
+        if (isManagedWorkflowRuntime)
         {
             var managedScope = ResolveCallerScope(requireOwner: false);
             if (managedScope.Error != null)
@@ -425,6 +481,7 @@ public sealed class AevatarInvocationDispatcher
                 workflowRuntimeContext,
                 workflowName,
                 workflowYamls,
+                toolContext,
                 ct);
         }
 
@@ -434,6 +491,25 @@ public sealed class AevatarInvocationDispatcher
         var scope = workflowScope.Value!;
 
         var backgroundDelivery = ResolveWorkflowBackgroundDelivery(AgentToolRequestContext.Current);
+        if (wait == InvocationWaitMode.Complete)
+        {
+            // wait=complete is the caller's explicit promise to observe the run
+            // to its terminal state in-turn (via the observe tools) and compose
+            // the user-facing reply itself. Registering the background channel
+            // relay here would post the run's raw final output as a second,
+            // unformatted message — the exact behavior wait=complete opts out
+            // of. Skip the relay entirely; delivery-credential problems are
+            // then also irrelevant to this start.
+            if (backgroundDelivery.ShouldRegister)
+            {
+                _logger.LogInformation(
+                    "Channel workflow background delivery skipped: reason=wait_complete_caller_observes platform={Platform}",
+                    AgentToolRequestContext.Current?.Channel.Platform ?? string.Empty);
+            }
+
+            backgroundDelivery = WorkflowBackgroundDeliveryResolution.Disabled();
+        }
+
         if (backgroundDelivery.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(backgroundDelivery.Error), backgroundDelivery.Error);
         if (backgroundDelivery.ShouldRegister && _workflowRunDeliveryRegistrationPort is null)
@@ -448,12 +524,19 @@ public sealed class AevatarInvocationDispatcher
         var callerCredential = ResolveWorkflowCallerCredential(AgentToolRequestContext.Current);
         if (callerCredential.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(callerCredential.Error), callerCredential.Error);
+        var agentKeyReadinessError = await EnsureChannelAgentKeyReadyAsync(callerCredential.Value, ct);
+        if (agentKeyReadinessError != null)
+        {
+            return ToChatRunRequest(
+                chatRunRequest,
+                AevatarInvocationJson.Error(agentKeyReadinessError),
+                agentKeyReadinessError);
+        }
 
-        var metadata = BuildPayloadHeaders(request.Inputs.Headers);
+        var metadata = BuildPayloadHeaders(inputs.Headers);
         var sourceResolution = await ResolveWorkflowStartSourceAsync(
                 scope.ScopeId,
                 workflowName,
-                actorId,
                 workflowYamls,
                 ct)
             .ConfigureAwait(false);
@@ -461,11 +544,11 @@ public sealed class AevatarInvocationDispatcher
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(sourceResolution.Error), sourceResolution.Error);
 
         var command = new WorkflowChatRunRequest(
-            Prompt: request.Inputs.Prompt,
+            Prompt: inputs.Prompt,
             Source: sourceResolution.Source!,
             ExpectedExecutionMode: ExternalCapabilityExecutionMode.Interactive,
             SessionId: ResolveSessionId(),
-            InputParts: ToWorkflowInputParts(request.Inputs),
+            InputParts: workflowInputParts,
             Metadata: metadata,
             ScopeId: scope.ScopeId,
             LlmControl: ToWorkflowLlmControl(AgentToolRequestContext.Current),
@@ -483,17 +566,12 @@ public sealed class AevatarInvocationDispatcher
     private async ValueTask<WorkflowStartSourceResolution> ResolveWorkflowStartSourceAsync(
         string scopeId,
         string workflowName,
-        string? actorId,
         string[]? workflowYamls,
         CancellationToken ct)
     {
         if (workflowYamls is { Length: > 0 })
             return WorkflowStartSourceResolution.Success(
-                WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName, actorId));
-
-        if (!string.IsNullOrWhiteSpace(actorId))
-            return WorkflowStartSourceResolution.Success(
-                WorkflowChatSource.DefinitionActor(actorId, workflowName));
+                WorkflowChatSource.InlineYamlBundle(workflowYamls, workflowName));
 
         var scopeWorkflow = await TryResolveScopeWorkflowAsync(scopeId, workflowName, ct).ConfigureAwait(false);
         if (scopeWorkflow.Error != null)
@@ -551,10 +629,10 @@ public sealed class AevatarInvocationDispatcher
         CancellationToken ct)
     {
         WorkflowBackgroundDeliveryReservationContext? deliveryReservation = null;
+        var workflowCommandIdSeed = ResolveCommandId();
         string? workflowCorrelationIdSeed = null;
         if (backgroundDelivery.ShouldRegister)
         {
-            var workflowCommandIdSeed = ResolveCommandId();
             workflowCorrelationIdSeed = ResolveWorkflowCorrelationId(workflowCommandIdSeed);
             var reservation = await ReserveWorkflowRunBackgroundDeliveryAsync(
                     workflowCommandIdSeed,
@@ -574,7 +652,7 @@ public sealed class AevatarInvocationDispatcher
 
         command = command with
         {
-            CommandIdSeed = deliveryReservation?.Reservation.ExpectedWorkflowCommandId,
+            CommandIdSeed = workflowCommandIdSeed,
             CorrelationIdSeed = workflowCorrelationIdSeed,
             CompletionNotificationTarget = ToWorkflowCompletionNotificationTarget(deliveryReservation),
         };
@@ -659,6 +737,7 @@ public sealed class AevatarInvocationDispatcher
         var streamTopic = wait == InvocationWaitMode.Stream
             ? AevatarInvocationStreamTopics.ForActorRun(receipt.ActorId, receipt.CommandId)
             : string.Empty;
+        LogWorkflowStartAccepted(command, receipt, wait);
         WorkflowRunBackgroundDeliveryReceipt? workflowRunDeliveryReceipt = null;
         if (deliveryReservation != null)
         {
@@ -671,9 +750,27 @@ public sealed class AevatarInvocationDispatcher
                 .ConfigureAwait(false);
         }
 
+        var mutationStage = await _workflowStartReadModelObserver.ObserveAsync(
+                scopeId,
+                receipt.ActorId,
+                receipt.CommandId,
+                ct)
+            .ConfigureAwait(false)
+            ? AgentToolReceiptMutationStage.ReadModelObserved
+            : AgentToolReceiptMutationStage.Accepted;
+        if (mutationStage != AgentToolReceiptMutationStage.ReadModelObserved)
+        {
+            _logger.LogWarning(
+                "Workflow start canonical read-model observation was unavailable: code={Code} scopeId={ScopeId} actorId={ActorId} commandId={CommandId}",
+                WorkflowStartReadModelUnavailableCode,
+                scopeId,
+                receipt.ActorId,
+                receipt.CommandId);
+        }
+
         return ToChatRunRequest(chatRunRequest, new InvocationToolResult
         {
-            RunId = receipt.CommandId,
+            RunId = receipt.ActorId,
             Status = wait == InvocationWaitMode.Ack ? "accepted" : "streaming",
             StreamTopic = streamTopic,
             ActorId = receipt.ActorId,
@@ -681,6 +778,7 @@ public sealed class AevatarInvocationDispatcher
             CorrelationId = receipt.CorrelationId,
             Wait = wait,
             WorkflowRunDelivery = workflowRunDeliveryReceipt,
+            MutationStage = mutationStage,
         }, scopeId);
     }
 
@@ -692,17 +790,9 @@ public sealed class AevatarInvocationDispatcher
         AgentWorkflowRuntimeContext workflowRuntimeContext,
         string workflowName,
         IReadOnlyList<string>? workflowYamls,
+        AgentToolExecutionContext? toolContext,
         CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(request.ActorId))
-        {
-            var actorIdError = Error(
-                "invalid_arguments",
-                "actor_id is not accepted when a workflow runtime context manages child workflow start.",
-                "actor_id");
-            return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(actorIdError), actorIdError);
-        }
-
         var parentActorId = workflowRuntimeContext.ParentActorId!.Trim();
         var parentRunId = workflowRuntimeContext.ParentRunId!.Trim();
         var parentStepId = workflowRuntimeContext.ParentStepId!.Trim();
@@ -722,10 +812,25 @@ public sealed class AevatarInvocationDispatcher
                 : workflowRuntimeContext.RootRunId.Trim(),
             RequestedDepth = Math.Max(0, workflowRuntimeContext.Depth) + 1,
         };
-        managedStart.InputFileRefs.Add(request.Inputs.InputParts
+        var effectiveInputParts = ToEffectiveInputParts(request.Inputs, toolContext);
+        managedStart.InputFileRefs.Add(effectiveInputParts
             .Select(static part => ToWorkflowEventFileRef(part.FileRef))
             .Where(static fileRef => fileRef != null)
             .Select(static fileRef => fileRef!.Clone()));
+        var firstManagedFileRef = managedStart.InputFileRefs.FirstOrDefault();
+        _logger.LogWarning(
+            "Managed sub-workflow input file refs resolved: workflowId={WorkflowId} parentRunId={ParentRunId} parentStepId={ParentStepId} commandId={CommandId} explicitInputPartCount={ExplicitInputPartCount} explicitInputFileRefCount={ExplicitInputFileRefCount} ambientToolContextFileRefCount={AmbientToolContextFileRefCount} managedInputFileRefCount={ManagedInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            workflowName,
+            parentRunId,
+            parentStepId,
+            commandId,
+            request.Inputs.InputParts.Count,
+            CountExplicitInputFileRefs(request.Inputs),
+            toolContext?.InputFileRefs.Count ?? 0,
+            managedStart.InputFileRefs.Count,
+            firstManagedFileRef?.FileId ?? string.Empty,
+            firstManagedFileRef?.ArtifactId ?? string.Empty,
+            firstManagedFileRef?.MediaType ?? string.Empty);
 
         if (workflowYamls is { Count: > 0 })
         {
@@ -771,6 +876,7 @@ public sealed class AevatarInvocationDispatcher
             CommandId = commandId,
             CorrelationId = commandId,
             Wait = wait,
+            MutationStage = AgentToolReceiptMutationStage.Accepted,
         }, scope.ScopeId);
     }
 
@@ -915,6 +1021,14 @@ public sealed class AevatarInvocationDispatcher
                 chatRunRequest,
                 AevatarInvocationJson.Error(callerCredential.Error),
                 callerCredential.Error);
+        }
+        var agentKeyReadinessError = await EnsureChannelAgentKeyReadyAsync(callerCredential.Value, ct);
+        if (agentKeyReadinessError != null)
+        {
+            return ToChatRunRequest(
+                chatRunRequest,
+                AevatarInvocationJson.Error(agentKeyReadinessError),
+                agentKeyReadinessError);
         }
 
         ApplyWorkflowServiceInvocationContext(invocationRequest, callerCredential.Value);
@@ -1537,7 +1651,7 @@ public sealed class AevatarInvocationDispatcher
             Prompt: payload.Prompt,
             SessionId: ResolveSessionId(),
             Headers: headers,
-            InputParts: ToGAgentInputParts(payload),
+            InputParts: ToGAgentInputParts(payload, toolContext: null),
             Caller: new ServiceInvocationCaller
             {
                 TenantId = resolution.ScopeId,
@@ -1552,7 +1666,8 @@ public sealed class AevatarInvocationDispatcher
     private ServiceInvocationRequest BuildServiceInvocationRequest(
         PublishedServiceInvocationTarget resolution,
         InvocationPayload payload,
-        string endpointId)
+        string endpointId,
+        AgentToolExecutionContext? toolContext)
     {
         var identity = new ServiceIdentity
         {
@@ -1570,7 +1685,7 @@ public sealed class AevatarInvocationDispatcher
                 AgentToolRequestContext.Current ?? AgentToolExecutionContext.Empty),
             LlmControl = ToLlmControlPayload(AgentToolRequestContext.Current),
         };
-        chatRequest.InputParts.AddRange(ToChatInputParts(payload));
+        chatRequest.InputParts.AddRange(ToChatInputParts(payload, toolContext));
         var headers = BuildPayloadHeaders(payload.Headers);
         AppendMetadata(chatRequest.Metadata, headers);
         AppendMetadata(chatRequest.Headers, headers);
@@ -1596,6 +1711,18 @@ public sealed class AevatarInvocationDispatcher
         if (invocationRequest.Payload?.TryUnpack<ChatRequestEvent>(out var chatRequest) != true)
             return;
 
+        if (callerCredential?.DurableCallerCredential is { } durableCallerCredential)
+        {
+            chatRequest.CallerDurableCredential = durableCallerCredential.Clone();
+            chatRequest.ConnectorHttpAuthorization = string.Empty;
+            chatRequest.CallerSourceReadableNyxIdBearerToken = string.Empty;
+            chatRequest.CallerNyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.Unspecified;
+            ClearNyxIdBearerMaterial(chatRequest.ToolContext?.Credentials);
+            ClearNyxIdBearerMaterial(chatRequest.LlmControl);
+            invocationRequest.Payload = Any.Pack(chatRequest);
+            return;
+        }
+
         chatRequest.ConnectorHttpAuthorization = ToConnectorHttpAuthorization(callerCredential);
         chatRequest.CallerSourceReadableNyxIdBearerToken =
             callerCredential?.SourceReadableUserBearerToken?.Trim() ?? string.Empty;
@@ -1605,6 +1732,8 @@ public sealed class AevatarInvocationDispatcher
                 AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
             NyxIdCallerCredentialKind.ProxyDelegation =>
                 AgentToolNyxIdCredentialKindPayload.ProxyDelegation,
+            NyxIdCallerCredentialKind.AgentKey =>
+                AgentToolNyxIdCredentialKindPayload.AgentKey,
             _ => AgentToolNyxIdCredentialKindPayload.Unspecified,
         };
         if (!string.IsNullOrWhiteSpace(callerCredential?.SourceReadableUserBearerToken) &&
@@ -1613,6 +1742,28 @@ public sealed class AevatarInvocationDispatcher
             chatRequest.LlmControl.SenderNyxIdAccessToken = string.Empty;
         }
         invocationRequest.Payload = Any.Pack(chatRequest);
+    }
+
+    private static void ClearNyxIdBearerMaterial(AgentToolCredentialsPayload? credentials)
+    {
+        if (credentials == null)
+            return;
+
+        credentials.NyxIdAccessToken = string.Empty;
+        credentials.NyxIdOrgToken = string.Empty;
+        credentials.SenderNyxIdAccessToken = string.Empty;
+        credentials.SourceReadableNyxIdAccessToken = string.Empty;
+        credentials.NyxIdCredentialKind = AgentToolNyxIdCredentialKindPayload.Unspecified;
+    }
+
+    private static void ClearNyxIdBearerMaterial(LLMControlContextPayload? control)
+    {
+        if (control == null)
+            return;
+
+        control.NyxIdAccessToken = string.Empty;
+        control.NyxIdOrgToken = string.Empty;
+        control.SenderNyxIdAccessToken = string.Empty;
     }
 
     private static string ToConnectorHttpAuthorization(WorkflowRunCallerCredential? callerCredential)
@@ -1886,7 +2037,7 @@ public sealed class AevatarInvocationDispatcher
         };
         AppendMetadata(request.Headers, headers);
         AppendMetadata(request.Metadata, headers);
-        request.InputParts.Add(ToChatInputParts(payload));
+        request.InputParts.Add(ToChatInputParts(payload, toolContext: null));
         return request;
     }
 
@@ -1958,12 +2109,40 @@ public sealed class AevatarInvocationDispatcher
 
     private static WorkflowCallerCredentialResolution ResolveWorkflowCallerCredential(AgentToolExecutionContext? context)
     {
+        if (context?.DurableNyxIdCredential is { } inherited &&
+            IsDurableAgentKeyCandidate(context, inherited))
+        {
+            if (!IsValidDurableAgentKeyReference(inherited))
+            {
+                return WorkflowCallerCredentialResolution.Failed(Error(
+                    "workflow_agent_key_invalid",
+                    "The inherited workflow Agent Key handle is invalid."));
+            }
+
+            return WorkflowCallerCredentialResolution.Success(
+                new WorkflowRunCallerCredential(
+                    Kind: NyxIdCallerCredentialKind.AgentKey,
+                    DurableCallerCredential: inherited.Clone()));
+        }
+
+        var channelAgentKey = ResolveChannelAgentKeyCredential(context);
+        if (channelAgentKey.IsChannelRegistration)
+        {
+            return channelAgentKey.Credential == null
+                ? WorkflowCallerCredentialResolution.Failed(Error(
+                    "channel_agent_key_unavailable",
+                    "The channel bot Agent Key is unavailable."))
+                : WorkflowCallerCredentialResolution.Success(channelAgentKey.Credential);
+        }
+
         var credentialKind = context?.Credentials.NyxIdCredentialKind switch
         {
             AgentToolNyxIdCredentialKind.SourceReadableUserBearer =>
                 NyxIdCallerCredentialKind.SourceReadableUserBearer,
             AgentToolNyxIdCredentialKind.ProxyDelegation =>
                 NyxIdCallerCredentialKind.ProxyDelegation,
+            AgentToolNyxIdCredentialKind.AgentKey =>
+                NyxIdCallerCredentialKind.AgentKey,
             _ => NyxIdCallerCredentialKind.Unspecified,
         };
         if (WorkflowCallerCredentialTokens.IsInvalidCredentialSet(
@@ -1980,14 +2159,156 @@ public sealed class AevatarInvocationDispatcher
         if (parsed.IsMissing)
             return WorkflowCallerCredentialResolution.Success(null);
 
+        var supportsProxyDelegation = credentialKind is
+            NyxIdCallerCredentialKind.SourceReadableUserBearer or
+            NyxIdCallerCredentialKind.ProxyDelegation;
+        var authority = supportsProxyDelegation && context?.NyxIdAuthority.IsComplete == true
+            ? new WorkflowRunCallerNyxIdAuthority(
+                context.NyxIdAuthority.Platform!.Trim(),
+                context.NyxIdAuthority.Tenant?.Trim() ?? string.Empty,
+                context.NyxIdAuthority.ExternalUserId!.Trim(),
+                string.IsNullOrWhiteSpace(context.NyxIdAuthority.Scope)
+                    ? "proxy"
+                    : context.NyxIdAuthority.Scope.Trim(),
+                Normalize(context.SenderBinding.BindingId))
+            : null;
+        if (credentialKind == NyxIdCallerCredentialKind.SourceReadableUserBearer && authority != null)
+            credentialKind = NyxIdCallerCredentialKind.ProxyDelegation;
+
         var sourceReadableUserBearerToken = credentialKind == NyxIdCallerCredentialKind.ProxyDelegation
             ? AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context?.Credentials)
             : null;
         return WorkflowCallerCredentialResolution.Success(
             new WorkflowRunCallerCredential(
                 parsed.NormalizedBearerToken,
+                NyxIdAuthority: authority,
                 Kind: credentialKind,
                 SourceReadableUserBearerToken: sourceReadableUserBearerToken));
+    }
+
+    private static ChannelAgentKeyCredentialResolution ResolveChannelAgentKeyCredential(
+        AgentToolExecutionContext? context)
+    {
+        if (context?.ExecutionOwner.Kind != AgentToolExecutionOwnerKind.ChannelRegistration)
+            return ChannelAgentKeyCredentialResolution.NotChannelRegistration();
+
+        var registrationId = Normalize(context.ExecutionOwner.OwnerId);
+        var botRegistrationId = Normalize(context.Channel.BotRegistrationId);
+        var registrationScopeId = Normalize(context.Channel.RegistrationScopeId);
+        var channelCredential = context.Channel.WorkflowResultDeliveryCredential;
+        var reference = channelCredential?.SecretReference;
+        if (registrationId == null ||
+            botRegistrationId == null ||
+            !string.Equals(registrationId, botRegistrationId, StringComparison.Ordinal) ||
+            registrationScopeId == null ||
+            reference == null ||
+            string.IsNullOrWhiteSpace(reference.Ref) ||
+            !string.Equals(
+                reference.Purpose,
+                CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                StringComparison.Ordinal) ||
+            !string.Equals(reference.OwnerScopeKey, registrationScopeId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(channelCredential?.SubjectId))
+        {
+            return ChannelAgentKeyCredentialResolution.Missing();
+        }
+
+        return ChannelAgentKeyCredentialResolution.Available(
+            new WorkflowRunCallerCredential(
+                Kind: NyxIdCallerCredentialKind.AgentKey,
+                DurableCallerCredential: new DurableCallerCredentialRef
+                {
+                    Ref = reference.Ref,
+                    Purpose = reference.Purpose,
+                    OwnerScopeKey = reference.OwnerScopeKey,
+                    SubjectId = channelCredential.SubjectId.Trim(),
+                    SourceKind = DurableCallerCredentialSourceKind.ChannelRegistration,
+                    SecretReference = reference.Clone(),
+                }));
+    }
+
+    private static bool IsValidDurableAgentKeyReference(DurableCallerCredentialRef reference) =>
+        !string.IsNullOrWhiteSpace(reference.Ref) &&
+        !string.IsNullOrWhiteSpace(reference.OwnerScopeKey) &&
+        !string.IsNullOrWhiteSpace(reference.SubjectId) &&
+        IsAgentKeySourceAndPurpose(reference) &&
+        HasMatchingRequiredDescriptor(reference);
+
+    private static bool IsAgentKeySourceAndPurpose(DurableCallerCredentialRef reference) =>
+        DurableCallerAgentKeyContract.Matches(reference);
+
+    private static bool IsDurableAgentKeyCandidate(
+        AgentToolExecutionContext context,
+        DurableCallerCredentialRef reference) =>
+        reference.SourceKind is
+            DurableCallerCredentialSourceKind.ChannelRegistration or
+            DurableCallerCredentialSourceKind.WebhookBinding ||
+        string.Equals(
+            reference.Purpose,
+            CredentialSecretPurposes.ScheduledInvocationAgentKey,
+            StringComparison.Ordinal) ||
+        context.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.AgentKey;
+
+    private static bool HasMatchingRequiredDescriptor(DurableCallerCredentialRef reference)
+    {
+        if (reference.SourceKind == DurableCallerCredentialSourceKind.ScheduledDispatch &&
+            reference.SecretReference is null)
+        {
+            return true;
+        }
+
+        return reference.SecretReference is { } descriptor &&
+        !string.IsNullOrWhiteSpace(descriptor.Ref) &&
+        string.Equals(reference.Ref, descriptor.Ref, StringComparison.Ordinal) &&
+        string.Equals(reference.Purpose, descriptor.Purpose, StringComparison.Ordinal) &&
+        string.Equals(reference.OwnerScopeKey, descriptor.OwnerScopeKey, StringComparison.Ordinal);
+    }
+
+    private static bool IsValidChannelAgentKeyReference(DurableCallerCredentialRef reference) =>
+        reference.SourceKind == DurableCallerCredentialSourceKind.ChannelRegistration &&
+        IsValidDurableAgentKeyReference(reference);
+
+    private async Task<InvocationToolError?> EnsureChannelAgentKeyReadyAsync(
+        WorkflowRunCallerCredential? callerCredential,
+        CancellationToken ct)
+    {
+        var durable = callerCredential?.DurableCallerCredential;
+        if (durable?.SourceKind != DurableCallerCredentialSourceKind.ChannelRegistration)
+            return null;
+
+        if (!IsValidChannelAgentKeyReference(durable) || _channelAgentKeyReadinessPort is null)
+        {
+            return Error(
+                "channel_agent_key_not_ready",
+                ChannelAgentKeyNotReadyMessage);
+        }
+
+        ChannelNyxIdAgentKeyReadinessResult readiness;
+        try
+        {
+            readiness = await _channelAgentKeyReadinessPort.EnsureReadyAsync(durable.Clone(), ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Channel Agent Key readiness port failed before workflow dispatch: subjectId={SubjectId} scope={Scope}",
+                durable.SubjectId,
+                durable.OwnerScopeKey);
+            return Error("channel_agent_key_not_ready", ChannelAgentKeyNotReadyMessage);
+        }
+
+        return readiness.Ready
+            ? null
+            : Error(
+                string.IsNullOrWhiteSpace(readiness.FailureCode)
+                    ? "channel_agent_key_not_ready"
+                    : readiness.FailureCode,
+                ChannelAgentKeyNotReadyMessage);
     }
 
     private static bool TryGetManagedWorkflowRuntimeContext(
@@ -2041,8 +2362,10 @@ public sealed class AevatarInvocationDispatcher
         });
     }
 
-    private static IReadOnlyList<ChatContentPart> ToChatInputParts(InvocationPayload payload) =>
-        payload.InputParts.Select(static part => new ChatContentPart
+    private static IReadOnlyList<ChatContentPart> ToChatInputParts(
+        InvocationPayload payload,
+        AgentToolExecutionContext? toolContext) =>
+        ToEffectiveInputParts(payload, toolContext).Select(static part => new ChatContentPart
         {
             Kind = part.Kind switch
             {
@@ -2061,12 +2384,15 @@ public sealed class AevatarInvocationDispatcher
             FileRef = part.FileRef?.Clone(),
         }).ToArray();
 
-    private static IReadOnlyList<GAgentDraftRunInputPart>? ToGAgentInputParts(InvocationPayload payload)
+    private static IReadOnlyList<GAgentDraftRunInputPart>? ToGAgentInputParts(
+        InvocationPayload payload,
+        AgentToolExecutionContext? toolContext)
     {
-        if (payload.InputParts.Count == 0)
+        var inputParts = ToEffectiveInputParts(payload, toolContext);
+        if (inputParts.Count == 0)
             return null;
 
-        return payload.InputParts.Select(static part => new GAgentDraftRunInputPart
+        return inputParts.Select(static part => new GAgentDraftRunInputPart
         {
             Kind = part.Kind switch
             {
@@ -2086,12 +2412,42 @@ public sealed class AevatarInvocationDispatcher
         }).ToArray();
     }
 
-    private static IReadOnlyList<WorkflowChatInputPart>? ToWorkflowInputParts(InvocationPayload payload)
+    private static InvocationToolError? RequireWorkflowInputs(
+        InvocationPayload? payload,
+        IReadOnlyList<WorkflowChatInputPart>? inputParts)
     {
-        if (payload.InputParts.Count == 0)
+        if (payload == null)
+        {
+            return new InvocationToolError
+            {
+                Code = "invalid_arguments",
+                Message = "inputs is required.",
+                Field = "inputs",
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.Prompt) && inputParts is not { Count: > 0 })
+        {
+            return new InvocationToolError
+            {
+                Code = "invalid_arguments",
+                Message = "inputs.prompt or inputs.input_parts is required.",
+                Field = "inputs",
+            };
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<WorkflowChatInputPart>? ToWorkflowInputParts(
+        InvocationPayload payload,
+        AgentToolExecutionContext? toolContext)
+    {
+        var inputParts = ToEffectiveInputParts(payload, toolContext);
+        if (inputParts.Count == 0)
             return null;
 
-        return payload.InputParts.Select(static part => new WorkflowChatInputPart
+        return inputParts.Select(static part => new WorkflowChatInputPart
         {
             Kind = part.Kind switch
             {
@@ -2110,6 +2466,56 @@ public sealed class AevatarInvocationDispatcher
             FileRef = ToWorkflowFileRef(part.FileRef),
         }).ToArray();
     }
+
+    private static bool HasExplicitFileRef(InvocationPayload payload) =>
+        payload.InputParts.Any(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef));
+
+    private static int CountExplicitInputFileRefs(InvocationPayload? payload) =>
+        payload?.InputParts.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static int CountWorkflowInputFileRefs(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static FileArtifactRef? FirstWorkflowInputFileRef(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?
+            .Select(static part => part.FileRef)
+            .FirstOrDefault(static fileRef => fileRef is not null && HasFileRefIdentity(fileRef));
+
+    private static IReadOnlyList<InvocationContentPart> ToEffectiveInputParts(
+        InvocationPayload payload,
+        AgentToolExecutionContext? toolContext)
+    {
+        if (HasExplicitFileRef(payload) || toolContext is null || toolContext.InputFileRefs.Count == 0)
+            return payload.InputParts;
+
+        var parts = new List<InvocationContentPart>(payload.InputParts.Count + toolContext.InputFileRefs.Count);
+        parts.AddRange(payload.InputParts);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var fileRef in toolContext.InputFileRefs)
+        {
+            if (!HasFileRefIdentity(fileRef))
+                continue;
+
+            var key = FileRefIdentityKey(fileRef);
+            if (!seen.Add(key))
+                continue;
+
+            parts.Add(new InvocationContentPart
+            {
+                Kind = InvocationContentPartKind.File,
+                MediaType = fileRef.MediaType ?? string.Empty,
+                Name = fileRef.FileName ?? string.Empty,
+                FileRef = fileRef.Clone(),
+            });
+        }
+
+        return parts;
+    }
+
+    private static string FileRefIdentityKey(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId)
+            ? $"artifact:{fileRef.ArtifactId.Trim()}"
+            : $"file:{fileRef.FileId?.Trim()}";
 
     private static FileArtifactRef? ToWorkflowFileRef(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
         fileRef is null || !HasFileRefIdentity(fileRef)
@@ -2140,6 +2546,10 @@ public sealed class AevatarInvocationDispatcher
             };
 
     private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static bool HasFileRefIdentity(FileArtifactRef fileRef) =>
         !string.IsNullOrWhiteSpace(fileRef.FileId) ||
         !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
@@ -2178,6 +2588,14 @@ public sealed class AevatarInvocationDispatcher
             ? InvocationWaitMode.Stream
             : wait;
 
+    private static InvocationToolError? RejectMemberCompleteWait(InvocationWaitMode wait) =>
+        wait == InvocationWaitMode.Complete
+            ? Error(
+                "unsupported_wait_mode",
+                "aevatar_invoke_member cannot wait for terminal completion. Use wait=ack or wait=stream once, then call aevatar_observe_run with the returned service_id and run_id.",
+                "wait")
+            : null;
+
     private static string ResolveMemberEndpointId(string endpointId) =>
         Normalize(endpointId) ?? DefaultMemberEndpointId;
 
@@ -2185,6 +2603,32 @@ public sealed class AevatarInvocationDispatcher
         Normalize(AgentToolRequestContext.CallId)
         ?? Normalize(AgentToolRequestContext.RequestId)
         ?? Guid.NewGuid().ToString("N");
+
+    private void LogWorkflowStartAccepted(
+        WorkflowChatRunRequest command,
+        WorkflowChatRunAcceptedReceipt receipt,
+        InvocationWaitMode wait)
+    {
+        var inputFileRefs = command.InputParts?
+            .Where(static part => part.FileRef is not null)
+            .Select(static part => part.FileRef!)
+            .ToArray() ?? [];
+        var firstFileRef = inputFileRefs.FirstOrDefault();
+
+        _logger.LogWarning(
+            "Aevatar workflow start accepted. workflowId={WorkflowId} workflowRunId={WorkflowRunId} workflowCommandId={WorkflowCommandId} correlationId={CorrelationId} wait={Wait} scopeId={ScopeId} inputPartCount={InputPartCount} inputFileRefCount={InputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            command.Source.WorkflowName ?? string.Empty,
+            receipt.ActorId,
+            receipt.CommandId,
+            receipt.CorrelationId,
+            wait.ToString(),
+            command.ScopeId ?? string.Empty,
+            command.InputParts?.Count ?? 0,
+            inputFileRefs.Length,
+            firstFileRef?.FileId ?? string.Empty,
+            firstFileRef?.ArtifactId ?? string.Empty,
+            firstFileRef?.MediaType ?? string.Empty);
+    }
 
     private static string ResolveWorkflowCorrelationId(string commandId) =>
         new[]
@@ -2305,6 +2749,18 @@ public sealed class AevatarInvocationDispatcher
 
         public static WorkflowCallerCredentialResolution Failed(InvocationToolError error) =>
             new(null, error);
+    }
+
+    private sealed record ChannelAgentKeyCredentialResolution(
+        bool IsChannelRegistration,
+        WorkflowRunCallerCredential? Credential)
+    {
+        public static ChannelAgentKeyCredentialResolution NotChannelRegistration() => new(false, null);
+
+        public static ChannelAgentKeyCredentialResolution Missing() => new(true, null);
+
+        public static ChannelAgentKeyCredentialResolution Available(WorkflowRunCallerCredential credential) =>
+            new(true, credential);
     }
 
     private sealed record WorkflowBackgroundDeliveryResolution(

@@ -375,6 +375,14 @@ jobs:
       - name: Projection Provider E2E Smoke Test
         run: bash tools/ci/projection_provider_e2e_smoke.sh
 
+      - name: Upload workflow report-artifact benchmark
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-report-artifact-write-cost
+          path: artifacts/ci/workflow-report-artifact-write-cost.txt
+          if-no-files-found: warn
+
   kafka-transport-integration:
     # Refactor (iter16/cluster-ci-systemic-refactor):
     #   Old pattern: kafka-transport-integration skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or kafka_runtime changes
@@ -449,7 +457,10 @@ jobs:
         needs.changes.outputs.docs_only == 'false'
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Full coverage takes 34-35 minutes after a roughly 10-minute restore/build,
+    # then still needs time to upload the report. Keep the fail-fast guard while
+    # leaving enough headroom for runner variance and cleanup.
+    timeout-minutes: 55
     services:
       agent-tool-admission-redis:
         image: redis:7.2.3

@@ -39,7 +39,8 @@ public sealed class AIAbstractionsProtoCoverageTests
                 "org-alpha",
                 "sender-alpha",
                 AgentToolNyxIdCredentialKind.ProxyDelegation,
-                "source-alpha"),
+                "source-alpha",
+                AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
         }).ToPayload();
 
         var copy = AgentToolExecutionContextMapper.FromPayload(
@@ -49,6 +50,8 @@ public sealed class AIAbstractionsProtoCoverageTests
         copy.Credentials.NyxIdOrgToken.Should().Be("org-alpha");
         copy.Credentials.SenderNyxIdAccessToken.Should().Be("sender-alpha");
         copy.Credentials.SourceReadableNyxIdAccessToken.Should().Be("source-alpha");
+        copy.Credentials.NyxIdCredentialAuthority.Should().Be(
+            AgentToolNyxIdCredentialAuthority.ToolExecutionContext);
     }
 
     [Fact]
@@ -133,6 +136,7 @@ public sealed class AIAbstractionsProtoCoverageTests
             ApprovalMode = AgentToolReceiptApprovalMode.AlwaysRequire,
             IsDestructive = false,
             SideEffectKind = "ornn.publish.skill",
+            Effect = AgentToolReceiptEffect.Mutating,
             SubjectKind = "ornn.skill",
             SubjectId = "skill-1",
             SubjectVersion = "1.0",
@@ -153,6 +157,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         var receiptRoundTrip = RoundTrip(receipt, AgentToolReceipt.Parser);
         receiptRoundTrip.SubjectId.Should().Be("skill-1");
         receiptRoundTrip.SubjectHash.Should().Be("hash-1");
+        receiptRoundTrip.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
         receiptRoundTrip.ManagedWorkflowHandoff.InvocationId.Should().Be("invoke-1");
         var request = RoundTrip(new ChatRequestEvent
         {

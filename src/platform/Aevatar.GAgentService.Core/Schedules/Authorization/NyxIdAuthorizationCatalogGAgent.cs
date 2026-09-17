@@ -419,7 +419,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             ? state.Clone()
             : new NyxIdAuthorizationCatalogState();
         var updatesOwnerCatalogStamp = coverageKind == NyxIdAuthorizationCatalogObservationCoverageKind.FullOwner ||
-                                       !state.Activated;
+                                       !HasOwnerCatalogStamp(state);
         next.Owner = evt.Owner.Clone();
         next.ObservedAt = updatesOwnerCatalogStamp ? evt.ObservedAt.Clone() : state.ObservedAt?.Clone();
         next.FreshUntil = updatesOwnerCatalogStamp ? evt.FreshUntil.Clone() : state.FreshUntil?.Clone();
@@ -450,6 +450,13 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             : evt.GatewayLlmTarget?.Clone();
         return next;
     }
+
+    private static bool HasOwnerCatalogStamp(NyxIdAuthorizationCatalogState state) =>
+        state.ObservedAt != null &&
+        state.FreshUntil != null &&
+        !string.IsNullOrWhiteSpace(state.ContractVersion) &&
+        !string.IsNullOrWhiteSpace(state.PolicyVersion) &&
+        state.EvaluatedAt != null;
 
     private static IReadOnlyList<NyxIdAuthorizationServiceEvidence> MergeServices(
         IEnumerable<NyxIdAuthorizationServiceEvidence> existingServices,
@@ -787,6 +794,23 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         {
             throw new InvalidOperationException(
                 "Catalog resource owner identity must use NyxID authority.");
+        }
+
+        if (NyxIdAuthorizationCatalogIntegrity.HasServiceAuthorityStamp(service))
+        {
+            var authorityWindow =
+                NyxIdAuthorizationCatalogIntegrity.ResolveServiceAuthorityStamp(service);
+            if (authorityWindow.Status ==
+                NyxIdAuthorizationServiceAuthorityWindowStatus.Incomplete)
+            {
+                throw new InvalidOperationException(
+                    "Catalog service authority evidence is incomplete.");
+            }
+            if (!authorityWindow.Ready)
+            {
+                throw new InvalidOperationException(
+                    "Catalog service authority evidence is invalid.");
+            }
         }
 
         string? previousNodeId = null;

@@ -236,6 +236,19 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
         CancellationToken ct)
     {
         var inputParts = await BuildAttachmentInputPartsAsync(request, ct).ConfigureAwait(false);
+        var firstFileRef = FirstInputFileRef(inputParts);
+        _logger.LogWarning(
+            "Workflow draft-run command input file refs resolved. runId={RunId} correlation={CorrelationId} workflowName={WorkflowName} scopeId={ScopeId} activityAttachmentCount={ActivityAttachmentCount} commandInputPartCount={CommandInputPartCount} commandInputFileRefCount={CommandInputFileRefCount} firstFileId={FirstFileId} firstArtifactId={FirstArtifactId} firstMediaType={FirstMediaType}",
+            request.RunId,
+            request.CorrelationId,
+            request.WorkflowSource?.WorkflowName ?? string.Empty,
+            request.WorkflowSource?.ScopeId ?? string.Empty,
+            request.Activity?.Content?.Attachments.Count ?? 0,
+            inputParts?.Count ?? 0,
+            CountInputFileRefs(inputParts),
+            firstFileRef?.FileId ?? string.Empty,
+            firstFileRef?.ArtifactId ?? string.Empty,
+            firstFileRef?.MediaType ?? string.Empty);
         return BuildCommand(request, inputParts);
     }
 
@@ -311,6 +324,19 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
                 throw new WorkflowAttachmentIngressException("ingress_failed", ex);
             }
 
+            _logger.LogWarning(
+                "Workflow draft-run attachment ingested. runId={RunId} correlation={CorrelationId} workflowName={WorkflowName} scopeId={ScopeId} attachmentKind={AttachmentKind} resourceKey={ResourceKey} fileId={FileId} artifactId={ArtifactId} mediaType={MediaType} sizeBytes={SizeBytes}",
+                request.RunId,
+                request.CorrelationId,
+                request.WorkflowSource?.WorkflowName ?? string.Empty,
+                request.WorkflowSource?.ScopeId ?? string.Empty,
+                attachment.Kind,
+                resourceKey,
+                ingress.FileRef.FileId ?? string.Empty,
+                ingress.FileRef.ArtifactId ?? string.Empty,
+                ingress.FileRef.MediaType ?? string.Empty,
+                ingress.FileRef.SizeBytes);
+
             inputParts.Add(WorkflowChatInputParts.FromFileRef(
                 ingress.FileRef,
                 attachment.Kind == AttachmentKind.Image
@@ -320,6 +346,16 @@ public sealed class ChannelWorkflowDraftRunInteractionPort : IChannelWorkflowDra
 
         return inputParts;
     }
+
+    private static int CountInputFileRefs(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.Count(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef)) ?? 0;
+
+    private static FileArtifactRef? FirstInputFileRef(IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        inputParts?.FirstOrDefault(static part => part.FileRef is not null && HasFileRefIdentity(part.FileRef))?.FileRef;
+
+    private static bool HasFileRefIdentity(FileArtifactRef fileRef) =>
+        !string.IsNullOrWhiteSpace(fileRef.FileId) ||
+        !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
 
     private ILarkNyxClient ResolveLarkResourceDownloadClient(NeedsWorkflowDraftRunEvent request)
     {

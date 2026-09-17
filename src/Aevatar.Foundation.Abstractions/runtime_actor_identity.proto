@@ -9,6 +9,31 @@ package aevatar.runtime;
 
 option csharp_namespace = "Aevatar.Foundation.Abstractions.Runtime";
 
+import "runtime_fleet_capability.proto";
+import "google/protobuf/timestamp.proto";
+
+// Immutable evidence that this actor adopted one state schema while the
+// matching fleet gate was valid. Live gate expiry or revocation blocks later
+// adoptions but does not invalidate an already persisted receipt.
+message RuntimeActorStateSchemaAdoptionReceipt {
+  int32 state_schema_version = 1;
+  RuntimeFleetCapability required_capability = 2;
+  string required_contract_id = 3;
+  int32 required_contract_version = 4;
+  int64 capability_epoch = 5;
+  int64 authority_state_version = 6;
+  int64 membership_epoch = 7;
+  string deployment_revision = 8;
+  google.protobuf.Timestamp adopted_at = 9;
+  string authority_actor_id = 10;
+  string membership_digest = 11;
+  // OPEN is a fresh membership-bound admission. QUIESCED is historical terminal evidence used
+  // only by explicitly declared bridge migrations. UNSPECIFIED is retained for pre-field OPEN
+  // receipts already persisted before this field existed.
+  RuntimeFleetCapabilityGateStatus evidence_status = 12;
+  string quiescence_transition_id = 13;
+}
+
 // Stable business identity for an actor row, persisted alongside the
 // runtime grain state envelope. Activation uses this primary kind to find
 // an implementation.
@@ -29,4 +54,20 @@ message RuntimeActorIdentity {
   // in issue #500 and reads this value off the runtime envelope.
   int32 state_schema_version = 2;
 
+  // Runtime-owned immutable receipts for state-schema cutovers. Business
+  // commands cannot supply or replace these entries.
+  repeated RuntimeActorStateSchemaAdoptionReceipt state_schema_adoptions = 4;
+
+}
+
+// Runtime-owned atomic persistence row used by adapters which do not already
+// have an envelope around actor identity and business-state snapshots. The
+// business state remains a typed protobuf payload identified by
+// state_contract_type_name; adapters must replace this row atomically during
+// schema adoption.
+message RuntimeActorStateEnvelope {
+  RuntimeActorIdentity identity = 1;
+  string state_contract_type_name = 2;
+  bytes state_snapshot = 3;
+  int64 state_snapshot_version = 4;
 }

@@ -269,10 +269,12 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
         {
             StepId = node.StepId,
             RunId = node.RunId,
+            ExecutionId = node.ExecutionId,
             Success = stageResult.Success,
             Output = stageResult.Output,
             Error = stageResult.Error,
             WorkerId = stageResult.WorkerId,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
 
         foreach (var (key, value) in stageResult.Annotations)
@@ -299,8 +301,10 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
         {
             StepId = node.StepId,
             RunId = node.RunId,
+            ExecutionId = node.ExecutionId,
             Success = false,
             Error = error,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         }, TopologyAudience.Self, ct);
 
         CleanupNode(BuildKey(node.RunId, node.StepId), state);
@@ -423,6 +427,7 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
         {
             RunId = runId,
             StepId = request.StepId,
+            ExecutionId = request.ExecutionId,
             OriginalTask = request.Input,
             Depth = ParseInt(parameters, "depth", 0, 0, 32),
             MaxDepth = ParseInt(parameters, "max_depth", 3, 0, 32),

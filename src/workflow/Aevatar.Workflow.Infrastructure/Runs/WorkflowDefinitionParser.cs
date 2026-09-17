@@ -28,7 +28,18 @@ internal sealed class WorkflowDefinitionParser : IWorkflowDefinitionParser
 
     public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
         string workflowYaml,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        ParseWorkflowYamlCoreAsync(workflowYaml, requireCurrentToolCatalogPolicy: false, ct);
+
+    public Task<WorkflowYamlParseResult> ParseWorkflowYamlForPublicationAsync(
+        string workflowYaml,
+        CancellationToken ct = default) =>
+        ParseWorkflowYamlCoreAsync(workflowYaml, requireCurrentToolCatalogPolicy: true, ct);
+
+    private Task<WorkflowYamlParseResult> ParseWorkflowYamlCoreAsync(
+        string workflowYaml,
+        bool requireCurrentToolCatalogPolicy,
+        CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(workflowYaml))
@@ -43,6 +54,7 @@ internal sealed class WorkflowDefinitionParser : IWorkflowDefinitionParser
                 {
                     RequireKnownStepTypes = true,
                     KnownStepTypes = _knownStepTypes,
+                    RequireExplicitLlmAgentToolScopes = requireCurrentToolCatalogPolicy,
                 },
                 availableWorkflowNames: null);
             if (errors.Count > 0)
@@ -95,7 +107,24 @@ internal sealed class WorkflowDefinitionParser : IWorkflowDefinitionParser
 
     public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
         IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        await ParseInlineWorkflowBundleCoreAsync(
+            inlineWorkflowDocuments,
+            requireCurrentToolCatalogPolicy: false,
+            ct).ConfigureAwait(false);
+
+    public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleForPublicationAsync(
+        IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+        CancellationToken ct = default) =>
+        await ParseInlineWorkflowBundleCoreAsync(
+            inlineWorkflowDocuments,
+            requireCurrentToolCatalogPolicy: true,
+            ct).ConfigureAwait(false);
+
+    private async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleCoreAsync(
+        IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+        bool requireCurrentToolCatalogPolicy,
+        CancellationToken ct)
     {
         if (inlineWorkflowDocuments.Count == 0)
             return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
@@ -111,7 +140,10 @@ internal sealed class WorkflowDefinitionParser : IWorkflowDefinitionParser
             if (string.IsNullOrWhiteSpace(yaml))
                 return WorkflowInlineYamlBundleParseResult.Invalid($"workflowYamls[{i}] is required.");
 
-            var parseResult = await ParseWorkflowYamlAsync(yaml, ct).ConfigureAwait(false);
+            var parseResult = await ParseWorkflowYamlCoreAsync(
+                yaml,
+                requireCurrentToolCatalogPolicy,
+                ct).ConfigureAwait(false);
             if (!parseResult.Succeeded)
                 return WorkflowInlineYamlBundleParseResult.Invalid(
                     parseResult.Error,

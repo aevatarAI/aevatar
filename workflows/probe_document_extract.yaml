@@ -3,7 +3,7 @@ description: >-
   Capability probe — read-file/document_extract: the user sends a file (PDF/DOCX/txt/json/md/csv/png/jpeg)
   plus a trigger, the workflow's document_extract step extracts its text and returns it as the run
   output. Used to verify the chat-attachment file -> workflow document_extract path end to end
-  before running real file-dependent workflows (petty-cash / invoice / resume / reimbursement).
+  before running file-dependent workflows supplied by an external skill or deployment package.
 when_to_use: Use to verify that an attached file reaches a workflow document_extract step and its text is extracted (returns extracted text, not a fileRef/argument error).
 
 # KNOWN BOUNDARY being probed (2026-06-12): the chat file's fileRef is carried on the run's
@@ -25,6 +25,7 @@ roles:
       Output STRICT JSON only, no markdown fences: {"extracted": true|false, "preview":
       "<first 200 chars of extracted text, else empty>", "note": "<error text verbatim if extraction
       failed, else empty>"}. Never invent file content.
+    allowed_tools: []
 
 steps:
   - id: extract_file

@@ -15,8 +15,10 @@ public sealed class NyxIdCatalogTool : INyxIdBuiltInTool
     public string Name => "nyxid_catalog";
 
     public string Description =>
-        "Browse available service templates in the NyxID catalog. " +
-        "Provide 'slug' to get details for a specific service, or omit to list all.";
+        "Browse available service templates in the NyxID catalog. Discovery only: for a connect, " +
+        "add, or authorize request, resolve the exact slug here when needed and then call " +
+        "nyxid_require_service; do not finish the request with a catalog result. Provide 'slug' " +
+        "to get details for a specific service, or omit to list all.";
 
     public string ParametersSchema => """
         {

@@ -27,7 +27,7 @@ public sealed class LarkAgentToolSource : IAgentToolSource
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_nyxOptions.BaseUrl))
+        if (string.IsNullOrWhiteSpace(_nyxOptions.EffectiveTransportBaseUrl))
         {
             _logger.LogDebug("NyxID base URL not configured, skipping typed Lark tools");
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);

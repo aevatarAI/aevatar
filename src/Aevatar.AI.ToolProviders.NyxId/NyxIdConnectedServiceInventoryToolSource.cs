@@ -36,7 +36,7 @@ public sealed class NyxIdConnectedServiceInventoryToolSource : IAgentToolSource
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(_options.EffectiveTransportBaseUrl))
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
 
         var userToken = AgentToolRequestContext.NyxIdAccessToken;

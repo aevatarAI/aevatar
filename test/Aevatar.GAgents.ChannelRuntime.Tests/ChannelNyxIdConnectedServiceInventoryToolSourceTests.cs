@@ -13,6 +13,7 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
+[Collection(ChannelRuntimeTestCollections.NyxIdInventoryRequestContext)]
 public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 {
     [Fact]
@@ -380,6 +381,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                           "service_id": "catalog-github",
                           "label": "GitHub",
                           "is_active": true,
+                          "connected": true,
+                          "status": "active",
                           "credential_source": { "type": "personal" }
                         }
                       ]

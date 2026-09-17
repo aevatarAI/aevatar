@@ -1,4 +1,3 @@
-using Aevatar.GAgents.Scheduled;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.AI.Abstractions;
@@ -11,32 +10,34 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
-using Aevatar.GAgents.Channel.Abstractions;
-using FluentAssertions;
-using NSubstitute;
-using Xunit;
-using Aevatar.GAgents.Channel.NyxIdRelay;
-using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.Channel.Identity.Abstractions;
-using Aevatar.GAgents.NyxidChat;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
-using UglyToad.PdfPig.Core;
-using UglyToad.PdfPig.Fonts.Standard14Fonts;
-using UglyToad.PdfPig.Content;
-using UglyToad.PdfPig.Writer;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
+using FluentAssertions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
+using UglyToad.PdfPig.Content;
+using UglyToad.PdfPig.Core;
+using UglyToad.PdfPig.Fonts.Standard14Fonts;
+using UglyToad.PdfPig.Writer;
+using Xunit;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
 using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
+[Collection(ChannelRuntimeTestCollections.NyxIdInventoryRequestContext)]
 public sealed class ConversationReplyGeneratorTests
 {
     private static readonly IBuiltInPromptFloorProvider BuiltInPromptFloorProvider =
@@ -666,6 +667,76 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task BuildStepPlanAsync_WithTypedLarkCallbackAttachmentWithoutRawPayload_ExposesFileRefToTools()
+    {
+        var callbackBody = """
+            {
+              "message_id": "msg-lark-typed-image-1",
+              "platform": "lark",
+              "agent": { "api_key_id": "api-key-1" },
+              "conversation": { "id": "route-uuid", "platform_id": "oc_group_1", "type": "group" },
+              "sender": { "platform_id": "ou_user_1", "display_name": "User One" },
+              "content": {
+                "type": "image",
+                "text": "/invoice-approval",
+                "attachments": [
+                  {
+                    "content_type": "image",
+                    "url": "https://open.larksuite.com/open-apis/im/v1/messages/om_typed_image_1/resources/img_typed_1?type=image",
+                    "platform_message_id": "om_typed_image_1",
+                    "image_key": "img_typed_1",
+                    "filename": "invoice.png",
+                    "mime_type": "image/png",
+                    "size_bytes": 3
+                  }
+                ]
+              }
+            }
+            """;
+        var parsed = new NyxIdRelayTransport().Parse(Encoding.UTF8.GetBytes(callbackBody));
+        parsed.Success.Should().BeTrue();
+
+        var imageBytes = new byte[] { 9, 8, 7 };
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/png", "invoice.png"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
+
+        var plan = await generator.BuildStepPlanAsync(
+            parsed.Activity!,
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: AgentToolExecutionContext.Empty,
+            priorHistory: null,
+            new ChatAttachmentInputContext([], "user-token"),
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        var fileRef = plan.ToolContext.InputFileRefs.Should().ContainSingle().Subject;
+        fileRef.FileId.Should().Be("wf-file-1");
+        fileRef.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        fileRef.SourceKind.Should().Be(Aevatar.AI.Abstractions.ChatFileSourceKind.ChatInput);
+        fileRef.SourceMessageId.Should().Be("om_typed_image_1");
+        fileRef.SourceResourceKey.Should().Be("img_typed_1");
+        fileRef.FileName.Should().Be("invoice.png");
+        fileRef.MediaType.Should().Be("image/png");
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            "om_typed_image_1",
+            "img_typed_1",
+            LarkMessageResourceKind.Image));
+    }
+
+    [Fact]
     public async Task BuildStepPlanAsync_WithRecentLarkPdfAttachment_PersistsFileRefWithoutExtractedText()
     {
         var pdfBytes = BuildSimplePdf("confidential extracted document text");
@@ -781,7 +852,7 @@ public sealed class ConversationReplyGeneratorTests
             Id = "msg-follow-up-provider",
             ChannelId = ChannelId.From("lark"),
             Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
-            Content = new MessageContent { Text = "/invoice-approval" },
+            Content = new MessageContent { Text = "/project-summary" },
         };
         var attachmentContext = new ChatAttachmentInputContext(
             [
@@ -897,18 +968,27 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task BuildStepPlanAsync_InNyxIdChatTurn_GatesLegacyHumanSessionTools()
+    public async Task BuildStepPlanAsync_InNyxIdChatTurn_UsesPinnedSourceAndAllowsHumanSessionReads()
     {
-        var toolSource = new StubToolSource(
+        var registeredSource = new StubToolSource(
+            new StubTool("newly_registered_tool"));
+        var pinnedSource = new StubToolSource(
             new HumanSessionStubTool("nyxid_services"),
             new HumanSessionStubTool("nyxid_api_keys"),
             new StubTool("nyxid_require_service"));
+        var inputSource = new StubToolSource(new StubTool("ask_user"));
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
             BuiltInPromptFloorProvider,
-            toolSources: [toolSource]);
+            toolSources: [registeredSource],
+            nyxIdChatToolSources: [pinnedSource, inputSource]);
         var toolContext = AgentToolExecutionContext.Empty with
         {
+            Credentials = new AgentToolCredentials(
+                "runtime-token",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
             Channel = new AgentToolChannelContext(
                 NyxIdChatServiceDefaults.ServiceId,
                 null,
@@ -933,8 +1013,301 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         var toolNames = OfferedToolNames(plan);
-        toolNames.Should().Contain("nyxid_require_service");
-        toolNames.Should().NotContain(["nyxid_services", "nyxid_api_keys"]);
+        toolNames.Should().BeEquivalentTo(
+            "nyxid_services",
+            "nyxid_api_keys",
+            "nyxid_require_service",
+            "ask_user");
+        toolNames.Should().NotContain("newly_registered_tool");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_InNyxIdChatTurnWithoutHumanSession_HidesPinnedReads()
+    {
+        var pinnedSource = new StubToolSource(
+            new HumanSessionStubTool("nyxid_status"),
+            new StubTool("nyxid_require_service"));
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            toolSources: [new StubToolSource(new StubTool("newly_registered_tool"))],
+            nyxIdChatToolSources: [pinnedSource]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-no-human-session",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-alpha" },
+                Content = new MessageContent { Text = "查看状态" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        OfferedToolNames(plan).Should().ContainSingle().Which.Should().Be("nyxid_require_service");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_InUnprofiledNyxIdChatTurnWithHumanSession_ShouldExposeExactPinnedProductionCatalog()
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        using var apiClient = new NyxIdApiClient(options, new HttpClient());
+        var localSkillCatalog = new LocalSkillCatalog();
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            localSkillCatalog: localSkillCatalog,
+            nyxIdChatToolSources:
+            [
+                new NyxIdAssistantToolSource(options, apiClient),
+                new StubToolSource(new StubTool("ask_user")),
+                new SkillsAgentToolSource(
+                    new SkillsOptions(),
+                    new SkillDiscovery(),
+                    localSkillCatalog),
+            ]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "source-readable-bearer",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-production-human",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-production" },
+                Content = new MessageContent { Text = "查看 NyxID 状态" },
+            },
+            new Dictionary<string, string>(),
+            Control(token: "source-readable-bearer"),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        OfferedToolNames(plan).Should().BeEquivalentTo(
+            "ask_user",
+            "nyxid_account",
+            "nyxid_api_keys",
+            "nyxid_approvals",
+            "nyxid_catalog",
+            "nyxid_developer_apps",
+            "nyxid_durable_grants",
+            "nyxid_endpoints",
+            "nyxid_external_keys",
+            "nyxid_llm_status",
+            "nyxid_mfa",
+            "nyxid_node_credentials",
+            "nyxid_nodes",
+            "nyxid_notifications",
+            "nyxid_oauth_bindings",
+            "nyxid_orgs",
+            "nyxid_profile",
+            "nyxid_providers",
+            "nyxid_require_service",
+            "nyxid_request_key_create",
+            "nyxid_request_key_rotate",
+            "nyxid_service_pools",
+            "nyxid_services",
+            "nyxid_sessions",
+            "nyxid_status",
+            "use_skill");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_InNyxIdChatTurnWithGenericNyxIdSource_ShouldExcludeChannelEventMutation()
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        using var apiClient = new NyxIdApiClient(options, new HttpClient());
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            nyxIdChatToolSources: [new NyxIdAgentToolSource(options, apiClient)]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "source-readable-bearer",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-generic-source",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-generic-source" },
+                Content = new MessageContent { Text = "push a channel event" },
+            },
+            new Dictionary<string, string>(),
+            Control(token: "source-readable-bearer"),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        OfferedToolNames(plan).Should().Contain("nyxid_catalog");
+        OfferedToolNames(plan).Should().NotContain("nyxid_channel_events");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_InUnprofiledNyxIdChatTurnWithoutHumanSession_ShouldExposeExactPinnedNonHumanCatalog()
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
+        using var apiClient = new NyxIdApiClient(options, new HttpClient());
+        var localSkillCatalog = new LocalSkillCatalog();
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            localSkillCatalog: localSkillCatalog,
+            nyxIdChatToolSources:
+            [
+                new NyxIdAssistantToolSource(options, apiClient),
+                new StubToolSource(new StubTool("ask_user")),
+                new SkillsAgentToolSource(
+                    new SkillsOptions(),
+                    new SkillDiscovery(),
+                    localSkillCatalog),
+            ]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-production-non-human",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-production" },
+                Content = new MessageContent { Text = "查看 NyxID 状态" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        OfferedToolNames(plan).Should().BeEquivalentTo(
+            "ask_user",
+            "nyxid_catalog",
+            "nyxid_llm_status",
+            "nyxid_require_service",
+            "use_skill");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_InUnprofiledNyxIdChatTurnWithDuplicatePinnedToolNames_ShouldFailClosed()
+    {
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            nyxIdChatToolSources:
+            [
+                new StubToolSource(new StubTool("duplicate_tool")),
+                new StubToolSource(new StubTool("DUPLICATE_TOOL")),
+            ]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        Func<Task> act = async () => await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-duplicate",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-duplicate" },
+                Content = new MessageContent { Text = "test" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        var exception = await act.Should().ThrowAsync<AgentToolDiscoveryException>();
+        exception.Which.Failure.Code.Should().Be(AgentToolDiscoveryFailureCode.ToolNameCollision);
+        exception.Which.Failure.ToolName.Should().Be("duplicate_tool");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_InNyxIdChatTurnWithUnknownRouteToolSet_ShouldExposeNoTools()
+    {
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            localSkillCatalog: new LocalSkillCatalog(),
+            nyxIdChatToolSources: []);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                NyxIdChatServiceDefaults.ServiceId,
+                null,
+                "scope-alpha",
+                null,
+                null),
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "turn-unknown-route-set",
+                Conversation = new ConversationReference { CanonicalKey = "nyxid-chat-unknown-route" },
+                Content = new MessageContent { Text = "test" },
+            },
+            new Dictionary<string, string>(),
+            Control(),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        OfferedToolNames(plan).Should().BeEmpty();
     }
 
     [Fact]
@@ -947,7 +1320,8 @@ public sealed class ConversationReplyGeneratorTests
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
             BuiltInPromptFloorProvider,
-            toolSources: [new StubToolSource(rawProxy, requireService, typedInventory)]);
+            toolSources: [new StubToolSource(rawProxy)],
+            nyxIdChatToolSources: [new StubToolSource(rawProxy, requireService, typedInventory)]);
         var nyxIdChatContext = AgentToolExecutionContext.Empty with
         {
             Channel = new AgentToolChannelContext(
@@ -1003,7 +1377,7 @@ public sealed class ConversationReplyGeneratorTests
             new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
             BuiltInPromptFloorProvider,
             toolSources: [new StubToolSource(allowed, denied)]);
-        var catalog = new AgentProfileTurnCatalog(
+        var catalog = new AgentTurnToolCatalog(
             [allowed.Name],
             new ProfileRoutingPromptLayer(
                 "profile-route-sentinel",
@@ -1015,7 +1389,7 @@ public sealed class ConversationReplyGeneratorTests
                 new PromptLayerBounds(1024, 256)),
             selectedIntentId: "service_connect",
             candidateIntentId: "service_connect",
-            routeOwnedTools: [allowed]);
+            exactTools: [allowed]);
 
         var plan = await generator.BuildStepPlanAsync(
             new ChatActivity
@@ -1209,7 +1583,7 @@ public sealed class ConversationReplyGeneratorTests
     [Fact]
     public async Task GenerateReplyAsync_WithLarkPdfFileAttachment_AddsExtractedTextPart()
     {
-        var pdfBytes = BuildSimplePdf("Invoice total 42.00 USD");
+        var pdfBytes = BuildSimplePdf("Document value 42.00 USD");
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "report.pdf"));
         var fileArtifacts = new RecordingWorkflowFileArtifactPort();
@@ -1255,7 +1629,7 @@ public sealed class ConversationReplyGeneratorTests
             part.Kind == ContentPartKind.Text &&
             part.Text != null &&
             part.Text.Contains("PDF attachment 'report.pdf' extracted text", StringComparison.Ordinal) &&
-            part.Text.Contains("Invoice total 42.00 USD", StringComparison.Ordinal));
+            part.Text.Contains("Document value 42.00 USD", StringComparison.Ordinal));
         providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
             .NotContain("Attachment visibility warning");
         lark.Downloads.Should().ContainSingle().Which.Should().Be((
@@ -1272,7 +1646,7 @@ public sealed class ConversationReplyGeneratorTests
         ingress.MediaType.Should().Be("application/pdf");
         result.AppendedHistory.Should().NotContain(entry =>
             entry.ContentParts.Any(part =>
-                part.Text.Contains("Invoice total 42.00 USD", StringComparison.Ordinal)));
+                part.Text.Contains("Document value 42.00 USD", StringComparison.Ordinal)));
         result.AppendedHistory.SelectMany(entry => entry.ContentParts)
             .Should().Contain(part =>
                 part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text &&
@@ -1603,7 +1977,7 @@ public sealed class ConversationReplyGeneratorTests
         systemPrompt.Should().NotContain("chrono-ai-daily");
         // Kernel invariant still present alongside the configured relay callback URL. (Skill-discovery
         // how-to moved from the kernel into the System Skill Overlay in #2468.)
-        systemPrompt.Should().Contain("## CRITICAL: Action-First Behavior");
+        systemPrompt.Should().Contain("## Execution Phases");
     }
 
     [Fact]
@@ -1699,8 +2073,8 @@ public sealed class ConversationReplyGeneratorTests
         // Kernel anchor: a stable invariant heading the slimmed kernel still carries, asserting the
         // overlay is appended AFTER the kernel. (Capability how-to like skill-discovery moved out of
         // the kernel into the overlay in #2468, so it is no longer a valid kernel anchor.)
-        systemPrompt.Should().Contain("Action-First Behavior");
-        systemPrompt!.IndexOf("Action-First Behavior", StringComparison.Ordinal)
+        systemPrompt.Should().Contain("## Execution Phases");
+        systemPrompt!.IndexOf("## Execution Phases", StringComparison.Ordinal)
             .Should()
             .BeLessThan(systemPrompt.IndexOf("MANDATORY FLOOR", StringComparison.Ordinal));
         systemPrompt.IndexOf("MANDATORY FLOOR", StringComparison.Ordinal)
@@ -2149,7 +2523,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     // Tools whose outcome lands off-chat (e.g. aevatar_provision_workflow_schedule, which
-    // delivers its scheduled runs to /workflow/observatory, never a chat/bot) self-declare the
+    // delivers its scheduled runs to /admin#/observatory, never a chat/bot) self-declare the
     // generic AgentToolCapabilities.ExcludeFromDirectChannelChat marker. The channel/Lark
     // conversation agent must hide ANY tool carrying that capability — keyed off the capability,
     // not the tool name — otherwise it could route a Lark user's request away from their chat.
@@ -2251,7 +2625,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WhenUseSkillMountsWorkflows_ShouldUseRegisteredScopedToolWithoutApprovalDenial()
+    public async Task GenerateReplyAsync_WhenUseSkillPreviewsWorkflowMount_ShouldRunReadOnlyWithoutApprovalDenial()
     {
         var catalog = new LocalSkillCatalog();
         catalog.Register(new SkillDefinition
@@ -2269,14 +2643,14 @@ public sealed class ConversationReplyGeneratorTests
                 },
             ],
         });
-        var commandPort = new RecordingScopeWorkflowCommandPort();
+        var mountPort = new RecordingSkillWorkflowMountPort();
         var providerFactory = new UseSkillMountWorkflowProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
             providerFactory,
             BuiltInPromptFloorProvider,
             toolSources:
             [
-                new SingleToolSource(new UseSkillTool(catalog, scopeWorkflowCommandPort: commandPort)),
+                new SingleToolSource(new UseSkillTool(catalog, workflowMountPort: mountPort)),
             ],
             localSkillCatalog: catalog,
             toolExecutionPort: new ChannelConversationTurnRunnerTests.TestAgentToolExecutionPort());
@@ -2293,6 +2667,11 @@ public sealed class ConversationReplyGeneratorTests
             AgentToolExecutionContext.Empty with
             {
                 Caller = new AgentToolCallerContext("scope-alpha", "owner-alpha", null),
+                Credentials = new AgentToolCredentials(
+                    "token-alpha",
+                    null,
+                    null,
+                    AgentToolNyxIdCredentialKind.SourceReadableUserBearer),
                 NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
                     "nyxid",
                     "tenant-alpha",
@@ -2302,15 +2681,15 @@ public sealed class ConversationReplyGeneratorTests
             CancellationToken.None);
 
         reply.Text.Should().Contain("## Mounted Workflows");
-        reply.Text.Should().Contain("\"accepted\": true");
+        reply.Text.Should().Contain("\"status\": \"confirmation_required\"");
         reply.Text.Should().NotContain("approval-gated tools cannot run here");
-        reply.Text.Should().NotContain("scope workflow command port is not available in this host");
-        commandPort.Requests.Should().ContainSingle()
-            .Which.Should().Match<ScopeWorkflowUpsertRequest>(request =>
+        reply.Text.Should().NotContain("Workflow mounting is not available in this host");
+        mountPort.Requests.Should().ContainSingle()
+            .Which.Should().Match<SkillWorkflowMountRequest>(request =>
                 request.ScopeId == "scope-alpha" &&
-                request.WorkflowId == "demo_dinner" &&
-                request.CapabilityAdmission != null &&
-                request.CapabilityAdmission.CallerId == "nyx-user-alpha");
+                request.CallerId == "nyx-user-alpha" &&
+                request.Workflows.Count == 1 &&
+                request.Workflows[0].WorkflowId == "demo_dinner");
     }
 
     [Fact]
@@ -3902,6 +4281,8 @@ public sealed class ConversationReplyGeneratorTests
                           "service_id": "catalog-github-alpha",
                           "label": "GitHub",
                           "is_active": true,
+                          "connected": true,
+                          "status": "active",
                           "credential_source": { "type": "personal" }
                         }
                       ]
@@ -4239,26 +4620,33 @@ public sealed class ConversationReplyGeneratorTests
             Task.FromResult(result);
     }
 
-    private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort
+    private sealed class RecordingSkillWorkflowMountPort : ISkillWorkflowMountPort
     {
-        public List<ScopeWorkflowUpsertRequest> Requests { get; } = [];
+        public List<SkillWorkflowMountRequest> Requests { get; } = [];
 
-        public Task<ScopeWorkflowUpsertResult> UpsertAsync(
-            ScopeWorkflowUpsertRequest request,
+        public Task<SkillWorkflowMountResult> MountAsync(
+            SkillWorkflowMountRequest request,
             CancellationToken ct = default)
         {
             Requests.Add(request);
-            return Task.FromResult(new ScopeWorkflowUpsertResult(
-                request.ScopeId,
-                request.WorkflowId,
-                $"service-key-{request.WorkflowId}",
-                $"revision-{request.WorkflowId}",
-                "definition-prefix",
-                $"actor-{request.WorkflowId}",
-                $"deployment-{request.WorkflowId}",
-                DateTimeOffset.UnixEpoch,
-                [new ScopeWorkflowCommandAcceptedHandle("create_revision", "target-actor", "cmd-1", "corr-1")],
-                $"/api/scopes/{request.ScopeId}/workflows/{request.WorkflowId}"));
+            var confirmation = new SkillWorkflowMountConfirmation(
+                "demo_dinner",
+                "rev-demo-dinner",
+                "sha256:demo-dinner",
+                []);
+            return Task.FromResult(new SkillWorkflowMountResult(
+                "confirmation_required",
+                false,
+                [],
+                "Review before mounting.",
+                [
+                    new SkillWorkflowMountPreview(
+                        confirmation.WorkflowId,
+                        confirmation.RevisionId,
+                        confirmation.WorkflowBundleDigest,
+                        [],
+                        confirmation),
+                ]));
         }
     }
 

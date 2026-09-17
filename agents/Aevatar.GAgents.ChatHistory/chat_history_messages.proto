@@ -56,6 +56,48 @@ message ChatTurn {
   google.protobuf.Timestamp terminal_time = 7;
   string llm_route = 8;
   string llm_model = 9;
+  // The turn's Model/Tool operation ledger, appended atomically with the turn
+  // so a reopened transcript can render its trajectory without replaying
+  // events or inferring records from message positions.
+  repeated ChatTurnOperation operations = 10;
+}
+
+enum ChatTurnOperationKind {
+  CHAT_TURN_OPERATION_KIND_UNSPECIFIED = 0;
+  CHAT_TURN_OPERATION_KIND_MODEL = 1;
+  CHAT_TURN_OPERATION_KIND_TOOL = 2;
+  CHAT_TURN_OPERATION_KIND_OTHER = 3;
+}
+
+// One recorded operation inside a turn. Content fields are sanitized, size
+// bounded previews produced by the owning conversation actor; `previews_truncated`
+// marks them as fragments rather than complete payloads. Timing is only present
+// when the operation reported it.
+message ChatTurnOperation {
+  // Tool result bodies never enter the transcript: they are untrusted external
+  // text and the owning conversation actor must not retain them.
+  reserved 17;
+  reserved "result_preview";
+  string operation_id = 1;
+  int32 order = 2;
+  ChatTurnOperationKind kind = 3;
+  string title = 4;
+  string status = 5;
+  google.protobuf.Timestamp started_at = 6;
+  google.protobuf.Timestamp completed_at = 7;
+  string model = 8;
+  string provider = 9;
+  string finish_reason = 10;
+  int32 prompt_tokens = 11;
+  int32 completion_tokens = 12;
+  int32 total_tokens = 13;
+  string input_preview = 14;
+  string output_preview = 15;
+  string arguments_preview = 16;
+  bool previews_truncated = 18;
+  string safe_message = 19;
+  repeated string available_tool_names = 20;
+  bool tool_catalog_captured = 21;
 }
 
 message ChatTurnAppendRejection {
@@ -198,6 +240,8 @@ message ChatTurnHistoryDeliveryState {
   bool create_conversation_if_missing = 21;
   string request_fingerprint = 22;
   bool expose_create_recovery = 23;
+  // Operation ledger observed with the terminal frame and appended with the turn.
+  repeated ChatTurnOperation terminal_operations = 24;
 }
 
 message ChatTurnHistoryDeliveryReserveRequested {
@@ -252,6 +296,7 @@ message ChatTurnHistoryDeliveryTerminalFrameObserved {
   string text = 5;
   string error_code = 6;
   int64 observed_at_unix_ms = 7;
+  repeated ChatTurnOperation operations = 8;
 }
 
 message ChatTurnHistoryDeliveryTerminalReconciledEvent {
@@ -263,6 +308,7 @@ message ChatTurnHistoryDeliveryTerminalReconciledEvent {
   string text = 6;
   string error_code = 7;
   int64 observed_at_unix_ms = 8;
+  repeated ChatTurnOperation operations = 9;
 }
 
 message ChatTurnHistoryDeliveryAppendDispatchedEvent {
@@ -318,4 +364,5 @@ message ChatTurnHistorySourceTerminalNotified {
   string text = 5;
   string error_code = 6;
   int64 observed_at_unix_ms = 7;
+  repeated ChatTurnOperation operations = 8;
 }

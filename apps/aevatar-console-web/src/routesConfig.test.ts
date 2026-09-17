@@ -30,7 +30,7 @@ it('exposes only canonical resource pages, authentication and home entries in pr
     '/scopes/:scopeId/activity',
     '/scopes/:scopeId/activity/:runId',
     '/scopes/:scopeId/channels',
-    '/scopes/:scopeId/channels/connect/telegram',
+    '/scopes/:scopeId/channels/bind/:botId',
     '/scopes/:scopeId/channels/:registrationId/edit',
     '/scopes/:scopeId/channels/:registrationId',
     '/scopes/:scopeId/settings',

@@ -24,7 +24,9 @@ This directory keeps CI gate scripts and smoke tests.
 
 - `tools/ci/projection_provider_e2e_smoke.sh`
   - Starts Elasticsearch + Neo4j from `docker-compose.projection-providers.yml`.
-  - Waits for readiness, runs `ProjectionProviderE2EIntegrationTests`, and cleans up containers.
+  - Waits for readiness, runs all `Category=ProviderIntegration` projects, and cleans up containers.
+  - Persists and prints the real-Elasticsearch workflow report write-cost table at
+    `artifacts/ci/workflow-report-artifact-write-cost.txt`.
 - `tools/ci/orleans_garnet_persistence_smoke.sh`: Orleans + Garnet persistence smoke.
 
 ## Workflow Mapping
@@ -44,6 +46,7 @@ This directory keeps CI gate scripts and smoke tests.
     - `.slnf` files are build-boundary inputs only; tests are not executed through split solution filters.
   - Job `projection-provider-e2e`
     - Runs `tools/ci/projection_provider_e2e_smoke.sh`.
+    - Uploads the workflow report-artifact write-cost table as a CI artifact.
     - Triggered on projection-provider related changes, `main/dev` pushes, or manual dispatch.
   - Job `kafka-transport-integration`
     - Starts Kafka and runs the distributed runtime integration test.

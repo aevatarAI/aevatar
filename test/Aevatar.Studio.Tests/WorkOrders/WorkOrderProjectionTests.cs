@@ -71,6 +71,12 @@ public sealed class WorkOrderProjectionTests
         document.RunId.Should().Be("run-1");
         document.RunAcceptedAtUnixMs.Should().Be(workOrderUpdatedAt.AddMinutes(-1).ToUnixTimeMilliseconds());
         document.RunOutcome!.CorrelationId.Should().Be("correlation-1");
+        document.AvailableActions.Should().BeEquivalentTo(new WorkOrderAvailableActionsDocument
+        {
+            CanReassign = false,
+            CanDispatch = false,
+            CanCancel = false,
+        });
         document.UpdatedAt!.ToDateTimeOffset().Should().Be(projectionObservedAt);
         document.WorkOrderUpdatedAtUtc!.ToDateTimeOffset().Should().Be(workOrderUpdatedAt);
     }
@@ -89,6 +95,12 @@ public sealed class WorkOrderProjectionTests
         state.RunOutcome = null;
         state.LateRunOutcome = null;
         state.TimeoutAtUtc = null;
+        state.AvailableActions = new WorkOrderAvailableActions
+        {
+            CanReassign = true,
+            CanDispatch = true,
+            CanCancel = true,
+        };
 
         await projector.ProjectAsync(
             new StudioMaterializationContext
@@ -110,6 +122,12 @@ public sealed class WorkOrderProjectionTests
         document.RunOutcome.Should().BeNull();
         document.LateRunOutcome.Should().BeNull();
         document.TimeoutAtUnixMs.Should().Be(0);
+        document.AvailableActions.Should().BeEquivalentTo(new WorkOrderAvailableActionsDocument
+        {
+            CanReassign = true,
+            CanDispatch = true,
+            CanCancel = true,
+        });
     }
 
     [Theory]
@@ -168,6 +186,12 @@ public sealed class WorkOrderProjectionTests
             DedupKey = "dedup-1",
             LifecycleStatus = WorkOrderLifecycleStatusNames.Completed,
             LifecycleVersion = 5,
+            AvailableActions = new WorkOrderAvailableActionsDocument
+            {
+                CanReassign = false,
+                CanDispatch = false,
+                CanCancel = false,
+            },
             CreatedAtUnixMs = workOrderUpdatedAt.AddHours(-1).ToUnixTimeMilliseconds(),
             RunId = "run-1",
             RunActorId = "run-1",
@@ -213,6 +237,10 @@ public sealed class WorkOrderProjectionTests
         response.PublishedServiceId.Should().Be("service-1");
         response.Run!.RunId.Should().Be("run-1");
         response.RunOutcome!.CorrelationId.Should().Be("correlation-1");
+        response.AvailableActions.Should().Be(new WorkOrderAvailableActionsResponse(
+            CanReassign: false,
+            CanDispatch: false,
+            CanCancel: false));
         reader.LastQuery!.Take.Should().Be(25);
         reader.LastQuery.Filters.Select(static filter => filter.FieldPath).Should().BeEquivalentTo(
             "scope_id",
@@ -252,6 +280,12 @@ public sealed class WorkOrderProjectionTests
             },
             LifecycleStatus = WorkOrderLifecycleStatus.Completed,
             LifecycleVersion = 5,
+            AvailableActions = new WorkOrderAvailableActions
+            {
+                CanReassign = false,
+                CanDispatch = false,
+                CanCancel = false,
+            },
             CreatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt.AddHours(-1)),
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt),
             Run = new WorkOrderRunLink

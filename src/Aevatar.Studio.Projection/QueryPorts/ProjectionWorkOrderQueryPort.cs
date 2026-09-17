@@ -126,6 +126,10 @@ public sealed class ProjectionWorkOrderQueryPort : IWorkOrderQueryPort
             document.LifecycleStatus,
             document.LifecycleVersion,
             document.StateVersion,
+            new WorkOrderAvailableActionsResponse(
+                document.AvailableActions?.CanReassign ?? false,
+                document.AvailableActions?.CanDispatch ?? false,
+                document.AvailableActions?.CanCancel ?? false),
             new WorkOrderServiceInputContract(
                 new WorkOrderChatInputContract(document.InputPrompt),
                 document.InputArtifacts.Select(ToArtifact).ToArray(),

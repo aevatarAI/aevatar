@@ -53,6 +53,12 @@ public sealed partial class ServiceDeploymentCatalogReadModel : IProjectionReadM
         get => DeploymentEntries;
         set => ServiceProjectionReadModelSupport.ReplaceCollection(DeploymentEntries, value);
     }
+
+    public IList<ServiceDeploymentActivationFailureReadModel> ActivationFailures
+    {
+        get => ActivationFailureEntries;
+        set => ServiceProjectionReadModelSupport.ReplaceCollection(ActivationFailureEntries, value);
+    }
 }
 
 public sealed partial class ServiceDeploymentReadModel

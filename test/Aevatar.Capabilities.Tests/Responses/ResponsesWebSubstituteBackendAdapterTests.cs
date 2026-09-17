@@ -59,24 +59,23 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
             new ResponsesWebSearchBoundaryInput("aevatar docs", 5, "secret-token"),
             CancellationToken.None);
 
-        result.Output.Results.Should().ContainSingle();
-        result.Output.Results[0].Title.Should().Be("fresh");
-        result.Output.Results[0].Url.Should().Be("https://example.com/fresh");
-        result.Output.Results[0].Snippet.Should().Be("fresh snippet");
+        result.Result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Search);
+        result.Result.Search.Results.Should().ContainSingle();
+        result.Result.Search.Results[0].Title.Should().Be("fresh");
+        result.Result.Search.Results[0].Url.Should().Be("https://example.com/fresh");
+        result.Result.Search.Results[0].Snippet.Should().Be("fresh snippet");
         webClient.SearchCalls.Should().ContainSingle();
         webClient.SearchCalls[0].Token.Should().Be("secret-token");
         webClient.SearchCalls[0].Query.Should().Be("aevatar docs");
         webClient.SearchCalls[0].MaxResults.Should().Be(5);
     }
 
-    [Theory]
-    [MemberData(nameof(MalformedSearchResults))]
-    public async Task ExecuteWebSearchAsync_WhenProviderTypedResultHasNoResults_ShouldReturnEmptyTypedResults(
-        WebSearchResult providerValue)
+    [Fact]
+    public async Task ExecuteWebSearchAsync_WhenProviderReturnsNoResults_ShouldReturnEmptyTypedResults()
     {
         var webClient = new RecordingWebApiClient
         {
-            SearchResult = providerValue,
+            SearchResult = WebSearchResult.Empty,
         };
         var adapter = new ResponsesWebSubstituteBackendAdapter(
             webClient,
@@ -86,11 +85,36 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
             new ResponsesWebSearchBoundaryInput("aevatar docs", 5, "secret-token"),
             CancellationToken.None);
 
-        result.Output.Results.Should().BeEmpty();
+        result.Result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Search);
+        result.Result.Search.Results.Should().BeEmpty();
         webClient.SearchCalls.Should().ContainSingle();
         webClient.SearchCalls[0].Token.Should().Be("secret-token");
         webClient.SearchCalls[0].Query.Should().Be("aevatar docs");
         webClient.SearchCalls[0].MaxResults.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task ExecuteWebSearchAsync_WhenProviderReturnsTypedError_ShouldPreserveErrorBranch()
+    {
+        var webClient = new RecordingWebApiClient
+        {
+            SearchResult = new WebSearchResult(
+                Array.Empty<WebSearchResultItem>(),
+                new WebToolError(
+                    "search_backend_not_configured",
+                    "No search backend configured.")),
+        };
+        var adapter = new ResponsesWebSubstituteBackendAdapter(
+            webClient,
+            new WebToolOptions { MaxSearchResults = 7 });
+
+        var result = await adapter.ExecuteWebSearchAsync(
+            new ResponsesWebSearchBoundaryInput("official X API documentation", 5, "secret-token"),
+            CancellationToken.None);
+
+        result.Result.ResultCase.Should().Be(ResponsesWebToolResult.ResultOneofCase.Error);
+        result.Result.Error.Code.Should().Be("search_backend_not_configured");
+        result.Result.Error.Message.Should().Be("No search backend configured.");
     }
 
     [Fact]
@@ -136,12 +160,4 @@ public sealed class ResponsesWebSubstituteBackendAdapterTests
         }
     }
 
-    public static TheoryData<WebSearchResult> MalformedSearchResults() =>
-        new()
-        {
-            WebSearchResult.Empty,
-            new WebSearchResult(
-                Array.Empty<WebSearchResultItem>(),
-                new WebToolError("unstructured_search_result", "bad")),
-        };
 }

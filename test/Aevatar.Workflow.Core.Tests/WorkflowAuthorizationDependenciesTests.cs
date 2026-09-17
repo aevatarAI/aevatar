@@ -10,6 +10,31 @@ namespace Aevatar.Workflow.Core.Tests;
 public sealed class WorkflowAuthorizationDependenciesTests
 {
     [Fact]
+    public void EvaluateAuthorizationDependencies_CodeExecute_ShouldCompileCanonicalPlatformSelector()
+    {
+        const string yaml = """
+            name: code-workflow
+            roles: []
+            steps:
+              - id: run-code
+                type: tool_call
+                parameters:
+                  tool: code_execute
+                  arguments: '{"language":"javascript","code":"console.log(2)"}'
+            """;
+
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        dependencies.Should().NotBeNull();
+        dependencies!.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.Required);
+        var invocation = dependencies.ExternalInvocations.Should().ContainSingle().Subject;
+        invocation.CallSiteId.Should().Be("code-workflow/run-code");
+        invocation.ToolName.Should().Be("code_execute");
+        invocation.Selector.SelectorCase.Should()
+            .Be(ExternalWorkflowCapabilitySelector.SelectorOneofCase.CodeExecution);
+    }
+
+    [Fact]
     public void WorkflowParser_ShouldMapStepLevelNyxIdOperationSelector()
     {
         const string yaml = """
@@ -57,6 +82,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
                     header_parameters: [If-Match]
                     body_mode: none
                     response_mode: text
+                    risk: read_only
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{"path_params":{"resource_id":"${input.resource_id}"},"query":{"page_size":500}}'
@@ -74,6 +100,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
         selector.NyxIdRequest.HeaderParameters.Should().Equal("If-Match");
         selector.NyxIdRequest.BodyMode.Should().Be(NyxIdRequestBodyMode.None);
         selector.NyxIdRequest.ResponseMode.Should().Be(NyxIdRequestResponseMode.Text);
+        selector.NyxIdRequest.Risk.Should().Be(NyxIdOperationRisk.ReadOnly);
     }
 
     [Fact]
@@ -275,6 +302,109 @@ public sealed class WorkflowAuthorizationDependenciesTests
     }
 
     [Fact]
+    public async Task BindWorkflowDefinition_CurrentPolicyParameterizedLlmCall_ShouldCommit()
+    {
+        const string yaml = """
+            name: codex_long_running_handoff
+            description: "Dispatch long-running Codex work, wait for an external callback, then review shards with a concurrency floor."
+            roles:
+              - id: reviewer
+                name: Reviewer
+                agent_kind: workflow.role-agent
+                system_prompt: "Review worker output for correctness and actionable issues."
+                allowed_tools: []
+            steps:
+              - id: announce_job
+                type: emit
+                parameters:
+                  event_type: "codex.job.requested"
+                  payload: "$input"
+                next: wait_for_codex_worker
+              - id: wait_for_codex_worker
+                type: wait_signal
+                parameters:
+                  signal_name: "codex_worker_done"
+                  prompt: "Waiting for Codex worker callback"
+                  timeout_ms: "5400000"
+                next: review_worker_output
+              - id: review_worker_output
+                type: foreach
+                target_role: reviewer
+                parameters:
+                  delimiter: "\n---\n"
+                  sub_step_type: "llm_call"
+                  sub_param_prompt_prefix: "Review this worker shard and flag anything unsafe or incomplete:"
+                  min_concurrent_workers: "4"
+                  max_concurrent_workers: "12"
+            """;
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            invocationAdmissions: [],
+            sourceStamps: []);
+        var agent = NewAgent();
+
+        await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
+        {
+            WorkflowName = "codex_long_running_handoff",
+            WorkflowYaml = yaml,
+            SourceKind = "file",
+            CapabilityAdmissionPlan = plan,
+            ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+        });
+
+        agent.State.Compiled.Should().BeTrue();
+        agent.State.Version.Should().Be(1);
+        agent.State.ToolCatalogPolicyVersion.Should().Be(WorkflowToolCatalogPolicies.CurrentVersion);
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinition_WhenCanonicalStateIsUnchanged_ShouldNotAppendOrAdvanceVersion()
+    {
+        const string rootYaml = "name: root-workflow\nroles: []\nsteps: []\n";
+        const string childYaml = "name: child-workflow\nroles: []\nsteps: []\n";
+        var behaviorFactory = new InMemoryWorkflowEventSourcingBehaviorFactory();
+        var agent = new WorkflowGAgent
+        {
+            EventSourcingBehaviorFactory = behaviorFactory,
+        };
+
+        await agent.BindWorkflowDefinitionAsync(
+            rootYaml,
+            " root-workflow ",
+            new Dictionary<string, string> { [" child-workflow "] = childYaml },
+            scopeId: null,
+            sourceKind: null,
+            capabilityAdmissionPlan: null,
+            workflowId: null,
+            revisionId: null,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
+
+        agent.State.Version.Should().Be(1);
+        behaviorFactory.CommittedEvents.Should().ContainSingle()
+            .Which.Should().BeOfType<BindWorkflowDefinitionEvent>();
+
+        await agent.BindWorkflowDefinitionAsync(
+            rootYaml,
+            "root-workflow",
+            new Dictionary<string, string> { ["child-workflow"] = childYaml },
+            scopeId: string.Empty,
+            sourceKind: " builtin ",
+            capabilityAdmissionPlan: null,
+            workflowId: string.Empty,
+            revisionId: string.Empty,
+            expectedExecutionMode: ExternalCapabilityExecutionMode.Interactive);
+
+        agent.State.Version.Should().Be(1);
+        agent.State.InlineWorkflowYamls.Keys.Should().Equal("child-workflow");
+        agent.State.ScopeId.Should().BeEmpty();
+        agent.State.SourceKind.Should().Be("builtin");
+        behaviorFactory.CommittedEvents.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task BindWorkflowDefinition_WhenExplicitIdentityChanges_ShouldRejectAndPreserveAuthority()
     {
         var yaml = ExactNyxIdRequestWorkflowYaml();
@@ -466,6 +596,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
     [InlineData("foreach_llm", "sub_step_type")]
     [InlineData("while", "step")]
     [InlineData("loop", "step")]
+    [InlineData("cache", "child_step_type")]
     public void EvaluateAuthorizationDependencies_IndirectNyxIdProxy_ShouldNeverBypassAdmission(
         string primitive,
         string subStepTypeKey)
@@ -750,6 +881,100 @@ public sealed class WorkflowAuthorizationDependenciesTests
         result.ExternalInvocations.Should().OnlyContain(static invocation =>
             invocation.Selector.NyxIdOperation.EndpointId == "list-items");
         result.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.Required);
+    }
+
+    [Fact]
+    public void EvaluateAuthorizationDependencies_ShouldCompileForeachResponseProjectionIntoSynthesizedCallSite()
+    {
+        const string yaml = """
+            name: fin-history
+            roles: []
+            steps:
+              - id: fetch-details
+                type: foreach
+                capability:
+                  nyxid_request:
+                    user_service_id: us-lark-alpha
+                    method: GET
+                    path_template: /approval/instances/{instance_code}
+                    body_mode: none
+                    response_mode: text
+                    risk: read_only
+                response_projection:
+                  fields:
+                    instance_code:
+                      - pointer: /data/instance_code
+                    payment_reasons:
+                      - pointer: /data/form
+                      - parse_json: true
+                      - match:
+                          pointer: /id
+                          equals: field-list
+                      - pointer: /value
+                      - map:
+                          - match:
+                              pointer: /id
+                              equals: payment-reason-widget
+                          - pointer: /value
+                parameters:
+                  sub_step_type: tool_call
+                  sub_param_tool: nyxid_proxy
+                  sub_param_arguments: '{"path_params":{"instance_code":"${input}"}}'
+            """;
+
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml);
+
+        var invocation = dependencies!.ExternalInvocations.Should().ContainSingle().Subject;
+        invocation.CallSiteId.Should().Be("fin-history/fetch-details/sub-step");
+        invocation.ResponseProjection.Fields.Select(static field => field.OutputName)
+            .Should().Equal("instance_code", "payment_reasons");
+        invocation.ResponseProjection.Fields[1].Operations.Select(static operation => operation.OperationCase)
+            .Should().Equal(
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.JsonPointer,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.ParseJson,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMatch,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.JsonPointer,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMap);
+        invocation.ResponseProjection.Fields[1].Operations[^1].ArrayMap.Operations
+            .Select(static operation => operation.OperationCase)
+            .Should().Equal(
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.ArrayMatch,
+                WorkflowToolResponseProjectionOperation.OperationOneofCase.JsonPointer);
+    }
+
+    [Fact]
+    public void EvaluateAuthorizationDependencies_ShouldRejectNestedResponseProjectionMaps()
+    {
+        const string yaml = """
+            name: nested-map
+            roles: []
+            steps:
+              - id: fetch-details
+                type: tool_call
+                capability:
+                  nyxid_request:
+                    user_service_id: us-lark-alpha
+                    method: GET
+                    path_template: /approval/instances
+                    body_mode: none
+                    response_mode: text
+                    risk: read_only
+                response_projection:
+                  fields:
+                    values:
+                      - pointer: /rows
+                      - map:
+                          - map:
+                              - pointer: /value
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{}'
+            """;
+
+        var act = () => new Aevatar.Workflow.Core.Primitives.WorkflowParser().Parse(yaml);
+
+        act.Should().Throw<YamlDotNet.Core.YamlException>()
+            .WithMessage("*Property 'map' not found*");
     }
 
     [Theory]
@@ -1065,6 +1290,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
         dependencies.ExternalInvocations.Select(invocation => new WorkflowCapabilityInvocationAdmission
         {
             CallSiteId = invocation.CallSiteId,
+            ResponseProjection = invocation.ResponseProjection?.Clone(),
             Capability = invocation.Selector.SelectorCase switch
             {
                 ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector =>

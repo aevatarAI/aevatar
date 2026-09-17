@@ -1139,14 +1139,16 @@ public sealed class StreamingProxyRoomInteractionTests : StreamingProxyTestBase
             var roomCommands = new StubRoomCommandService();
             var coordinator = CreateNyxCoordinator(roomCommands);
             var streamProvider = new StubStreamProvider();
+            var subscriptionProvider = new StubActorEventSubscriptionProvider(streamProvider);
             var runner = new StreamingProxyChatLifecycleContinuationRunner(
                 streamProvider,
-                new StubActorEventSubscriptionProvider(streamProvider),
+                subscriptionProvider,
                 coordinator,
                 roomCommands,
                 NullLogger<StreamingProxyChatLifecycleContinuationRunner>.Instance);
 
             await runner.StartAsync(CancellationToken.None);
+            await subscriptionProvider.WaitUntilSubscriptionsReadyAsync();
             await streamProvider
                 .GetStream(StreamingProxyGAgent.ChatLifecycleContinuationRunnerStreamId)
                 .ProduceAsync(new StreamingProxyChatLifecycleContinuationRequested
@@ -1159,6 +1161,26 @@ public sealed class StreamingProxyRoomInteractionTests : StreamingProxyTestBase
                 });
 
             roomCommands.ParticipantsResolvedCommands.Should().ContainSingle(command => command.RoomId == "room-from-message");
+            await runner.StopAsync(CancellationToken.None);
+        }
+
+        [Fact]
+        public async Task ChatLifecycleContinuationRunner_ShouldNotBlockHostStartup_WhenSubscriptionIsPending()
+        {
+            var roomCommands = new StubRoomCommandService();
+            var coordinator = CreateNyxCoordinator(roomCommands);
+            var streamProvider = new StubStreamProvider();
+            var subscriptionProvider = new PendingActorEventSubscriptionProvider();
+            var runner = new StreamingProxyChatLifecycleContinuationRunner(
+                streamProvider,
+                subscriptionProvider,
+                coordinator,
+                roomCommands,
+                NullLogger<StreamingProxyChatLifecycleContinuationRunner>.Instance);
+
+            await runner.StartAsync(CancellationToken.None);
+
+            await subscriptionProvider.WaitUntilSubscriptionStartedAsync();
             await runner.StopAsync(CancellationToken.None);
         }
 
@@ -1222,5 +1244,27 @@ public sealed class StreamingProxyRoomInteractionTests : StreamingProxyTestBase
             publisher.Published.OfType<GroupChatParticipantLeftEvent>()
                 .Should()
                 .ContainSingle(x => x.AgentId == "agent-1");
+        }
+
+        private sealed class PendingActorEventSubscriptionProvider : IActorEventSubscriptionProvider
+        {
+            private readonly TaskCompletionSource<IAsyncDisposable> _pendingSubscription =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly TaskCompletionSource _subscriptionStarted =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public Task WaitUntilSubscriptionStartedAsync() => _subscriptionStarted.Task;
+
+            public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
+                string actorId,
+                Func<TMessage, Task> handler,
+                CancellationToken ct = default)
+                where TMessage : class, IMessage, new()
+            {
+                _ = actorId;
+                _ = handler;
+                _subscriptionStarted.TrySetResult();
+                return _pendingSubscription.Task.WaitAsync(ct);
+            }
         }
 }

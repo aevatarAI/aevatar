@@ -1,9 +1,11 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Grains.Callbacks;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -69,6 +71,61 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             .Should().BeAssignableTo<IMessage<RuntimeCallbackSchedulerState>>();
         typeof(RuntimeScheduledCallback)
             .Should().BeAssignableTo<IMessage<RuntimeScheduledCallback>>();
+    }
+
+    [Fact]
+    public void RuntimeCallbackSchedulerGrain_ShouldVerifyOnlyExactPersistedFleetReconcileEnvelope()
+    {
+        const long generation = 7;
+        const long fireIndex = 3;
+        var trigger = new EventEnvelope
+        {
+            Id = "fleet-reconcile-trigger",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+                TopologyAudience.Self),
+            Payload = Any.Pack(new RuntimeFleetReconcileRequested()),
+        };
+        var delivered = RuntimeCallbackEnvelopeFactory.CreateScheduledEnvelope(
+            RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+            generation,
+            fireIndex,
+            trigger,
+            RuntimeCallbackDeliveryMode.FiredSelfEvent,
+            RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
+        var scheduled = new RuntimeScheduledCallback
+        {
+            ActorId = RuntimeFleetCapabilityAuthorityIdentity.ActorId,
+            CallbackId = RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId,
+            Generation = generation,
+            SlotEpoch = RuntimeCallbackSlotEpoch.OrleansSchedulerV2,
+            PendingDeliveryEnvelope = delivered.Clone(),
+        };
+        var state = new RuntimeCallbackSchedulerState
+        {
+            ReminderCallbacks =
+            {
+                [RuntimeFleetCapabilityAuthorityIdentity.ReconcileCallbackId] = scheduled,
+            },
+        };
+
+        RuntimeCallbackSchedulerGrain
+            .IsExactRuntimeFleetReconcileDelivery(state, delivered.Clone())
+            .Should().BeTrue();
+
+        var forgedWithPersistedIdentity = delivered.Clone();
+        forgedWithPersistedIdentity.Route.PublisherActorId = "forged-publisher";
+        RuntimeCallbackSchedulerGrain
+            .IsExactRuntimeFleetReconcileDelivery(state, forgedWithPersistedIdentity)
+            .Should().BeFalse();
+
+        scheduled.LastDeliveryEnvelope = delivered.Clone();
+        scheduled.PendingDeliveryEnvelope = null;
+        RuntimeCallbackSchedulerGrain
+            .IsExactRuntimeFleetReconcileDelivery(state, delivered.Clone())
+            .Should().BeTrue();
     }
 
     [Fact]
@@ -328,6 +385,82 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         mapAct.Should()
             .Throw<InvalidOperationException>()
             .WithMessage("*execution_states[credential]*aevatar.foundation.runtime.hosting.tests.NeedsCredentialPayload*.reply_token*");
+    }
+
+    [Fact]
+    public void DurableCallbackEnvelopeCredentialGuard_ShouldAcceptActorOwnedCallbackIdentifiersAndRejectCredential()
+    {
+        IMessage[] actorOwnedCallbacks =
+        [
+            WithStringField(new WorkflowToolCallAttemptCompletedEvent
+            {
+                RunId = "run-1",
+                StepId = "step-1",
+                ExecutionId = "execution-1",
+                CallId = "call-1",
+                Attempt = 1,
+                Success = new WorkflowToolCallAttemptSuccessOutcome { ResultJson = "{}" },
+            }, 9, "continuation-1"),
+            WithStringField(new WorkflowToolCallTimeoutFiredEvent
+            {
+                RunId = "run-1",
+                StepId = "step-1",
+                ExecutionId = "execution-1",
+                CallId = "call-1",
+                TimeoutMs = 1_000,
+            }, 6, "continuation-1"),
+            WithStringField(new WorkflowToolCallRetryFiredEvent
+            {
+                RunId = "run-1",
+                StepId = "step-1",
+                ExecutionId = "execution-1",
+                CallId = "call-1",
+                Attempt = 2,
+            }, 6, "continuation-1"),
+            WithStringField(new WorkflowToolCallExecutionRecoveryFiredEvent
+            {
+                RunId = "run-1",
+                StepId = "step-1",
+                ExecutionId = "execution-1",
+                CallId = "call-1",
+                Attempt = 1,
+            }, 6, "continuation-1"),
+            WithStringField(new WorkflowLeaseExpirationFiredEvent
+            {
+                LeaseKey = "lease-1",
+                Generation = 1,
+                ExpiresAtUnixMs = 1_780_000_000_000,
+            }, 2, "holder-fence-1"),
+        ];
+
+        foreach (var callback in actorOwnedCallbacks)
+        {
+            var callbackAct = () => DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(
+                CreateEnvelope($"evt-{callback.Descriptor.Name}", callback));
+
+            callbackAct.Should().NotThrow(
+                $"{callback.Descriptor.Name} carries stable actor-owned callback identifiers, not runtime credentials");
+        }
+
+        var credentialAct = () => DurableCallbackEnvelopeCredentialGuard.ThrowIfContainsRuntimeCredential(
+            CreateEnvelope("evt-credential", new NeedsCredentialPayload
+            {
+                ReplyToken = "runtime-reply-token",
+            }));
+
+        credentialAct.Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*reply_token*");
+    }
+
+    private static T WithStringField<T>(T message, int fieldNumber, string value)
+        where T : IMessage
+    {
+        var field = message.Descriptor.FindFieldByNumber(fieldNumber)
+            ?? throw new InvalidOperationException(
+                $"{message.Descriptor.FullName} does not define field {fieldNumber}.");
+        field.Accessor.SetValue(message, value);
+        return message;
     }
 
     [Fact]

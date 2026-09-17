@@ -10,6 +10,9 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<
+            INyxIdScheduledOperationAuthorizationPort,
+            UnavailableNyxIdScheduledOperationAuthorizationPort>();
         services.TryAddSingleton<IScheduledInvocationAuthorizationPlanner, ScheduledInvocationAuthorizationPlanner>();
         services.TryAddSingleton<IScheduledInvocationAuthorizationRevalidator, ScheduledInvocationAuthorizationRevalidator>();
         services.TryAddSingleton<

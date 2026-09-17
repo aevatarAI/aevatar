@@ -10,6 +10,9 @@ using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using ExternalCapabilityExecutionMode = Aevatar.Workflow.Abstractions.ExternalCapabilityExecutionMode;
+using WorkflowCapabilityAdmissionPlanIntegrity = Aevatar.Workflow.Abstractions.WorkflowCapabilityAdmissionPlanIntegrity;
+using WorkflowToolCatalogPolicies = Aevatar.Workflow.Abstractions.WorkflowToolCatalogPolicies;
 
 namespace Aevatar.GAgentService.Integration.Tests;
 
@@ -71,12 +74,10 @@ public sealed class ScopeServiceTeamStreamMultipartTests : ScopeServiceEndpointT
                 },
                 DeploymentPlan = new ServiceDeploymentPlan
                 {
-                    WorkflowPlan = new WorkflowServiceDeploymentPlan
-                    {
-                        WorkflowName = "member-a",
-                        WorkflowYaml = "name: member_a\nsteps:\n  - run: echo member",
-                        DefinitionActorId = "definition-actor-member-a",
-                    },
+                    WorkflowPlan = BuildInteractiveWorkflowPlan(
+                        "member-a",
+                        "name: member_a\nsteps:\n  - run: echo member",
+                        "definition-actor-member-a"),
                 },
             },
             CancellationToken.None);
@@ -207,5 +208,27 @@ public sealed class ScopeServiceTeamStreamMultipartTests : ScopeServiceEndpointT
         host.WorkflowFileIngressPort.Requests.Should().BeEmpty();
         host.StaticGAgentStreamInvocationPort.Requests.Should().BeEmpty();
         host.InteractionService.LastRequest.Should().BeNull();
+    }
+
+    private static WorkflowServiceDeploymentPlan BuildInteractiveWorkflowPlan(
+        string workflowName,
+        string workflowYaml,
+        string definitionActorId)
+    {
+        const ExternalCapabilityExecutionMode executionMode = ExternalCapabilityExecutionMode.Interactive;
+        return new WorkflowServiceDeploymentPlan
+        {
+            ToolCatalogPolicyVersion = WorkflowToolCatalogPolicies.CurrentVersion,
+            WorkflowName = workflowName,
+            WorkflowYaml = workflowYaml,
+            DefinitionActorId = definitionActorId,
+            CapabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                executionMode,
+                [],
+                []),
+            ExecutionMode = executionMode,
+        };
     }
 }

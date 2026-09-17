@@ -38,6 +38,7 @@ public sealed class WorkflowDocumentNormalizer
             EventModules = NormalizeText(role.EventModules),
             EventRoutes = NormalizeText(role.EventRoutes),
             AllowedTools = NormalizeAllowedTools(role.AllowedTools),
+            ToolSets = NormalizeAllowedTools(role.ToolSets),
             Connectors = role.Connectors
                 .SelectMany(SplitConnectorValue)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -81,6 +82,7 @@ public sealed class WorkflowDocumentNormalizer
             TargetRole = NormalizeText(step.TargetRole),
             UsedRoleAlias = false,
             AllowedTools = NormalizeAllowedTools(step.AllowedTools),
+            ToolSets = NormalizeAllowedTools(step.ToolSets),
             Capability = NormalizeCapability(step.Capability),
             Parameters = normalizedParameters,
             Next = NormalizeText(step.Next),
@@ -120,6 +122,7 @@ public sealed class WorkflowDocumentNormalizer
                         .ToList(),
                     BodyMode = capability.NyxIdRequest.BodyMode.Trim(),
                     ResponseMode = capability.NyxIdRequest.ResponseMode.Trim(),
+                    Risk = capability.NyxIdRequest.Risk.Trim(),
                 },
         };
     }

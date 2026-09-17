@@ -30,6 +30,14 @@ public sealed class GarnetEventStore : IEventStore, IEventStoreMaintenance
                                         return {1, current}
                                       end
 
+                                      local stale = redis.call('ZRANGEBYSCORE', KEYS[2], '(' .. tostring(current), '+inf')
+                                      if #stale > 0 then
+                                        for i = 1, #stale do
+                                          redis.call('HDEL', KEYS[3], stale[i])
+                                        end
+                                        redis.call('ZREMRANGEBYSCORE', KEYS[2], '(' .. tostring(current), '+inf')
+                                      end
+
                                       local latest = current
                                       for i = 0, count - 1 do
                                         local base = 3 + (i * 2)
@@ -158,10 +166,19 @@ public sealed class GarnetEventStore : IEventStore, IEventStoreMaintenance
         ct.ThrowIfCancellationRequested();
 
         var keys = BuildKeys(agentId);
+        // The version key is the commit point: index/data entries above it are
+        // remnants of an append the store aborted mid-script (e.g. ENOSPC) and
+        // were never committed. Reading them would replay uncommitted — and
+        // possibly payload-less — facts, so bound the range at the committed
+        // version instead of +inf.
+        var committedVersion = await GetVersionAsync(agentId, ct);
+        if (committedVersion <= 0 || (fromVersion.HasValue && fromVersion.Value >= committedVersion))
+            return [];
+
         var versions = await _database.SortedSetRangeByScoreAsync(
             keys.EventIndexKey,
             start: fromVersion ?? double.NegativeInfinity,
-            stop: double.PositiveInfinity,
+            stop: committedVersion,
             exclude: fromVersion.HasValue ? Exclude.Start : Exclude.None,
             order: Order.Ascending);
         ct.ThrowIfCancellationRequested();

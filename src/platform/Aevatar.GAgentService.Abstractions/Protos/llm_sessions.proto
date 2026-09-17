@@ -8,6 +8,7 @@ import "google/protobuf/duration.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "ai_messages.proto";
+import "llm_selection.proto";
 
 enum LlmSessionOriginKind {
   LLM_SESSION_ORIGIN_KIND_UNSPECIFIED = 0;
@@ -224,6 +225,13 @@ message LlmSessionRuntimeToolSelection {
   // Empty = no route tool set (run uses only the always-on DI providers). See task
   // 06-21-offgrain-run-route-toolset-drop.
   string tool_set_name = 8;
+  // Frozen Aevatar-owned catalog proof selected at ingress. Forwarded declarations are
+  // intentionally outside this proof because Aevatar never executes them.
+  aevatar.ai.AgentTurnToolCatalogProofPayload owned_catalog_proof = 9;
+  // Immutable published profile pinned when the run is created. Null remains readable
+  // only for legacy commands; newly profiled runs fail closed when it is unavailable.
+  aevatar.ai.AgentProfileSnapshot profile_snapshot = 10;
+  string tool_catalog_policy_version = 11;
 }
 
 message LlmRunRequested {
@@ -241,6 +249,7 @@ message LlmRunRequested {
   google.protobuf.Timestamp requested_at = 12;
   aevatar.ai.AgentToolExecutionContextPayload tool_context = 13;
   google.protobuf.Duration timeout_after = 14;
+  aevatar.ai.LLMRouteTarget route_target = 15;
 }
 
 message LlmRunStartedEvent {

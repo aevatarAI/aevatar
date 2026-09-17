@@ -7,6 +7,7 @@ public sealed class ResponsesModelRouteParserTests
 {
     [Theory]
     [InlineData("openai/gpt-5", "openai", "gpt-5")]
+    [InlineData("o/gpt-5", "o", "gpt-5")]
     [InlineData("vendor-1/model/name", "vendor-1", "model/name")]
     [InlineData("  anthropic/claude-sonnet  ", "anthropic", "claude-sonnet")]
     public void Parse_ShouldSplitSlugPrefix_WhenPrefixIsLowercaseSlug(string model, string routeSlug, string effectiveModel)
@@ -19,7 +20,6 @@ public sealed class ResponsesModelRouteParserTests
 
     [Theory]
     [InlineData("OpenAI/gpt-5")]
-    [InlineData("o/gpt-5")]
     [InlineData("/gpt-5")]
     [InlineData("openai/")]
     [InlineData("plain-model")]

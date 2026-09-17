@@ -253,8 +253,7 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
                 CorrelationId = result.TurnId,
             },
         };
-        await dispatchPort.DispatchAsync(result.DeliveryActorId, envelope, CancellationToken.None)
-            .ConfigureAwait(false);
+        await dispatchPort.DispatchAsync(result.DeliveryActorId, envelope, CancellationToken.None);
     }
 
     private static bool HasSamePayload(ChatTurn existing, ChatTurn candidate) =>

@@ -84,8 +84,8 @@ export function buildChannelDetailsHref(
   return `${buildWorkflowActivitySectionHref(scopeId, 'channels')}/${encodeURIComponent(registrationId)}`;
 }
 
-export function buildTelegramConnectionHref(scopeId: string): string {
-  return `${buildWorkflowActivitySectionHref(scopeId, 'channels')}/connect/telegram`;
+export function buildChannelBindHref(scopeId: string, botId: string): string {
+  return `${buildWorkflowActivitySectionHref(scopeId, 'channels')}/bind/${encodeURIComponent(botId)}`;
 }
 
 export function buildChannelEditHref(

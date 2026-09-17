@@ -80,6 +80,35 @@ public sealed class ConnectorCallModuleApprovalTests
     }
 
     [Fact]
+    public async Task RemoteApproval_WithAgentKey_ShouldPreserveTypedCredential()
+    {
+        const string agentKey = "nyxid_ag_connector_approval_key";
+        var harness = await ApprovalHarness.CreateAsync();
+        await WorkflowCallerCredentialRuntimeContextAccess.SetCredentialAsync(
+            harness.Agent,
+            new WorkflowCallerCredential
+            {
+                BearerToken = agentKey,
+                Kind = NyxIdCallerCredentialKind.AgentKey,
+                NyxIdAuthority = new WorkflowCallerNyxIdAuthority
+                {
+                    Platform = "nyxid",
+                    Tenant = "tenant-alpha",
+                    ExternalUserId = "user-alpha",
+                    Scope = "proxy",
+                },
+            });
+        harness.ApprovalPort.ExpectedToken = agentKey;
+
+        await harness.BeginAsync();
+
+        harness.ApprovalPort.Credentials.Should().ContainSingle();
+        harness.ApprovalPort.Credentials.Single().Token.Should().Be(agentKey);
+        harness.ApprovalPort.Credentials.Single().Kind.Should()
+            .Be(AgentToolNyxIdCredentialKind.AgentKey);
+    }
+
+    [Fact]
     public async Task PendingApproval_ShouldResumeAfterContextAndModuleRecreation()
     {
         var harness = await ApprovalHarness.CreateAsync();
@@ -839,15 +868,22 @@ public sealed class ConnectorCallModuleApprovalTests
             ExpiresAt: ApprovalHarness.Now.AddMinutes(2));
         public bool ThrowOnSubmit { get; init; }
         public bool ThrowOnStatus { get; set; }
+        public string ExpectedToken { get; set; } = ApprovalHarness.BearerToken;
         public List<RemoteToolApprovalRequest> Submissions { get; } = [];
         public List<RemoteToolApprovalStatusQuery> StatusQueries { get; } = [];
+        public List<(string? Token, AgentToolNyxIdCredentialKind Kind)> Credentials { get; } = [];
 
         public Task<RemoteToolApprovalSubmission> SubmitAsync(
             RemoteToolApprovalRequest request,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            AgentToolRequestContext.NyxIdAccessToken.Should().Be(ApprovalHarness.BearerToken);
+            var context = AgentToolRequestContext.Current;
+            context.Should().NotBeNull();
+            context!.Credentials.NyxIdAccessToken.Should().Be(ExpectedToken);
+            Credentials.Add((
+                context.Credentials.NyxIdAccessToken,
+                context.Credentials.NyxIdCredentialKind));
             Submissions.Add(request);
             return ThrowOnSubmit
                 ? Task.FromException<RemoteToolApprovalSubmission>(new HttpRequestException("unavailable"))
@@ -859,7 +895,12 @@ public sealed class ConnectorCallModuleApprovalTests
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            AgentToolRequestContext.NyxIdAccessToken.Should().Be(ApprovalHarness.BearerToken);
+            var context = AgentToolRequestContext.Current;
+            context.Should().NotBeNull();
+            context!.Credentials.NyxIdAccessToken.Should().Be(ExpectedToken);
+            Credentials.Add((
+                context.Credentials.NyxIdAccessToken,
+                context.Credentials.NyxIdCredentialKind));
             StatusQueries.Add(query);
             return ThrowOnStatus
                 ? Task.FromException<RemoteToolApprovalStatusSnapshot>(new HttpRequestException("unavailable"))

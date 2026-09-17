@@ -1,12 +1,30 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Identity.ProjectionRecovery;
 using Aevatar.Mainnet.Host.Api.ProjectionRecovery;
 using Aevatar.Studio.Application.Studio.ProjectionRecovery;
 using FluentAssertions;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using NSubstitute;
 
 namespace Aevatar.Capabilities.Tests;
@@ -20,6 +38,105 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
         "CATALOG-CONTENTS-SENTINEL-DO-NOT-SERIALIZE-65ad61e8";
     private const string ExceptionSentinel =
         $"downstream-failure {BearerSentinel} {CredentialSentinel} {CatalogSentinel}";
+
+    [Fact]
+    public async Task OAuthClientRoute_EndpointAuditMiddlewareAppendsSanitizedRepairEvidence()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var service = Substitute.For<IAevatarOAuthClientVersionRegressionRepairService>();
+        service.RepairAsync(
+                Arg.Any<AevatarOAuthClientVersionRegressionRepairRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(OAuthClientAccepted());
+
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthorization();
+        builder.Services.AddLogging();
+        builder.Services.AddSingleton<IAuditTrailAppender>(appender);
+        builder.Services.AddSingleton<IAuditActorIdentityHasher>(new StableAuditActorIdentityHasher());
+        builder.Services.AddSingleton(ElevatedAuthorizer());
+        builder.Services.AddSingleton(service);
+
+        await using var app = builder.Build();
+        app.UseRouting();
+        app.Use(async (context, next) =>
+        {
+            context.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim("sub", "admin-1"),
+                new Claim("scope_id", "platform"),
+            ], "Test"));
+            await next(context);
+        });
+        app.UseMiddleware<EndpointAuditCaptureMiddleware>();
+        app.UseAuthorization();
+        app.MapProjectionVersionRegressionRepairAdminEndpoints();
+        await app.StartAsync();
+
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(static candidate =>
+                candidate.RoutePattern.RawText ==
+                "/api/admin/identity/projection-repair/aevatar-oauth-client");
+        endpoint.Metadata.GetMetadata<IAuthorizeData>().Should().NotBeNull();
+        var audit = endpoint.Metadata.GetMetadata<EndpointAuditMetadata>();
+        audit.Should().NotBeNull();
+        audit!.OperationName.Should().Be("identity.oauth-client.projection-repair");
+        audit.SensitivityLevel.Should().Be(AuditSensitivityLevel.Restricted);
+
+        var request = ValidOAuthClientRequest() with
+        {
+            RepairReason = "restore regressed identity client replica",
+        };
+        using var httpRequest = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/api/admin/identity/projection-repair/aevatar-oauth-client")
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(request),
+                Encoding.UTF8,
+                "application/json"),
+        };
+        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", BearerSentinel);
+
+        using var response = await app.GetTestClient().SendAsync(httpRequest);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        appender.Records.Should().HaveCount(2);
+        appender.Records.Should().OnlyContain(record =>
+            record.Target.Kind == "identity-client-projection" &&
+            record.Target.Id == "cluster-singleton" &&
+            record.RequestSummary != "redacted" &&
+            record.Target.Kind != "redacted" &&
+            record.Target.Id != "redacted");
+
+        var terminal = appender.Records.Single(record =>
+            record.OperationName == "identity.oauth-client.projection-repair");
+        var requestIdDigest = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(request.RepairRequestId)).AsSpan(0, 16))
+            .ToLowerInvariant();
+        terminal.RequestSummary.Should()
+            .Contain("POST identity-client-projection-repair")
+            .And.Contain("apply=true")
+            .And.Contain("source_version=2")
+            .And.Contain("document_version=3")
+            .And.Contain($"repair_request_sha256={requestIdDigest}")
+            .And.Contain("reason=restore regressed identity client replica")
+            .And.NotContain(request.RepairRequestId)
+            .And.NotContain(request.ExpectedDocumentLastEventId)
+            .And.NotContain(BearerSentinel);
+
+        var capturedRecords = string.Join('\n', appender.Records.Select(static record => record.ToString()));
+        capturedRecords.Should()
+            .NotContain(BearerSentinel)
+            .And.NotContain(request.RepairRequestId)
+            .And.NotContain(request.ExpectedDocumentLastEventId);
+    }
 
     [Fact]
     public async Task Workspace_WithoutAuthorizer_ReturnsServiceUnavailable()
@@ -45,6 +162,94 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
             CancellationToken.None);
 
         StatusCode(result).Should().Be(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    [Fact]
+    public async Task OAuthClient_WithoutBearer_ReturnsForbiddenWithoutServiceIo()
+    {
+        var service = Substitute.For<IAevatarOAuthClientVersionRegressionRepairService>();
+
+        var result = await ProjectionVersionRegressionRepairAdminEndpoints.HandleOAuthClientAsync(
+            Context(),
+            ValidOAuthClientRequest(),
+            ElevatedAuthorizer(),
+            service,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status403Forbidden);
+        await service.DidNotReceiveWithAnyArgs().InspectAsync(default);
+        await service.DidNotReceiveWithAnyArgs().RepairAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task OAuthClient_DryRun_ReturnsOnlyInspectionManifest()
+    {
+        var service = Substitute.For<IAevatarOAuthClientVersionRegressionRepairService>();
+        service.InspectAsync(Arg.Any<CancellationToken>())
+            .Returns(OAuthClientInspection());
+
+        var result = await ProjectionVersionRegressionRepairAdminEndpoints.HandleOAuthClientAsync(
+            Context(BearerSentinel),
+            ValidOAuthClientRequest() with { Apply = false },
+            ElevatedAuthorizer(),
+            service,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status200OK);
+        var body = SerializedBody(result);
+        body.Should().Contain("inspection").And.Contain("repairable");
+        body.Should().NotContain(BearerSentinel).And.NotContain(CredentialSentinel);
+        await service.DidNotReceiveWithAnyArgs().RepairAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task OAuthClient_ApplyAccepted_ReturnsAcceptedWithoutProjectionSecrets()
+    {
+        var service = Substitute.For<IAevatarOAuthClientVersionRegressionRepairService>();
+        service.RepairAsync(
+                Arg.Any<AevatarOAuthClientVersionRegressionRepairRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(OAuthClientAccepted());
+
+        var result = await ProjectionVersionRegressionRepairAdminEndpoints.HandleOAuthClientAsync(
+            Context(BearerSentinel),
+            ValidOAuthClientRequest(),
+            ElevatedAuthorizer(),
+            service,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        var body = SerializedBody(result);
+        body.Should().Contain("accepted").And.Contain("oauth-command-1");
+        body.Should()
+            .NotContain(BearerSentinel)
+            .And.NotContain(CredentialSentinel)
+            .And.NotContain(CatalogSentinel);
+        await service.Received(1).RepairAsync(
+            Arg.Is<AevatarOAuthClientVersionRegressionRepairRequest>(request =>
+                request.RequestedBySubjectId == "admin-1" &&
+                request.ExpectedActorId == AevatarOAuthClientGAgent.WellKnownId),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("line one\u2028line two")]
+    [InlineData("paragraph one\u2029paragraph two")]
+    public async Task OAuthClient_UnicodeMultilineRepairReason_ReturnsBadRequestWithoutServiceIo(
+        string reason)
+    {
+        var service = Substitute.For<IAevatarOAuthClientVersionRegressionRepairService>();
+
+        var result = await ProjectionVersionRegressionRepairAdminEndpoints.HandleOAuthClientAsync(
+            Context(BearerSentinel),
+            ValidOAuthClientRequest() with { RepairReason = reason },
+            ElevatedAuthorizer(),
+            service,
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status400BadRequest);
+        await service.DidNotReceiveWithAnyArgs().InspectAsync(default);
+        await service.DidNotReceiveWithAnyArgs().RepairAsync(default!, default);
     }
 
     [Fact]
@@ -632,6 +837,17 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
             "catalog-repair-request-1",
             "repair catalog projection regression");
 
+    private static ProjectionVersionRegressionRepairAdminEndpoints.OAuthClientRepairRequest
+        ValidOAuthClientRequest() =>
+        new(
+            Apply: true,
+            AevatarOAuthClientGAgent.WellKnownId,
+            ExpectedSourceStateVersion: 2,
+            ExpectedDocumentStateVersion: 3,
+            "oauth-event-3",
+            "oauth-repair-request-1",
+            "repair OAuth client projection regression");
+
     private static ProjectionVersionRegressionRepairAdminEndpoints.WorkspaceRepairRequest
         InvalidWorkspaceApplyRequest(string invalidField)
     {
@@ -705,6 +921,26 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
             Repairable: true,
             BearerSentinel);
 
+    private static AevatarOAuthClientVersionRegressionInspection OAuthClientInspection() =>
+        new(
+            AevatarOAuthClientGAgent.WellKnownId,
+            SourceStateVersion: 2,
+            DocumentStateVersion: 3,
+            "oauth-event-3",
+            AevatarOAuthClientGAgent.WellKnownId,
+            Repairable: true,
+            BearerSentinel);
+
+    private static AevatarOAuthClientVersionRegressionRepairResult OAuthClientAccepted() =>
+        AevatarOAuthClientVersionRegressionRepairResult.Accepted(
+            OAuthClientInspection(),
+            "oauth-repair-request-1",
+            AevatarOAuthClientReplicaDeleteDisposition.Deleted,
+            new AevatarOAuthClientProjectionRepublishReceipt(
+                AevatarOAuthClientGAgent.WellKnownId,
+                "oauth-command-1",
+                "oauth-correlation-1"));
+
     private static NyxIdAuthorizationCatalogVersionRegressionRepairResult CatalogResult(
         NyxIdAuthorizationCatalogVersionRegressionRepairStatus status)
     {
@@ -761,4 +997,30 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
         result is Microsoft.AspNetCore.Http.HttpResults.ForbidHttpResult
             ? StatusCodes.Status403Forbidden
             : ((IStatusCodeHttpResult)result).StatusCode ?? StatusCodes.Status200OK;
+
+    private sealed class RecordingAuditTrailAppender : IAuditTrailAppender
+    {
+        public List<AuditRecord> Records { get; } = [];
+
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            Records.Add(record);
+            return Task.FromResult(AuditTrailAppendResult.Appended(
+                record.AuditId,
+                record.AuditActorId,
+                record.OccurredAt.ToDateTimeOffset()));
+        }
+    }
+
+    private sealed class StableAuditActorIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) =>
+            new($"hashed:{canonicalActorKey}", "kid-test");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) =>
+            auditActorId == $"hashed:{canonicalActorKey}" &&
+            identityKeyId == "kid-test";
+    }
 }

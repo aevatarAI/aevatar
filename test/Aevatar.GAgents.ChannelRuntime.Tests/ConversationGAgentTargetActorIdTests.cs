@@ -1,5 +1,7 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
@@ -18,6 +20,114 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ConversationGAgentTargetActorIdTests
 {
     [Fact]
+    public async Task HandleLlmReplyReadyAsync_ShouldPinProfileAndForwardItToLaterRuns()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var runner = new DeferredReplyTurnRunner();
+        var dispatcher = new RecordingLlmReplyRunDispatcher();
+        var agent = await CreateAgentAsync(actorId, runner, dispatcher);
+        var profile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-channel-alpha",
+            ProfileVersion = "profile-v1",
+            PublishedRevision = 1,
+            AgentKind = "channel.reply",
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "workspace.default",
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        });
+
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-target-1"));
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = runner.Request.CorrelationId,
+            RunId = runner.Request.RunId,
+            RegistrationId = runner.Request.RegistrationId,
+            SourceActorId = "channel-agent-run:agent-run-target-1",
+            Activity = BuildInboundActivity("msg-target-1"),
+            Outbound = new MessageContent { Text = "completed" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            AgentProfile = profile.Clone(),
+        });
+
+        AgentProfileSnapshotCodec.ByteEquivalent(agent.State.AgentProfile, profile).Should().BeTrue();
+        runner.Request.CorrelationId = "msg-target-2";
+        runner.Request.RunId = "agent-run-target-2";
+        runner.Request.Activity = BuildInboundActivity("msg-target-2");
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-target-2"));
+
+        dispatcher.Requests.Should().HaveCount(2);
+        AgentProfileSnapshotCodec.ByteEquivalent(dispatcher.Requests[1].AgentProfile, profile).Should().BeTrue();
+        AgentProfileSnapshotCodec.ByteEquivalent(
+            agent.State.PendingLlmReplyRequests.Should().ContainSingle().Subject.AgentProfile,
+            profile).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WhenProfileDiffersFromConversationPin_ShouldFailClosed()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var runner = new DeferredReplyTurnRunner();
+        var agent = await CreateAgentAsync(actorId, runner, new RecordingLlmReplyRunDispatcher());
+        var pinnedProfile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-channel-alpha",
+            ProfileVersion = "profile-v1",
+            PublishedRevision = 1,
+            AgentKind = "channel.reply",
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "workspace.default",
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        });
+        var changedProfile = AgentProfileSnapshotCodec.Seal(new AgentProfileSnapshot
+        {
+            ProfileId = "profile-channel-alpha",
+            ProfileVersion = "profile-v2",
+            PublishedRevision = 2,
+            AgentKind = "channel.reply",
+            PolicyRevision = "policy-v2",
+            RouteToolSetRef = "workspace.default",
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        });
+
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-target-1"));
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = runner.Request.CorrelationId,
+            RunId = runner.Request.RunId,
+            RegistrationId = runner.Request.RegistrationId,
+            Activity = BuildInboundActivity("msg-target-1"),
+            Outbound = new MessageContent { Text = "first" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            AgentProfile = pinnedProfile.Clone(),
+        });
+
+        runner.Request.CorrelationId = "msg-target-2";
+        runner.Request.RunId = "agent-run-target-2";
+        runner.Request.Activity = BuildInboundActivity("msg-target-2");
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-target-2"));
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = runner.Request.CorrelationId,
+            RunId = runner.Request.RunId,
+            RegistrationId = runner.Request.RegistrationId,
+            Activity = BuildInboundActivity("msg-target-2"),
+            Outbound = new MessageContent { Text = "must not escape" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            AgentProfile = changedProfile,
+        });
+
+        AgentProfileSnapshotCodec.ByteEquivalent(agent.State.AgentProfile, pinnedProfile).Should().BeTrue();
+        runner.Replies.Should().HaveCount(2);
+        var rejected = runner.Replies[1];
+        rejected.TerminalState.Should().Be(LlmReplyTerminalState.Failed);
+        rejected.ErrorCode.Should().Be("agent_profile_pin_mismatch");
+        rejected.AgentProfile.Should().BeNull();
+        rejected.AppendedHistory.Should().BeEmpty();
+        rejected.Outbound.Text.Should().NotContain("must not escape");
+    }
+
+    [Fact]
     public async Task HandleInboundActivityAsync_ShouldOwnerStampLlmReplyTargetActorIdBeforeDispatch()
     {
         var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
@@ -32,6 +142,126 @@ public sealed class ConversationGAgentTargetActorIdTests
         dispatcher.Requests[0].TargetActorId.Should().Be(actorId);
         agent.State.PendingLlmReplyRequests.Should().ContainSingle();
         agent.State.PendingLlmReplyRequests[0].TargetActorId.Should().Be(actorId);
+    }
+
+    [Theory]
+    [InlineData(true, "callback-reply-message-1")]
+    [InlineData(false, "original-reply-message-1")]
+    public async Task HandleLlmReplyReadyAsync_ShouldSelectSourceActivityDeliveryContextOnlyWhenRequested(
+        bool useSourceActivityDeliveryContext,
+        string expectedReplyMessageId)
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var runner = new DeferredReplyTurnRunner();
+        runner.Request.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "original-reply-message-1",
+            CorrelationId = runner.Request.CorrelationId,
+        };
+        var agent = await CreateAgentAsync(actorId, runner, new RecordingLlmReplyRunDispatcher());
+        var inboundActivity = BuildInboundActivity("msg-target-1");
+        inboundActivity.OutboundDelivery = runner.Request.Activity.OutboundDelivery.Clone();
+        await agent.HandleNyxRelayInboundActivityAsync(new NyxRelayInboundActivity
+        {
+            Activity = inboundActivity,
+            CorrelationId = runner.Request.CorrelationId,
+            ReplyToken = "original-reply-token-1",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+        });
+        var callbackActivity = BuildInboundActivity("callback-approval-1");
+        callbackActivity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "callback-reply-message-1",
+            CorrelationId = "callback-approval-1",
+        };
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = runner.Request.CorrelationId,
+            RunId = runner.Request.RunId,
+            RegistrationId = runner.Request.RegistrationId,
+            SourceActorId = "channel-agent-run:agent-run-target-1",
+            Activity = callbackActivity,
+            Outbound = new MessageContent { Text = "completed" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReplyToken = "callback-reply-token-1",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
+            UseSourceActivityDeliveryContext = useSourceActivityDeliveryContext,
+        });
+
+        var context = runner.ReplyRuntimeContexts.Should().ContainSingle().Subject;
+        context.NyxRelayReplyToken.Should().NotBeNull();
+        context.NyxRelayReplyToken!.ReplyToken.Should().Be("callback-reply-token-1");
+        context.NyxRelayReplyToken.ReplyMessageId.Should().Be(expectedReplyMessageId);
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_WithWorkflowDeliveryDelegation_ShouldCompleteWithoutVisibleReply()
+    {
+        var actorId = ConversationGAgent.BuildActorId("lark:group:oc_group_chat_1");
+        var eventStore = new InMemoryEventStore();
+        var runner = new DeferredReplyTurnRunner();
+        var agent = await CreateAgentAsync(
+            actorId,
+            runner,
+            new RecordingLlmReplyRunDispatcher(),
+            eventStore: eventStore);
+        await agent.HandleInboundActivityAsync(BuildInboundActivity("msg-target-1"));
+        agent.State.PendingLlmReplyRequests.Should().ContainSingle();
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = runner.Request.CorrelationId,
+            RunId = runner.Request.RunId,
+            RegistrationId = runner.Request.RegistrationId,
+            SourceActorId = "channel-agent-run:agent-run-target-1",
+            Activity = BuildInboundActivity("msg-target-1"),
+            Outbound = new MessageContent
+            {
+                Text = "{\"status\":\"pending\",\"reason\":\"AwaitingToolApproval\",\"success\":false}",
+            },
+            TerminalState = LlmReplyTerminalState.Completed,
+            WorkflowRunDelivery = new WorkflowRunBackgroundDeliveryReceipt
+            {
+                DeliveryActorId = "workflow-delivery-actor-1",
+                WorkflowActorId = "workflow-actor-1",
+                WorkflowRunId = "workflow-run-1",
+                WorkflowCommandId = "workflow-command-1",
+                WorkflowCorrelationId = "workflow-correlation-1",
+                StreamTopic = "aevatar://actors/workflow-actor-1/runs/workflow-command-1",
+                ChannelPlatform = "lark",
+                ReplyMessageId = "reply-message-1",
+                PlatformMessageId = "platform-message-1",
+                RegistrationScopeId = "registration-scope-1",
+            },
+            AppendedHistory =
+            {
+                new ConversationHistoryEntry
+                {
+                    Role = "tool",
+                    ToolCallId = "call-start-workflow-1",
+                    Content = "{\"status\":\"accepted\"}",
+                },
+            },
+        });
+
+        runner.ReplyRuntimeContexts.Should().BeEmpty();
+        agent.State.PendingLlmReplyRequests.Should().BeEmpty();
+        agent.State.ProcessedCommandIds.Should().Contain("llm:msg-target-1");
+
+        var events = await eventStore.GetEventsAsync(actorId);
+        var completed = events
+            .Where(x => x.EventData.Is(ConversationTurnCompletedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<ConversationTurnCompletedEvent>())
+            .Should()
+            .ContainSingle()
+            .Subject;
+        completed.WorkflowRunDelivery.DeliveryActorId.Should().Be("workflow-delivery-actor-1");
+        completed.AppendedHistory.Should().ContainSingle(entry =>
+            entry.Role == "tool" && entry.ToolCallId == "call-start-workflow-1");
+        completed.Outbound.Should().BeNull();
+        events.Should().NotContain(x => x.EventData.Is(LlmReplyDeliveredEvent.Descriptor));
+        events.Should().NotContain(x => x.EventData.Is(DeliveryProducedEvent.Descriptor));
     }
 
     [Fact]
@@ -510,6 +740,10 @@ public sealed class ConversationGAgentTargetActorIdTests
             RequestedAtUnixMs = 10,
         };
 
+        public List<ConversationTurnRuntimeContext> ReplyRuntimeContexts { get; } = [];
+
+        public List<LlmReplyReadyEvent> Replies { get; } = [];
+
         public Task<ConversationTurnResult> RunInboundAsync(
             ChatActivity activity,
             ConversationTurnRuntimeContext runtimeContext,
@@ -519,11 +753,15 @@ public sealed class ConversationGAgentTargetActorIdTests
         public Task<ConversationTurnResult> RunLlmReplyAsync(
             LlmReplyReadyEvent reply,
             ConversationTurnRuntimeContext runtimeContext,
-            CancellationToken ct) =>
-            Task.FromResult(ConversationTurnResult.Sent(
+            CancellationToken ct)
+        {
+            ReplyRuntimeContexts.Add(runtimeContext);
+            Replies.Add(reply.Clone());
+            return Task.FromResult(ConversationTurnResult.Sent(
                 "sent",
                 reply.Outbound?.Clone() ?? new MessageContent(),
                 "bot"));
+        }
 
         public Task<ConversationTurnResult> RunContinueAsync(
             ConversationContinueRequestedEvent command,

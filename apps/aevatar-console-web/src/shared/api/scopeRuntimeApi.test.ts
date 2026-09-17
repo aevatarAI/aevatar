@@ -376,31 +376,48 @@ describe('scopeRuntimeApi', () => {
         smokeTestSupported: true,
         defaultSmokeInputMode: 'typed-payload',
         defaultSmokePrompt: null,
-        sampleRequestJson: '{}',
-        deploymentStatus: 'Active',
-        revisionId: 'rev-script',
-        curlExample: 'curl ...',
-        fetchExample: 'await fetch(...)',
+        sampleRequestJson: "{}",
+        deploymentStatus: "Active",
+        revisionId: "rev-script",
+        invocationReadiness: {
+          canInvoke: true,
+          status: "ready",
+          reasonCode: "ready",
+          message: "Member endpoint is ready for invocation.",
+          revisionId: "rev-script",
+          deploymentId: "dep-script",
+          observedAtUtc: "2026-08-17T04:57:08Z",
+        },
+        publishedServiceStateVersion: 2,
+        boundRevisionStateVersion: 3,
+        curlExample: "curl ...",
+        fetchExample: "await fetch(...)",
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await expect(
-      scopeRuntimeApi.getMemberEndpointContract(
-        'scope-a',
-        'script-1',
-        'command',
-      ),
-    ).resolves.toEqual(
+    const contract = await scopeRuntimeApi.getMemberEndpointContract(
+      "scope-a",
+      "script-1",
+      "command",
+    );
+    expect(contract).toEqual(
       expect.objectContaining({
-        endpointId: 'command',
-        memberId: 'script-1',
-        publishedServiceId: 'script-1',
-        serviceId: '',
+        endpointId: "command",
+        memberId: "script-1",
+        publishedServiceId: "script-1",
+        invocationReadiness: expect.objectContaining({
+          canInvoke: true,
+          revisionId: "rev-script",
+          status: "ready",
+        }),
+        publishedServiceStateVersion: 2,
+        boundRevisionStateVersion: 3,
         requestTypeUrl:
           'type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand',
       }),
     );
+    expect(contract).not.toHaveProperty("serviceId");
 
     const [input, init] = fetchMock.mock.calls[0] as [
       string,
@@ -412,9 +429,10 @@ describe('scopeRuntimeApi', () => {
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
     );
+    expect(init?.cache).toBe("no-store");
   });
 
-  it('keeps endpoint contract identities in separate fields', async () => {
+  it("rejects a member endpoint contract without its member identity", async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -444,17 +462,9 @@ describe('scopeRuntimeApi', () => {
     } as Response) as typeof global.fetch;
 
     await expect(
-      scopeRuntimeApi.getMemberEndpointContract(
-        'scope-a',
-        'script-1',
-        'command',
-      ),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        memberId: undefined,
-        publishedServiceId: undefined,
-        serviceId: '',
-      }),
+      scopeRuntimeApi.getMemberEndpointContract("scope-a", "script-1", "command"),
+    ).rejects.toThrow(
+      "ScopeMemberEndpointContract.memberId must be a string.",
     );
   });
 

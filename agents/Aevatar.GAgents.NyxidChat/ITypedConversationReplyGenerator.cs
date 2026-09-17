@@ -39,7 +39,7 @@ internal interface IAgentRunStepConversationReplyGenerator : ITypedConversationR
         ChatAttachmentInputContext? attachmentContext,
         bool forceDisableTools,
         CancellationToken ct,
-        AgentProfileTurnCatalog? turnCatalog = null);
+        AgentTurnToolCatalog? turnCatalog = null);
 
     MessageContent? TryTakeOutboundIntent() => null;
 }

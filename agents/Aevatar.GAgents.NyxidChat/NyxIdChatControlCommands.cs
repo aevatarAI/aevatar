@@ -57,9 +57,6 @@ public static class NyxIdChatControlCommands
     public const string ActiveTurnRequiresSteeringMessage =
         "This conversation already has active work. Submit a steering command for the active turn.";
 
-    private const string StopAcceptedMessage = "The active chat turn was stopped.";
-    private const string StopUncancellableMessage =
-        "The chat turn was fenced, but the in-flight operation could not be proven cancelled.";
     private const string SteeringAcceptedMessage =
         "The steering instruction was accepted at a safe checkpoint.";
     private const string SteeringAcceptedForLaterMessage =
@@ -142,6 +139,32 @@ public static class NyxIdChatControlCommands
         if (!actions.Retry || !step.RetryInputRebuildable || HasAcceptedFence(state))
             return RejectStepControl(state, input, StepActionUnavailable, StepActionUnavailableMessage, now);
 
+        var retryAuthorizationSourceKey = step.Kind == NyxIdChatStepKind.Tool
+            ? ResolveRetryAuthorizationSourceKey(state, step)
+            : null;
+        if (step.Kind == NyxIdChatStepKind.Tool && retryAuthorizationSourceKey is null)
+            return RejectStepControl(state, input, StepActionUnavailable, StepActionUnavailableMessage, now);
+        if (step.Kind == NyxIdChatStepKind.Tool &&
+            !HasConsistentAgentProfileAuthority(state))
+        {
+            return RejectStepControl(
+                state,
+                input,
+                StepActionUnavailable,
+                StepActionUnavailableMessage,
+                now);
+        }
+        if (step.Kind == NyxIdChatStepKind.Tool &&
+            !NyxIdChatDurableRetryAuthority.TrySeal(
+                state,
+                command.OwnerSubject,
+                command.RetryRequestId,
+                command.ToolContext,
+                out _))
+        {
+            return RejectStepControl(state, input, StepActionUnavailable, StepActionUnavailableMessage, now);
+        }
+
         var generation = step.Operation.Key.OperationGeneration + 1;
         var next = state.Clone();
         var retried = next.ActiveTask.Steps.First(candidate =>
@@ -165,13 +188,26 @@ public static class NyxIdChatControlCommands
         retried.ExternalEffect = NyxIdChatEffectEvidence.NotStarted;
         retried.FailureCode = string.Empty;
         retried.SafeMessage = string.Empty;
+        retried.ApprovalRequestId = string.Empty;
+        retried.ApprovalObservation = null;
+        retried.RematerializeDurableAuthorization = retried.Kind == NyxIdChatStepKind.Tool;
+        retried.RetryAuthorizationSourceKey = retryAuthorizationSourceKey?.Clone();
         retried.Operation = new NyxIdChatOperationState
         {
             Key = key.Clone(),
-            Kind = NyxIdChatStepKind.Llm,
+            Kind = retried.Kind,
             Phase = NyxIdChatOperationPhase.Requested,
+            MayChangeExternalState = retried.MayChangeExternalState,
+            Idempotent = retried.Kind == NyxIdChatStepKind.Llm,
+            IdempotencyKey = key.OperationId,
             RequestedAt = now.Clone(),
         };
+        ResetDependentVerification(next, retried, generation, now);
+        NyxIdChatPlanRevisions.CommitChange(
+            next.ActiveTask,
+            NyxIdChatPlanRevisionCause.FailureRecovery,
+            now,
+            []);
         retried.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(retried);
         retried.UpdatedAt = now.Clone();
         next.ActiveTask.Status = NyxIdChatTaskStatus.Active;
@@ -192,13 +228,23 @@ public static class NyxIdChatControlCommands
             StepRetryAccepted,
             StepRetryAcceptedMessage,
             now);
+        var retryCommand = BuildRetryDispatch(next, command, generation);
+        if (retryCommand is null)
+        {
+            return RejectStepControl(
+                state,
+                input,
+                StepActionUnavailable,
+                StepActionUnavailableMessage,
+                now);
+        }
         RecordStepControlResult(next, result, now);
         return new NyxIdChatStepControlDecision(
             ShouldCommit: true,
             ShouldDispatch: true,
             next,
             result,
-            BuildRetryDispatch(next, command, generation));
+            retryCommand);
     }
 
     public static NyxIdChatStepControlDecision Skip(
@@ -339,6 +385,35 @@ public static class NyxIdChatControlCommands
         step.Operation.CompletedAt = now.Clone();
         step.UpdatedAt = now.Clone();
         step.AvailableActions = new NyxIdChatAvailableActions();
+        if (step.Source?.Tool?.OperationAdmission is not null &&
+            signal.Tool?.Receipt is
+            {
+                Status: AgentToolReceiptStatus.ApprovalRequired or
+                    AgentToolReceiptStatus.Denied,
+            } receipt &&
+            !string.IsNullOrWhiteSpace(receipt.ApprovalRequestId))
+        {
+            step.ApprovalRequestId = receipt.ApprovalRequestId;
+            step.ApprovalObservation = new NyxIdChatPostReturnApprovalObservation
+            {
+                ApprovalRequestId = receipt.ApprovalRequestId,
+                DecisionMode = receipt.NyxIdApprovalDecisionMode,
+                ReceiptStatus = receipt.Status,
+                ObservedAt = now.Clone(),
+                TerminalOutcome = receipt.NyxIdApprovalTerminalOutcome,
+                SubjectKind = receipt.SubjectKind,
+                SubjectId = receipt.SubjectId,
+            };
+        }
+        if (evidence.Value.Phase != NyxIdChatOperationPhase.Uncertain &&
+            next.ControlFence?.Kind == NyxIdChatControlKind.Steering &&
+            next.ContinuationAdmission?.Status ==
+                NyxIdChatContinuationAdmissionStatus.AcceptedForLater)
+        {
+            next.ContinuationAdmission.Status = NyxIdChatContinuationAdmissionStatus.Accepted;
+            next.ContinuationAdmission.ReasonCode = SteeringAccepted;
+            next.ContinuationAdmission.SafeMessage = SteeringAcceptedMessage;
+        }
         next.ProgressSequence++;
         next.UpdatedAt = now.Clone();
 
@@ -391,18 +466,9 @@ public static class NyxIdChatControlCommands
                 now);
         }
 
-        if (!MatchesExpectedVersion(command.ExpectedStateVersion, stateVersion))
-        {
-            return Reject(
-                state,
-                NyxIdChatControlKind.Stop,
-                requestId,
-                command.ClientRequestId,
-                command.TurnId,
-                StateVersionMismatch,
-                StateVersionMismatchMessage,
-                now);
-        }
+        // Progress is an observation waterline, not a control fence. The exact turn
+        // identity above prevents cross-turn stale commands; same-turn progress must
+        // not make stop impossible while a model stream is active.
 
         if (HasAcceptedFence(state))
         {
@@ -431,6 +497,7 @@ public static class NyxIdChatControlCommands
         var outcome = physicallyInFlight
             ? NyxIdChatControlOutcome.Uncancellable
             : NyxIdChatControlOutcome.Accepted;
+        var receipt = BuildStopReceipt(state, physicallyInFlight);
         var fence = BuildResult(
             state,
             NyxIdChatControlKind.Stop,
@@ -438,7 +505,7 @@ public static class NyxIdChatControlCommands
             command.ClientRequestId,
             outcome,
             physicallyInFlight ? StopUncancellable : StopAccepted,
-            physicallyInFlight ? StopUncancellableMessage : StopAcceptedMessage,
+            receipt,
             now);
         var next = ApplyTerminalFence(state, fence, now);
         return new NyxIdChatControlDecision(
@@ -493,18 +560,8 @@ public static class NyxIdChatControlCommands
                 now);
         }
 
-        if (!MatchesExpectedVersion(command.ExpectedStateVersion, stateVersion))
-        {
-            return Reject(
-                state,
-                NyxIdChatControlKind.Steering,
-                requestId,
-                command.ClientRequestId,
-                command.TurnId,
-                StateVersionMismatch,
-                StateVersionMismatchMessage,
-                now);
-        }
+        // Same-turn steering is fenced by the exact turn identity, not by unrelated
+        // progress commits that may occur between the state read and command delivery.
 
         if (HasAcceptedFence(state))
         {
@@ -807,6 +864,45 @@ public static class NyxIdChatControlCommands
         return true;
     }
 
+    private static NyxIdChatOperationKey? ResolveRetryAuthorizationSourceKey(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState effectStep)
+    {
+        var effectOperation = effectStep.Operation;
+        var effectKey = effectOperation?.Key;
+        if (state.ActiveTask is null ||
+            effectOperation is null ||
+            effectKey is null ||
+            effectStep.ExternalEffect != NyxIdChatEffectEvidence.NotApplied)
+        {
+            return null;
+        }
+
+        var verification = state.ActiveTask.Steps
+            .Where(candidate =>
+                candidate.Kind == NyxIdChatStepKind.Postcondition &&
+                candidate.Status == NyxIdChatStepStatus.Done &&
+                candidate.Operation is
+                {
+                    Key: not null,
+                    Phase: NyxIdChatOperationPhase.Succeeded,
+                } &&
+                candidate.Operation.Key.OperationGeneration == effectKey.OperationGeneration &&
+                candidate.ExternalEffect == NyxIdChatEffectEvidence.NotApplied &&
+                candidate.DependsOn.Contains(effectStep.StepId))
+            .OrderByDescending(static candidate => candidate.Order)
+            .FirstOrDefault();
+        if (verification?.Operation?.Key is not null)
+            return verification.Operation.Key.Clone();
+
+        return (effectOperation.Phase is
+                    NyxIdChatOperationPhase.Failed or
+                    NyxIdChatOperationPhase.Cancelled) &&
+               effectOperation.CompletedAt is not null
+                ? effectKey.Clone()
+                : null;
+    }
+
     private static bool CanRedispatchRetry(
         NyxIdChatConversationGAgentState state,
         NyxIdChatStepControlResultState result)
@@ -823,13 +919,10 @@ public static class NyxIdChatControlCommands
 
         var step = state.ActiveTask.Steps.FirstOrDefault(candidate =>
             string.Equals(candidate.StepId, result.StepId, StringComparison.Ordinal));
-        return step is
-        {
-            Kind: NyxIdChatStepKind.Llm,
-            RetryInputRebuildable: true,
-            Status: NyxIdChatStepStatus.Running,
-            Operation.Phase: NyxIdChatOperationPhase.Requested,
-        } &&
+        return step is { RetryInputRebuildable: true,
+                         Status: NyxIdChatStepStatus.Running,
+                         Operation.Phase: NyxIdChatOperationPhase.Requested } &&
+        step.Kind is (NyxIdChatStepKind.Llm or NyxIdChatStepKind.Tool) &&
         step.Operation.Key.OperationGeneration == result.OperationGeneration;
     }
 
@@ -841,12 +934,51 @@ public static class NyxIdChatControlCommands
         var step = state.ActiveTask?.Steps.FirstOrDefault(candidate =>
             string.Equals(candidate.StepId, Normalize(command.StepId), StringComparison.Ordinal));
         if (step?.Operation?.Key is null ||
-            step.Kind != NyxIdChatStepKind.Llm ||
+            step.Kind is not (NyxIdChatStepKind.Llm or NyxIdChatStepKind.Tool) ||
             !step.RetryInputRebuildable ||
             step.Operation.Key.OperationGeneration != generation ||
             state.ActiveTurn is null)
         {
             return null;
+        }
+
+        if (step.Kind == NyxIdChatStepKind.Tool)
+        {
+            if (step.RetryToolInput?.Arguments is null ||
+                step.RetryToolInput.OperationAdmission is null ||
+                !HasConsistentAgentProfileAuthority(state) ||
+                !NyxIdChatDurableRetryAuthority.TrySeal(
+                    state,
+                    command.OwnerSubject,
+                    command.RetryRequestId,
+                    command.ToolContext,
+                    out var sealedToolContext))
+                return null;
+            return new NyxIdChatOperationDispatchCommand
+            {
+                Key = step.Operation.Key.Clone(),
+                Tool = new NyxIdChatToolOperationInput
+                {
+                    CallId = step.RetryToolInput.CallId,
+                    ToolName = step.RetryToolInput.ToolName,
+                    ArgumentsJson = JsonFormatter.Default.Format(step.RetryToolInput.Arguments),
+                    ToolContext = sealedToolContext,
+                    MayChangeExternalState = step.MayChangeExternalState,
+                    Idempotent = false,
+                    IdempotencyKey = step.Operation.Key.OperationId,
+                    OperationAdmission = step.RetryToolInput.OperationAdmission.Clone(),
+                    AgentProfile = state.AgentProfile?.Clone(),
+                    AgentProfileTurnAuthority =
+                        state.ActiveTurn.AgentProfileTurnAuthority?.Clone(),
+                    RematerializeDurableAuthorization =
+                        step.RematerializeDurableAuthorization,
+                    RetryAuthorizationSourceKey =
+                        step.RetryAuthorizationSourceKey?.Clone(),
+                    Presentation = NyxIdChatDurableToolPresentation.Snapshot(
+                        step.RetryToolInput.Presentation ?? step.Source?.Tool?.Presentation,
+                        step.RetryToolInput.ToolName),
+                },
+            };
         }
 
         var request = new ChatRequestEvent
@@ -871,6 +1003,44 @@ public static class NyxIdChatControlCommands
                 AgentProfileTurnAuthority = state.ActiveTurn.AgentProfileTurnAuthority?.Clone(),
             },
         };
+    }
+
+    private static bool HasConsistentAgentProfileAuthority(
+        NyxIdChatConversationGAgentState state) =>
+        (state.AgentProfile is null) ==
+        (state.ActiveTurn?.AgentProfileTurnAuthority is null);
+
+    private static void ResetDependentVerification(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState retried,
+        long generation,
+        Timestamp now)
+    {
+        var verification = state.ActiveTask.Steps.FirstOrDefault(step =>
+            step.Kind == NyxIdChatStepKind.Postcondition &&
+            step.DependsOn.Contains(retried.StepId));
+        if (verification?.Operation?.Key is null)
+            return;
+
+        verification.Status = NyxIdChatStepStatus.Planned;
+        verification.ExternalEffect = NyxIdChatEffectEvidence.NotStarted;
+        verification.FailureCode = string.Empty;
+        verification.SafeMessage = string.Empty;
+        verification.Operation.Key.OperationGeneration = generation;
+        verification.Operation.Key.OperationId = BuildStableIdentity(
+            "operation",
+            state.ConversationActorId,
+            state.ActiveTurn.TurnId,
+            state.ActiveTask.TaskId,
+            verification.StepId,
+            generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        verification.Operation.Phase = NyxIdChatOperationPhase.Requested;
+        verification.Operation.RequestedAt = now.Clone();
+        verification.Operation.CompletedAt = null;
+        verification.Operation.TerminalCode = string.Empty;
+        verification.Operation.SafeMessage = string.Empty;
+        verification.UpdatedAt = now.Clone();
+        verification.AvailableActions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(verification);
     }
 
     private static void ApplyTaskOutcomeAfterSkip(
@@ -1004,6 +1174,7 @@ public static class NyxIdChatControlCommands
             ClientRequestId = Normalize(clientRequestId),
             TurnId = state.ActiveTurn?.TurnId ?? string.Empty,
             TaskId = state.ActiveTask?.TaskId ?? string.Empty,
+            StepId = state.ActiveTask?.ActiveStepId ?? string.Empty,
             OperationGeneration = ResolveOperationGeneration(state),
             Outcome = outcome,
             ReasonCode = reasonCode,
@@ -1109,6 +1280,72 @@ public static class NyxIdChatControlCommands
             IsPhysicallyInFlight(step.Operation?.Phase ??
                                  NyxIdChatOperationPhase.Unspecified)) == true;
 
+    private static string BuildStopReceipt(
+        NyxIdChatConversationGAgentState state,
+        bool physicallyInFlight)
+    {
+        var steps = state.ActiveTask?.Steps ?? [];
+        var completed = steps.Where(static step =>
+            step.Status == NyxIdChatStepStatus.Done).ToArray();
+        var unfinishedSteps = steps.Where(static step =>
+            step.Status is NyxIdChatStepStatus.Planned or
+                NyxIdChatStepStatus.Waiting or
+                NyxIdChatStepStatus.Running).ToArray();
+        var retained = completed.Length switch
+        {
+            0 => "No completed steps were retained.",
+            1 => "1 completed step was retained.",
+            _ => $"{completed.Length} completed steps were retained.",
+        };
+        var retainedDetails = BuildReceiptStepList(completed);
+        if (retainedDetails.Length > 0)
+            retained += $" Retained: {retainedDetails}.";
+        var unfinished = physicallyInFlight
+            ? "Unfinished work was fenced; the in-flight operation could not be proven cancelled."
+            : "Unfinished work was cancelled.";
+        var unfinishedDetails = BuildReceiptStepList(unfinishedSteps);
+        if (unfinishedDetails.Length > 0)
+            unfinished += physicallyInFlight
+                ? $" Fenced: {unfinishedDetails}."
+                : $" Cancelled: {unfinishedDetails}.";
+        var uncertainExternalEffect = steps.Any(static step =>
+            step.ExternalEffect == NyxIdChatEffectEvidence.MayHaveChanged) ||
+            steps.Any(step =>
+                step.Kind == NyxIdChatStepKind.Tool &&
+                step.MayChangeExternalState &&
+                IsPhysicallyInFlight(step.Operation?.Phase ??
+                                     NyxIdChatOperationPhase.Unspecified));
+        var confirmedExternalEffect = steps.Any(static step =>
+            step.MayChangeExternalState &&
+            step.ExternalEffect == NyxIdChatEffectEvidence.Confirmed);
+        var effectReceipt = uncertainExternalEffect
+            ? "An external operation may have changed state; inspect its committed evidence before retrying."
+            : confirmedExternalEffect
+                ? "Completed external effects remain recorded in the committed step evidence."
+                : "No external effect was applied.";
+
+        return $"Stopped. Partial-work receipt: {retained} {unfinished} {effectReceipt} " +
+               "Late evidence cannot advance this stopped task.";
+    }
+
+    private static string BuildReceiptStepList(IEnumerable<NyxIdChatTaskStepState> steps) =>
+        string.Join("; ", steps
+            .Select(static step => ReceiptStepLabel(step))
+            .Where(static label => label.Length > 0)
+            .Take(3));
+
+    private static string ReceiptStepLabel(NyxIdChatTaskStepState step)
+    {
+        var label = string.Join(" ", (step.Description ?? string.Empty)
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            .TrimEnd('.', ';', ':');
+        if (label.Length == 0 && step.Source?.SourceCase == NyxIdChatStepSource.SourceOneofCase.Tool)
+            label = step.Source.Tool.ToolName;
+        if (label.Length == 0)
+            label = step.Kind.ToString();
+        return label.Length <= 96 ? label : string.Concat(label.AsSpan(0, 93), "...");
+    }
+
     private static bool IsPhysicallyInFlight(NyxIdChatOperationPhase phase) =>
         phase is NyxIdChatOperationPhase.Dispatched or NyxIdChatOperationPhase.Running;
 
@@ -1169,6 +1406,29 @@ public static class NyxIdChatControlCommands
         NyxIdChatTaskStepState step,
         NyxIdChatOperationResultSignal signal)
     {
+        if (signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Failure &&
+            string.Equals(
+                signal.Failure.FailureCode,
+                NyxIdChatTurnOperationDispatchPort.ExecutionCancelledCode,
+                StringComparison.Ordinal))
+        {
+            var effect = signal.Failure.ExternalEffect ==
+                         NyxIdChatEffectEvidence.MayHaveChanged
+                ? NyxIdChatEffectEvidence.MayHaveChanged
+                : signal.Failure.ExternalEffect is
+                    NyxIdChatEffectEvidence.NotApplied or
+                    NyxIdChatEffectEvidence.NotStarted
+                    ? signal.Failure.ExternalEffect
+                    : NyxIdChatEffectEvidence.NotStarted;
+            return new LateToolEvidence(
+                effect == NyxIdChatEffectEvidence.MayHaveChanged
+                    ? NyxIdChatOperationPhase.Uncertain
+                    : NyxIdChatOperationPhase.Cancelled,
+                effect,
+                signal.Failure.FailureCode,
+                signal.Failure.SafeMessage);
+        }
+
         if (step.Kind == NyxIdChatStepKind.Llm &&
             signal.ResultCase == NyxIdChatOperationResultSignal.ResultOneofCase.Llm)
         {
@@ -1195,9 +1455,11 @@ public static class NyxIdChatControlCommands
         return receipt.Status switch
         {
             AgentToolReceiptStatus.Success => new LateToolEvidence(
-                NyxIdChatOperationPhase.Succeeded,
                 step.MayChangeExternalState
-                    ? NyxIdChatEffectEvidence.Confirmed
+                    ? NyxIdChatOperationPhase.Uncertain
+                    : NyxIdChatOperationPhase.Succeeded,
+                step.MayChangeExternalState
+                    ? NyxIdChatEffectEvidence.MayHaveChanged
                     : NyxIdChatEffectEvidence.NotApplied,
                 terminalCode,
                 safeMessage),

@@ -1,8 +1,11 @@
 using System.Security.Claims;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -67,15 +70,17 @@ public partial class NyxIdChatEndpointsCoverageTests
         var stateQuery = new FixedNyxIdChatStateQueryPort(
             NyxIdChatConversationStateQueryResult.NotFound());
         var dispatchPort = new StubActorDispatchPort(runtime);
-        using var services = new ServiceCollection()
+        var services = new ServiceCollection()
             .AddLogging()
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery)
+            .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery);
+        using var provider = services
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
-        var interaction = services.GetRequiredService<
+        var interaction = provider.GetRequiredService<
             ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
         var command = new NyxIdChatCommand(
             actorId,
@@ -160,6 +165,85 @@ public partial class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task NyxIdChatDurableCompletionResolver_WithRecoverableFailedStep_ShouldReturnBlockedTerminal()
+    {
+        var stateQuery = new FixedNyxIdChatStateQueryPort(RecoverableFailureState());
+        var resolver = new NyxIdChatDurableCompletionResolver(stateQuery);
+
+        var result = await resolver.ResolveAsync(new NyxIdChatAcceptedReceipt(
+            "conversation-alpha",
+            "chat-command-alpha",
+            "chat-command-alpha",
+            "turn-chat-alpha",
+            "scope-alpha"));
+
+        result.HasTerminalCompletion.Should().BeTrue();
+        result.Completion.Should().Be(NyxIdChatCompletionStatus.Completed);
+        result.Completion.DurableTerminal.Should().NotBeNull();
+        result.Completion.DurableTerminal!.RunFinished.Status.Should()
+            .Be(RunCompletionStatus.Blocked);
+        stateQuery.Result.Snapshot!.ActiveTask!.Status.Should().Be("active");
+        stateQuery.Result.Snapshot.ActiveTask.Steps.Single().AvailableActions!.Retry.Should()
+            .BeTrue();
+    }
+
+    [Fact]
+    public async Task NyxIdChatDurableCompletionResolver_WithHistoricalRecoverableStep_ShouldRemainIncomplete()
+    {
+        var result = RecoverableFailureState();
+        var snapshot = result.Snapshot!;
+        var failedStep = snapshot.ActiveTask!.Steps.Single();
+        var activeStep = failedStep with
+        {
+            StepId = "step-beta",
+            Status = "running",
+            FailureCode = null,
+            SafeMessage = null,
+            AvailableActions = new NyxIdChatAvailableActionsSnapshot(false, false, false),
+            Operation = failedStep.Operation! with
+            {
+                StepId = "step-beta",
+                OperationId = "operation-beta",
+                Phase = "running",
+                TerminalCode = null,
+                SafeMessage = null,
+                CompletedAt = null,
+            },
+        };
+        var stateQuery = new FixedNyxIdChatStateQueryPort(
+            NyxIdChatConversationStateQueryResult.Current(snapshot with
+            {
+                ActiveTask = snapshot.ActiveTask with
+                {
+                    ActiveStepId = activeStep.StepId,
+                    FailureCode = null,
+                    SafeMessage = null,
+                    Steps = [failedStep, activeStep],
+                },
+                ActiveTurn = snapshot.ActiveTurn! with
+                {
+                    FailureCode = null,
+                    SafeMessage = null,
+                },
+                LatestTurn = snapshot.LatestTurn! with
+                {
+                    FailureCode = null,
+                    SafeMessage = null,
+                },
+            }));
+        var resolver = new NyxIdChatDurableCompletionResolver(stateQuery);
+
+        var observation = await resolver.ResolveAsync(new NyxIdChatAcceptedReceipt(
+            "conversation-alpha",
+            "chat-command-alpha",
+            "chat-command-alpha",
+            "turn-chat-alpha",
+            "scope-alpha"));
+
+        observation.HasTerminalCompletion.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task HandleStreamMessageAsync_ActionContinueExactRetry_ShouldUsePayloadBoundCommandIdentity()
     {
         var actionInteraction = new StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>
@@ -232,15 +316,17 @@ public partial class NyxIdChatEndpointsCoverageTests
         };
         var stateQuery = new FixedNyxIdChatStateQueryPort(
             NyxIdChatConversationStateQueryResult.NotFound());
-        using var services = new ServiceCollection()
+        var services = new ServiceCollection()
             .AddLogging()
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(new StubActorDispatchPort(runtime))
             .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
-            .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery)
+            .AddSingleton<INyxIdChatConversationStateQueryPort>(stateQuery);
+        using var provider = services
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
-        var interaction = services.GetRequiredService<
+        var interaction = provider.GetRequiredService<
             ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
         var command = new NyxIdActionContinuationCommand(
             actorId,
@@ -313,13 +399,22 @@ public partial class NyxIdChatEndpointsCoverageTests
     [Fact]
     public async Task HandleStreamMessageAsync_ActionContinue_ShouldUseAuthenticatedSubjectAndServerTurn()
     {
+        var visibility = new StubActionContinuationCredentialVisibilityPort(
+            new NyxIdActionContinuationCredentialVisibilityResult(
+                NyxIdActionContinuationCredentialVisibilityStatus.Visible,
+                "service-alpha",
+                "visible"));
+        using var requestServices = new ServiceCollection()
+            .AddSingleton<INyxIdActionContinuationCredentialVisibilityPort>(visibility)
+            .BuildServiceProvider();
         var context = new DefaultHttpContext
         {
             User = new ClaimsPrincipal(new ClaimsIdentity(
                 [new Claim("sub", "owner-alpha")],
                 authenticationType: "test")),
+            RequestServices = requestServices,
         };
-        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Request.Headers.Authorization = "Bearer refreshed-token";
         context.Response.Body = new MemoryStream();
         var textInteraction = new StubNyxIdChatInteractionService<NyxIdChatCommand>();
         var actionInteraction = new StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>
@@ -366,14 +461,102 @@ public partial class NyxIdChatEndpointsCoverageTests
             .And.NotBe("turn-origin-alpha");
         command.OwnerSubject.Should().Be("owner-alpha");
         command.ClientRequestId.Should().Be("client-action-alpha");
+        command.ToolContext.Should().NotBeNull();
+        command.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("refreshed-token");
+        command.ToolContext.Credentials.NyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer);
         var report = command.Actions.Should().ContainSingle().Which;
         report.ActionRequestId.Should().Be("action-alpha");
         report.OriginTurnId.Should().Be("turn-origin-alpha");
         report.Disposition.Should().Be(NyxIdChatActionDisposition.Completed);
         report.Resource.UserService.UserServiceId.Should().Be("service-alpha");
+        visibility.Reads.Should().ContainSingle().Which.Should().Be(
+            ("refreshed-token", "service-alpha"));
         (await ReadResponseBodyAsync(context)).Should()
             .Contain("RUN_FINISHED")
             .And.Contain(command.ContinuationTurnId);
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ActionContinue_WhenUserServiceIsNotVisible_ShouldRequireCredentialRefreshBeforeDispatch()
+    {
+        var visibility = new StubActionContinuationCredentialVisibilityPort(
+            new NyxIdActionContinuationCredentialVisibilityResult(
+                NyxIdActionContinuationCredentialVisibilityStatus.CredentialRefreshRequired,
+                "service-alpha",
+                "not-visible"));
+        using var requestServices = new ServiceCollection()
+            .AddSingleton<INyxIdActionContinuationCredentialVisibilityPort>(visibility)
+            .BuildServiceProvider();
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("sub", "owner-alpha")],
+                authenticationType: "test")),
+            RequestServices = requestServices,
+        };
+        context.Request.Headers.Authorization = "Bearer stale-token";
+        context.Response.Body = new MemoryStream();
+        var actionInteraction = new StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>();
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-alpha",
+            "conversation-alpha",
+            CompletedUserServiceContinuationRequest(),
+            new StubGAgentActorStore(),
+            new StubNyxIdChatInteractionService<NyxIdChatCommand>(),
+            actionInteraction,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        actionInteraction.Commands.Should().BeEmpty();
+        visibility.Reads.Should().ContainSingle().Which.Should().Be(
+            ("stale-token", "service-alpha"));
+        (await ReadResponseBodyAsync(context)).Should().Contain(
+            "NYXID_ACTION_CONTINUATION_CREDENTIAL_REFRESH_REQUIRED");
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ActionContinue_WhenVisibilitySourceIsUnavailable_ShouldFailBeforeDispatch()
+    {
+        var visibility = new StubActionContinuationCredentialVisibilityPort(
+            new NyxIdActionContinuationCredentialVisibilityResult(
+                NyxIdActionContinuationCredentialVisibilityStatus.SourceUnavailable,
+                "service-alpha",
+                "catalog-unavailable"));
+        using var requestServices = new ServiceCollection()
+            .AddSingleton<INyxIdActionContinuationCredentialVisibilityPort>(visibility)
+            .BuildServiceProvider();
+        var context = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim("sub", "owner-alpha")],
+                authenticationType: "test")),
+            RequestServices = requestServices,
+        };
+        context.Request.Headers.Authorization = "Bearer current-token";
+        context.Response.Body = new MemoryStream();
+        var actionInteraction = new StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>();
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-alpha",
+            "conversation-alpha",
+            CompletedUserServiceContinuationRequest(),
+            new StubGAgentActorStore(),
+            new StubNyxIdChatInteractionService<NyxIdChatCommand>(),
+            actionInteraction,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        actionInteraction.Commands.Should().BeEmpty();
+        (await ReadResponseBodyAsync(context)).Should().Contain(
+            "NYXID_ACTION_CONTINUATION_CATALOG_UNAVAILABLE");
     }
 
     private static async Task InvokeActionContinuationAsync(
@@ -428,6 +611,24 @@ public partial class NyxIdChatEndpointsCoverageTests
             CancellationToken.None);
     }
 
+    private static NyxIdChatEndpoints.NyxIdChatStreamRequest
+        CompletedUserServiceContinuationRequest() =>
+        new(
+            Prompt: null,
+            ClientRequestId: "client-action-alpha",
+            Type: "action.continue",
+            OriginTurnId: "turn-origin-alpha",
+            Actions:
+            [
+                new NyxIdChatEndpoints.NyxIdChatActionReportDto(
+                    "action-alpha",
+                    "turn-origin-alpha",
+                    "completed",
+                    new NyxIdChatEndpoints.NyxIdChatActionResourceDto(
+                        UserService: new NyxIdChatEndpoints.NyxIdChatUserServiceRefDto(
+                            "service-alpha"))),
+            ]);
+
     private static NyxIdChatConversationStateQueryResult OrdinaryTerminalState(
         string actorId,
         string scopeId,
@@ -476,6 +677,72 @@ public partial class NyxIdChatEndpointsCoverageTests
                 null,
                 null,
                 null));
+
+    private static NyxIdChatConversationStateQueryResult RecoverableFailureState()
+    {
+        var result = OrdinaryTerminalState(
+            "conversation-alpha",
+            "scope-alpha",
+            "turn-chat-alpha",
+            "active");
+        var snapshot = result.Snapshot!;
+        var failedStep = new NyxIdChatConversationStepSnapshot(
+            StepId: "step-alpha",
+            Order: 1,
+            Kind: "llm",
+            Status: "failed",
+            Required: true,
+            Description: "Generate the assistant response.",
+            MayChangeExternalState: false,
+            ExternalEffect: "not_applied",
+            ApprovalRequestId: null,
+            ActionRequestId: null,
+            FailureCode: "NYXID_CHAT_OPERATION_EXECUTION_FAILED",
+            SafeMessage: "The operation could not be completed.",
+            SafeToSkip: false,
+            AvailableActions: new NyxIdChatAvailableActionsSnapshot(
+                Retry: true,
+                Skip: false,
+                Stop: false),
+            UpdatedAt: snapshot.UpdatedAt,
+            Operation: new NyxIdChatConversationOperationSnapshot(
+                ConversationActorId: snapshot.ActorId,
+                TurnId: "turn-chat-alpha",
+                TaskId: "task-alpha",
+                StepId: "step-alpha",
+                OperationId: "operation-alpha",
+                OperationGeneration: 1,
+                Kind: "llm",
+                Phase: "failed",
+                MayChangeExternalState: false,
+                Idempotent: false,
+                LatestProgressSequence: 0,
+                TerminalCode: "NYXID_CHAT_OPERATION_EXECUTION_FAILED",
+                SafeMessage: "The operation could not be completed.",
+                RequestedAt: snapshot.UpdatedAt,
+                DispatchedAt: snapshot.UpdatedAt,
+                CompletedAt: snapshot.UpdatedAt));
+        return NyxIdChatConversationStateQueryResult.Current(snapshot with
+        {
+            ActiveTask = snapshot.ActiveTask! with
+            {
+                ActiveStepId = failedStep.StepId,
+                FailureCode = failedStep.FailureCode,
+                SafeMessage = failedStep.SafeMessage,
+                Steps = [failedStep],
+            },
+            ActiveTurn = snapshot.ActiveTurn! with
+            {
+                FailureCode = failedStep.FailureCode,
+                SafeMessage = failedStep.SafeMessage,
+            },
+            LatestTurn = snapshot.LatestTurn! with
+            {
+                FailureCode = failedStep.FailureCode,
+                SafeMessage = failedStep.SafeMessage,
+            },
+        });
+    }
 
     private static NyxIdChatConversationStateQueryResult TerminalState(
         string actorId,
@@ -648,7 +915,16 @@ public partial class NyxIdChatEndpointsCoverageTests
                 },
             ],
             CommandId: "command-alpha",
-            CorrelationId: "correlation-alpha");
+            CorrelationId: "correlation-alpha",
+            ToolContext: new AgentToolExecutionContextPayload
+            {
+                Credentials = new AgentToolCredentialsPayload
+                {
+                    NyxIdAccessToken = "fresh-token",
+                    NyxIdCredentialKind =
+                        AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer,
+                },
+            });
 
         var envelope = factory.CreateEnvelope(
             command,
@@ -669,6 +945,9 @@ public partial class NyxIdChatEndpointsCoverageTests
         message.ClientRequestId.Should().Be("client-request-alpha");
         message.CommandId.Should().Be("command-alpha");
         message.CorrelationId.Should().Be("correlation-alpha");
+        message.ToolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-token");
+        message.ToolContext.Credentials.NyxIdCredentialKind.Should().Be(
+            AgentToolNyxIdCredentialKindPayload.SourceReadableUserBearer);
         message.Actions.Should().ContainSingle().Which.Resource.UserService.UserServiceId
             .Should().Be("service-alpha");
     }
@@ -687,14 +966,16 @@ public partial class NyxIdChatEndpointsCoverageTests
             },
         };
         var dispatchPort = new StubActorDispatchPort(runtime);
-        using var services = new ServiceCollection()
+        var services = new ServiceCollection()
             .AddLogging()
             .AddSingleton<IActorRuntime>(runtime)
             .AddSingleton<IActorDispatchPort>(dispatchPort)
-            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort)
+            .AddSingleton<INyxIdChatSessionProjectionPort>(projectionPort);
+        using var provider = services
+            .AddStreamForwarding(runtime.StreamForwardingRegistry)
             .AddNyxIdChat()
             .BuildServiceProvider();
-        var interaction = services.GetRequiredService<
+        var interaction = provider.GetRequiredService<
             ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus>>();
         var report = new NyxIdChatActionReport
         {
@@ -742,4 +1023,22 @@ public partial class NyxIdChatEndpointsCoverageTests
         envelope.Payload.Unpack<NyxIdChatActionContinueCommand>()
             .OwnerSubject.Should().Be("owner-alpha");
     }
+
+    private sealed class StubActionContinuationCredentialVisibilityPort(
+        NyxIdActionContinuationCredentialVisibilityResult result)
+        : INyxIdActionContinuationCredentialVisibilityPort
+    {
+        public List<(string BearerToken, string UserServiceId)> Reads { get; } = [];
+
+        public Task<NyxIdActionContinuationCredentialVisibilityResult> InspectUserServiceAsync(
+            string bearerToken,
+            string userServiceId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Reads.Add((bearerToken, userServiceId));
+            return Task.FromResult(result);
+        }
+    }
 }
+

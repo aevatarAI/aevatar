@@ -53,8 +53,10 @@ public sealed class ActorSendModule : IEventModule<IWorkflowExecutionContext>
         {
             StepId = request.StepId,
             RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = true,
             Output = sendState.TargetActorId,
+            OutputProvenance = WorkflowStepOutputProvenance.Produced,
         };
         completion.Annotations["actor.target_actor_id"] = sendState.TargetActorId;
         completion.Annotations["actor.payload_type_url"] = sendState.Payload.TypeUrl ?? string.Empty;
@@ -71,8 +73,10 @@ public sealed class ActorSendModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
+                ExecutionId = request.ExecutionId,
                 Success = false,
                 Error = error,
+                OutputProvenance = WorkflowStepOutputProvenance.Produced,
             },
             TopologyAudience.Self,
             ct);

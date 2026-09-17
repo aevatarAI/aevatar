@@ -85,6 +85,11 @@ public sealed record WorkOrderRunOutcomeReferenceResponse(
     string Outcome,
     DateTimeOffset TerminalAtUtc);
 
+public sealed record WorkOrderAvailableActionsResponse(
+    bool CanReassign,
+    bool CanDispatch,
+    bool CanCancel);
+
 public sealed record WorkOrderCurrentStateResponse(
     string WorkOrderId,
     string ScopeId,
@@ -101,6 +106,7 @@ public sealed record WorkOrderCurrentStateResponse(
     string LifecycleStatus,
     long LifecycleVersion,
     long StateVersion,
+    WorkOrderAvailableActionsResponse AvailableActions,
     WorkOrderServiceInputContract Input,
     WorkOrderRunLinkResponse? Run,
     WorkOrderRunOutcomeReferenceResponse? RunOutcome,

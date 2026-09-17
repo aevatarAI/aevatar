@@ -117,6 +117,8 @@ public static class WorkflowEventTypes
     public const string StateSnapshot = WorkflowRunEventTypes.StateSnapshot;
     public const string ToolCallStart = WorkflowRunEventTypes.ToolCallStart;
     public const string ToolCallEnd = WorkflowRunEventTypes.ToolCallEnd;
+    public const string ModelCallStart = WorkflowRunEventTypes.ModelCallStart;
+    public const string ModelCallEnd = WorkflowRunEventTypes.ModelCallEnd;
     public const string Custom = WorkflowRunEventTypes.Custom;
 }
 

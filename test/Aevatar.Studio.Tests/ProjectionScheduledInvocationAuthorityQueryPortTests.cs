@@ -21,7 +21,8 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
     {
         var reader = new RecordingReader<StudioMemberCurrentStateDocument>(new StudioMemberCurrentStateDocument
         {
-            StateVersion = 3,
+            StateVersion = 420,
+            AuthorizationRevision = 3,
             ImplementationWorkflowId = "wf-alpha",
             LastBoundRevisionId = "rev-alpha",
             PublishedServiceId = "svc-alpha",
@@ -32,10 +33,47 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         reader.Key.Should().Be("studio-member:scope-alpha:m-alpha");
         result.Should().NotBeNull();
-        result!.StateVersion.Should().Be(3);
+        result!.AuthorizationRevision.Should().Be(3);
         result.DraftWorkflowId.Should().Be("wf-alpha");
         result.WorkflowRevisionId.Should().Be("rev-alpha");
         result.PublishedServiceId.Should().Be("svc-alpha");
+    }
+
+    [Fact]
+    public async Task MemberPort_ShouldMapLegacyZeroToStableBaseline_IgnoringAggregateVersion()
+    {
+        var reader = new RecordingReader<StudioMemberCurrentStateDocument>(new StudioMemberCurrentStateDocument
+        {
+            StateVersion = 427,
+            AuthorizationRevision = 0,
+            ImplementationWorkflowId = "wf-alpha",
+            LastBoundRevisionId = "rev-alpha",
+            PublishedServiceId = "svc-alpha",
+        });
+
+        var result = await new ProjectionScheduledInvocationMemberQueryPort(reader)
+            .GetAsync("scope-alpha", "m-alpha");
+
+        result.Should().NotBeNull();
+        result!.AuthorizationRevision.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MemberPort_ShouldFailClosed_WhenAuthorizationRevisionIsNegative()
+    {
+        var reader = new RecordingReader<StudioMemberCurrentStateDocument>(new StudioMemberCurrentStateDocument
+        {
+            StateVersion = 427,
+            AuthorizationRevision = -1,
+            ImplementationWorkflowId = "wf-alpha",
+            LastBoundRevisionId = "rev-alpha",
+            PublishedServiceId = "svc-alpha",
+        });
+
+        var result = await new ProjectionScheduledInvocationMemberQueryPort(reader)
+            .GetAsync("scope-alpha", "m-alpha");
+
+        result.Should().BeNull();
     }
 
     [Fact]
@@ -65,9 +103,14 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
                 HttpMethod = "GET",
                 PathTemplate = "/api/states",
                 ContractDigest = "nyxid-digest-alpha",
+                ExecutionPolicy = ReadOnlyPolicy(
+                    ExternalCapabilityExecutionMode.Interactive,
+                    ExternalCapabilityExecutionMode.Durable),
             },
         });
-        var reader = new RecordingRevisionCatalogReader(CreateWorkflowRevisionCatalog(evidence));
+        var reader = new RecordingRevisionCatalogReader(CreateWorkflowRevisionCatalog(
+            evidence,
+            CreateAdmissionPlan(evidence.ExternalCapabilities)));
 
         var result = await new ProjectionScheduledInvocationWorkflowQueryPort(reader)
             .GetAsync(" scope-alpha ", " svc-alpha ", " rev-alpha ");
@@ -84,6 +127,49 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         result.ExternalCapabilities.Should()
             .OnlyContain(capability => evidence.ExternalCapabilities.All(source => !ReferenceEquals(source, capability)));
         result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
+    }
+
+    [Fact]
+    public async Task WorkflowPort_WhenDerivedEvidenceDoesNotMatchAdmissionPlan_ShouldFailClosed()
+    {
+        var evidence = new WorkflowRevisionAuthorizationEvidence
+        {
+            ServiceGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+        };
+        evidence.ExternalCapabilities.Add(new ExternalWorkflowCapabilityRef
+        {
+            HostConnector = new HostConnectorCapabilityRef
+            {
+                ConnectorCapabilityRef = "connector-calendar-alpha",
+                OperationId = "create_event",
+                ContractDigest = "connector-digest-alpha",
+            },
+        });
+        var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: workflow-alpha",
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Durable,
+            [new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = "workflow-alpha/send-mail",
+                Capability = new ExternalWorkflowCapabilityRef
+                {
+                    HostConnector = new HostConnectorCapabilityRef
+                    {
+                        ConnectorCapabilityRef = "connector-mail-alpha",
+                        OperationId = "send_message",
+                        ContractDigest = "connector-digest-beta",
+                    },
+                },
+            }],
+            []);
+        var reader = new RecordingRevisionCatalogReader(
+            CreateWorkflowRevisionCatalog(evidence, admissionPlan));
+
+        var result = await new ProjectionScheduledInvocationWorkflowQueryPort(reader)
+            .GetAsync("scope-alpha", "svc-alpha", "rev-alpha");
+
+        result.Should().BeNull();
     }
 
     [Fact]
@@ -359,7 +445,8 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
     }
 
     private static ServiceRevisionCatalogSnapshot CreateWorkflowRevisionCatalog(
-        WorkflowRevisionAuthorizationEvidence evidence)
+        WorkflowRevisionAuthorizationEvidence evidence,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null)
     {
         var artifact = new PreparedServiceRevisionArtifact
         {
@@ -369,7 +456,10 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             {
                 WorkflowPlan = new WorkflowServiceDeploymentPlan
                 {
+                    WorkflowName = "workflow-alpha",
+                    WorkflowYaml = "name: workflow-alpha",
                     AuthorizationEvidence = evidence,
+                    CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 },
             },
         };
@@ -391,6 +481,32 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             ],
             DateTimeOffset.UtcNow,
             StateVersion: 5);
+    }
+
+    private static WorkflowCapabilityAdmissionPlan CreateAdmissionPlan(
+        IEnumerable<ExternalWorkflowCapabilityRef> capabilities) =>
+        WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: workflow-alpha",
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Durable,
+            capabilities.Select(static (capability, index) => new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = $"workflow-alpha/call-{index}",
+                Capability = capability,
+            }),
+            []);
+
+    private static NyxIdOperationExecutionPolicy ReadOnlyPolicy(
+        params ExternalCapabilityExecutionMode[] executionModes)
+    {
+        var policy = new NyxIdOperationExecutionPolicy
+        {
+            Risk = NyxIdOperationRisk.ReadOnly,
+            Approval = NyxIdOperationApproval.None,
+            EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+        };
+        policy.AllowedExecutionModes.Add(executionModes);
+        return policy;
     }
 
     private static LLMModelSelection ExplicitModel(string modelId) => new()

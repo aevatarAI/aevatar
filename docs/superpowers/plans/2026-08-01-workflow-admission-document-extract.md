@@ -379,7 +379,7 @@ git commit -m "Preserve workflow context in document extraction"
 **Files:**
 - Verify: all files committed by Tasks 1-3
 - Read-only fixtures: `~/workflows/2026-07-30-for-aevatar-team/P2-budget-monitor/budget_monitor_weekly.nosend.yaml`
-- Read-only fixtures: `~/workflows/2026-07-30-for-aevatar-team/P1-invoice-approval/attach-probe.provision-body.json`
+- Read-only fixtures: `~/workflows/2026-07-30-for-aevatar-team/<operator-owned-workflow>/attach-probe.provision-body.json`
 
 **Interfaces:**
 - Consumes: committed branch plus authenticated `nyxid proxy request aevatar ...`.

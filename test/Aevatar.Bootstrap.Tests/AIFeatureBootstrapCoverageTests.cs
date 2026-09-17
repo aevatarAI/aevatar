@@ -69,7 +69,7 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
-    public void ReadConfiguredProviders_WhenNyxIdAuthorityConfigured_ShouldResolveGatewayEndpoint()
+    public void ReadConfiguredProviders_WhenNyxIdEndpointRolesDiffer_ShouldUsePublicApiGateway()
     {
         var options = new AevatarAIFeatureOptions
         {
@@ -85,7 +85,9 @@ public class AIFeatureBootstrapCoverageTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
+                ["Aevatar:NyxId:InternalApiBaseUrl"] = "http://nyxid.internal:3001",
+                ["Aevatar:NyxId:ApiBaseUrl"] = "https://nyx-api.example.com",
+                ["Cli:App:NyxId:Authority"] = "https://nyx-issuer.example.com",
             })
             .Build();
 
@@ -94,7 +96,7 @@ public class AIFeatureBootstrapCoverageTests
         configuredProviders.Should().ContainSingle();
         var provider = configuredProviders[0];
         ReadConfiguredProviderString(provider, "ProviderType").Should().Be("nyxid");
-        ReadConfiguredProviderString(provider, "Endpoint").Should().Be("https://nyx.example.com/api/v1/llm/gateway/v1");
+        ReadConfiguredProviderString(provider, "Endpoint").Should().Be("https://nyx-api.example.com/api/v1/llm/gateway/v1");
     }
 
     [Fact]
@@ -571,10 +573,10 @@ public class AIFeatureBootstrapCoverageTests
                 """
                 {
                   "mcpServers": {
-                    "local": {
-                      "command": "echo",
-                      "args": ["hello"],
-                      "env": { "K": "V" }
+                    "remote": {
+                      "url": "https://mcp.example.com/mcp",
+                      "headers": { "x-tenant": "demo" },
+                      "timeoutMs": 12345
                     }
                   }
                 }
@@ -597,8 +599,10 @@ public class AIFeatureBootstrapCoverageTests
 
             var mcpOptions = provider.GetRequiredService<MCPToolsOptions>();
             mcpOptions.Servers.Should().ContainSingle();
-            mcpOptions.Servers[0].Name.Should().Be("local");
-            mcpOptions.Servers[0].Environment["K"].Should().Be("V");
+            mcpOptions.Servers[0].Name.Should().Be("remote");
+            mcpOptions.Servers[0].Url.Should().Be("https://mcp.example.com/mcp");
+            mcpOptions.Servers[0].AdditionalHeaders["x-tenant"].Should().Be("demo");
+            mcpOptions.Servers[0].InitializationTimeout.Should().Be(TimeSpan.FromMilliseconds(12345));
         }
         finally
         {
@@ -680,8 +684,67 @@ public class AIFeatureBootstrapCoverageTests
         serverConfigField.Should().NotBeNull();
         var serverConfig = serverConfigField!.GetValue(connector).Should().BeOfType<MCPServerConfig>().Subject;
         serverConfig.Url.Should().Be("https://nyxid.example.com/mcp");
+        serverConfig.InitializationTimeout.Should().Be(TimeSpan.FromMilliseconds(15000));
         serverConfig.HttpClient.Should().NotBeNull();
         serverConfig.HttpClient!.Timeout.Should().Be(Timeout.InfiniteTimeSpan);
+    }
+
+    [Theory]
+    [InlineData(false, -1, 30000)]
+    [InlineData(false, 50, 100)]
+    [InlineData(false, 500001, 300000)]
+    [InlineData(true, -1, 30000)]
+    [InlineData(true, 50, 100)]
+    [InlineData(true, 500001, 300000)]
+    public void MCPConnectorBuilder_ShouldNormalizeInitializationTimeout(
+        bool useRemoteUrl,
+        int timeoutMs,
+        int expectedTimeoutMs)
+    {
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "bounded-mcp",
+            Type = "mcp",
+            TimeoutMs = timeoutMs,
+            MCP = new MCPConnectorConfig
+            {
+                Command = useRemoteUrl ? string.Empty : "echo",
+                Url = useRemoteUrl ? "https://mcp.example.com/mcp" : string.Empty,
+            },
+        };
+
+        builder.TryBuild(entry, NullLogger.Instance, out var connector).Should().BeTrue();
+
+        var serverConfigField = connector!.GetType()
+            .GetField("_serverConfig", BindingFlags.Instance | BindingFlags.NonPublic);
+        var serverConfig = serverConfigField!.GetValue(connector).Should().BeOfType<MCPServerConfig>().Subject;
+        serverConfig.InitializationTimeout.Should().Be(TimeSpan.FromMilliseconds(expectedTimeoutMs));
+    }
+
+    [Fact]
+    public void MCPConnectorBuilder_ShouldRejectAmbiguousTransportConfiguration()
+    {
+        var builder = new MCPConnectorBuilder(
+            new VoicePresenceBootstrapTests.TestHttpClientFactory(),
+            new VoicePresenceBootstrapTests.UnusedAgentToolExecutionPort());
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "ambiguous-mcp",
+            Type = "mcp",
+            MCP = new MCPConnectorConfig
+            {
+                Command = "npx",
+                Url = "https://mcp.example.com/mcp",
+            },
+        };
+
+        var ok = builder.TryBuild(entry, NullLogger.Instance, out var connector);
+
+        ok.Should().BeFalse();
+        connector.Should().BeNull();
     }
 
     private static IReadOnlyList<object> InvokeReadConfiguredProviders(

@@ -94,6 +94,41 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
     }
 
     [Fact]
+    public async Task ScopeResumeRunEndpoint_ShouldRejectFlatToolApprovalIdentityWithoutDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.RunBindingReader.BindingsByRunId["run-default-flat"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-default-flat",
+                "def-actor-1",
+                "run-default-flat",
+                "main",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive,
+                "scope-a"),
+        ];
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/runs/run-default-flat:resume", new
+        {
+            stepId = "approval-1",
+            approved = true,
+            executionId = "exec-flat",
+            toolCallId = "tool-call-flat",
+            approvalRequestId = "approval-flat",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_TOOL_APPROVAL_RESUME_REQUEST");
+        body["message"].Should().Contain("nested under 'toolApproval'");
+        host.ResumeDispatchService.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ScopeResumeRunEndpoint_ShouldReturnConflict_WhenRunIsAmbiguous()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -357,6 +392,44 @@ public sealed class ScopeServiceRunControlEndpointTests : ScopeServiceEndpointTe
         host.ResumeDispatchService.LastCommand.ToolApproval!.ExecutionId.Should().Be("exec-1");
         host.ResumeDispatchService.LastCommand.ToolApproval.ToolCallId.Should().Be("tool-call-1");
         host.ResumeDispatchService.LastCommand.ToolApproval.ApprovalRequestId.Should().Be("approval-1");
+    }
+
+    [Fact]
+    public async Task ResumeRunEndpoint_ShouldRejectIncompleteNestedToolApprovalWithoutDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "def-actor-1");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:orders", "dep-1", "rev-1", "def-actor-1");
+        host.RunBindingReader.BindingsByRunId["run-incomplete"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-incomplete",
+                "def-actor-1",
+                "run-incomplete",
+                "orders",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                ExternalCapabilityExecutionMode.Interactive,
+                "scope-a"),
+        ];
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/runs/run-incomplete:resume", new
+        {
+            stepId = "approval-1",
+            approved = true,
+            toolApproval = new
+            {
+                executionId = "exec-incomplete",
+                toolCallId = "tool-call-incomplete",
+            },
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_TOOL_APPROVAL_RESUME_REQUEST");
+        host.ResumeDispatchService.LastCommand.Should().BeNull();
     }
 
     [Fact]

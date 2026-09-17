@@ -1,3 +1,5 @@
+using Aevatar.Workflow.Abstractions;
+
 namespace Aevatar.Workflow.Application.Abstractions.Workflows;
 
 /// <summary>
@@ -7,7 +9,8 @@ public sealed record WorkflowDefinitionRegistration(
     string WorkflowName,
     string WorkflowYaml,
     string DefinitionActorId,
-    string SourceKind = "builtin");
+    ExternalCapabilityExecutionMode ExpectedExecutionMode,
+    string SourceKind);
 
 /// <summary>
 /// Read-only catalog of workflow YAML definitions loaded at application startup.
@@ -32,7 +35,10 @@ public interface IWorkflowDefinitionCatalog
     /// Registers a workflow definition during startup bootstrap.
     /// Must not be called after application startup completes.
     /// </summary>
-    void Register(string name, string yaml);
+    void Register(
+        string name,
+        string yaml,
+        ExternalCapabilityExecutionMode expectedExecutionMode);
 
     /// <summary>
     /// Returns the full registration for the given workflow name, or <c>null</c> if not found.

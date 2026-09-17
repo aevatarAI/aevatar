@@ -10,13 +10,18 @@ public sealed class NyxIdCallerCredentialSelection
 
     private NyxIdCallerCredentialSelection(
         NyxIdCallerCredentialKind kind,
-        string bearerToken)
+        string bearerToken,
+        bool canManageUserServices)
     {
         Kind = kind;
         _bearerToken = NormalizeRequired(bearerToken);
+        CanManageUserServices = canManageUserServices;
     }
 
     public NyxIdCallerCredentialKind Kind { get; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool CanManageUserServices { get; }
 
     [System.Text.Json.Serialization.JsonIgnore]
     public string? SourceReadableUserBearerToken =>
@@ -27,10 +32,13 @@ public sealed class NyxIdCallerCredentialSelection
         Kind == NyxIdCallerCredentialKind.ProxyDelegation ? _bearerToken : null;
 
     public static NyxIdCallerCredentialSelection SourceReadableUserBearer(string bearerToken) =>
-        new(NyxIdCallerCredentialKind.SourceReadableUserBearer, bearerToken);
+        new(NyxIdCallerCredentialKind.SourceReadableUserBearer, bearerToken, false);
+
+    public static NyxIdCallerCredentialSelection DirectUserBearer(string bearerToken) =>
+        new(NyxIdCallerCredentialKind.SourceReadableUserBearer, bearerToken, true);
 
     public static NyxIdCallerCredentialSelection ProxyDelegation(string bearerToken) =>
-        new(NyxIdCallerCredentialKind.ProxyDelegation, bearerToken);
+        new(NyxIdCallerCredentialKind.ProxyDelegation, bearerToken, false);
 
     public static NyxIdCallerCredentialSelection? SourceReadableUserBearerOrNull(string? bearerToken) =>
         string.IsNullOrWhiteSpace(bearerToken) ? null : SourceReadableUserBearer(bearerToken);

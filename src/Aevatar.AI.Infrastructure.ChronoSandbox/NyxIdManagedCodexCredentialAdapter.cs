@@ -231,18 +231,44 @@ internal sealed class NyxIdManagedCodexCredentialAdapter(
         try
         {
             var document = JsonDocument.Parse(response ?? string.Empty);
-            if (document.RootElement.ValueKind == JsonValueKind.Object &&
-                !(document.RootElement.TryGetProperty("error", out var error) &&
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object &&
+                !(root.TryGetProperty("error", out var error) &&
                   error.ValueKind == JsonValueKind.True))
             {
                 return document;
             }
+
+            var failure = root.ValueKind == JsonValueKind.Object
+                ? FailureForErrorResponse(root, code)
+                : Failure(code, "NyxID returned an invalid managed Codex response.");
             document.Dispose();
+            throw failure;
         }
         catch (JsonException)
         {
         }
         throw Failure(code, "NyxID returned an invalid managed Codex response.");
+    }
+
+    private static ManagedCodexCredentialLifecycleException FailureForErrorResponse(
+        JsonElement root,
+        string fallbackCode)
+    {
+        var status = root.TryGetProperty("status", out var statusValue) &&
+                     statusValue.TryGetInt32(out var parsed)
+            ? parsed
+            : 0;
+        return status switch
+        {
+            401 => Failure(
+                "managed_user_authentication_failed",
+                "NyxID rejected the current user credential."),
+            403 => Failure(
+                "managed_user_authorization_denied",
+                "NyxID denied the current user credential for this operation."),
+            _ => Failure(fallbackCode, "NyxID returned an invalid managed Codex response."),
+        };
     }
 
     private static bool TryReadErrorStatus(string? response, out int status)

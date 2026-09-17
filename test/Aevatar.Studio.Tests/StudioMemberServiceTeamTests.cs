@@ -377,7 +377,6 @@ public sealed class StudioMemberServiceTeamTests
         public Task<ServiceCommandAcceptedReceipt> PrepareRevisionAsync(PrepareServiceRevisionCommand c, CancellationToken ct = default) => throw Reject(nameof(PrepareRevisionAsync));
         public Task<ServiceCommandAcceptedReceipt> PublishRevisionAsync(PublishServiceRevisionCommand c, CancellationToken ct = default) => throw Reject(nameof(PublishRevisionAsync));
         public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand c, CancellationToken ct = default) => throw Reject(nameof(RetireRevisionAsync));
-        public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand c, CancellationToken ct = default) => throw Reject(nameof(SetDefaultServingRevisionAsync));
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand c, CancellationToken ct = default) => throw Reject(nameof(ActivateServiceRevisionAsync));
         public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(DeactivateServiceDeploymentCommand c, CancellationToken ct = default) => throw Reject(nameof(DeactivateServiceDeploymentAsync));
         public Task<ServiceCommandAcceptedReceipt> ReplaceServiceServingTargetsAsync(ReplaceServiceServingTargetsCommand c, CancellationToken ct = default) => throw Reject(nameof(ReplaceServiceServingTargetsAsync));

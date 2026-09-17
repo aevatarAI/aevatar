@@ -1,3 +1,4 @@
+using Aevatar.Configuration;
 using Aevatar.Configuration.BackendConsole;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,6 +9,8 @@ namespace Aevatar.BackendConsole.Hosting;
 
 public static class BackendConsoleHostingServiceCollectionExtensions
 {
+    private const string OfflineAccessScope = "offline_access";
+
     public static IServiceCollection AddBackendConsoleStaticAssets(
         this IServiceCollection services,
         IConfiguration configuration)
@@ -38,11 +41,15 @@ public static class BackendConsoleHostingServiceCollectionExtensions
                 .Distinct(StringComparer.Ordinal)
                 .ToArray(),
             NyxApiBaseUrl = section[nameof(BackendConsoleOptions.NyxApiBaseUrl)] ?? string.Empty,
+            NyxWebBaseUrl = section[nameof(BackendConsoleOptions.NyxWebBaseUrl)] ?? string.Empty,
             StorageKey = section[nameof(BackendConsoleOptions.StorageKey)] ?? string.Empty,
             DefaultReturnPath = section[nameof(BackendConsoleOptions.DefaultReturnPath)] ?? string.Empty,
+            EnableStudioWireInspector = section.GetValue<bool>(
+                nameof(BackendConsoleOptions.EnableStudioWireInspector)),
         };
-        ApplyFallbacks(configuration, options);
         ApplyHostEnvironmentOverrides(options);
+        ApplyFallbacks(configuration, options);
+        NormalizeOidcScope(options);
         NormalizeOidcResources(configuration, options);
         return options;
     }
@@ -52,15 +59,24 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         if (string.IsNullOrWhiteSpace(options.OidcAuthority))
         {
             options.OidcAuthority =
-                configuration["Aevatar:Authentication:Authority"]
-                ?? configuration["Aevatar:NyxId:Authority"]
+                configuration["Aevatar:NyxId:Authority"]
+                ?? configuration["Aevatar:Authentication:Authority"]
                 ?? string.Empty;
         }
 
         if (string.IsNullOrWhiteSpace(options.NyxApiBaseUrl))
         {
             options.NyxApiBaseUrl =
-                configuration["Aevatar:NyxId:ApiBaseUrl"]
+                NyxIdEndpointResolver.ResolvePublicApiBaseUrl(configuration)
+                ?? string.Empty;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.NyxWebBaseUrl))
+        {
+            options.NyxWebBaseUrl =
+                (!string.IsNullOrWhiteSpace(options.NyxApiBaseUrl)
+                    ? options.NyxApiBaseUrl
+                    : NyxIdEndpointResolver.ResolvePublicApiBaseUrl(configuration))
                 ?? string.Empty;
         }
     }
@@ -70,8 +86,26 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         options.OidcAuthority = EnvironmentOverride("HOST_BACKEND_CONSOLE_OIDC_AUTHORITY", options.OidcAuthority);
         options.OidcScope = EnvironmentOverride("HOST_BACKEND_CONSOLE_OIDC_SCOPE", options.OidcScope);
         options.NyxApiBaseUrl = EnvironmentOverride("HOST_BACKEND_CONSOLE_NYX_API_BASE_URL", options.NyxApiBaseUrl);
+        options.NyxWebBaseUrl = EnvironmentOverride("HOST_BACKEND_CONSOLE_NYX_WEB_BASE_URL", options.NyxWebBaseUrl);
         options.StorageKey = EnvironmentOverride("HOST_BACKEND_CONSOLE_STORAGE_KEY", options.StorageKey);
         options.DefaultReturnPath = EnvironmentOverride("HOST_BACKEND_CONSOLE_DEFAULT_RETURN_PATH", options.DefaultReturnPath);
+        options.EnableStudioWireInspector = EnvironmentOverride(
+            "HOST_BACKEND_CONSOLE_ENABLE_STUDIO_WIRE_INSPECTOR",
+            options.EnableStudioWireInspector);
+    }
+
+    private static void NormalizeOidcScope(BackendConsoleOptions options)
+    {
+        var scopes = options.OidcScope
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (scopes.Length == 0)
+            return;
+
+        options.OidcScope = string.Join(
+            ' ',
+            scopes.Append(OfflineAccessScope).Distinct(StringComparer.Ordinal));
     }
 
     private static void NormalizeOidcResources(
@@ -79,6 +113,7 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         BackendConsoleOptions options)
     {
         options.NyxApiBaseUrl = options.NyxApiBaseUrl.Trim().TrimEnd('/');
+        options.NyxWebBaseUrl = options.NyxWebBaseUrl.Trim().TrimEnd('/');
         var resources = options.OidcResources
             .Select(resource => resource.Trim())
             .Where(resource => resource.Length > 0)
@@ -121,5 +156,11 @@ public static class BackendConsoleHostingServiceCollectionExtensions
         return string.IsNullOrWhiteSpace(value)
             ? configuredValue
             : value.Trim();
+    }
+
+    private static bool EnvironmentOverride(string key, bool configuredValue)
+    {
+        var value = Environment.GetEnvironmentVariable(key);
+        return bool.TryParse(value, out var parsed) ? parsed : configuredValue;
     }
 }

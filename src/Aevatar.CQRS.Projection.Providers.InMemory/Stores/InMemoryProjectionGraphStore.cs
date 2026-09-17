@@ -2,8 +2,9 @@ using System.Text.Json;
 
 namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 
-public sealed class InMemoryProjectionGraphStore
-    : IProjectionGraphStore
+public sealed partial class InMemoryProjectionGraphStore
+    : IProjectionGraphStore,
+      IVersionedProjectionGraphStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, ProjectionGraphNode> _nodes = new(StringComparer.Ordinal);

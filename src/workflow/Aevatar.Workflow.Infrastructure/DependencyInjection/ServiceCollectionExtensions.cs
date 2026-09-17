@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Workflow.Application.Abstractions.Reporting;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -44,8 +46,14 @@ public static class ServiceCollectionExtensions
         // Replace the Noop fallback from Application layer with the real file export adapter.
         services.Replace(ServiceDescriptor.Singleton<IWorkflowRunReportExportPort, FileSystemWorkflowRunReportExporter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, WorkflowFileArtifactCleanupHostedService>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowDocumentExtractToolSource>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowSpreadsheetExtractToolSource>());
+        services.TryAddSingleton<WorkflowDocumentExtractToolSource>();
+        services.TryAddSingleton<WorkflowSpreadsheetExtractToolSource>();
+        services.AddSingleton<IWorkflowToolSource>(sp =>
+            sp.GetRequiredService<WorkflowDocumentExtractToolSource>());
+        services.AddSingleton<IWorkflowToolSource>(sp =>
+            sp.GetRequiredService<WorkflowSpreadsheetExtractToolSource>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAgentToolSource, WorkflowFileExtractionAgentToolSource>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ILLMCallMiddleware, WorkflowFileRefLlmCallMiddleware>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowConnectedServiceResourceFetchToolSource>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowToolSource, WorkflowFileSubmitToolSource>());
         services.TryAddSingleton<
@@ -58,6 +66,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowDefinitionProvisioningPort>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());
         services.TryAddSingleton<IWorkflowRunProvisioningPort>(sp =>
+            sp.GetRequiredService<WorkflowRunActorPort>());
+        services.TryAddSingleton<IWorkflowRunLineageRecordingPort>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());
         services.TryAddSingleton<WorkflowDefinitionParser>();
         services.TryAddSingleton<IWorkflowDefinitionParser>(sp =>

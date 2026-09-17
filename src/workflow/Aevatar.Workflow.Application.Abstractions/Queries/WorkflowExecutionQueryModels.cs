@@ -1,3 +1,5 @@
+using Aevatar.Workflow.Abstractions;
+
 namespace Aevatar.Workflow.Application.Abstractions.Queries;
 
 public sealed record WorkflowAgentSummary(
@@ -19,6 +21,8 @@ public sealed class WorkflowCatalogItem
     public bool IsPrimitiveExample { get; set; }
     public bool RequiresLlmProvider { get; set; }
     public List<string> Primitives { get; set; } = [];
+    public List<string> RequiredConnectors { get; set; } = [];
+    public int StepCount { get; set; }
     public long AuthorityStateVersion { get; set; }
     public DateTimeOffset ProjectionWatermark { get; set; }
     public string LastEventId { get; set; } = string.Empty;
@@ -124,6 +128,8 @@ public enum WorkflowRunCompletionStatus
     Stopped = 4,
     NotFound = 5,
     Disabled = 6,
+    AwaitingToolApproval = 7,
+    WaitingForSignal = 8,
     Unknown = 99,
 }
 
@@ -150,6 +156,7 @@ public sealed class WorkflowRunReport
     public List<WorkflowRunTopologyEdge> Topology { get; set; } = [];
     public List<WorkflowRunStepTrace> Steps { get; set; } = [];
     public List<WorkflowRunRoleReply> RoleReplies { get; set; } = [];
+    public List<WorkflowRunOperation> Operations { get; set; } = [];
     public List<WorkflowRunTimelineEvent> Timeline { get; set; } = [];
     public WorkflowRunUsageMetrics Usage { get; set; } = new();
     public WorkflowRunStatistics Summary { get; set; } = new();
@@ -177,6 +184,45 @@ public sealed class WorkflowRunStatistics
 public sealed class WorkflowRunStepTrace
 {
     public string StepId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string StepType { get; set; } = string.Empty;
+    public string TargetRole { get; set; } = string.Empty;
+    public DateTimeOffset? RequestedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+    public bool? Success { get; set; }
+    public string WorkerId { get; set; } = string.Empty;
+    public string OutputPreview { get; set; } = string.Empty;
+    public string Error { get; set; } = string.Empty;
+    public string FailureOutput { get; set; } = string.Empty;
+    public bool FailureOutputTruncated { get; set; }
+    public WorkflowStepFailureOutcome FailureOutcome { get; set; } = WorkflowStepFailureOutcome.Unspecified;
+    public WorkflowRecoveryFailureKind RecoveryFailureKind { get; set; } = WorkflowRecoveryFailureKind.Unspecified;
+    public WorkflowStepRetryDisposition RetryDisposition { get; set; } = WorkflowStepRetryDisposition.Unspecified;
+    public WorkflowFileItemResultSet? FileItemResults { get; set; }
+    public VoteAgreementDecision? VoteAgreementDecision { get; set; }
+    public WorkflowRunFailedStepAttempt? LatestFailedAttempt { get; set; }
+    public Dictionary<string, string> RequestParameters { get; set; } = [];
+    public Dictionary<string, string> CompletionAnnotations { get; set; } = [];
+    public string NextStepId { get; set; } = string.Empty;
+    public string BranchKey { get; set; } = string.Empty;
+    public string AssignedVariable { get; set; } = string.Empty;
+    public string AssignedValue { get; set; } = string.Empty;
+    public string SuspensionType { get; set; } = string.Empty;
+    public string SuspensionPrompt { get; set; } = string.Empty;
+    public string SuspensionContent { get; set; } = string.Empty;
+    public int? SuspensionTimeoutSeconds { get; set; }
+    public string RequestedVariableName { get; set; } = string.Empty;
+    public WorkflowRunToolApproval? ToolApproval { get; set; }
+    public WorkflowRunUsageMetrics Usage { get; set; } = new();
+    public WorkflowRunStepOutcome Outcome { get; set; } = WorkflowRunStepOutcome.Unspecified;
+    public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
+        ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
+        : null;
+}
+
+public sealed class WorkflowRunFailedStepAttempt
+{
+    public string DisplayName { get; set; } = string.Empty;
     public string StepType { get; set; } = string.Empty;
     public string TargetRole { get; set; } = string.Empty;
     public DateTimeOffset? RequestedAt { get; set; }
@@ -191,15 +237,31 @@ public sealed class WorkflowRunStepTrace
     public string BranchKey { get; set; } = string.Empty;
     public string AssignedVariable { get; set; } = string.Empty;
     public string AssignedValue { get; set; } = string.Empty;
+    public WorkflowRunUsageMetrics Usage { get; set; } = new();
+    public string FailureOutput { get; set; } = string.Empty;
+    public bool FailureOutputTruncated { get; set; }
+    public WorkflowStepFailureOutcome FailureOutcome { get; set; } = WorkflowStepFailureOutcome.Unspecified;
+    public WorkflowRecoveryFailureKind RecoveryFailureKind { get; set; } = WorkflowRecoveryFailureKind.Unspecified;
+    public WorkflowStepRetryDisposition RetryDisposition { get; set; } = WorkflowStepRetryDisposition.Unspecified;
+    public WorkflowFileItemResultSet? FileItemResults { get; set; }
+    public VoteAgreementDecision? VoteAgreementDecision { get; set; }
     public string SuspensionType { get; set; } = string.Empty;
     public string SuspensionPrompt { get; set; } = string.Empty;
     public string SuspensionContent { get; set; } = string.Empty;
     public int? SuspensionTimeoutSeconds { get; set; }
     public string RequestedVariableName { get; set; } = string.Empty;
-    public WorkflowRunUsageMetrics Usage { get; set; } = new();
+    public WorkflowRunToolApproval? ToolApproval { get; set; }
     public double? DurationMs => RequestedAt.HasValue && CompletedAt.HasValue
         ? Math.Max(0, (CompletedAt.Value - RequestedAt.Value).TotalMilliseconds)
         : null;
+}
+
+public sealed class WorkflowRunToolApproval
+{
+    public string ExecutionId { get; set; } = string.Empty;
+    public string ToolName { get; set; } = string.Empty;
+    public string ToolCallId { get; set; } = string.Empty;
+    public string ApprovalRequestId { get; set; } = string.Empty;
 }
 
 public sealed class WorkflowRunRoleReply
@@ -209,6 +271,37 @@ public sealed class WorkflowRunRoleReply
     public string SessionId { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
     public int ContentLength { get; set; }
+}
+
+public sealed class WorkflowRunOperation
+{
+    public string SessionId { get; set; } = string.Empty;
+    public string OperationId { get; set; } = string.Empty;
+    public long ProgressSequence { get; set; }
+    public int Round { get; set; }
+    public WorkflowRuntimeOperationKind Kind { get; set; }
+    public DateTimeOffset? StartedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+    public string RoleActorId { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+    public string Provider { get; set; } = string.Empty;
+    public string InputSummary { get; set; } = string.Empty;
+    public List<string> AvailableToolNames { get; set; } = [];
+    public string Output { get; set; } = string.Empty;
+    public string ReasoningContent { get; set; } = string.Empty;
+    public string FinishReason { get; set; } = string.Empty;
+    public WorkflowRunUsageMetrics Usage { get; set; } = new();
+    public bool? Success { get; set; }
+    public string Error { get; set; } = string.Empty;
+    public string ToolCallId { get; set; } = string.Empty;
+    public string ToolName { get; set; } = string.Empty;
+    public string ArgumentsJson { get; set; } = string.Empty;
+    public string ResultJson { get; set; } = string.Empty;
+    public double? DurationMs => StartedAt.HasValue &&
+                                 CompletedAt.HasValue &&
+                                 CompletedAt.Value >= StartedAt.Value
+        ? (CompletedAt.Value - StartedAt.Value).TotalMilliseconds
+        : null;
 }
 
 public sealed class WorkflowRunTimelineEvent

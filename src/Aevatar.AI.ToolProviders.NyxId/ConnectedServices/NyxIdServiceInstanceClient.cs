@@ -13,6 +13,17 @@ public sealed class NyxIdServiceInstanceClient
         _client = client ?? throw new ArgumentNullException(nameof(client));
     }
 
+    internal static bool IsCallerExecutable(NyxIdServiceInstance instance)
+    {
+        var readiness = instance.CallerExecutionReadiness;
+        return instance.IsActive &&
+               instance.CredentialAllowed &&
+               readiness is not null &&
+               readiness.Connected &&
+               readiness.CredentialStatus == NyxIdServiceCredentialStatus.Active &&
+               (!instance.HasNodeId || readiness.NodeStatus == NyxIdServiceNodeStatus.Online);
+    }
+
     internal async Task<IReadOnlyList<NyxIdServiceInstanceBinding>> DiscoverAsync(
         string userToken,
         string? organizationToken,
@@ -243,7 +254,13 @@ public sealed class NyxIdServiceInstanceClient
         var id = ReadString(item, "user_service_id") ?? ReadString(item, "id");
         var slug = ReadString(item, "service_slug") ?? ReadString(item, "slug");
         var catalogId = ReadString(item, "catalog_service_id") ?? ReadString(item, "service_id");
+        var catalogSlug = ReadString(item, "catalog_service_slug");
         var active = ReadBool(item, "is_active");
+        if (!TryReadNodeId(item, out var nodeId) ||
+            !TryReadCallerExecutionReadiness(item, nodeId, out var callerExecutionReadiness))
+        {
+            return null;
+        }
         if (string.IsNullOrWhiteSpace(id) ||
             (string.IsNullOrWhiteSpace(catalogId) && string.IsNullOrWhiteSpace(slug)) ||
             !active.HasValue ||
@@ -269,13 +286,95 @@ public sealed class NyxIdServiceInstanceClient
             AccessTokenSource = tokenSource,
             RouteConstraint = routeConstraint,
             CredentialAllowed = credentialAllowed,
+            CallerExecutionReadiness = callerExecutionReadiness,
         };
         if (!string.IsNullOrWhiteSpace(catalogId))
             instance.CatalogServiceId = catalogId;
-        var nodeId = ReadString(item, "node_id");
-        if (!string.IsNullOrWhiteSpace(nodeId))
+        if (!string.IsNullOrWhiteSpace(catalogSlug))
+            instance.CatalogServiceSlug = catalogSlug;
+        if (nodeId is not null)
             instance.NodeId = nodeId;
         return new NyxIdServiceInstanceBinding(instance, token);
+    }
+
+    private static bool TryReadNodeId(JsonElement item, out string? nodeId)
+    {
+        nodeId = null;
+        if (!item.TryGetProperty("node_id", out var value) || value.ValueKind == JsonValueKind.Null)
+            return true;
+        if (value.ValueKind != JsonValueKind.String)
+            return false;
+        var candidate = value.GetString();
+        if (string.IsNullOrWhiteSpace(candidate) ||
+            !string.Equals(candidate, candidate.Trim(), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        nodeId = candidate;
+        return true;
+    }
+
+    private static bool TryReadCallerExecutionReadiness(
+        JsonElement item,
+        string? nodeId,
+        out NyxIdServiceCallerExecutionReadiness readiness)
+    {
+        readiness = new NyxIdServiceCallerExecutionReadiness();
+        if (ReadBool(item, "connected") is not { } connected ||
+            !TryParseCredentialStatus(ReadString(item, "status"), out var credentialStatus) ||
+            !TryParseNodeStatus(item, nodeId, out var nodeStatus))
+        {
+            return false;
+        }
+
+        readiness.CredentialStatus = credentialStatus;
+        readiness.Connected = connected;
+        readiness.NodeStatus = nodeStatus;
+        return true;
+    }
+
+    private static bool TryParseCredentialStatus(
+        string? value,
+        out NyxIdServiceCredentialStatus status)
+    {
+        status = value switch
+        {
+            "active" => NyxIdServiceCredentialStatus.Active,
+            "expired" => NyxIdServiceCredentialStatus.Expired,
+            "revoked" => NyxIdServiceCredentialStatus.Revoked,
+            "failed" => NyxIdServiceCredentialStatus.Failed,
+            "refresh_failed" => NyxIdServiceCredentialStatus.RefreshFailed,
+            "pending_auth" => NyxIdServiceCredentialStatus.PendingAuthorization,
+            _ => NyxIdServiceCredentialStatus.Unspecified,
+        };
+        return status != NyxIdServiceCredentialStatus.Unspecified;
+    }
+
+    private static bool TryParseNodeStatus(
+        JsonElement item,
+        string? nodeId,
+        out NyxIdServiceNodeStatus status)
+    {
+        status = NyxIdServiceNodeStatus.Unspecified;
+        if (nodeId is null)
+        {
+            if (item.TryGetProperty("node_status", out _))
+                return false;
+            status = NyxIdServiceNodeStatus.NotBound;
+            return true;
+        }
+
+        status = ReadString(item, "node_status") switch
+        {
+            "online" => NyxIdServiceNodeStatus.Online,
+            "offline" => NyxIdServiceNodeStatus.Offline,
+            "draining" => NyxIdServiceNodeStatus.Draining,
+            "unknown" => NyxIdServiceNodeStatus.Unknown,
+            "inaccessible" => NyxIdServiceNodeStatus.Inaccessible,
+            _ => NyxIdServiceNodeStatus.Unspecified,
+        };
+        return status != NyxIdServiceNodeStatus.Unspecified;
     }
 
     private static bool TryReadCredentialSource(
@@ -324,12 +423,15 @@ public sealed class NyxIdServiceInstanceClient
         string.Equals(left.UserServiceId, right.UserServiceId, StringComparison.Ordinal) &&
         left.CredentialSource == right.CredentialSource &&
         left.AccessTokenSource == right.AccessTokenSource &&
+        left.IsActive == right.IsActive &&
         left.CredentialAllowed == right.CredentialAllowed &&
         string.Equals(left.CatalogServiceId, right.CatalogServiceId, StringComparison.Ordinal) &&
+        string.Equals(left.CatalogServiceSlug, right.CatalogServiceSlug, StringComparison.Ordinal) &&
         string.Equals(left.DisplaySlug, right.DisplaySlug, StringComparison.Ordinal) &&
         string.Equals(left.EndpointId, right.EndpointId, StringComparison.Ordinal) &&
         string.Equals(left.EndpointUrl, right.EndpointUrl, StringComparison.Ordinal) &&
         string.Equals(left.NodeId, right.NodeId, StringComparison.Ordinal) &&
+        Equals(left.CallerExecutionReadiness, right.CallerExecutionReadiness) &&
         Equals(left.RouteConstraint, right.RouteConstraint);
 
     private static string? ReadString(JsonElement item, string name) =>

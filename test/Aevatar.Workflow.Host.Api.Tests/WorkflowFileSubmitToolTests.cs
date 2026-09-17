@@ -47,7 +47,8 @@ public sealed class WorkflowFileSubmitToolTests
 
         var tools = await source.GetToolsAsync();
 
-        tools.Should().ContainSingle(tool => tool.Name == "workflow_file_submit");
+        var tool = tools.Should().ContainSingle(candidate => candidate.Name == "workflow_file_submit").Subject;
+        tool.RecoverySafety.Should().Be(WorkflowToolRecoverySafety.EffectfulNonReplayable);
         artifactPort.OpenCount.Should().Be(0);
     }
 
