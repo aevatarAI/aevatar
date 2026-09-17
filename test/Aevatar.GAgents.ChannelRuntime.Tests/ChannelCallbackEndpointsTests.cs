@@ -1070,7 +1070,7 @@ public sealed class ChannelCallbackEndpointsTests
             """,
             "scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
-        var nyxClient = CreateNyxClient(new RecordingNyxHttpMessageHandler(request =>
+        var nyxHandler = new RecordingNyxHttpMessageHandler(request =>
         {
             if (request.Method == HttpMethod.Put && request.RequestUri!.AbsolutePath == "/api/v1/api-keys/key-service-ids")
             {
@@ -1078,7 +1078,8 @@ public sealed class ChannelCallbackEndpointsTests
             }
 
             return NotFoundResponse(request);
-        }));
+        });
+        var nyxClient = CreateNyxClient(nyxHandler);
 
         var result = await InvokeAsync(
             "HandleUpdateRegistrationAsync",
@@ -1094,6 +1095,21 @@ public sealed class ChannelCallbackEndpointsTests
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        var agentKeyUpdateRequest = nyxHandler.Requests
+            .Should().ContainSingle(request => request.Method == HttpMethod.Put &&
+                request.RequestUri!.AbsolutePath == "/api/v1/api-keys/key-service-ids")
+            .Subject;
+        nyxHandler.Requests
+            .Should().NotContain(request => request.Method == HttpMethod.Post &&
+                request.RequestUri!.AbsolutePath == "/api/v1/api-keys");
+        var updateBody = JsonDocument.Parse(await agentKeyUpdateRequest.Content!.ReadAsStringAsync());
+        updateBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().ContainSingle().Which.Should().Be("svc-calendar");
+        updateBody.RootElement.GetProperty("allowed_node_ids").EnumerateArray()
+            .Should().BeEmpty();
+        updateBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+        updateBody.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
         capturedEnvelope.Should().NotBeNull();
         var command = capturedEnvelope!.Payload.Unpack<ChannelBotUpdateRuntimeConfigCommand>();
         command.DefaultSkillName.Should().Be("booking-capacity");
@@ -1373,19 +1389,26 @@ public sealed class ChannelCallbackEndpointsTests
     {
         public List<HttpRequestMessage> Requests { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            Requests.Add(CloneRequest(request));
-            return Task.FromResult(handler(request));
+            Requests.Add(await CloneRequestAsync(request, cancellationToken));
+            return handler(request);
         }
 
-        private static HttpRequestMessage CloneRequest(HttpRequestMessage request)
+        private static async Task<HttpRequestMessage> CloneRequestAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
         {
             var clone = new HttpRequestMessage(request.Method, request.RequestUri);
             foreach (var header in request.Headers)
                 clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            if (request.Content is not null)
+            {
+                var body = await request.Content.ReadAsStringAsync(cancellationToken);
+                clone.Content = new StringContent(body, Encoding.UTF8, request.Content.Headers.ContentType?.MediaType);
+            }
             return clone;
         }
     }
