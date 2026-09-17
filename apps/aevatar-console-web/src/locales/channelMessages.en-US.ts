@@ -43,6 +43,8 @@ export default {
     'This bot could not be bound. Refresh the channel list and review its binding and routes in NyxID.',
   'channels.bind.failed':
     'Could not save this bot. Check your skill, services and NyxID access, then try again.',
+  'channels.bind.configuration':
+    'Bot binding is unavailable because the server callback address is not configured correctly. Contact your administrator.',
   'channels.edit.partialConfigSave':
     'Label saved, but the configuration could not be updated. Review your choices and try again.',
   'channels.edit.label': 'Label',

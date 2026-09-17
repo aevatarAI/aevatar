@@ -40,6 +40,8 @@ export default {
     '无法绑定此 Bot。请刷新列表，并到 NyxID 检查绑定与路由。',
   'channels.bind.failed':
     '无法保存此 Bot，请检查 Skill、Services 和 NyxID 授权后重试。',
+  'channels.bind.configuration':
+    '服务端 Bot 回调地址未正确配置，暂时无法绑定。请联系管理员处理。',
   'channels.edit.partialConfigSave':
     'Label 已保存，但配置更新失败。请检查选择后重试。',
   'channels.edit.label': 'Label',

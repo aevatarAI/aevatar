@@ -387,26 +387,33 @@ function ConfigurationForm({
       )
         setUncertain(true);
       const message =
-        error instanceof ChannelRegistrationError && error.reason === 'conflict'
+        error instanceof ChannelRegistrationError &&
+        error.reason === 'configuration'
           ? t(
-              'channels.bind.conflict',
-              'This bot could not be bound. Refresh the channel list and review its binding and routes in NyxID.',
+              'channels.bind.configuration',
+              'Bot binding is unavailable because the server callback address is not configured correctly. Contact your administrator.',
             )
           : error instanceof ChannelRegistrationError &&
-              error.reason === 'uncertain'
+              error.reason === 'conflict'
             ? t(
-                'channels.bind.uncertain',
-                'The request could not be confirmed. Return to Channels and refresh before trying again.',
+                'channels.bind.conflict',
+                'This bot could not be bound. Refresh the channel list and review its binding and routes in NyxID.',
               )
-            : labelSaved
+            : error instanceof ChannelRegistrationError &&
+                error.reason === 'uncertain'
               ? t(
-                  'channels.edit.partialConfigSave',
-                  'Label saved, but the configuration could not be updated. Review your choices and try again.',
+                  'channels.bind.uncertain',
+                  'The request could not be confirmed. Return to Channels and refresh before trying again.',
                 )
-              : t(
-                  'channels.bind.failed',
-                  'Could not save this bot. Check your skill, services and NyxID access, then try again.',
-                );
+              : labelSaved
+                ? t(
+                    'channels.edit.partialConfigSave',
+                    'Label saved, but the configuration could not be updated. Review your choices and try again.',
+                  )
+                : t(
+                    'channels.bind.failed',
+                    'Could not save this bot. Check your skill, services and NyxID access, then try again.',
+                  );
       setFailure(message);
       toast.error(message);
     } finally {

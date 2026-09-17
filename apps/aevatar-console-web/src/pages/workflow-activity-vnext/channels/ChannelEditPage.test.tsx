@@ -283,6 +283,48 @@ it('preserves Label editing and requires a newer matching configuration before r
   }
 });
 
+it('attributes an insecure callback rejection to the server and retains the binding choices', async () => {
+  jest.useFakeTimers();
+  try {
+    fetchMock.mockImplementation(async (input, init) => {
+      if (init?.method === 'POST')
+        return response({ error: 'insecure_webhook_base_url' }, 400);
+      return catalogue(input) ?? response([unbound]);
+    });
+    renderWithQueryClient(
+      <ChannelConfigurationPage scopeId="scope-alpha" botId="bot-alpha" />,
+    );
+    await chooseSkill('support');
+    fireEvent.click(await screen.findByRole('checkbox', { name: /GitHub/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Bind bot' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'server callback address is not configured correctly',
+    );
+    expect(mockToast.error).toHaveBeenCalledWith(
+      expect.stringContaining('server callback address'),
+    );
+    expect(
+      screen.queryByText(/Check your skill, services/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /GitHub/ })).toBeChecked();
+    expect(
+      screen.getByText('support', { selector: '.ant-select-content' }),
+    ).toBeInTheDocument();
+    expect(JSON.parse(String(posts()[0][1]?.body))).toEqual({
+      nyx_channel_bot_id: 'bot-alpha',
+      skill_name: 'support',
+      authorization_mode: 'explicit_service_allowlist',
+      service_ids: ['user-service-github'],
+    });
+    expect(posts()).toHaveLength(1);
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(history.replace).not.toHaveBeenCalled();
+  } finally {
+    cleanup();
+    jest.useRealTimers();
+  }
+});
+
 it('does not repeat an adoption after an uncertain transport result', async () => {
   jest.useFakeTimers();
   try {

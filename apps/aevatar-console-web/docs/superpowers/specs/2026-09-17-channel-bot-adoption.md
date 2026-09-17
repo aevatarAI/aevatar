@@ -86,6 +86,29 @@ inspected in the existing Chrome session. No production bot or service grant
 was mutated during this verification; write confirmation and uncertain-write
 behavior are covered by focused tests.
 
+A subsequent user-triggered Bind returned `400 insecure_webhook_base_url`.
+The captured request contained exactly the documented bot ID, skill name,
+authorization mode and service IDs. In the referenced backend, registration
+checks the resolved callback address before calling the adoption facade.
+The UI must attribute this rejection to server configuration and preserve the
+user's choices instead of suggesting that the skill or grants are incorrect.
+
+The deployed host must explicitly configure its public HTTPS callback origin
+when TLS terminates before the application, for example:
+
+```text
+Aevatar__NyxIdRelay__WebhookBaseUrl=https://<public-channel-api-host>
+```
+
+`MainnetHostBuilderExtensions` reads `NyxIdRelay` first and overlays
+`Aevatar:NyxIdRelay`; operators must check that effective configuration.
+The host appends `/api/webhooks/nyxid-relay` to the base. Do not send this value
+in adoption JSON or substitute the browser's localhost origin. Correcting the
+UI error alone does not resolve the deployment configuration or establish a
+successful live binding. The backend deployment blocker is tracked in
+[issue #3656](https://github.com/aevatarAI/aevatar/issues/3656), assigned to
+`louis4li`.
+
 Focused tests cover inventory/null identities, request shapes and safe
 decoding, private Ornn proxy authorization/pagination, static guidance,
 binding/availability actions, refresh retention, exact detail/removal,
