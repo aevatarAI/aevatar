@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
@@ -70,7 +71,7 @@ public sealed class ChannelAgentKeyProvisioningService(
         if (writeMode != ChannelAgentKeyWriteMode.NyxIdDefault)
             throw new InvalidOperationException("channel_agent_key_write_gate_closed");
 
-        var normalizedPlatform = NormalizePlatform(platform);
+        var normalizedPlatform = ChannelPlatformId.FromCanonical(platform).Value;
         ArgumentException.ThrowIfNullOrWhiteSpace(accessToken);
         ArgumentException.ThrowIfNullOrWhiteSpace(relayCallbackUrl);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
@@ -165,22 +166,21 @@ public sealed class ChannelAgentKeyProvisioningService(
             SecretReference = storedReference.Clone(),
             Grant = parsed.Grant.Clone(),
         };
-        var validationCommand = new ChannelBotRegisterCommand
-        {
-            ScopeId = normalizedScopeId,
-            NyxAgentApiKeyId = credential.ApiKeyId,
-            WorkflowResultDeliveryCredential = credential.SecretReference.Clone(),
-            ChannelAgentKey = credential.Clone(),
-            AuthorizationMode = authorization is null
-                ? ChannelRegistrationAuthorizationMode.NyxidDefault
-                : ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
-        };
+        ChannelRegistrationServiceAllowlist? registrationServiceAllowlist = null;
         if (authorization is not null)
         {
-            validationCommand.RegistrationServiceAllowlist = new ChannelRegistrationServiceAllowlist();
-            validationCommand.RegistrationServiceAllowlist.ServiceIds.Add(authorization.Plan.RegistrationServiceIds);
+            registrationServiceAllowlist = new ChannelRegistrationServiceAllowlist();
+            registrationServiceAllowlist.ServiceIds.Add(authorization.Plan.RegistrationServiceIds);
         }
-        if (!ChannelRegistrationAuthorizationContract.IsValidNewCommand(validationCommand))
+        if (!ChannelRegistrationAuthorizationContract.IsValidCredentialAndGrant(
+                normalizedScopeId,
+                authorization is null
+                    ? ChannelRegistrationAuthorizationMode.NyxidDefault
+                    : ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
+                registrationServiceAllowlist,
+                credential,
+                credential.ApiKeyId,
+                credential.SecretReference))
         {
             await CleanupDetachedAsync(
                 accessToken,
@@ -574,15 +574,6 @@ public sealed class ChannelAgentKeyProvisioningService(
         !string.IsNullOrWhiteSpace(reference.Fingerprint) &&
         reference.CreatedAtUnixMs > 0 &&
         reference.ExpiresAtUnixMs >= 0;
-
-    private static string NormalizePlatform(string platform)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(platform);
-        var normalized = platform.Trim().ToLowerInvariant();
-        return normalized is "lark" or "telegram"
-            ? normalized
-            : throw new ArgumentException("Unsupported channel platform.", nameof(platform));
-    }
 
     private sealed class ParsedChannelAgentKey(
         string apiKeyId,

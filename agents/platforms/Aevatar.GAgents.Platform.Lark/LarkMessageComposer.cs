@@ -194,11 +194,8 @@ public sealed class LarkMessageComposer : IMessageComposer<LarkOutboundMessage>
         if (intent.Disposition == MessageDisposition.Ephemeral)
             return ComposeCapability.Degraded;
 
-        if (intent.Attachments.Count > 0 && !(context.Capabilities?.SupportsFiles ?? DefaultCapabilities.SupportsFiles))
+        if (intent.Attachments.Count > 0)
             return ComposeCapability.Unsupported;
-
-        if (EnumerateActions(intent).Any() && !(context.Capabilities?.SupportsActionButtons ?? DefaultCapabilities.SupportsActionButtons))
-            return ComposeCapability.Degraded;
 
         return ComposeCapability.Exact;
     }

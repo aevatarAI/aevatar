@@ -1,6 +1,7 @@
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -31,8 +32,27 @@ public static class LarkPlatformServiceCollectionExtensions
         {
             client.BaseAddress = LarkConversationHostDefaults.BaseAddress;
         });
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxIdRelayContentAdapter, LarkRelayMessageAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxIdRelayContentAdapter, FeishuRelayMessageAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxIdRelayConversationAdapter, FeishuRelayMessageAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxIdRelayMentionAdapter, FeishuRelayMessageAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxIdRelayInteractionAdapter, FeishuRelayMessageAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxIdRelayConversationAdapter, LarkRelayMessageAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxIdRelayMentionAdapter, LarkRelayMessageAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxIdRelayInteractionAdapter, LarkRelayMessageAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelGroupAdmissionPolicy, LarkGroupAdmissionPolicy>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelGroupAdmissionPolicy, FeishuGroupAdmissionPolicy>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelTypingIndicator, LarkTypingIndicator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelTypingIndicator, FeishuTypingIndicator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelReplyTextFormatter, LarkReplyTextFormatter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelReplyTextFormatter, FeishuReplyTextFormatter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSubjectContactResolver, LarkSubjectContactResolver>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelSubjectContactResolver, FeishuSubjectContactResolver>());
+        services.TryAddSingleton<ILarkBotIdentityResolver, LarkBotIdentityResolver>();
         services.TryAddSingleton<LarkMessageComposer>();
         services.TryAddSingleton<LarkChannelNativeMessageProducer>();
+        services.TryAddSingleton<FeishuLarkFamilyMessageComposer>();
+        services.TryAddSingleton<FeishuLarkFamilyNativeMessageProducer>();
         services.TryAddSingleton<NyxIdToolOptions>();
         services.TryAddSingleton<NyxIdApiClient>();
         services.TryAddSingleton<ILarkOutboundDispatcher, LarkOutboundDispatcher>();
@@ -46,8 +66,12 @@ public static class LarkPlatformServiceCollectionExtensions
             sp => sp.GetRequiredService<LarkRelayProxyResponseClassifier>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, LarkMessageComposer>(
             sp => sp.GetRequiredService<LarkMessageComposer>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IMessageComposer, FeishuLarkFamilyMessageComposer>(
+            sp => sp.GetRequiredService<FeishuLarkFamilyMessageComposer>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, LarkChannelNativeMessageProducer>(
             sp => sp.GetRequiredService<LarkChannelNativeMessageProducer>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageProducer, FeishuLarkFamilyNativeMessageProducer>(
+            sp => sp.GetRequiredService<FeishuLarkFamilyNativeMessageProducer>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeMessageSender, LarkChannelNativeMessageSender>(
             sp => sp.GetRequiredService<LarkChannelNativeMessageSender>()));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelNativeDeliveryTargetAdapter, LarkChannelNativeDeliveryTargetAdapter>(

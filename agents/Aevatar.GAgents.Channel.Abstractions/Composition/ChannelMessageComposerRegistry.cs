@@ -4,6 +4,8 @@ namespace Aevatar.GAgents.Channel.Abstractions;
 
 /// <summary>
 /// Default <see cref="IChannelMessageComposerRegistry"/> backed by DI-provided composer instances.
+/// Composition rejects conflicting implementations for one channel while allowing repeated
+/// references to the same singleton registration.
 /// </summary>
 public sealed class ChannelMessageComposerRegistry : IChannelMessageComposerRegistry
 {
@@ -24,7 +26,7 @@ public sealed class ChannelMessageComposerRegistry : IChannelMessageComposerRegi
             if (composer is null)
                 continue;
 
-            _composers[composer.Channel.Value] = composer;
+            AddUnique(_composers, composer.Channel.Value, composer, "composer");
         }
 
         _nativeProducers = new Dictionary<string, IChannelNativeMessageProducer>(StringComparer.OrdinalIgnoreCase);
@@ -33,8 +35,32 @@ public sealed class ChannelMessageComposerRegistry : IChannelMessageComposerRegi
             if (producer is null)
                 continue;
 
-            _nativeProducers[producer.Channel.Value] = producer;
+            AddUnique(_nativeProducers, producer.Channel.Value, producer, "native producer");
         }
+    }
+
+    private static void AddUnique<T>(
+        IDictionary<string, T> registrations,
+        string channel,
+        T registration,
+        string registrationKind)
+        where T : class
+    {
+        if (!registrations.TryGetValue(channel, out var existing))
+        {
+            registrations.Add(channel, registration);
+            return;
+        }
+
+        // Repeated built-in DI registration resolves the same singleton instance and is
+        // idempotent. Distinct implementations for one channel are ambiguous and fail at the
+        // composition boundary instead of silently selecting the last enumeration item.
+        if (ReferenceEquals(existing, registration))
+            return;
+
+        throw new InvalidOperationException(
+            $"Duplicate {registrationKind} registration detected for channel '{channel}'. " +
+            $"Only one implementation may be composed per channel.");
     }
 
     /// <inheritdoc />

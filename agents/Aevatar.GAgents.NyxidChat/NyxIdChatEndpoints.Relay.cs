@@ -45,17 +45,10 @@ public static partial class NyxIdChatEndpoints
                 bodyBytes = body.ToArray();
             }
 
-            var parsed = relayTransport.Parse(bodyBytes);
-            if (parsed.Payload is null)
-            {
-                return Results.BadRequest(new
-                {
-                    error = string.IsNullOrWhiteSpace(parsed.ErrorCode) ? "invalid_relay_payload" : parsed.ErrorCode,
-                    detail = parsed.ErrorSummary,
-                });
-            }
+            var payload = NyxIdRelayTransport.ReadPayload(bodyBytes);
+            if (payload is null)
+                return Results.BadRequest(new { error = "invalid_relay_payload", detail = "Failed to parse relay payload." });
 
-            var payload = parsed.Payload;
             var validation = await relayAuthValidator.ValidateAsync(http, bodyBytes, payload, ct);
             if (!validation.Succeeded || validation.Principal is null)
             {
@@ -83,6 +76,7 @@ public static partial class NyxIdChatEndpoints
                 return Results.Unauthorized();
             }
 
+            var parsed = relayTransport.Parse(bodyBytes);
             if (parsed.Ignored)
             {
                 // This branch produces no user-visible reply; without a log line a dropped

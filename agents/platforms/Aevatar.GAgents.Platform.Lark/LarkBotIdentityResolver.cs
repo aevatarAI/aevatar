@@ -2,7 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Microsoft.Extensions.Logging;
 
-namespace Aevatar.GAgents.NyxidChat;
+namespace Aevatar.GAgents.Platform.Lark;
 
 /// <summary>
 /// Resolves the bot's own Lark <c>open_id</c> via the NyxID proxy. The proxy injects the bot app's

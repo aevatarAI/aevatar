@@ -6,13 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
-/// <summary>
-/// Shared parsing / rollback helpers for the Nyx-side responses consumed by per-platform
-/// provisioning services (<see cref="NyxLarkProvisioningService"/>, <see cref="NyxTelegramProvisioningService"/>,
-/// future platforms). Centralized here so the Lark and Telegram services do not drift on the
-/// JSON shape Nyx returns and the failure-string contract surfaced through the registration
-/// endpoint stays uniform.
-/// </summary>
+/// <summary>NyxID response parsing, safe public errors and owned-resource compensation.</summary>
 internal static class NyxApiResponseHelper
 {
     /// <summary>
@@ -42,184 +36,6 @@ internal static class NyxApiResponseHelper
         {
             throw new InvalidOperationException($"invalid_json_in_{resourceName}_response", ex);
         }
-    }
-
-    /// <summary>
-    /// Returns the trimmed per-connection proxy slug from a Nyx <c>POST /api/v1/keys</c>
-    /// (connect-service) response — <c>slug</c> preferred, <c>proxy_url_slug</c> normalized as
-    /// fallback — or <c>null</c> when the response is an error envelope, unparseable, or carries
-    /// neither field.
-    /// NyxID auto-numbers a base slug that is already taken (<c>api-lark-bot</c> →
-    /// <c>api-lark-bot-2</c>/<c>-3</c>), so a user with several Lark bots gets a distinct proxy
-    /// service per app. Capturing the slug NyxID actually assigned is what lets a later reply proxy
-    /// through the SAME Lark app this connection was created for, instead of always the first one.
-    /// </summary>
-    public static string? ExtractOptionalProxyUrlSlug(string response)
-    {
-        if (LooksLikeErrorEnvelope(response))
-            return null;
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-            return NormalizeProxyUrlSlug(ReadNonEmptyString(root, "slug")) ??
-                   NormalizeProxyUrlSlug(ReadNonEmptyString(root, "proxy_url_slug"));
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Returns the ids of every Lark channel-bot in a Nyx <c>GET /api/v1/channel-bots</c> list
-    /// response (each list item carries <c>id</c> + <c>platform</c>, but NOT <c>platform_bot_id</c>:
-    /// the per-app identifier lives only on the per-bot detail <c>GET /channel-bots/{id}</c>). The
-    /// caller fetches each returned bot's detail and matches <c>platform_bot_id</c> against the Lark
-    /// app being (re-)registered via <see cref="ChannelBotDetailMatchesApp"/>, so only the conflicting
-    /// app's bot is deleted before the create retry — NyxID rejects a second channel-bot for an app
-    /// that already has one with <c>409 already-exists</c>, which otherwise aborts a re-bind (the 502
-    /// the /channels wizard surfaced). Returns an empty list when the response is an error envelope,
-    /// unparseable, or carries no Lark bot.
-    /// </summary>
-    public static IReadOnlyList<string> ExtractLarkChannelBotIds(string listResponse)
-    {
-        if (LooksLikeErrorEnvelope(listResponse))
-            return Array.Empty<string>();
-
-        try
-        {
-            using var document = JsonDocument.Parse(listResponse);
-            if (!TryGetBotArray(document.RootElement, out var bots))
-                return Array.Empty<string>();
-
-            var ids = new List<string>();
-            foreach (var bot in bots.EnumerateArray())
-            {
-                if (bot.ValueKind != JsonValueKind.Object)
-                    continue;
-
-                var platform = ReadNonEmptyString(bot, "platform");
-                if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var id = ReadNonEmptyString(bot, "id");
-                if (id is not null)
-                    ids.Add(id);
-            }
-
-            return ids;
-        }
-        catch (JsonException)
-        {
-            return Array.Empty<string>();
-        }
-    }
-
-    /// <summary>
-    /// Returns true when a Nyx per-bot detail <c>GET /api/v1/channel-bots/{id}</c> response is for
-    /// the Lark app <paramref name="appId"/>, i.e. its <c>platform_bot_id</c> equals the app id.
-    /// This is the field the list response omits, so the conflicting-bot match must be made against
-    /// the detail. Returns false for an error envelope, an unparseable body, a non-Lark bot, or any
-    /// other app, so cleanup never deletes a bot belonging to a different Lark app.
-    /// </summary>
-    public static bool ChannelBotDetailMatchesApp(string detailResponse, string appId)
-    {
-        var normalizedAppId = appId?.Trim();
-        if (string.IsNullOrWhiteSpace(normalizedAppId) || LooksLikeErrorEnvelope(detailResponse))
-            return false;
-
-        try
-        {
-            using var document = JsonDocument.Parse(detailResponse);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-                return false;
-
-            var platform = ReadNonEmptyString(root, "platform");
-            if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            return string.Equals(ReadNonEmptyString(root, "platform_bot_id"), normalizedAppId, StringComparison.Ordinal);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static bool TryGetBotArray(JsonElement root, out JsonElement array)
-    {
-        if (root.ValueKind == JsonValueKind.Array)
-        {
-            array = root;
-            return true;
-        }
-
-        foreach (var key in new[] { "data", "channel_bots", "channelBots", "items", "bots" })
-        {
-            if (root.TryGetProperty(key, out var element) && element.ValueKind == JsonValueKind.Array)
-            {
-                array = element;
-                return true;
-            }
-        }
-
-        array = default;
-        return false;
-    }
-
-    private static string? NormalizeProxyUrlSlug(string? value)
-    {
-        var trimmed = value?.Trim();
-        if (string.IsNullOrWhiteSpace(trimmed))
-            return null;
-
-        var extracted = ExtractProxySlugFromRouteTemplate(trimmed);
-        if (!string.IsNullOrWhiteSpace(extracted))
-            return extracted;
-
-        return LooksLikeProxyUrlTemplate(trimmed) ? null : trimmed;
-    }
-
-    private static string? ExtractProxySlugFromRouteTemplate(string value)
-    {
-        var path = Uri.TryCreate(value, UriKind.Absolute, out var uri) ? uri.AbsolutePath : value;
-        const string marker = "/proxy/s/";
-        var index = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (index < 0)
-            return null;
-
-        var start = index + marker.Length;
-        var end = path.IndexOfAny(new[] { '/', '?', '#' }, start);
-        var segment = end < 0 ? path[start..] : path[start..end];
-        string slug;
-        try
-        {
-            slug = Uri.UnescapeDataString(segment).Trim();
-        }
-        catch (UriFormatException)
-        {
-            return null;
-        }
-        return string.IsNullOrWhiteSpace(slug) || LooksLikeProxyUrlTemplate(slug) ? null : slug;
-    }
-
-    private static bool LooksLikeProxyUrlTemplate(string value) =>
-        value.Contains("://", StringComparison.Ordinal) ||
-        value.Contains('/', StringComparison.Ordinal) ||
-        value.Contains('\\', StringComparison.Ordinal) ||
-        value.Contains('?', StringComparison.Ordinal) ||
-        value.Contains('#', StringComparison.Ordinal);
-
-    private static string? ReadNonEmptyString(JsonElement root, string propertyName)
-    {
-        if (!root.TryGetProperty(propertyName, out var element) || element.ValueKind != JsonValueKind.String)
-            return null;
-
-        var value = element.GetString()?.Trim();
-        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     /// <summary>
@@ -378,9 +194,6 @@ internal static class NyxApiResponseHelper
         if (string.IsNullOrWhiteSpace(normalized))
             return "provisioning_failed";
 
-        if (IsChannelBotAlreadyExists(normalized))
-            return "channel_bot_already_exists";
-
         foreach (var publicCode in PublicProvisioningFailureCodes)
         {
             if (string.Equals(normalized, publicCode, StringComparison.Ordinal) ||
@@ -393,85 +206,14 @@ internal static class NyxApiResponseHelper
         return "provisioning_failed";
     }
 
-    public static string? SanitizeFailureDetail(Exception ex, string platform) =>
-        ex is InvalidOperationException ? NormalizePublicFailureDetail(ex.Message, platform) : null;
-
-    public static string? NormalizePublicFailureDetailCode(string? detail)
-    {
-        var normalized = detail?.Trim();
-        if (string.IsNullOrWhiteSpace(normalized))
-            return null;
-
-        foreach (var publicDetail in PublicProvisioningFailureDetails)
-        {
-            if (string.Equals(normalized, publicDetail, StringComparison.Ordinal))
-                return publicDetail;
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Returns a stable client-visible detail for known channel registration failures only.
-    /// Unknown provider bodies are intentionally omitted.
-    /// </summary>
-    public static string? NormalizePublicFailureDetail(string? reason, string platform)
-    {
-        var normalized = reason?.Trim();
-        if (string.IsNullOrWhiteSpace(normalized) ||
-            !normalized.StartsWith("channel_bot_id_request_failed ", StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        if (IsChannelBotAlreadyExists(normalized))
-            return "channel_bot_already_exists";
-
-        if (IsChannelBotLimitReached(normalized))
-            return "channel_bot_limit_reached";
-
-        if (string.Equals(platform?.Trim(), "telegram", StringComparison.OrdinalIgnoreCase) &&
-            IsTelegramBotCredentialRejected(normalized))
-        {
-            return "telegram_bot_credential_rejected";
-        }
-
-        return null;
-    }
-
-    private static bool IsChannelBotAlreadyExists(string reason) =>
-        reason.StartsWith("channel_bot_id_request_failed ", StringComparison.Ordinal) &&
-        (reason.Contains("nyx_status=409", StringComparison.Ordinal) ||
-         reason.Contains("already registered", StringComparison.OrdinalIgnoreCase) ||
-         reason.Contains("channel bot already exists", StringComparison.OrdinalIgnoreCase));
-
-    private static bool IsChannelBotLimitReached(string reason) =>
-        reason.Contains("channel bot limit reached", StringComparison.OrdinalIgnoreCase) ||
-        reason.Contains("channel-bot limit reached", StringComparison.OrdinalIgnoreCase) ||
-        reason.Contains("channel_bot_limit", StringComparison.OrdinalIgnoreCase) ||
-        reason.Contains("maximum number of channel bots", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsTelegramBotCredentialRejected(string reason) =>
-        reason.Contains("Telegram getMe failed", StringComparison.OrdinalIgnoreCase) ||
-        reason.Contains("bot token", StringComparison.OrdinalIgnoreCase) ||
-        reason.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
-        reason.Contains("Not Found", StringComparison.OrdinalIgnoreCase);
-
-    private static readonly string[] PublicProvisioningFailureDetails =
-    [
-        "telegram_bot_credential_rejected",
-        "channel_bot_limit_reached",
-        "channel_bot_already_exists",
-    ];
-
     private static readonly string[] PublicProvisioningFailureCodes =
     [
-        "unsupported_platform",
         "missing_access_token",
-        "missing_app_id",
-        "missing_app_secret",
-        "missing_verification_token",
-        "missing_bot_token",
+        "missing_nyx_channel_bot_id",
+        "invalid_channel_bot_detail",
+        "channel_bot_platform_mismatch",
+        "channel_bot_not_found_or_forbidden",
+        "channel_bot_not_adoptable",
         "missing_webhook_base_url",
         "missing_scope_id",
         "insecure_webhook_base_url",
@@ -481,11 +223,8 @@ internal static class NyxApiResponseHelper
         "nyxid_user_service_not_accessible",
         "scope_plan_changed",
         "nyxid_scope_plan_unavailable",
-        "channel_service_connection_unavailable",
         "nyx_base_url_not_configured",
         "nyx_api_base_url_not_configured",
-        "channel_bot_id_request_failed",
-        "channel_bot_already_exists",
         "local_mirror_dispatch_failed",
         "local_mirror_accepted_remote_cleanup_skipped",
         "local_mirror_acceptance_unknown_remote_cleanup_skipped",

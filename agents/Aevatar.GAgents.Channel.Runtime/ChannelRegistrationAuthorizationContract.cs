@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 
 namespace Aevatar.GAgents.Channel.Runtime;
@@ -49,32 +50,62 @@ public static class ChannelRegistrationAuthorizationContract
         };
     }
 
-    public static bool IsValidNewCommand(ChannelBotRegisterCommand? command)
-    {
-        if (command is null)
-            return false;
+    public static bool IsValidNewCommand(ChannelBotRegisterCommand? command) =>
+        command is not null &&
+        IsCanonicalPlatform(command.Platform) &&
+        IsValidNyxChannelBotId(command.NyxChannelBotId) &&
+        IsValidCredentialAndGrant(
+            command.ScopeId,
+            command.AuthorizationMode,
+            command.RegistrationServiceAllowlist,
+            command.ChannelAgentKey,
+            command.NyxAgentApiKeyId,
+            command.WorkflowResultDeliveryCredential);
 
-        var credential = command.ChannelAgentKey;
-        return command.AuthorizationMode switch
+    public static bool IsCanonicalPlatform(string? platform)
+    {
+        try
+        {
+            ChannelPlatformId.FromCanonical(platform);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    public static bool IsValidNyxChannelBotId(string? botId) =>
+        !string.IsNullOrWhiteSpace(botId) &&
+        string.Equals(botId, botId.Trim(), StringComparison.Ordinal) &&
+        !botId.Any(char.IsControl);
+
+    /// <summary>
+    /// Validate a provisioned credential before a registration command exists.
+    /// Bot identity and platform remain mandatory in <see cref="IsValidNewCommand"/>.
+    /// </summary>
+    public static bool IsValidCredentialAndGrant(
+        string scopeId,
+        ChannelRegistrationAuthorizationMode authorizationMode,
+        ChannelRegistrationServiceAllowlist? registrationServiceAllowlist,
+        ChannelAgentKeyCredential? credential,
+        string legacyApiKeyId,
+        SecretReference? legacySecretReference) =>
+        authorizationMode switch
         {
             ChannelRegistrationAuthorizationMode.NyxidDefault =>
-                command.RegistrationServiceAllowlist is null &&
-                IsValidCredential(
-                    command.ScopeId,
-                    credential,
-                    command.NyxAgentApiKeyId,
-                    command.WorkflowResultDeliveryCredential) &&
+                registrationServiceAllowlist is null &&
+                IsValidCredential(scopeId, credential, legacyApiKeyId, legacySecretReference) &&
                 IsValidDefaultGrant(credential!.Grant),
             ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist =>
                 IsValidExplicitContract(
-                    command.ScopeId,
-                    command.RegistrationServiceAllowlist,
+                    scopeId,
+                    registrationServiceAllowlist,
                     credential,
-                    command.NyxAgentApiKeyId,
-                    command.WorkflowResultDeliveryCredential),
+                    legacyApiKeyId,
+                    legacySecretReference),
             _ => false,
         };
-    }
 
     public static bool TryGetAuthoritativeCredential(
         ChannelBotRegistrationEntry? entry,

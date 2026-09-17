@@ -1,4 +1,4 @@
-namespace Aevatar.GAgents.NyxidChat;
+namespace Aevatar.GAgents.Platform.Lark;
 
 /// <summary>
 /// Resolves the bot's own Lark <c>open_id</c> so the group-chat admission gate can tell whether an

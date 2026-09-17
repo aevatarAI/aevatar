@@ -4,6 +4,7 @@ using Aevatar.Authentication.Hosting;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions.Sessions;
 using Aevatar.Foundation.VoicePresence.Hosting;
@@ -551,13 +552,14 @@ public static class PolicyAwareVoiceEndpoints
         out string channel,
         out string failure)
     {
+        channel = string.Empty;
         var nyxUserId = FirstNonEmpty(
             http.User.FindFirst(AevatarStandardClaimTypes.ScopeId)?.Value,
             http.User.FindFirst("uid")?.Value,
             http.User.FindFirst("sub")?.Value,
             http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value);
 
-        channel = NormalizeOptional(http.Request.Query["channel"].ToString()) ?? OwnerScope.NyxIdPlatform;
+        var externalChannel = http.Request.Query["channel"].ToString();
         if (string.IsNullOrWhiteSpace(nyxUserId))
         {
             routingScope = new OwnerScope();
@@ -565,23 +567,39 @@ public static class PolicyAwareVoiceEndpoints
             return false;
         }
 
-        if (IsNativeChannel(channel))
+        try
         {
-            routingScope = OwnerScope.ForNyxIdNative(nyxUserId);
+            // Preserve omitted/native routing, but validate supplied identities before
+            // trimming can erase controls or native aliases can bypass the shared parser.
+            channel = string.IsNullOrWhiteSpace(externalChannel)
+                ? OwnerScope.NyxIdPlatform
+                : ChannelPlatformId.ParseExternal(externalChannel).Value;
+            if (IsNativeChannel(channel))
+            {
+                routingScope = OwnerScope.ForNyxIdNative(nyxUserId);
+                channel = string.Empty;
+                failure = string.Empty;
+                return true;
+            }
+
+            var registrationScopeId = FirstNonEmpty(
+                http.Request.Query["registration_scope_id"].ToString(),
+                http.User.FindFirst("registration_scope_id")?.Value,
+                http.User.FindFirst(AevatarStandardClaimTypes.ScopeId)?.Value);
+            var senderId = FirstNonEmpty(
+                http.Request.Query["sender_id"].ToString(),
+                http.User.FindFirst("sender_id")?.Value);
+
+            routingScope = OwnerScope.ForChannel(nyxUserId, channel, registrationScopeId ?? string.Empty, senderId ?? string.Empty);
+        }
+        catch (ArgumentException)
+        {
+            routingScope = new OwnerScope();
             channel = string.Empty;
-            failure = string.Empty;
-            return true;
+            failure = "Invalid channel identity.";
+            return false;
         }
 
-        var registrationScopeId = FirstNonEmpty(
-            http.Request.Query["registration_scope_id"].ToString(),
-            http.User.FindFirst("registration_scope_id")?.Value,
-            http.User.FindFirst(AevatarStandardClaimTypes.ScopeId)?.Value);
-        var senderId = FirstNonEmpty(
-            http.Request.Query["sender_id"].ToString(),
-            http.User.FindFirst("sender_id")?.Value);
-
-        routingScope = OwnerScope.ForChannel(nyxUserId, channel, registrationScopeId ?? string.Empty, senderId ?? string.Empty);
         failure = string.Empty;
         return true;
     }

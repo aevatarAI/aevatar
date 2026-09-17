@@ -490,7 +490,7 @@ const LARK_SCOPE_IMPORT_JSON = JSON.stringify(
 const CHANNELS = [
   { id:"lark",     name:"Lark",        en:"lark",     status:"available", desc:"飞书国际版 · 把 bot 接到群聊和单聊", color:"#3370ff" },
   { id:"feishu",   name:"飞书 Feishu", en:"feishu",   status:"soon",      desc:"国内版飞书，复用同一接入流程", color:"#3370ff" },
-  { id:"telegram", name:"Telegram",    en:"telegram", status:"available", desc:"Bot API 接入 · 用 BotFather 的 bot token 一步接入（无需手动配 webhook）", color:"#2aabee" },
+  { id:"telegram", name:"Telegram",    en:"telegram", status:"available", desc:"Bot API 接入 · 使用已有 NyxID Channel Bot ID 接入", color:"#2aabee" },
   { id:"discord",  name:"Discord",     en:"discord",  status:"soon",      desc:"服务器 / 频道 bot，规划中", color:"#5865f2" },
   { id:"slack",    name:"Slack",       en:"slack",    status:"soon",      desc:"Workspace app，规划中", color:"#611f69" }
 ];
@@ -559,37 +559,34 @@ function chLogo(id){
 const PLATFORMS = {
   lark: {
     id:"lark", connect:"Lark", consoleStep:true,
-    intro:"按下面 5 步完成，直到你能在 Lark 里给 bot 发消息、bot 能回话。",
-    credTitle:"填入 Lark 应用凭据",
-    credDesc:`这些值来自 Lark 开发者后台 → 你的应用 → <b style="color:var(--fg)">凭证与基础信息</b> / <b style="color:var(--fg)">事件订阅</b>。我们只用它们去 facade 注册，不会明文留存。`,
-    credHelp:`${ICON.info}<div class="body"><span class="ct-title">找不到这些值？</span>登录 <b>open.larksuite.com</b> → 开发者后台 → 选择或新建企业自建应用 → 左侧「凭证与基础信息」拿 App ID / Secret；「事件订阅」拿 Verification Token。</div>`,
+    intro:"先在 NyxID 创建 Channel Bot，再将它接入 Aevatar。",
+    credTitle:"填入已有 NyxID Channel Bot ID",
+    credDesc:`请先在 NyxID 完成 Lark Bot 创建，再复制 Bot ID。Aevatar 只创建接入所需的 Key 和路由。`,
+    credHelp:`${ICON.info}<div class="body"><span class="ct-title">Bot ID 在哪里？</span>打开 NyxID 的 Channel Bot 详情，复制对应 Lark Bot 的 ID。平台密钥由 NyxID 管理。</div>`,
     credFields:[
-      { name:"app_id", ph:"cli_xxxxxxxxxxxx", help:"开发者后台 → 凭证与基础信息 → App ID" },
-      { name:"app_secret", ph:"••••••••••••••••", help:"开发者后台 → 凭证与基础信息 → App Secret", secret:true },
-      { name:"verification_token", ph:"事件订阅页的 Verification Token", help:"开发者后台 → 事件订阅 → Verification Token（第③步在 Lark 后台还会用到）" },
-      { name:"encrypt_key", ph:"事件订阅页的 Encrypt Key（可选）", help:"仅当 Lark 事件订阅启用了加密时填写；Aevatar 不会留存或回显", secret:true, optional:true },
-      { name:"label", ph:"给这个 bot 起个名字（可选）", help:"便于在「已接入」列表里区分；可留空", optional:true }
+      { name:"nyx_channel_bot_id", ph:"NyxID Channel Bot ID", help:"NyxID Channel Bot 详情页中的 ID；不要包含首尾空白" },
+      { name:"label", ph:"给这个 bot 起个名字（可选）", help:"便于区分；可留空", optional:true }
     ],
-    requiredOk:(c)=> !!(c.app_id.trim() && c.app_secret.trim() && c.verification_token.trim()),
-    requiredMsg:"请先填写 app_id、app_secret 和 verification_token",
-    buildBody:(c)=>({ platform:"lark", webhook_base_url:location.origin, app_id:c.app_id.trim(), app_secret:c.app_secret, verification_token:c.verification_token.trim(), encrypt_key:c.encrypt_key.trim(), label:(c.label||"").trim() }),
+    requiredOk:(c)=> !!c.nyx_channel_bot_id && c.nyx_channel_bot_id===c.nyx_channel_bot_id.trim(),
+    requiredMsg:"请填写已有 nyx_channel_bot_id，且不要包含首尾空白",
+    buildBody:(c)=>({ platform:"lark", webhook_base_url:location.origin, nyx_channel_bot_id:c.nyx_channel_bot_id, label:(c.label||"").trim() }),
     step3Title:"Lark 后台配置", stepSub3:"lark console",
-    step2Next:"下一步：去 Lark 后台配置"
+    step2Next:"下一步：检查 Lark 后台配置"
   },
   telegram: {
     id:"telegram", connect:"Telegram", consoleStep:false,
-    intro:"按下面几步完成。Telegram 不需要你手动配置 webhook —— 注册后 NyxID 会自动用 bot token 接管 Bot API。",
-    credTitle:"填入 Telegram Bot Token",
-    credDesc:`在 Telegram 里找 <b style="color:var(--fg)">@BotFather</b>，用 <code class="kbd">/newbot</code> 新建一个 bot（或对已有 bot 用 <code class="kbd">/token</code>），把它给你的 <b style="color:var(--fg)">HTTP API token</b> 贴到下面。我们只用它去 facade 注册，不会明文留存。`,
-    credHelp:`${ICON.info}<div class="body"><span class="ct-title">怎么拿 bot token？</span>在 Telegram 搜索 <b>@BotFather</b> → 发送 <code class="kbd">/newbot</code> → 按提示起名 → 它会回一串形如 <span class="mono">123456789:AAE…</span> 的 token，整串复制过来。</div>`,
+    intro:"先在 NyxID 创建 Telegram Channel Bot，再将它接入 Aevatar。",
+    credTitle:"填入已有 NyxID Channel Bot ID",
+    credDesc:`Telegram Bot 和 webhook 由 NyxID 管理。请复制已有 Bot 的 ID，Aevatar 不接收 Bot Token。`,
+    credHelp:`${ICON.info}<div class="body"><span class="ct-title">先在 NyxID 创建 Bot</span>在 NyxID 完成 Telegram Bot 创建后，复制 Channel Bot 详情中的 ID。</div>`,
     credFields:[
-      { name:"bot_token", ph:"123456789:AAE-xxxxxxxxxxxxxxxxxxxxxxxxxxx", help:"@BotFather 用 /newbot 或 /token 给你的 HTTP API token", secret:true },
-      { name:"label", ph:"给这个 bot 起个名字（可选）", help:"便于在「已接入」列表里区分；可留空", optional:true }
+      { name:"nyx_channel_bot_id", ph:"NyxID Channel Bot ID", help:"NyxID Channel Bot 详情页中的 ID；不要包含首尾空白" },
+      { name:"label", ph:"给这个 bot 起个名字（可选）", help:"便于区分；可留空", optional:true }
     ],
-    requiredOk:(c)=> !!c.bot_token.trim(),
-    requiredMsg:"请先填写 bot_token（来自 @BotFather）",
-    buildBody:(c)=>({ platform:"telegram", webhook_base_url:location.origin, bot_token:c.bot_token.trim(), label:(c.label||"").trim() }),
-    step3Title:"自动配置 webhook", stepSub3:"telegram · 自动",
+    requiredOk:(c)=> !!c.nyx_channel_bot_id && c.nyx_channel_bot_id===c.nyx_channel_bot_id.trim(),
+    requiredMsg:"请填写已有 nyx_channel_bot_id，且不要包含首尾空白",
+    buildBody:(c)=>({ platform:"telegram", webhook_base_url:location.origin, nyx_channel_bot_id:c.nyx_channel_bot_id, label:(c.label||"").trim() }),
+    step3Title:"检查 NyxID webhook", stepSub3:"telegram",
     step2Next:"下一步"
   }
 };
@@ -612,7 +609,7 @@ const state = {
   s:"idle",                           // idle | running | done | failed
   err:null,                           // step2: 'auth' | '409' | 'cred' | 'limit' | 'infra' | 'other' | 'network'
   errMsg:null,
-  cred:{ app_id:"", app_secret:"", verification_token:"", encrypt_key:"", bot_token:"", label:"" },
+  cred:{ nyx_channel_bot_id:"", label:"" },
   reg:null,                           // last registration result
   registrations:[],                   // GET /api/channels/registrations
   statuses:{},                        // registrationId -> { status, last_event_at }
@@ -888,8 +885,6 @@ async function doRegister(){
       relayCallbackUrl: d.relay_callback_url || "",
       workflowDeliveryStatus: d.workflow_result_delivery_status || "repair_required",
       scope: state.scopeId || (r.data && r.data.scope_id) || "",
-      verificationToken: (c.verification_token||"").trim(),
-      encryptKey: (c.encrypt_key||"").trim(),
       label: (c.label||"").trim()
     };
     state.s="done"; render();
@@ -905,17 +900,11 @@ async function doRegister(){
 function classifyRegError(status, errText){
   const t=(errText||"").toLowerCase();
   if(status===401) return "auth";
-  if(t.includes("channel_bot_already_exists") || t.includes("nyx_status=409") || t.includes("already")) return "409";
-  if(t.includes("telegram_bot_credential_rejected") || t.includes("nyx_status=401") || t.includes("nyx_status=400") || t.includes("secret") || t.includes("invalid")) return "cred";
-  if(t.includes("channel_bot_limit_reached")) return "limit";
-  if(t.includes("nyx_base_url")) return "infra";
+  if(t.includes("channel_bot_not_adoptable")) return "409";
+  if(t.includes("missing_nyx_channel_bot_id") || t.includes("channel_bot_platform_mismatch") || t.includes("channel_bot_not_found_or_forbidden")) return "cred";
   return "other";
 }
 function registrationErrorMessage(data, status){
-  const detail=(data && data.error_detail) || "";
-  if(detail==="telegram_bot_credential_rejected") return "Telegram bot token 校验失败，请回上一步检查 token 后重试。";
-  if(detail==="channel_bot_limit_reached") return "NyxID channel-bot 数量已达上限，请清理不用的 bot 后重试。";
-  if(detail==="channel_bot_already_exists") return "该 bot 已被接入。";
   return (data && (data.error || data.note)) || ("HTTP " + status);
 }
 async function doDelete(regId){
@@ -1231,7 +1220,7 @@ function renderCatalog(){
   const p=el("main",{class:"page"});
   p.innerHTML=`
     <h1 class="page-h">把消息渠道接到你的 agent</h1>
-    <p class="page-sub">选择一个渠道，按向导一步步接入：填凭据 → 注册 → 在渠道后台配置 → 配回复模型 → 验证。完成后就能在该渠道里直接跟你的 aevatar bot 对话。</p>
+    <p class="page-sub">选择一个渠道，按向导一步步接入：填已有 Bot ID → 注册 → 在渠道后台配置 → 配回复模型 → 验证。完成后就能在该渠道里直接跟你的 aevatar bot 对话。</p>
     <div class="sec-title">可接入的渠道</div>`;
   const grid=el("div",{class:"ch-grid"});
   CHANNELS.forEach(c=>{
@@ -1288,7 +1277,7 @@ function renderCatalog(){
 function steps(){
   const P=curP();
   return [
-    { n:1, title:"填凭据", sub:"credentials" },
+    { n:1, title:"选择已有 Bot", sub:"existing bot" },
     { n:2, title:"一键注册", sub:"register · facade" },
     { n:3, title:P.step3Title, sub:P.stepSub3 },
     { n:4, title:"配回复模型", sub:"reply model · llm" },
@@ -1387,11 +1376,11 @@ function footer(nodes){ const f=el("div",{class:"step-foot"}); nodes.forEach(n=>
 function btn(label,kind,icon,onClick,opts={}){ const b=el("button",{class:`btn btn-${kind}`},`${icon?icon+" ":""}<span>${label}</span>`); if(opts.disabled)b.disabled=true; if(onClick)b.addEventListener("click",onClick); return b; }
 function sub(t){ return el("div",{class:"sec-title",style:"margin:22px 0 10px;font-size:12px"},esc(t)); }
 
-/* ---- Step 1 : 填凭据 ---- */
+/* ---- Step 1 : 填已有 Bot ID ---- */
 function renderStep1(){
   const P=curP();
   const wrap=el("section",{});
-  wrap.innerHTML=stepHead("STEP 1 / 5 · credentials", esc(P.credTitle), badge("pending","待填写"));
+  wrap.innerHTML=stepHead("STEP 1 / 5 · existing bot", esc(P.credTitle), badge("pending","待填写"));
   wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">${P.credDesc}</p>`);
 
   const f=el("div",{});
@@ -1420,37 +1409,25 @@ function field(fd,val){
 /* ---- Step 2 : 一键注册（facade）---- */
 function renderStep2(){
   const wrap=el("section",{});
-  const map={ idle:["pending","待注册"], running:["running","注册中"], done:["registered","已注册"], failed:["failed", state.err==="409"?"已被接入":state.err==="cred"?"凭据无效":"注册失败"] };
+  const map={ idle:["pending","待注册"], running:["running","注册中"], done:["registered","已注册"], failed:["failed", state.err==="409"?"已被接入":state.err==="cred"?"Bot 不可接入":"注册失败"] };
   const [bs,bl]=map[state.s]||map.idle;
   wrap.innerHTML=stepHead("STEP 2 / 5 · register",`通过 facade 一键注册`, badge(bs,bl));
-  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">注册走 aevatar <b style="color:var(--fg)">facade</b>：它会建好 NyxID channel-bot、relay api-key、入站路由，并写入 <code class="kbd">api_key_id → scope_id</code> mirror —— 这是入站消息路由的<b style="color:var(--fg)">唯一依据</b>，只有 facade 会写它，所以注册不能用 CLI/工具代替。</p>`);
+  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">注册走 aevatar <b style="color:var(--fg)">facade</b>：它会验证已有 NyxID channel-bot，创建 relay api-key、入站路由，并写入 <code class="kbd">api_key_id → scope_id</code> mirror —— 这是入站消息路由的<b style="color:var(--fg)">唯一依据</b>，只有 facade 会写它，所以注册不能用 CLI/工具代替。</p>`);
 
   if(state.s==="idle"){
-    wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body">点击注册后，facade 会自动完成 4 件事：建 channel-bot、建 relay key、写 mirror、建路由。约几秒。</div>`));
+    wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body">点击注册后，facade 会自动完成 4 件事：验证已有 Bot、建 relay key、写 mirror、建路由。约几秒。</div>`));
     wrap.appendChild(footer([ btn("一键注册","primary",ICON.bolt,doRegister), "spacer",
       btn("上一步","ghost",ICON.back,()=>{ goStep(1); }) ]));
   } else if(state.s==="running"){
     wrap.appendChild(regProgress(["run","run","run","run"]));
     wrap.appendChild(el("div",{class:"live-chip",style:"margin-top:8px"},`<span class="dot s-running"></span><span>正在调用 facade · POST /api/channels/registrations</span>`));
   } else if(state.s==="failed"){
-    if(state.err==="limit"){
-      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">NyxID channel-bot 数量已达上限</span><div class="errnote mono">${esc(state.errMsg||"")}</div>请清理不用的 bot 后重试。</div>`));
-      wrap.appendChild(footer([ btn("重试","primary",ICON.refresh,doRegister), "spacer", btn("上一步","ghost",ICON.back,()=>{ goStep(1); }) ]));
-    } else if(state.err==="409"){
-      const P=curP();
-      const msg = P.consoleStep
-        ? `同一个 app_id 在 NyxID 全局只能有一个 active channel-bot。可以删旧重建 —— 但<b>重建会换一个新的 bot_id 和 webhook_url</b>，你需要回 ${esc(P.connect)} 后台把回调地址改成新的。`
-        : `同一个 bot token 在 NyxID 全局只能有一个 active channel-bot。删旧重建即可 —— Telegram 无需任何后台改动，NyxID 会自动重新注册 webhook。`;
-      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">该 ${esc(P.connect)} bot 已被接入（NyxID 409）</span>${msg}</div>`));
-      wrap.appendChild(footer([ btn("删旧重建","danger",ICON.refresh,()=>{ deleteExistingThenRegister(); }),
-        btn("取消","ghost",null,()=>{ goStep(1); }) ]));
+    if(state.err==="409"){
+      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">该 Bot 当前无法采用</span>请在 NyxID 检查 Bot 状态及已有默认路由。已有路由不会被自动替换。<div class="errnote mono">${esc(state.errMsg||"")}</div></div>`));
+      wrap.appendChild(footer([ btn("返回检查 Bot ID","primary",ICON.back,()=>{ goStep(1); }) ]));
     } else if(state.err==="cred"){
-      const P=curP();
-      const detail = P.consoleStep
-        ? "facade 用 app_id / app_secret 向 Lark 换 token 失败（多半是 app_secret 错误）。"
-        : "facade 用 bot token 向 Telegram 校验失败（多半是 bot token 错误或已失效）。";
-      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">凭据无效</span>${detail}<div class="errnote mono">${esc(state.errMsg||"")}</div>回上一步修改后重试。</div>`));
-      wrap.appendChild(footer([ btn("返回修改凭据","primary",ICON.back,()=>{ goStep(1); }) ]));
+      wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">Bot 身份或权限不匹配</span>请确认 Bot ID、所选平台及当前账户权限。<div class="errnote mono">${esc(state.errMsg||"")}</div></div>`));
+      wrap.appendChild(footer([ btn("返回修改 Bot ID","primary",ICON.back,()=>{ goStep(1); }) ]));
     } else if(state.err==="auth"){
       wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">登录已失效</span>请重新登录后再注册。</div>`));
       wrap.appendChild(footer([ btn("重新登录","primary",null,()=>signOut()) ]));
@@ -1463,7 +1440,7 @@ function renderStep2(){
     const workflowReady = state.reg && state.reg.workflowDeliveryStatus === "enabled";
     wrap.appendChild(regProgress(["done","done","done","done"]));
     const rc=el("div",{class:"result-card"});
-    rc.innerHTML=`<div class="rc-h">${ICON.check} ${workflowReady?"注册完成":"入站接入完成 · 工作流回传待修复"} · mirror 已写入</div>`;
+    rc.innerHTML=`<div class="rc-h">${ICON.check} ${workflowReady?"注册完成":"入站接入完成 · 工作流回传待修复"} · 注册命令已接受，状态正在同步</div>`;
     rc.appendChild(copyRow("bot_id", state.reg.botId));
     if(P.consoleStep) rc.appendChild(copyRow("webhook_url（回调地址）", state.reg.webhookUrl));
     if(state.reg.scope) rc.appendChild(copyRow("scope", state.reg.scope));
@@ -1477,14 +1454,14 @@ function renderStep2(){
     if(P.consoleStep){
       wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body">下一步要把上面的 <b>webhook_url</b> 和 Verification Token 填到 Lark 后台 —— 这一步只能你手动做。</div>`));
     } else {
-      wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body"><span class="ct-title">已自动接入 · 无需手动配置</span>NyxID 已用你的 bot token 向 Telegram 注册好 webhook 和 secret_token。<b>不要</b>自己再调 setWebhook，否则会覆盖 NyxID 的 secret_token、弄坏入站校验。直接进入下一步配回复模型即可。</div>`));
+      wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body"><span class="ct-title">已自动接入 · 无需手动配置</span>请在 NyxID 确认 Telegram Bot 的 webhook 配置。<b>不要</b>自己再调 setWebhook，否则会覆盖 NyxID 的 secret_token、弄坏入站校验。直接进入下一步配回复模型即可。</div>`));
     }
     wrap.appendChild(footer([ btn(P.step2Next,"primary",ICON.arrow,()=>{ goStep(3); }) ]));
   }
   return wrap;
 }
 function regProgress(states){
-  const labels=["创建 NyxID channel-bot","创建 relay api-key","写入 api_key_id → scope_id mirror","建立入站路由"];
+  const labels=["验证已有 NyxID channel-bot","创建 relay api-key","写入 api_key_id → scope_id mirror","建立入站路由"];
   const box=el("div",{class:"reg-steps"});
   labels.forEach((l,i)=>{
     const stt=states[i]||"pending";
@@ -1493,27 +1470,11 @@ function regProgress(states){
   });
   return box;
 }
-/* delete-then-recreate for the 409 path: find the existing registration for the
-   active platform, delete it, then re-register with the captured credentials. */
-async function deleteExistingThenRegister(){
-  state.s="running"; state.err=null; render();
-  try {
-    const list = (await apiGet("/api/channels/registrations")) || [];
-    const existing = list.filter(r => (r.platform||"").toLowerCase()===state.platform);
-    for(const r of existing){
-      if(!await doDelete(r.id)){
-        state.s="failed"; state.err="other"; state.errMsg=state.registrationActionError||"删除旧接入失败"; render(); return;
-      }
-    }
-  } catch(e){ if(e.message==="unauthorized") return; }
-  doRegister();
-}
-
 /* ---- Step 3（Telegram）: webhook 已由 NyxID 自动注册，无需手动操作 ---- */
 function renderStep3Auto(){
   const wrap=el("section",{});
   wrap.innerHTML=stepHead("STEP 3 / 5 · auto","webhook 已自动配置", badge("registered","已自动完成"));
-  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">和 Lark 不同，Telegram <b style="color:var(--fg)">不需要你去任何后台手动配置</b>。注册时 NyxID 已经用你的 bot token 调用了 Telegram Bot API 的 <code class="kbd">setWebhook</code>，把入站消息指到 relay 回调并设置了 secret_token 校验。</p>`);
+  wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">和 Lark 不同，Telegram <b style="color:var(--fg)">不需要你去任何后台手动配置</b>。创建 Bot 时由 NyxID 调用 Telegram Bot API 的 <code class="kbd">setWebhook</code>，把入站消息指到 relay 回调并设置了 secret_token 校验。</p>`);
   wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">不要自己调 setWebhook</span>如果你手动对这个 bot 调用 <code class="kbd">setWebhook</code>，会覆盖掉 NyxID 设置的 secret_token，导致入站消息无法通过校验、bot 收不到消息。保持现状即可。</div>`));
   const reg=state.reg||{};
   if(reg.botId){
@@ -1541,8 +1502,7 @@ function renderStep3(){
   const reg = state.reg || {};
   wrap.appendChild(sub("① 事件订阅 —— 回调地址 & Token"));
   wrap.appendChild(copyRow("事件订阅 Request URL（回调地址）", reg.webhookUrl||""));
-  wrap.appendChild(copyRow("Verification Token", reg.verificationToken||""));
-  wrap.appendChild(copyRow("Encrypt Key", reg.encryptKey||"（未启用）"));
+  wrap.appendChild(el("p",{class:"help"},"Verification Token 和 Encrypt Key 请在 NyxID Bot 配置与 Lark 后台核对；Aevatar 不接收这些密钥。"));
 
   wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">别填错回调地址</span>Lark 后台填的是上面这个 <b>webhook_url</b>（指向 NyxID）。⚠️ <b>不要</b>填 relay 内部用的 <code class="kbd">callback_url</code>${reg.relayCallbackUrl?`（<span class="mono">${esc(reg.relayCallbackUrl)}</span>，仅供参考，勿填）`:""}。卡片回调（如有单独字段）也填同一个 webhook_url。</div>`));
 
@@ -1831,7 +1791,7 @@ function renderManage(){
     const recovery=el("section",{class:"status-card",style:"margin-top:16px"});
     recovery.appendChild(el("div",{class:"sec-title",style:"margin:0 0 10px"},"Lark pending_webhook 恢复清单"));
     recovery.appendChild(copyRow("Event Subscriptions Request URL", r.webhook_url||""));
-    recovery.appendChild(el("div",{class:"callout warn",style:"margin-top:12px"},`${ICON.warn}<div class="body"><ol style="margin:0;padding-left:20px"><li>把上面的精确 Request URL 粘贴到 Lark <b>Event Subscriptions</b>。</li><li>确认 Lark 中的 Verification Token，以及启用加密时的 Encrypt Key，与本次注册输入完全一致；Aevatar 不保存或回显这些秘密。</li><li>在权限管理中导入页面提供的权限 JSON。</li><li>订阅事件 <code class="kbd">im.message.receive_v1</code>。</li><li>创建、发布并由管理员批准应用版本。</li><li>给 bot 发送一条测试消息，刷新状态直到 <code class="kbd">active</code>。</li></ol><div style="margin-top:10px"><b>只有收到验证通过的入站消息并变为 active 才算完成</b>；Aevatar 无法代替你修改 Lark 后台。</div></div>`));
+    recovery.appendChild(el("div",{class:"callout warn",style:"margin-top:12px"},`${ICON.warn}<div class="body"><ol style="margin:0;padding-left:20px"><li>把上面的精确 Request URL 粘贴到 Lark <b>Event Subscriptions</b>。</li><li>确认 Lark 中的 Verification Token，以及启用加密时的 Encrypt Key，与 NyxID Bot 配置完全一致；Aevatar 不保存或回显这些秘密。</li><li>在权限管理中导入页面提供的权限 JSON。</li><li>订阅事件 <code class="kbd">im.message.receive_v1</code>。</li><li>创建、发布并由管理员批准应用版本。</li><li>给 bot 发送一条测试消息，刷新状态直到 <code class="kbd">active</code>。</li></ol><div style="margin-top:10px"><b>只有收到验证通过的入站消息并变为 active 才算完成</b>；Aevatar 无法代替你修改 Lark 后台。</div></div>`));
     const actions=el("div",{style:"display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px"});
     const copyPermissions=el("button",{class:"copybtn"},`${ICON.copy}<span>复制权限 JSON</span>`);
     bindCopy(copyPermissions,LARK_SCOPE_IMPORT_JSON);
@@ -1887,7 +1847,7 @@ function renderManage(){
 /* ===========================================================================
    Compose / render
    =========================================================================== */
-function enterWizard(platformId){ state.llmSaveToken+=1; state.llmDraftRevision+=1; state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.manageReg=null; state.registrationActionError=null; state.llmSel={ value:null, model:null }; state.llmDraftOption=null; state.llmPending=null; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; state.cred={ app_id:"", app_secret:"", verification_token:"", encrypt_key:"", bot_token:"", label:"" }; render(); }
+function enterWizard(platformId){ state.llmSaveToken+=1; state.llmDraftRevision+=1; state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.manageReg=null; state.registrationActionError=null; state.llmSel={ value:null, model:null }; state.llmDraftOption=null; state.llmPending=null; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; state.cred={ nyx_channel_bot_id:"", label:"" }; render(); }
 function render(){
   const app=$("#app"); app.innerHTML="";
   app.appendChild(renderTopbar());

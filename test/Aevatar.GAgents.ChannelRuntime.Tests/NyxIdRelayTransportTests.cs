@@ -2,13 +2,77 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
+using Aevatar.GAgents.Platform.Lark;
 using FluentAssertions;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class NyxIdRelayTransportTests
 {
-    private readonly NyxIdRelayTransport _transport = new();
+    private readonly NyxIdRelayTransport _transport = new(
+        [new LarkRelayMessageAdapter(), new FeishuRelayMessageAdapter()], [new LarkRelayMessageAdapter(), new FeishuRelayMessageAdapter()],
+        [new LarkRelayMessageAdapter(), new FeishuRelayMessageAdapter()], [new LarkRelayMessageAdapter(), new FeishuRelayMessageAdapter(), new Aevatar.GAgents.Platform.Telegram.TelegramRelayInteractionAdapter()]);
+
+    [Theory]
+    [InlineData("rich_text")]
+    [InlineData("unknown")]
+    [InlineData("image")]
+    [InlineData("card_action")]
+    [InlineData("typing")]
+    [InlineData("reaction")]
+    public void Parse_WithoutAdapter_ShouldRejectNonPlainTextEvenWhenTextIsPresent(string contentType)
+    {
+        var body = $$$"""
+            {"message_id":"msg-matrix","platform":"matrix","agent":{"api_key_id":"key-1"},
+             "conversation":{"type":"private"},"content":{"type":"{{{contentType}}}","text":"{\"value\":\"hello\"}"}}
+            """;
+        var result = new NyxIdRelayTransport().Parse(Encoding.UTF8.GetBytes(body));
+        result.Success.Should().BeFalse();
+        result.Ignored.Should().BeTrue();
+        result.ErrorCode.Should().Be("unsupported_content_type");
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("message_delete")]
+    [InlineData("modal")]
+    public void Parse_ShouldIgnoreLarkUnsupportedTextBearingShapes(string contentType)
+    {
+        var body = $$$"""
+            {"message_id":"msg-lark-unsupported","platform":"lark","agent":{"api_key_id":"key-1"},
+             "conversation":{"type":"private"},"content":{"type":"{{{contentType}}}","text":"hello"}}
+            """;
+
+        var result = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        result.Success.Should().BeFalse();
+        result.Ignored.Should().BeTrue();
+        result.ErrorCode.Should().Be("unsupported_content_type");
+        result.Activity.Should().BeNull();
+    }
+
+    [Fact]
+    public void Parse_ShouldPreserveRecognizedLarkRawPostFallback_WhenOuterTypeIsUnknown()
+    {
+        var body = """
+            {
+              "message_id":"msg-lark-raw-post",
+              "platform":"lark",
+              "agent":{"api_key_id":"key-1"},
+              "conversation":{"type":"private"},
+              "content":{"type":"unknown"},
+              "raw_platform_data":{"event":{"message":{
+                "message_type":"post",
+                "content":"{\"content\":[[{\"tag\":\"text\",\"text\":\"recognized raw post\"}]]}"
+              }}}
+            }
+            """;
+
+        var result = _transport.Parse(Encoding.UTF8.GetBytes(body));
+
+        result.Success.Should().BeTrue();
+        result.Activity!.Content.Text.Should().Contain("recognized raw post");
+    }
 
     [Theory]
     [InlineData("private", ConversationScope.DirectMessage, false)]
@@ -225,17 +289,9 @@ public sealed class NyxIdRelayTransportTests
 
         var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
 
-        parsed.Success.Should().BeTrue();
-        parsed.Activity!.Content.Text.Should().BeEmpty();
-        parsed.Activity.Content.Attachments.Should().ContainSingle();
-        var attachment = parsed.Activity.Content.Attachments.Single();
-        attachment.AttachmentId.Should().Be("telegram-file-id-1");
-        attachment.Kind.Should().Be(AttachmentKind.Image);
-        attachment.Name.Should().Be("photo.png");
-        attachment.ContentType.Should().Be("image/png");
-        attachment.BlobRef.Should().BeEmpty();
-        attachment.ExternalUrl.Should().BeEmpty();
-        attachment.SizeBytes.Should().Be(12345);
+        parsed.Success.Should().BeFalse();
+        parsed.Ignored.Should().BeTrue();
+        parsed.ErrorCode.Should().Be("unsupported_content_type");
     }
 
     [Fact]
@@ -264,13 +320,9 @@ public sealed class NyxIdRelayTransportTests
 
         var parsed = _transport.Parse(Encoding.UTF8.GetBytes(body));
 
-        parsed.Success.Should().BeTrue();
-        parsed.Activity!.Content.Attachments.Should().ContainSingle();
-        var attachment = parsed.Activity.Content.Attachments.Single();
-        attachment.AttachmentId.Should().Be("https://files.example.test/report.pdf");
-        attachment.Kind.Should().Be(AttachmentKind.File);
-        attachment.ExternalUrl.Should().Be("https://files.example.test/report.pdf");
-        attachment.BlobRef.Should().BeEmpty();
+        parsed.Success.Should().BeFalse();
+        parsed.Ignored.Should().BeTrue();
+        parsed.ErrorCode.Should().Be("unsupported_content_type");
     }
 
     [Fact]
@@ -521,7 +573,7 @@ public sealed class NyxIdRelayTransportTests
 
         parsed.Success.Should().BeFalse();
         parsed.Ignored.Should().BeTrue();
-        parsed.ErrorCode.Should().Be("empty_text");
+        parsed.ErrorCode.Should().Be("unsupported_content_type");
     }
 
     [Fact]

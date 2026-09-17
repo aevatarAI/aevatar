@@ -348,17 +348,6 @@ public static class MainnetHostBuilderExtensions
                 options.ChannelAgentKeyWriteMode = parsedWriteMode;
             }
 
-            var requiredChannelAgentKeyServiceSlugs = options.ChannelAgentKeyRequiredServiceSlugs
-                .Append(builder.Configuration["Aevatar:NyxId:DefaultRoute"] ?? LlmDefaults.NyxIdRoute)
-                .Append(builder.Configuration["Aevatar:Ornn:NyxIdSlug"] ?? OrnnOptions.DefaultNyxIdSlug)
-                .Select(static serviceSlug => serviceSlug.Trim())
-                .Where(static serviceSlug => serviceSlug.Length > 0)
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal)
-                .ToArray();
-            options.ChannelAgentKeyRequiredServiceSlugs.Clear();
-            options.ChannelAgentKeyRequiredServiceSlugs.AddRange(requiredChannelAgentKeyServiceSlugs);
-
             return options;
         }));
         builder.Services.AddLarkPlatform();

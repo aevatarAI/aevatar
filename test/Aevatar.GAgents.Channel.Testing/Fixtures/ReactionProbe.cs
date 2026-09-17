@@ -5,8 +5,8 @@ namespace Aevatar.GAgents.Channel.Testing;
 /// </summary>
 /// <remarks>
 /// Reactions are not part of <see cref="IChannelOutboundPort"/>; when the channel supports them, the adapter exposes
-/// an adapter-specific entry point. The conformance suite delegates to this probe so <c>SupportsReactions</c> adapters
-/// can be exercised end-to-end without the base class needing to know the adapter's reaction API shape.
+/// an adapter-specific entry point. Supplying this probe is the conformance surface, so the suite can exercise the
+/// operation end-to-end without using a capability bool as a second authority.
 /// </remarks>
 public abstract class ReactionProbe
 {

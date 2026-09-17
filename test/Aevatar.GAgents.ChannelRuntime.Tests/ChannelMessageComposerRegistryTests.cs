@@ -61,6 +61,32 @@ public sealed class ChannelMessageComposerRegistryTests
         registry.GetNativeProducer(ChannelId.From("Lark")).Should().BeSameAs(producer);
     }
 
+    [Fact]
+    public void Registry_allows_repeated_same_native_producer_instance_for_idempotent_di()
+    {
+        var producer = CreateNativeProducer("lark");
+
+        var registry = new ChannelMessageComposerRegistry(
+            Array.Empty<IMessageComposer>(),
+            new[] { producer, producer });
+
+        registry.GetNativeProducer(ChannelId.From("lark")).Should().BeSameAs(producer);
+    }
+
+    [Fact]
+    public void Registry_rejects_conflicting_native_producers_for_same_channel()
+    {
+        var first = CreateNativeProducer("lark");
+        var second = CreateNativeProducer("LARK");
+
+        var action = () => new ChannelMessageComposerRegistry(
+            Array.Empty<IMessageComposer>(),
+            new[] { first, second });
+
+        action.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Duplicate native producer registration*lark*");
+    }
+
     private static IMessageComposer CreateComposer(string channel)
     {
         var composer = Substitute.For<IMessageComposer>();

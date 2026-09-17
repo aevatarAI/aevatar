@@ -10,8 +10,8 @@ namespace Aevatar.GAgents.Channel.Testing;
 /// scenario drive and the observation to this probe so the base class does not need to know the adapter's typing API.
 /// </para>
 /// <para>
-/// The probe is required when <see cref="ChannelCapabilities.SupportsTyping"/> is <see langword="true"/>. Each typing
-/// conformance test fails when the capability is claimed but no probe is supplied.
+/// Supplying a probe is the conformance surface for typing behavior. The capability descriptor is derived from the
+/// registered behavior and is checked for diagnostics; it never decides whether these tests run.
 /// </para>
 /// </remarks>
 public abstract class TypingProbe

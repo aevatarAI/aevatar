@@ -55,11 +55,9 @@ public sealed class NyxIdRelayScopeResolverTests
     }
 
     [Fact]
-    public async Task ResolveScopeIdByApiKeyAsync_ShouldCollapseDuplicates_WhenRegistrationsAgreeOnScope()
+    public async Task ResolveScopeIdByApiKeyAsync_ShouldRefuseDistinctRegistrations_EvenWhenTheyAgreeOnScope()
     {
-        // Repeated mirror flows can persist multiple ChannelBotRegistration documents with
-        // the same NyxAgentApiKeyId; if they all agree on ScopeId, that's still a single
-        // tenant and the resolver should return it.
+        // Agent Key authority must resolve to one active registration, not merely one tenant.
         var queryPort = Substitute.For<IChannelBotRegistrationQueryByNyxIdentityPort>();
         queryPort.ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationEntry>>(
@@ -71,7 +69,7 @@ public sealed class NyxIdRelayScopeResolverTests
 
         var result = await resolver.ResolveScopeIdByApiKeyAsync("nyx-key-1");
 
-        result.Should().Be("scope-1");
+        result.Should().BeNull();
     }
 
     [Fact]

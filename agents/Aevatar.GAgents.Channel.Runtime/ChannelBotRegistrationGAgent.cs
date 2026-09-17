@@ -45,49 +45,33 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
 
     // ─── Commands ───
 
-    /// <summary>
-    /// Platforms whose registrations are allowed to land in the local mirror. Aligned with the
-    /// set of <c>INyxChannelBotProvisioningService</c> registered on the supported production
-    /// contract. Anything outside this set is treated as a retired direct-callback dispatch and
-    /// dropped without persistence so legacy producers cannot resurface old wire shapes.
-    /// </summary>
-    private static readonly HashSet<string> SupportedPlatforms =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            "lark",
-            "telegram",
-        };
-
     [EventHandler]
     public async Task HandleRegister(ChannelBotRegisterCommand cmd)
     {
-        if (!SupportedPlatforms.Contains(cmd.Platform ?? string.Empty))
+        var identityError = !ChannelRegistrationAuthorizationContract.IsCanonicalPlatform(cmd.Platform)
+            ? "invalid_channel_platform"
+            : !ChannelRegistrationAuthorizationContract.IsValidNyxChannelBotId(cmd.NyxChannelBotId)
+                ? "missing_nyx_channel_bot_id"
+                : null;
+        if (identityError is not null)
         {
-            Logger.LogWarning(
-                "Ignoring registration request for unsupported platform: platform={Platform}, requestedId={RequestedId}",
+            Logger.LogError(
+                "Rejecting channel bot registration with invalid identity: reason={Reason}, platform={Platform}, requestedId={RequestedId}, apiKeyId={ApiKeyId}",
+                identityError,
                 cmd.Platform,
-                cmd.RequestedId);
+                cmd.RequestedId,
+                cmd.NyxAgentApiKeyId);
             return;
         }
 
         if (string.IsNullOrWhiteSpace(cmd.ScopeId))
         {
-            // Elevated to LogError so log-based metrics surface upstream
-            // contract breaks; persisted as a domain event so the audit trail
-            // captures the rejection without polluting the registration set.
+            // Log upstream contract breaks without committing registration facts.
             Logger.LogError(
                 "Rejecting channel bot registration without scope id: platform={Platform}, requestedId={RequestedId}, apiKeyId={ApiKeyId}",
                 cmd.Platform,
                 cmd.RequestedId,
                 cmd.NyxAgentApiKeyId);
-            await PersistDomainEventAsync(new ChannelBotRegistrationRejectedEvent
-            {
-                Reason = "missing_scope_id",
-                Platform = cmd.Platform ?? string.Empty,
-                RequestedId = cmd.RequestedId ?? string.Empty,
-                NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
-                RejectedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            });
             return;
         }
 
@@ -98,14 +82,6 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
                 cmd.Platform,
                 cmd.RequestedId,
                 cmd.NyxAgentApiKeyId);
-            await PersistDomainEventAsync(new ChannelBotRegistrationRejectedEvent
-            {
-                Reason = "channel_authorization_contract_invalid",
-                Platform = cmd.Platform ?? string.Empty,
-                RequestedId = cmd.RequestedId ?? string.Empty,
-                NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
-                RejectedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            });
             return;
         }
 
@@ -121,14 +97,6 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
                 cmd.Platform,
                 registrationId,
                 cmd.NyxAgentApiKeyId);
-            await PersistDomainEventAsync(new ChannelBotRegistrationRejectedEvent
-            {
-                Reason = "registration_id_conflict",
-                Platform = cmd.Platform ?? string.Empty,
-                RequestedId = registrationId,
-                NyxAgentApiKeyId = cmd.NyxAgentApiKeyId ?? string.Empty,
-                RejectedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            });
             return;
         }
 

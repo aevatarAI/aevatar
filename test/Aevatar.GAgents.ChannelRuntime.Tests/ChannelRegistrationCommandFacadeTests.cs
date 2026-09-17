@@ -9,6 +9,24 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 public sealed class ChannelRegistrationCommandFacadeTests
 {
+    [Theory]
+    [InlineData("", "matrix")]
+    [InlineData(" bot-1", "matrix")]
+    [InlineData("bot-1 ", "matrix")]
+    [InlineData("bot-1", " Matrix ")]
+    [InlineData("bot-1", "MATRIX")]
+    [InlineData("bot-1", "matrix invalid")]
+    public async Task RegisterLocalMirrorAsync_RejectsInvalidIdentityBeforeActorLifecycle(string botId, string platform)
+    {
+        var runtime = Substitute.For<IActorRuntime>();
+        var dispatch = Substitute.For<IActorDispatchPort>();
+        var command = new ChannelBotRegisterCommand { NyxChannelBotId = botId, Platform = platform };
+        var action = () => ChannelRegistrationCommandFacadeTestSupport.CreateFacade(runtime, dispatch).RegisterLocalMirrorAsync(command);
+        await action.Should().ThrowAsync<ArgumentException>();
+        await runtime.DidNotReceiveWithAnyArgs().GetAsync(default!);
+        await dispatch.DidNotReceiveWithAnyArgs().DispatchAsync(default!, default!, default);
+    }
+
     [Fact]
     public async Task RegisterLocalMirrorAsync_CallerCancelledDuringPreparation_ThrowsCancellationBeforeDispatch()
     {
@@ -30,7 +48,7 @@ public sealed class ChannelRegistrationCommandFacadeTests
 
         var act = () => facade.RegisterLocalMirrorAsync(new ChannelBotRegisterCommand
         {
-            RequestedId = "reg-alpha", Platform = "lark", ScopeId = "scope-alpha",
+            RequestedId = "reg-alpha", Platform = "lark", ScopeId = "scope-alpha", NyxChannelBotId = "bot-alpha",
         }, caller.Token);
 
         var failure = await act.Should().ThrowAsync<OperationCanceledException>();
@@ -62,6 +80,7 @@ public sealed class ChannelRegistrationCommandFacadeTests
         var receipt = await facade.RegisterLocalMirrorAsync(new ChannelBotRegisterCommand
         {
             RequestedId = "reg-1",
+            NyxChannelBotId = "bot-1",
             Platform = "lark",
             ScopeId = "scope-1",
             NyxProviderSlug = "api-lark-bot",

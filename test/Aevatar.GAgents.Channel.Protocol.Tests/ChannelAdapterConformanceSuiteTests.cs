@@ -138,6 +138,9 @@ public sealed class StubChannelAdapter : IChannelTransport, IChannelOutboundPort
 
     public TransportMode TransportMode { get; } = TransportMode.Webhook;
 
+    // Descriptor values mirror the optional behavior surfaces below: mention seeds are present, while typing and
+    // reactions have no probe/interface and therefore remain unsupported. The conformance base never uses these flags
+    // to decide which optional operation to execute.
     public ChannelCapabilities Capabilities { get; } = new()
     {
         SupportsEdit = true,

@@ -61,6 +61,9 @@ public sealed class ChannelRegistrationCommandFacade
         //   Old pattern: provisioning services 手写 local mirror envelope 并直调 runtime/dispatch。
         //   New principle: local mirror writes 只进入 typed command facade 和 standard command skeleton。
         ArgumentNullException.ThrowIfNull(command);
+        if (!NyxChannelBotIdentity.IsValid(command.NyxChannelBotId))
+            throw new ArgumentException("missing_nyx_channel_bot_id", nameof(command));
+        _ = ChannelPlatformId.FromCanonical(command.Platform);
         var prepared = await _registerDispatchPipeline.PrepareAsync(command, ct);
         if (!prepared.Succeeded || prepared.Target is null)
         {
@@ -149,84 +152,59 @@ public sealed class ChannelRegistrationCommandFacade
     }
 }
 
-// Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
-//   Old pattern: HTTP endpoint selected platform provisioning services and owned registration saga branching.
-//   New principle: typed application facade owns platform selection; Host only adapts HTTP request/response shapes.
-public sealed class ChannelRelayRegistrationFacade
+/// <summary>Validates caller-authorized existing Bot identity before adoption.</summary>
+public sealed class ChannelRelayRegistrationFacade(
+    INyxChannelBotAdoptionService adoptionService,
+    VerifiedNyxChannelBotDetail.Reader botReader,
+    IChannelRegistrationOwnerResolver ownerResolver,
+    ChannelAgentKeyWriteMode writeMode = ChannelAgentKeyWriteMode.Disabled)
 {
-    private readonly IReadOnlyDictionary<string, INyxChannelBotProvisioningService> _provisioningServices;
-    private readonly ChannelAgentKeyWriteMode _writeMode;
-
-    public ChannelRelayRegistrationFacade(
-        IEnumerable<INyxChannelBotProvisioningService> provisioningServices,
-        ChannelAgentKeyWriteMode writeMode = ChannelAgentKeyWriteMode.Disabled)
+    public async Task<NyxChannelBotAdoptionResult> RegisterAsync(
+        ChannelRelayRegistrationRequest request, CancellationToken ct = default)
     {
-        _provisioningServices = BuildProvisioningServiceMap(provisioningServices);
-        _writeMode = writeMode;
-    }
-
-    public async Task<NyxChannelBotProvisioningResult> RegisterAsync(
-        ChannelRelayRegistrationRequest request,
-        CancellationToken ct = default)
-    {
-        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
-        //   Old pattern: endpoint performed platform selection before invoking provisioning.
-        //   New principle: facade selects typed provisioning adapter; adapter only calls NyxID and local mirror facade.
         ArgumentNullException.ThrowIfNull(request);
-
-        var platform = request.Platform.Trim().ToLowerInvariant();
-        if (!_provisioningServices.TryGetValue(platform, out var provisioningService))
+        if (!NyxChannelBotIdentity.IsValid(request.NyxChannelBotId))
+            return Failure("missing_nyx_channel_bot_id");
+        if (string.IsNullOrWhiteSpace(request.Platform))
+            return Failure("invalid_channel_bot_detail");
+        ChannelPlatformId canonicalPlatform;
+        try
         {
-            return new NyxChannelBotProvisioningResult(
-                Succeeded: false,
-                Status: "error",
-                Platform: platform,
-                Error: "unsupported_platform",
-                Note: $"Platform '{platform}' is not in the supported production contract. ChannelRuntime currently provisions relay registrations for: {string.Join(", ", _provisioningServices.Keys.OrderBy(static key => key, StringComparer.OrdinalIgnoreCase))}.");
+            // Application callers already cross the external Host/tool boundary. Keep this
+            // assertion canonical and reject missed normalization before owner/detail reads.
+            canonicalPlatform = ChannelPlatformId.FromCanonical(request.Platform);
         }
-
-        if (_writeMode != ChannelAgentKeyWriteMode.NyxIdDefault)
+        catch (ArgumentException)
         {
-            return new NyxChannelBotProvisioningResult(
-                Succeeded: false,
-                Status: "error",
-                Platform: platform,
-                Error: "channel_agent_key_write_gate_closed");
+            return Failure("invalid_channel_bot_detail");
         }
+        if (string.IsNullOrWhiteSpace(request.AccessToken))
+            return Failure("missing_access_token");
+        if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
+            return Failure("missing_webhook_base_url");
+        if (!NyxRelayCallbackUrl.IsSecureBaseUrl(request.WebhookBaseUrl))
+            return Failure("insecure_webhook_base_url");
+        if (string.IsNullOrWhiteSpace(request.ScopeId))
+            return Failure("missing_scope_id");
+        if (writeMode != ChannelAgentKeyWriteMode.NyxIdDefault)
+            return Failure("channel_agent_key_write_gate_closed");
 
-        var result = await provisioningService.ProvisionAsync(request.ToProvisioningRequest(platform), ct);
-        if (result.Succeeded)
-            return result;
-
-        var failureReason = NyxApiResponseHelper.NormalizePublicFailureReason(result.Error);
-        var failureDetail = NyxApiResponseHelper.NormalizePublicFailureDetail(result.Error, result.Platform) ??
-            NyxApiResponseHelper.NormalizePublicFailureDetailCode(result.ErrorDetail);
-        return result with { Error = failureReason, ErrorDetail = failureDetail };
-    }
-
-    private static IReadOnlyDictionary<string, INyxChannelBotProvisioningService> BuildProvisioningServiceMap(
-        IEnumerable<INyxChannelBotProvisioningService> provisioningServices)
-    {
-        ArgumentNullException.ThrowIfNull(provisioningServices);
-
-        var serviceMap = new Dictionary<string, INyxChannelBotProvisioningService>(StringComparer.OrdinalIgnoreCase);
-        foreach (var provisioningService in provisioningServices)
+        var owner = await ownerResolver.ResolveAsync(request.AccessToken, request.ScopeId, ct);
+        if (!owner.Succeeded)
+            return Failure(owner.ErrorCode);
+        var detail = await botReader.ReadAsync(request.AccessToken, request.NyxChannelBotId,
+            canonicalPlatform.Value, owner.Owner!, ct);
+        if (!detail.Succeeded)
+            return Failure(detail.ErrorCode);
+        var canonicalRequest = request with { Platform = detail.Bot!.Platform.Value };
+        var result = await adoptionService.AdoptAsync(new(detail.Bot, canonicalRequest), ct);
+        return result.Succeeded ? result : result with
         {
-            if (provisioningService is null)
-                continue;
+            Error = NyxApiResponseHelper.NormalizePublicFailureReason(result.Error),
+            ErrorDetail = null,
+        };
 
-            var platformKey = provisioningService.Platform?.Trim().ToLowerInvariant();
-            if (string.IsNullOrWhiteSpace(platformKey))
-                continue;
-
-            if (!serviceMap.TryAdd(platformKey, provisioningService))
-            {
-                throw new InvalidOperationException(
-                    $"Multiple Nyx channel provisioning services are registered for platform '{platformKey}'.");
-            }
-        }
-
-        return serviceMap;
+        NyxChannelBotAdoptionResult Failure(string error) => new(false, "error", request.Platform, Error: error);
     }
 }
 
@@ -237,8 +215,7 @@ public sealed record ChannelRelayRegistrationRequest(
     string ScopeId,
     string Label,
     string NyxProviderSlug,
-    NyxChannelLarkCredentials? Lark = null,
-    IReadOnlyDictionary<string, string>? Credentials = null,
+    string NyxChannelBotId,
     string DefaultSkillName = "",
     ChannelBotRuntimeConfig? RuntimeConfig = null,
     ChannelRegistrationServiceSelection? RequestedServiceSelection = null)
@@ -247,25 +224,6 @@ public sealed record ChannelRelayRegistrationRequest(
         RequestedServiceSelection ?? ChannelRegistrationServiceSelection.NyxIdDefault;
 
     public ChannelBotRuntimeConfig? RuntimeConfigCopy => RuntimeConfig?.Clone();
-
-    public NyxChannelBotProvisioningRequest ToProvisioningRequest(string platform)
-    {
-        // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
-        //   Old pattern: HTTP endpoints rebuilt provisioning DTOs inline while owning platform branching.
-        //   New principle: relay registration request mapping stays typed and local to the application facade boundary.
-        return new NyxChannelBotProvisioningRequest(
-            Platform: platform,
-            AccessToken: AccessToken,
-            WebhookBaseUrl: WebhookBaseUrl,
-            ScopeId: ScopeId,
-            Label: Label,
-            NyxProviderSlug: NyxProviderSlug,
-            Lark: Lark,
-            Credentials: Credentials,
-            DefaultSkillName: DefaultSkillName,
-            RuntimeConfig: RuntimeConfigCopy,
-            RequestedServiceSelection: ServiceSelection);
-    }
 }
 
 internal sealed record ChannelBotRegistrationCommandTarget(IActor Actor) : IActorCommandDispatchTarget

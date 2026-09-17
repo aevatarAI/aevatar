@@ -65,47 +65,11 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     protected virtual Task PrepareAsync(TAdapter adapter, CancellationToken ct) => Task.CompletedTask;
 
     /// <summary>
-    /// Returns whether the adapter implements <typeparamref name="TCapability"/> given the current capability matrix.
-    /// </summary>
-    /// <remarks>
-    /// Default implementation inspects the runtime type of the adapter. Override in a derived class when adapters gate
-    /// capability interfaces behind another boundary (for example, a composition root where the adapter is wrapped).
-    /// </remarks>
-    protected virtual bool AdapterImplements<TCapability>(TAdapter adapter) => adapter is TCapability;
-
-    /// <summary>
-    /// Returns whether the adapter implements the supplied optional interface type. The capability-parity test uses this
-    /// overload so it reads the adapter's real runtime type instead of trusting an author-supplied bool.
-    /// </summary>
-    /// <remarks>
-    /// Default implementation delegates to <see cref="Type.IsInstanceOfType(object?)"/>. Override when the adapter is
-    /// hosted through a proxy or composition wrapper that hides its optional interfaces from a direct <c>is</c> test.
-    /// </remarks>
-    protected virtual bool AdapterImplements(TAdapter adapter, Type capabilityInterface)
-    {
-        ArgumentNullException.ThrowIfNull(capabilityInterface);
-        return capabilityInterface.IsInstanceOfType(adapter);
-    }
-
-    /// <summary>
-    /// Returns the capability-flag ↔ optional-interface parity rules the adapter wants enforced.
-    /// </summary>
-    /// <remarks>
-    /// Each entry pairs one <see cref="ChannelCapabilities"/> flag value with one optional <see cref="Type"/>. The
-    /// suite uses <see cref="AdapterImplements(TAdapter, Type)"/> to read the adapter's runtime type, so author-
-    /// supplied parity booleans cannot lie. Default returns an empty set — adapters with optional typing / reaction /
-    /// mention adapter interfaces override this hook to wire the parity into the suite.
-    /// </remarks>
-    protected virtual IEnumerable<CapabilityInterfaceParity> GetCapabilityInterfaceParities(TAdapter adapter) =>
-        Array.Empty<CapabilityInterfaceParity>();
-
-    /// <summary>
     /// Returns the adapter-supplied reaction probe.
     /// </summary>
     /// <remarks>
-    /// Required whenever <see cref="ChannelCapabilities.SupportsReactions"/> is <see langword="true"/>. The reaction
-    /// conformance test fails when the capability is claimed but the probe is <see langword="null"/>, so adapters
-    /// cannot advertise reaction support without exercising it.
+    /// The presence of this probe is the conformance surface for reaction support. Channel capability fields are
+    /// derived diagnostics and never decide whether the operation is exercised.
     /// </remarks>
     protected virtual ReactionProbe? Reactions => null;
 
@@ -113,9 +77,8 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     /// Returns the adapter-supplied typing probe.
     /// </summary>
     /// <remarks>
-    /// Required whenever <see cref="ChannelCapabilities.SupportsTyping"/> is <see langword="true"/>. The four typing
-    /// conformance tests fail when the capability is claimed but the probe is <see langword="null"/>, so adapters
-    /// cannot advertise typing support without exercising keepalive / TTL / breaker / idempotent start-stop behavior.
+    /// The presence of this probe is the conformance surface for typing support. Channel capability fields are derived
+    /// diagnostics and never decide whether the operation is exercised.
     /// </remarks>
     protected virtual TypingProbe? Typing => null;
 
@@ -124,10 +87,8 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     /// the adapter's native mention syntax.
     /// </summary>
     /// <remarks>
-    /// Required whenever <see cref="ChannelCapabilities.SupportsMention"/> is <see langword="true"/>. The mention
-    /// conformance test fails when the capability is claimed but this hook returns <see langword="null"/>. Adapters
-    /// override to emit a seed whose <see cref="InboundActivitySeed.Text"/> contains the raw mention token and whose
-    /// <see cref="InboundActivitySeed.Mentions"/> carries the normalized participant.
+    /// The presence of this seed hook is the conformance surface for bot-mention normalization. The capability field is
+    /// a derived diagnostic only; it never decides whether the operation is exercised.
     /// </remarks>
     protected virtual InboundActivitySeed? BuildBotMentionSeed(ChannelTransportBinding binding) => null;
 
@@ -136,7 +97,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     /// mention syntax so the test can verify other-participant mentions are preserved in normalized text.
     /// </summary>
     /// <remarks>
-    /// Required whenever <see cref="ChannelCapabilities.SupportsMention"/> is <see langword="true"/>.
+    /// The presence of this seed hook is the conformance surface for preserving other-participant mentions.
     /// </remarks>
     protected virtual InboundActivitySeed? BuildParticipantMentionSeed() => null;
 
@@ -429,28 +390,38 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     }
 
     [Fact]
-    public async Task Capabilities_ImplementedInterfaces_AreConsistent()
+    public async Task CapabilityDescriptors_AreDerivedFromOptionalBehaviorSurfaces()
     {
         await using var lifetime = await StartAdapterAsync();
         var caps = CapabilitiesOf(lifetime.Adapter);
 
-        if (caps.SupportsTyping)
+        if (Typing is not null)
             caps.TypingTtlMs.ShouldBeGreaterThanOrEqualTo(caps.TypingKeepaliveIntervalMs);
 
-        var parities = GetCapabilityInterfaceParities(lifetime.Adapter).ToList();
-        if (parities.Count == 0)
-            return;
+        // Optional operation hooks are the authority for conformance. The bool fields remain a read-only descriptor
+        // for diagnostics and must agree with the operation surfaces exposed by this fixture.
+        caps.SupportsTyping.ShouldBe(Typing is not null);
+        caps.SupportsReactions.ShouldBe(Reactions is not null);
 
-        foreach (var parity in parities)
-        {
-            var implemented = AdapterImplements(lifetime.Adapter, parity.OptionalInterface);
-            implemented.ShouldBe(
-                parity.CapabilityFlag,
-                $"Capability flag '{parity.CapabilityName}' (={parity.CapabilityFlag}) must match whether the adapter "
-                    + $"implements {parity.OptionalInterface.FullName} (runtime={implemented}). "
-                    + "The suite reads the adapter's runtime type, not the author-supplied value, so declarations "
-                    + "cannot drift from implementations.");
-        }
+        var botMentionSeed = BuildBotMentionSeed(lifetime.Binding);
+        var participantMentionSeed = BuildParticipantMentionSeed();
+        caps.SupportsMention.ShouldBe(botMentionSeed is not null && participantMentionSeed is not null);
+    }
+
+    [Fact]
+    public async Task CapabilityDescriptors_AbsentProbe_IsReportedUnsupported()
+    {
+        await using var lifetime = await StartAdapterAsync();
+        var caps = CapabilitiesOf(lifetime.Adapter);
+
+        // This checks descriptor parity only. Operation effects require an actual supplied probe or
+        // the concrete runner tests; a false descriptor alone does not exercise an operation.
+        if (Typing is null)
+            caps.SupportsTyping.ShouldBeFalse();
+        if (Reactions is null)
+            caps.SupportsReactions.ShouldBeFalse();
+        if (BuildBotMentionSeed(lifetime.Binding) is null || BuildParticipantMentionSeed() is null)
+            caps.SupportsMention.ShouldBeFalse();
     }
 
     [Fact]
@@ -482,12 +453,8 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     public async Task Typing_KeepaliveWithinInterval()
     {
         await using var lifetime = await StartAdapterAsync();
-        if (!CapabilitiesOf(lifetime.Adapter).SupportsTyping)
+        if (Typing is null)
             return;
-
-        Typing.ShouldNotBeNull(
-            "SupportsTyping=true requires an adapter-supplied TypingProbe; the suite cannot verify keepalive behavior "
-                + "without one.");
 
         var fired = await Typing.KeepaliveFiresWithinIntervalAsync(CancellationToken.None);
         fired.ShouldBeTrue(
@@ -498,12 +465,8 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     public async Task Typing_AutoStopsAfterTtl()
     {
         await using var lifetime = await StartAdapterAsync();
-        if (!CapabilitiesOf(lifetime.Adapter).SupportsTyping)
+        if (Typing is null)
             return;
-
-        Typing.ShouldNotBeNull(
-            "SupportsTyping=true requires an adapter-supplied TypingProbe; the suite cannot verify TTL auto-stop "
-                + "without one.");
 
         var autoStopped = await Typing.AutoStopsAfterTtlAsync(CancellationToken.None);
         autoStopped.ShouldBeTrue(
@@ -514,12 +477,8 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     public async Task Typing_FailureCircuitBreakerAfterConsecutiveFailures()
     {
         await using var lifetime = await StartAdapterAsync();
-        if (!CapabilitiesOf(lifetime.Adapter).SupportsTyping)
+        if (Typing is null)
             return;
-
-        Typing.ShouldNotBeNull(
-            "SupportsTyping=true requires an adapter-supplied TypingProbe; the suite cannot verify the keepalive "
-                + "circuit breaker without one.");
 
         var tripped = await Typing.CircuitBreakerTripsAfterConsecutiveFailuresAsync(CancellationToken.None);
         tripped.ShouldBeTrue(
@@ -531,12 +490,8 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     public async Task Typing_StartStop_Idempotent()
     {
         await using var lifetime = await StartAdapterAsync();
-        if (!CapabilitiesOf(lifetime.Adapter).SupportsTyping)
+        if (Typing is null)
             return;
-
-        Typing.ShouldNotBeNull(
-            "SupportsTyping=true requires an adapter-supplied TypingProbe; the suite cannot verify start/stop "
-                + "idempotency without one.");
 
         var idempotent = await Typing.StartStopIsIdempotentAsync(CancellationToken.None);
         idempotent.ShouldBeTrue("Repeated typing start/stop must be idempotent (RFC §8.1).");
@@ -546,12 +501,8 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     public async Task Reaction_SendAndRemove_Succeeds()
     {
         await using var lifetime = await StartAdapterAsync();
-        if (!CapabilitiesOf(lifetime.Adapter).SupportsReactions)
+        if (Reactions is null)
             return;
-
-        Reactions.ShouldNotBeNull(
-            "SupportsReactions=true must be backed by an adapter-supplied ReactionProbe; the conformance suite cannot "
-                + "claim reaction coverage without one.");
 
         var reference = BuildDirectMessageReference(lifetime.Adapter);
         var sent = await lifetime.Adapter.SendAsync(
@@ -561,7 +512,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
         sent.Success.ShouldBeTrue();
 
         var added = await Reactions.AddAsync(sent.SentActivityId, ":thumbsup:", CancellationToken.None);
-        added.ShouldBeTrue("Adding a reaction on a channel with SupportsReactions=true must succeed.");
+        added.ShouldBeTrue("Adding a reaction on the supplied reaction behavior surface must succeed.");
 
         var removed = await Reactions.RemoveAsync(sent.SentActivityId, ":thumbsup:", CancellationToken.None);
         removed.ShouldBeTrue("Removing a previously added reaction must succeed.");
@@ -574,14 +525,9 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
             return;
 
         await using var lifetime = await StartAdapterAsync();
-        if (!CapabilitiesOf(lifetime.Adapter).SupportsMention)
-            return;
-
         var seed = BuildBotMentionSeed(lifetime.Binding);
-        seed.ShouldNotBeNull(
-            "SupportsMention=true requires an adapter-supplied BuildBotMentionSeed override; the suite cannot exercise "
-                + "bot-mention stripping without one.");
-
+        if (seed is null)
+            return;
         var botId = lifetime.Binding.Bot.Bot.Value;
         var activity = await DispatchAsync(seed);
 
@@ -601,14 +547,9 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
             return;
 
         await using var lifetime = await StartAdapterAsync();
-        if (!CapabilitiesOf(lifetime.Adapter).SupportsMention)
-            return;
-
         var seed = BuildParticipantMentionSeed();
-        seed.ShouldNotBeNull(
-            "SupportsMention=true requires an adapter-supplied BuildParticipantMentionSeed override; the suite cannot "
-                + "exercise other-participant mention preservation without one.");
-
+        if (seed is null)
+            return;
         var activity = await DispatchAsync(seed);
 
         activity.Mentions.Count.ShouldBeGreaterThan(0);

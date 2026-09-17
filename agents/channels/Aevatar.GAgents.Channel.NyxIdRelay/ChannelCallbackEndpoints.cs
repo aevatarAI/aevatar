@@ -5,6 +5,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.AspNetCore.Builder;
@@ -153,6 +154,9 @@ public static class ChannelCallbackEndpoints
             return Results.BadRequest(new { error = "platform is required" });
         }
 
+        if (!NyxChannelBotIdentity.IsValid(request.NyxChannelBotId))
+            return Results.BadRequest(new { error = "missing_nyx_channel_bot_id" });
+
         var accessToken = ResolveBearerAccessToken(http);
         if (string.IsNullOrWhiteSpace(accessToken))
         {
@@ -170,7 +174,16 @@ public static class ChannelCallbackEndpoints
         if (scopeResolution.Error is not null)
             return Results.BadRequest(new { error = scopeResolution.Error });
 
-        var platformNormalized = request.Platform.Trim().ToLowerInvariant();
+        string platformNormalized;
+        try
+        {
+            platformNormalized = ChannelPlatformId.ParseExternal(request.Platform).Value;
+        }
+        catch (ArgumentException)
+        {
+            return Results.BadRequest(new { error = "invalid_channel_bot_detail" });
+        }
+
         var result = await registrationFacade.RegisterAsync(
             new ChannelRelayRegistrationRequest(
                 Platform: platformNormalized,
@@ -178,13 +191,9 @@ public static class ChannelCallbackEndpoints
                 WebhookBaseUrl: request.WebhookBaseUrl.Trim(),
                 ScopeId: scopeResolution.ScopeId!,
                 Label: request.Label?.Trim() ?? string.Empty,
-                NyxProviderSlug: request.NyxProviderSlug?.Trim() ?? string.Empty,
-                Lark: new NyxChannelLarkCredentials(
-                    AppId: request.AppId?.Trim() ?? string.Empty,
-                    AppSecret: request.AppSecret?.Trim() ?? string.Empty,
-                    VerificationToken: request.VerificationToken?.Trim() ?? string.Empty,
-                    EncryptKey: request.EncryptKey?.Trim() ?? string.Empty),
-                Credentials: BuildCredentialsMap(platformNormalized, request),
+                NyxProviderSlug: string.IsNullOrWhiteSpace(request.NyxProviderSlug)
+                    ? ResolveDefaultProviderSlug(platformNormalized) : request.NyxProviderSlug.Trim(),
+                NyxChannelBotId: request.NyxChannelBotId ?? string.Empty,
                 DefaultSkillName: request.DefaultSkillName?.Trim() ?? string.Empty,
                 RuntimeConfig: request.RuntimeConfig?.Clone(),
                 RequestedServiceSelection: serviceSelection),
@@ -209,6 +218,14 @@ public static class ChannelCallbackEndpoints
             error = result.Error ?? string.Empty,
             note = result.Note ?? string.Empty,
             error_detail = result.ErrorDetail,
+            cleanup = result.Cleanup is null ? null : new
+            {
+                complete = result.Cleanup.CleanupComplete,
+                conversation_route_removed = result.Cleanup.ConversationRouteRemoved,
+                agent_key_removed = result.Cleanup.AgentKeyRemoved,
+                vault_secret_revoked = result.Cleanup.VaultSecretRevoked,
+                warnings = result.Cleanup.Warnings,
+            },
         };
 
         if (result.Succeeded)
@@ -747,15 +764,13 @@ public static class ChannelCallbackEndpoints
         //   Old pattern: delete endpoint queried then dispatched unregister through raw helpers.
         //   New principle: query remains readmodel existence check; write enters typed command facade.
         // Deprovision (06-25-channel-delete-nyxid-deprovision):
-        //   Delete is the reverse of register — tear down the NyxID side (conversation route →
-        //   channel-bot → Agent Key → Vault secret) BEFORE tombstoning the local mirror, so deleting a bot
-        //   leaves no orphaned NyxID resources and the same app re-registers cleanly. A NyxID 404
-        //   is success (idempotent). A hard channel-bot delete failure returns a non-2xx and does
-        //   NOT tombstone the local mirror (row stays visible/retryable). Agent Key deletion is
-        //   also a hard gate; route and Vault cleanup failures are warnings. NyxID channel-bot
-        //   delete is owner-scoped, so an admin deleting another owner's
-        //   foreign registration cannot delete that owner's NyxID bot — that hard-fails here and
-        //   keeps the local mirror; a pure-local admin purge would be a separate explicit path.
+        //   Delete is the reverse of register — tear down registration-owned NyxID resources
+        //   (conversation route → Agent Key → Vault secret) BEFORE tombstoning the local mirror,
+        //   preserving the adopted Bot and existing UserService. A NyxID 404 is success
+        //   (idempotent). Any required route/key delete failure returns a non-2xx and does NOT
+        //   tombstone the local mirror; the row and stable ownership IDs remain retryable. Vault
+        //   cleanup is best effort after the remote key is gone. The adopted Bot and existing
+        //   UserService are external lifecycle facts and are never deleted by this endpoint.
         var registration = await queryPort.GetAsync(registrationId, ct);
         if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
@@ -771,15 +786,18 @@ public static class ChannelCallbackEndpoints
 
         if (!deprovisionResult.Succeeded)
         {
-            var error = deprovisionResult.ChannelBotRemoved
+            var error = deprovisionResult.ConversationRouteRemoved
                 ? "nyx_agent_key_delete_failed"
-                : "nyx_channel_bot_delete_failed";
+                : "nyx_conversation_route_delete_failed";
             return Results.Json(
                 new
                 {
                     error,
                     registration_id = registrationId,
-                    note = "A required NyxID resource could not be deleted; the local registration was kept so you can retry.",
+                    conversation_route_id = registration.NyxConversationRouteId,
+                    agent_key_id = registration.NyxAgentApiKeyId,
+                    warnings = deprovisionResult.Warnings,
+                    note = "Registration-owned NyxID cleanup is incomplete; the registration and stable ownership IDs were kept so you can retry.",
                 },
                 statusCode: StatusCodes.Status502BadGateway);
         }
@@ -944,25 +962,19 @@ public static class ChannelCallbackEndpoints
         var reason = error ?? string.Empty;
         return reason switch
         {
-            "unsupported_platform" => StatusCodes.Status409Conflict,
             "missing_access_token" => StatusCodes.Status401Unauthorized,
-            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_bot_token" or "missing_webhook_base_url" or "missing_scope_id" or "insecure_webhook_base_url" => StatusCodes.Status400BadRequest,
+            "missing_nyx_channel_bot_id" or "channel_bot_platform_mismatch" or "missing_webhook_base_url" or "missing_scope_id" or "insecure_webhook_base_url" => StatusCodes.Status400BadRequest,
             "channel_authorization_contract_invalid" => StatusCodes.Status409Conflict,
-            "channel_bot_already_exists" => StatusCodes.Status409Conflict,
+            "channel_bot_not_adoptable" => StatusCodes.Status409Conflict,
+            "channel_bot_not_found_or_forbidden" => StatusCodes.Status403Forbidden,
+            "invalid_channel_bot_detail" => StatusCodes.Status502BadGateway,
             "channel_agent_key_write_gate_closed" => StatusCodes.Status503ServiceUnavailable,
             "secret_vault_unavailable" => StatusCodes.Status503ServiceUnavailable,
             "service_owner_forbidden" => StatusCodes.Status403Forbidden,
             "nyxid_user_service_not_accessible" => StatusCodes.Status404NotFound,
             "scope_plan_changed" => StatusCodes.Status409Conflict,
-            "nyxid_scope_plan_unavailable" or "channel_service_connection_unavailable" => StatusCodes.Status502BadGateway,
+            "nyxid_scope_plan_unavailable" => StatusCodes.Status502BadGateway,
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
-            // A downstream NyxID channel-bot uniqueness conflict (NyxID allows one active bot per
-            // app across all accounts) is a real Conflict, not a gateway failure. Surface 409 so the
-            // caller learns the app is already registered — possibly under another account this
-            // registration cannot auto-clean — instead of an opaque 502 that reads as an outage.
-            _ when reason.Contains("nyx_status=409", StringComparison.Ordinal)
-                || reason.Contains("already registered", StringComparison.OrdinalIgnoreCase)
-                => StatusCodes.Status409Conflict,
             _ => StatusCodes.Status502BadGateway,
         };
     }
@@ -1321,46 +1333,12 @@ public static class ChannelCallbackEndpoints
         string? NyxProviderSlug,
         string? ScopeId,
         string? WebhookBaseUrl,
-        // Lark-specific (legacy explicit fields kept for backward compatibility; Telegram and
-        // future platforms use the Credentials map below).
-        string? AppId,
-        string? AppSecret,
-        string? VerificationToken,
-        string? EncryptKey,
-        // Telegram-specific shorthand: equivalent to Credentials["bot_token"].
-        string? BotToken,
-        // Platform-extensible credential bag. Per-platform provisioning services document
-        // which keys they expect (e.g. Telegram reads "bot_token").
-        IReadOnlyDictionary<string, string>? Credentials,
+        string? NyxChannelBotId,
         string? Label,
         // Optional Ornn skill this bot's plain inbound messages are routed to
         // (deterministic channel→skill binding; message text becomes the skill args).
         string? DefaultSkillName,
         [property: JsonIgnore] ChannelBotRuntimeConfig? RuntimeConfig = null);
-
-    private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(
-        string platform,
-        RegistrationRequest request)
-    {
-        var bag = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (request.Credentials is { Count: > 0 } incoming)
-        {
-            foreach (var (key, value) in incoming)
-            {
-                if (!string.IsNullOrWhiteSpace(value))
-                    bag[key] = value.Trim();
-            }
-        }
-
-        if (string.Equals(platform, "telegram", StringComparison.OrdinalIgnoreCase) &&
-            !bag.ContainsKey("bot_token") &&
-            !string.IsNullOrWhiteSpace(request.BotToken))
-        {
-            bag["bot_token"] = request.BotToken!.Trim();
-        }
-
-        return bag.Count == 0 ? null : bag;
-    }
 
     /// <summary>
     /// Builds the default Nyx provider slug echoed back to the client when the registration request

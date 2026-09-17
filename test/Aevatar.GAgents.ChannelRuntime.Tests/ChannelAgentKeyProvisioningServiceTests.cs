@@ -290,8 +290,12 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
         vault.RevokeRequests.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task ProvisionAsync_ValidDefaultGrant_StoresSecretAndReturnsTypedCredential()
+    [Theory]
+    [InlineData("lark")]
+    [InlineData("telegram")]
+    [InlineData("matrix")]
+    [InlineData("future.platform:v2")]
+    public async Task ProvisionAsync_ValidDefaultGrant_StoresSecretAndReturnsTypedCredential(string platform)
     {
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", ValidCreateResponse());
@@ -299,7 +303,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
         var service = CreateService(handler, vault);
 
         var credential = await service.ProvisionAsync(
-            "lark",
+            platform,
             "owner-token",
             "https://aevatar.example.com/api/webhooks/nyxid-relay",
             "scope-alpha",
@@ -331,7 +335,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
 
         handler.Requests.Should().ContainSingle();
         handler.Requests.Single().Body.Should().Be(
-            """{"name":"aevatar-lark-relay-reg-alpha","scopes":"read write proxy","platform":"generic","callback_url":"https://aevatar.example.com/api/webhooks/nyxid-relay"}""");
+            """{"name":"aevatar-lark-relay-reg-alpha","scopes":"read write proxy","platform":"generic","callback_url":"https://aevatar.example.com/api/webhooks/nyxid-relay"}""".Replace("aevatar-lark-relay", $"aevatar-{platform}-relay", StringComparison.Ordinal));
         using var request = JsonDocument.Parse(handler.Requests.Single().Body);
         var root = request.RootElement;
         root.GetProperty("scopes").GetString().Should().Be("read write proxy");

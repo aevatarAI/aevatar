@@ -4,6 +4,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -116,8 +117,8 @@ public sealed class NyxIdRelayAuthValidator
                 "Relay callback message id does not match callback JWT.");
         }
 
-        var payloadPlatform = NormalizeOptional(payload.Platform);
-        if (!string.Equals(jwtValidation.Platform, payloadPlatform, StringComparison.OrdinalIgnoreCase))
+        var payloadPlatform = CanonicalPlatformOrNull(payload.Platform);
+        if (payloadPlatform is null || !string.Equals(jwtValidation.Platform, payloadPlatform, StringComparison.Ordinal))
         {
             return Fail(
                 "callback_jwt_platform_mismatch",
@@ -226,7 +227,7 @@ public sealed class NyxIdRelayAuthValidator
             var principal = handler.ValidateToken(token, parameters, out var validatedToken);
             var relayApiKeyId = principal.FindFirstValue("api_key_id")?.Trim();
             var messageId = principal.FindFirstValue("message_id")?.Trim();
-            var platform = principal.FindFirstValue("platform")?.Trim();
+            var platform = CanonicalPlatformOrNull(principal.FindFirstValue("platform"));
             var bodySha256 = principal.FindFirstValue("body_sha256")?.Trim();
             var jti = principal.FindFirstValue(JwtRegisteredClaimNames.Jti)?.Trim() ??
                       principal.FindFirstValue("jti")?.Trim();
@@ -529,4 +530,10 @@ public sealed class NyxIdRelayAuthValidator
         return property.GetString() ?? throw new InvalidOperationException(
             $"Nyx relay OIDC discovery property '{propertyName}' is null.");
     }
+    private static string? CanonicalPlatformOrNull(string? value)
+    {
+        try { return ChannelPlatformId.ParseExternal(value).Value; }
+        catch (ArgumentException) { return null; }
+    }
+
 }

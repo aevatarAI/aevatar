@@ -1,5 +1,7 @@
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.NyxIdRelay;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -17,6 +19,8 @@ public static class TelegramPlatformServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IChannelGroupAdmissionPolicy, TelegramGroupAdmissionPolicy>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxIdRelayInteractionAdapter, TelegramRelayInteractionAdapter>());
         services.TryAddSingleton<TelegramMessageComposer>();
         services.TryAddSingleton<TelegramChannelNativeMessageProducer>();
         services.TryAddSingleton<NyxIdToolOptions>();

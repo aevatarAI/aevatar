@@ -9,6 +9,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -32,6 +33,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
 
     private ChannelBotRegistrationGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
+    private readonly RecordingLogger _logger = new();
 
     public async Task InitializeAsync()
     {
@@ -48,6 +50,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         _agent = new ChannelBotRegistrationGAgent
         {
             Services = _serviceProvider,
+            Logger = _logger,
             EventSourcingBehaviorFactory =
                 _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<ChannelBotRegistrationStoreState>>(),
         };
@@ -67,6 +70,7 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         var agent = new ChannelBotRegistrationGAgent
         {
             Services = _serviceProvider,
+            Logger = _logger,
             EventSourcingBehaviorFactory =
                 _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<ChannelBotRegistrationStoreState>>(),
         };
@@ -357,28 +361,27 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         {
             RequestedId = "reg-legacy-command",
             Platform = "lark",
+            NyxChannelBotId = "adopted-bot-legacy-contract",
             ScopeId = "scope-1",
             NyxAgentApiKeyId = "key-legacy",
             WorkflowResultDeliveryCredential = TestDeliverySecretReference("reg-legacy-command"),
         });
 
         _agent.State.Registrations.Should().BeEmpty();
-        _agent.EventSourcing.CurrentVersion.Should().Be(beforeVersion + 1);
-        var rejected = await LastCommittedPayloadAsync<ChannelBotRegistrationRejectedEvent>();
-        rejected.Reason.Should().Be("channel_authorization_contract_invalid");
+        await AssertRegistrationRejectedWithoutCommitAsync(beforeVersion, "invalid authorization contract");
     }
 
     [Fact]
     public async Task HandleRegister_RejectsMalformedNewAuthorizationContract()
     {
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
         var command = NewRegistration("reg-malformed");
         command.ChannelAgentKey.Grant.ClearAllowAllNodes();
 
         await _agent.HandleRegister(command);
 
         _agent.State.Registrations.Should().BeEmpty();
-        var rejected = await LastCommittedPayloadAsync<ChannelBotRegistrationRejectedEvent>();
-        rejected.Reason.Should().Be("channel_authorization_contract_invalid");
+        await AssertRegistrationRejectedWithoutCommitAsync(beforeVersion, "invalid authorization contract");
     }
 
     [Fact]
@@ -386,13 +389,13 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     {
         await _agent.HandleRegister(NewRegistration("reg-duplicate", apiKeyId: "key-original"));
         var original = _agent.State.Registrations.Single().Clone();
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
 
         await _agent.HandleRegister(NewRegistration("reg-duplicate", apiKeyId: "key-replacement"));
 
         _agent.State.Registrations.Should().ContainSingle();
         _agent.State.Registrations.Single().Should().Be(original);
-        var rejected = await LastCommittedPayloadAsync<ChannelBotRegistrationRejectedEvent>();
-        rejected.Reason.Should().Be("registration_id_conflict");
+        await AssertRegistrationRejectedWithoutCommitAsync(beforeVersion, "active registration id already exists");
     }
 
     [Fact]
@@ -701,22 +704,47 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.Tombstoned.Should().BeFalse();
     }
 
-    [Fact]
-    public async Task HandleRegister_IgnoresUnsupportedPlatforms()
+    [Theory]
+    [InlineData("matrix")]
+    [InlineData("future.platform:v2")]
+    public async Task HandleRegister_PersistsArbitraryCanonicalPlatform(string platform)
     {
-        await _agent.HandleRegister(new ChannelBotRegisterCommand
-        {
-            Platform = "discord",
-            NyxProviderSlug = "api-discord-bot",
-            ScopeId = "scope-1",
-            RequestedId = "reg-discord",
-        });
+        await _agent.HandleRegister(NewRegistration(platform: platform));
+        _agent.State.Registrations.Should().ContainSingle();
+        _agent.State.Registrations[0].Platform.Should().Be(platform);
+        _agent.State.Registrations[0].NyxChannelBotId.Should().Be("bot-1");
+    }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" bot-1")]
+    [InlineData("bot-1 ")]
+    [InlineData("bot\u0000id")]
+    public async Task HandleRegister_RejectsMissingOrPaddedBotIdentity(string botId)
+    {
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+        var command = NewRegistration();
+        command.NyxChannelBotId = botId;
+        await _agent.HandleRegister(command);
         _agent.State.Registrations.Should().BeEmpty();
+        await AssertRegistrationRejectedWithoutCommitAsync(beforeVersion, "missing_nyx_channel_bot_id");
+    }
+
+    [Theory]
+    [InlineData("Matrix")]
+    [InlineData(" matrix ")]
+    [InlineData("matrix room")]
+    public async Task HandleRegister_RejectsNonCanonicalPlatform(string platform)
+    {
+        var beforeVersion = _agent.EventSourcing!.CurrentVersion;
+        await _agent.HandleRegister(NewRegistration(platform: platform));
+        _agent.State.Registrations.Should().BeEmpty();
+        await AssertRegistrationRejectedWithoutCommitAsync(beforeVersion, "invalid_channel_platform");
     }
 
     [Fact]
-    public async Task HandleRegister_RejectsLarkRegistrationWithoutScopeId_AndPersistsRejectionEvent()
+    public async Task HandleRegister_RejectsLarkRegistrationWithoutScopeId_AndLogsWithoutCommittingEvent()
     {
         var beforeVersion = _agent.EventSourcing!.CurrentVersion;
 
@@ -724,11 +752,8 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         command.ScopeId = string.Empty;
         await _agent.HandleRegister(command);
 
-        // Audit event recorded for the contract break (issue #391); the
-        // registration set stays empty because the rejection is a no-op
-        // transition.
-        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion + 1);
         _agent.State.Registrations.Should().BeEmpty();
+        await AssertRegistrationRejectedWithoutCommitAsync(beforeVersion, "without scope id");
     }
 
     [Fact]
@@ -871,12 +896,37 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
             CancellationToken.None);
     }
 
+    private async Task AssertRegistrationRejectedWithoutCommitAsync(long beforeVersion, string logMessage)
+    {
+        _agent.EventSourcing!.CurrentVersion.Should().Be(beforeVersion);
+        var eventStore = _serviceProvider.GetRequiredService<IEventStore>();
+        var events = await eventStore.GetEventsAsync(ChannelBotRegistrationGAgent.WellKnownId);
+        events.Should().NotContain(evt => evt.EventData.Is(ChannelBotRegistrationRejectedEvent.Descriptor));
+        _logger.Errors.Should().Contain(message => message.Contains(logMessage, StringComparison.Ordinal));
+    }
+
     private async Task<T> LastCommittedPayloadAsync<T>() where T : IMessage<T>, new()
     {
         var eventStore = _serviceProvider.GetRequiredService<IEventStore>();
         var events = await eventStore.GetEventsAsync(ChannelBotRegistrationGAgent.WellKnownId);
         events.Should().NotBeEmpty();
         return events[^1].EventData.Unpack<T>();
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Errors { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Error)
+                Errors.Add(formatter(state, exception));
+        }
     }
 
     private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler

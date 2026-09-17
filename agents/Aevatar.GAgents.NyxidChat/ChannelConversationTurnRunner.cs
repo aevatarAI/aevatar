@@ -1,3 +1,4 @@
+using Aevatar.GAgents.Platform.Lark;
 using System.Net.Http;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
@@ -17,7 +18,6 @@ using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
-using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -72,8 +72,6 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ExternalSubjectRef? Subject,
         BindingId? BindingId);
 
-    private sealed record LarkSubjectContactIds(string? UserId, string? EmployeeId);
-
     private sealed record ReplyChannelContext(
         IReadOnlyDictionary<string, string> Metadata,
         IReadOnlyList<AgentToolChannelIdentityHint> IdentityHints);
@@ -100,7 +98,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly ChannelWorkflowDraftRunAdmission? _workflowDraftRunAdmission;
     private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
     private readonly ILogger<ChannelConversationTurnRunner> _logger;
-    private readonly ILarkBotIdentityResolver? _botIdentityResolver;
+    private readonly IReadOnlyList<IChannelGroupAdmissionPolicy> _groupAdmissionPolicies;
+    private readonly IReadOnlyList<IChannelTypingIndicator> _typingIndicators;
+    private readonly IReadOnlyList<IChannelReplyTextFormatter> _replyFormatters;
+    private readonly IReadOnlyList<IChannelSubjectContactResolver> _subjectContactResolvers;
     private readonly INyxIdCurrentUserResolver? _nyxIdCurrentUserResolver;
     private readonly IChannelRelayTailTextSender? _relayTailTextSender;
     private readonly IChannelRelayProxyResponseClassifier? _relayProxyResponseClassifier;
@@ -129,11 +130,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>? workflowResumeService = null,
         ChannelWorkflowDraftRunAdmission? workflowDraftRunAdmission = null,
         IRemoteToolApprovalPort? remoteToolApprovalPort = null,
-        ILarkBotIdentityResolver? botIdentityResolver = null,
         INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null,
         IChannelRelayTailTextSender? relayTailTextSender = null,
         IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null,
-        IAgentRunToolApprovalDecisionDispatcher? agentRunToolApprovalDecisionDispatcher = null)
+        IAgentRunToolApprovalDecisionDispatcher? agentRunToolApprovalDecisionDispatcher = null,
+        IEnumerable<IChannelGroupAdmissionPolicy>? groupAdmissionPolicies = null,
+        IEnumerable<IChannelTypingIndicator>? typingIndicators = null,
+        IEnumerable<IChannelReplyTextFormatter>? replyFormatters = null,
+        IEnumerable<IChannelSubjectContactResolver>? subjectContactResolvers = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
@@ -157,7 +161,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _workflowDraftRunAdmission = workflowDraftRunAdmission;
         _remoteToolApprovalPort = remoteToolApprovalPort;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _botIdentityResolver = botIdentityResolver;
+        _groupAdmissionPolicies = ChannelPlatformBehavior.Validate(groupAdmissionPolicies ?? services.GetServices<IChannelGroupAdmissionPolicy>());
+        _typingIndicators = ChannelPlatformBehavior.Validate(typingIndicators ?? services.GetServices<IChannelTypingIndicator>());
+        _replyFormatters = ChannelPlatformBehavior.Validate(replyFormatters ?? services.GetServices<IChannelReplyTextFormatter>());
+        _subjectContactResolvers = ChannelPlatformBehavior.Validate(subjectContactResolvers ?? services.GetServices<IChannelSubjectContactResolver>());
         _nyxIdCurrentUserResolver = nyxIdCurrentUserResolver;
         _relayTailTextSender = relayTailTextSender;
         _relayProxyResponseClassifier = relayProxyResponseClassifier;
@@ -176,6 +183,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             return ConversationTurnResult.PermanentFailure("registration_not_found", "Channel registration not found.");
         var registration = registrationSnapshot.Registration;
         var registrationStateVersion = registrationSnapshot.StateVersion;
+        if (!IsCanonicalRegistrationPlatform(activity, registration))
+            return ConversationTurnResult.PermanentFailure("channel_platform_mismatch", "Callback and registration platform must match canonically.");
+        if (activity.Type == ActivityType.Message &&
+            (activity.Conversation?.Scope is null or ConversationScope.Unspecified ||
+             (string.IsNullOrWhiteSpace(activity.Content?.Text) && activity.Content?.Attachments.Count is not > 0)))
+            return ConversationTurnResult.Ignored("unsupported_message", activity.Id);
+        if (activity.Type is not (ActivityType.Message or ActivityType.CardAction))
+            return ConversationTurnResult.Ignored("unsupported_activity_type", activity.Id);
+
         if (ChannelRegistrationAuthorizationContract.Classify(registration) ==
             ChannelRegistrationAuthorizationContractKind.Invalid)
         {
@@ -198,7 +214,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // await-with-timeout the typing POST first. The deferred-LLM and streaming
         // paths don't get this task (different invocation), but their natural latency is
         // orders of magnitude greater than the typing POST so the race cannot fire.
-        var typingReactionTask = TrySendImmediateLarkReactionAsync(activity, registration, ct);
+        var typingReactionTask = TrySendImmediateTypingAsync(activity, registration, ct);
 
         var inbound = ToInboundMessage(activity);
         var hasSlashCommand = TryParseSlashCommand(inbound.Text, out var observedCommandName, out _);
@@ -1841,13 +1857,13 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         CancellationToken ct)
     {
         var relayChannel = ResolveRelayChannel(inbound, conversation);
-        var hasJsonTable = IsLarkChannel(relayChannel) &&
-                           LarkJsonTableFormatter.ContainsConvertibleJson(outboundIntent.Text);
+        var formatter = ChannelPlatformBehavior.Resolve(_replyFormatters, relayChannel.Value);
+        var hasJsonTable = formatter?.ContainsStructuredContent(outboundIntent.Text) == true;
         if (!HasInteractiveContent(outboundIntent) && !hasJsonTable)
             return null;
 
         var fallbackText = hasJsonTable
-            ? NormalizeReplyText(LarkJsonTableFormatter.FormatAsKeyValueText(outboundIntent.Text))
+            ? NormalizeReplyText(formatter!.Format(outboundIntent.Text))
             : NormalizeReplyText(NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(outboundIntent));
         if (_interactiveReplyDispatcher is null)
         {
@@ -1938,6 +1954,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 outbound,
                 relayDelivery)
             : ToRelayFailure(emit);
+    }
+
+    private static bool IsCanonicalRegistrationPlatform(ChatActivity activity, ChannelBotRegistrationEntry registration)
+    {
+        try
+        {
+            var platform = Aevatar.Foundation.Abstractions.ChannelPlatformId.FromCanonical(registration.Platform).Value;
+            return string.Equals(platform, Aevatar.Foundation.Abstractions.ChannelPlatformId.FromCanonical(activity.ChannelId?.Value).Value, StringComparison.Ordinal)
+                && (string.IsNullOrEmpty(activity.TransportExtras?.NyxPlatform) ||
+                    string.Equals(platform, Aevatar.Foundation.Abstractions.ChannelPlatformId.FromCanonical(activity.TransportExtras.NyxPlatform).Value, StringComparison.Ordinal));
+        }
+        catch (ArgumentException) { return false; }
     }
 
     private async Task<ChannelBotRegistrationSnapshot?> ResolveRegistrationSnapshotAsync(
@@ -2031,27 +2059,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         IReadOnlyList<ChannelBotRegistrationEntry> registrations,
         string? canonicalScopeId)
     {
-        if (registrations.Count == 0)
+        var active = registrations.Where(entry => !entry.Tombstoned).ToArray();
+        if (active.Length != 1)
             return null;
+        var registration = active[0];
+        var scopeId = NormalizeOptional(registration.ScopeId);
+        return scopeId is not null && (string.IsNullOrWhiteSpace(canonicalScopeId) ||
+            string.Equals(scopeId, canonicalScopeId, StringComparison.Ordinal)) ? registration : null;
 
-        if (!string.IsNullOrWhiteSpace(canonicalScopeId))
-        {
-            return registrations.FirstOrDefault(entry =>
-                string.Equals(NormalizeOptional(entry.ScopeId), canonicalScopeId, StringComparison.Ordinal));
-        }
-
-        var distinctScopeIds = registrations
-            .Select(entry => NormalizeOptional(entry.ScopeId))
-            .Where(static scopeId => scopeId is not null)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-
-        if (distinctScopeIds.Length != 1)
-            return null;
-
-        var resolvedScopeId = distinctScopeIds[0];
-        return registrations.FirstOrDefault(entry =>
-            string.Equals(NormalizeOptional(entry.ScopeId), resolvedScopeId, StringComparison.Ordinal));
     }
 
     private static bool IsBotIdFallbackRegistrationAllowed(
@@ -2286,7 +2301,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             AddIdentityHint(identityHints, "operator", "global", larkOperatorUnionId);
         }
 
-        if (await TryResolveLarkSubjectContactIdsAsync(inboundEvent, activity, runtimeContext, larkUnionId, ct)
+        if (await ResolveSubjectContactIdsAsync(inboundEvent, activity, runtimeContext, larkUnionId, ct)
                 .ConfigureAwait(false) is { } subjectContactIds)
         {
             if (!string.IsNullOrWhiteSpace(subjectContactIds.UserId))
@@ -2328,110 +2343,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         string value) =>
         identityHints.Add(new AgentToolChannelIdentityHint(subject, kind, value));
 
-    private async Task<LarkSubjectContactIds?> TryResolveLarkSubjectContactIdsAsync(
-        ChannelInboundEvent inboundEvent,
-        ChatActivity? activity,
-        ConversationTurnRuntimeContext runtimeContext,
-        string? larkUnionId,
-        CancellationToken ct)
+    private Task<ChannelSubjectContactIds?> ResolveSubjectContactIdsAsync(
+        ChannelInboundEvent inbound, ChatActivity? activity, ConversationTurnRuntimeContext runtimeContext,
+        string? unionId, CancellationToken ct)
     {
-        if (activity?.Type != ActivityType.Message)
-            return null;
-
-        if (!IsLarkPlatform(inboundEvent.Platform))
-            return null;
-
-        var accessToken = activity is null
-            ? NormalizeOptional(runtimeContext.NyxUserAccessToken)
-            : ResolveUserAccessToken(activity, runtimeContext);
-        var providerSlug = NormalizeOptional(inboundEvent.NyxProviderSlug);
-        var scopeId = NormalizeOptional(inboundEvent.RegistrationScopeId);
-        if (string.IsNullOrWhiteSpace(accessToken) ||
-            string.IsNullOrWhiteSpace(providerSlug) ||
-            string.IsNullOrWhiteSpace(scopeId))
-        {
-            return null;
-        }
-
-        var lookupId = NormalizeOptional(larkUnionId);
-        var userIdType = "union_id";
-        if (string.IsNullOrWhiteSpace(lookupId))
-        {
-            lookupId = NormalizeOptional(inboundEvent.SenderId);
-            userIdType = "open_id";
-        }
-
-        if (string.IsNullOrWhiteSpace(lookupId))
-            return null;
-
-        try
-        {
-            var response = await _nyxClient.ProxyRequestAsync(
-                    accessToken!,
-                    providerSlug!,
-                    $"/open-apis/contact/v3/users/{Uri.EscapeDataString(lookupId!)}?user_id_type={userIdType}",
-                    "GET",
-                    body: null,
-                    extraHeaders: null,
-                    ct)
-                .ConfigureAwait(false);
-
-            if (ClassifyRelayProxyResponse(response).IsError)
-                return null;
-
-            return TryParseLarkSubjectContactIds(response, out var contactIds) ? contactIds : null;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Lark subject contact lookup failed open: provider={ProviderSlug}, userIdType={UserIdType}",
-                providerSlug,
-                userIdType);
-            return null;
-        }
+        var behavior = ChannelPlatformBehavior.Resolve(_subjectContactResolvers, inbound.Platform);
+        return behavior?.ResolveAsync(inbound, activity, runtimeContext, unionId, ct)
+            ?? Task.FromResult<ChannelSubjectContactIds?>(null);
     }
-
-    private static bool TryParseLarkSubjectContactIds(string? response, out LarkSubjectContactIds contactIds)
-    {
-        contactIds = new LarkSubjectContactIds(null, null);
-        if (string.IsNullOrWhiteSpace(response))
-            return false;
-
-        try
-        {
-            using var document = JsonDocument.Parse(response);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.TryGetProperty("data", out var data) ||
-                data.ValueKind != JsonValueKind.Object ||
-                !data.TryGetProperty("user", out var user) ||
-                user.ValueKind != JsonValueKind.Object)
-            {
-                return false;
-            }
-
-            var userId = TryReadString(user, "user_id");
-            var employeeId = TryReadString(user, "employee_id");
-            if (string.IsNullOrWhiteSpace(userId) && string.IsNullOrWhiteSpace(employeeId))
-                return false;
-
-            contactIds = new LarkSubjectContactIds(userId, employeeId);
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static bool IsLarkPlatform(string? platform) =>
-        string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
 
     private static string? TryReadString(JsonElement container, string propertyName)
     {
@@ -3228,143 +3147,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 ? inbound.Platform
                 : conversation?.Channel?.Value ?? string.Empty;
 
-        return string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase)
-            ? "lark"
-            : platform;
+        return platform;
     }
 
-    // Group-chat admission: returns true when an inbound group/channel/thread message does NOT
-    // address the bot and should be dropped silently. The gate is opt-in — it stays inert until an
-    // ILarkBotIdentityResolver is wired, so a missing DI registration degrades to the legacy
-    // "engage everything" behavior rather than going silent. Slash commands and replies-to-the-bot
-    // are free signals checked before any network call; only a message that @-mentions someone
-    // forces an on-demand bot/v3/info resolve to learn whether that mention is the bot.
     private async Task<bool> ShouldIgnoreUnaddressedGroupMessageAsync(
-        ChatActivity activity,
-        ChannelBotRegistrationEntry registration,
-        ConversationTurnRuntimeContext runtimeContext,
-        CancellationToken ct)
+        ChatActivity activity, ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext, CancellationToken ct)
     {
-        if (_botIdentityResolver is null)
+        if (activity.Type != ActivityType.Message || activity.Conversation?.Scope == ConversationScope.DirectMessage)
             return false;
-
-        // Card actions (button clicks) are explicit interactions; never gate them. DMs are 1:1 and
-        // always addressed. Only Lark group-like message activities are subject to the gate.
-        if (activity.Type != ActivityType.Message)
-            return false;
-
-        if (!IsLarkActivity(activity, registration))
-            return false;
-
-        if (!IsGroupLikeScope(activity.Conversation?.Scope))
-            return false;
-
-        if (LooksLikeSlashCommand(activity.Content?.Text))
-            return false;
-
-        if (runtimeContext.IsReplyToBot)
-            return false;
-
-        // With no @-mention at all the message cannot name the bot, so ignore without a network
-        // call. Otherwise resolve the bot's own open_id and engage only if it is among the mentions.
-        if (activity.Mentions.Count == 0)
-            return true;
-
-        var accessToken = ResolveUserAccessToken(activity, runtimeContext);
-        var providerSlug = NormalizeOptional(registration.NyxProviderSlug);
-        if (string.IsNullOrWhiteSpace(accessToken) || string.IsNullOrWhiteSpace(providerSlug))
-            return false; // identity unknowable -> fail open (engage)
-
-        var botOpenId = await _botIdentityResolver.ResolveBotOpenIdAsync(providerSlug!, accessToken!, ct);
-        if (string.IsNullOrWhiteSpace(botOpenId))
-            return false; // resolution failed -> fail open (engage)
-
-        var botMentioned = activity.Mentions.Any(mention =>
-            string.Equals(mention.CanonicalId, botOpenId, StringComparison.Ordinal));
-        return !botMentioned;
-    }
-
-    private static bool IsGroupLikeScope(ConversationScope? scope) =>
-        scope is ConversationScope.Group or ConversationScope.Channel or ConversationScope.Thread;
-
-    private static bool LooksLikeSlashCommand(string? text) =>
-        !string.IsNullOrWhiteSpace(text) && text.TrimStart().StartsWith('/');
-
-    private static bool IsLarkActivity(ChatActivity activity, ChannelBotRegistrationEntry registration)
-    {
-        var platform = NormalizeOptional(activity.TransportExtras?.NyxPlatform)
-            ?? NormalizeOptional(registration.Platform)
-            ?? NormalizeOptional(activity.ChannelId?.Value);
-        return string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
-    }
-
-    // Lark reaction emoji_type for "hands typing on keyboard" — added immediately on inbound
-    // so the user sees the bot is working before the LLM reply lands. After a reply succeeds,
-    // the reaction is cleared instead of replaced with DONE because DONE reads as task completion,
-    // while a chat reply can be an intermediate progress update.
-    private const string TypingReactionEmojiType = "Typing";
-
-    private async Task TrySendImmediateLarkReactionAsync(
-        ChatActivity activity,
-        ChannelBotRegistrationEntry registration,
-        CancellationToken ct)
-    {
-        if (!ShouldSendImmediateLarkReaction(activity, registration, out var accessToken, out var providerSlug, out var platformMessageId))
-            return;
-
-        try
-        {
-            var response = await _nyxClient.ProxyRequestAsync(
-                accessToken!,
-                providerSlug!,
-                $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions",
-                "POST",
-                $$$"""{"reaction_type":{"emoji_type":"{{{TypingReactionEmojiType}}}"}}""",
-                null,
-                ct);
-
-            var classification = ClassifyRelayProxyResponse(response);
-            if (classification.IsError)
-            {
-                if (classification.Kind == ChannelRelayProxyResponseKind.PermissionDenied)
-                {
-                    // The bot is missing reaction permission on Lark — a
-                    // tenant-level config issue that recurs on every inbound
-                    // message until ops fixes the app scope. Log at Debug so
-                    // it stays discoverable when the channel is opted into
-                    // verbose logging without spamming Warnings on every turn.
-                    _logger.LogDebug(
-                        "Immediate Lark typing reaction skipped (missing reaction scope): provider={ProviderSlug}, message={MessageId}, detail={Detail}",
-                        providerSlug,
-                        platformMessageId,
-                        classification.Detail);
-                }
-                else
-                {
-                    // Anything else is a real signal that should stay at Warning
-                    // so provider behavior changes remain visible.
-                    _logger.LogWarning(
-                        "Immediate Lark typing reaction failed: provider={ProviderSlug}, message={MessageId}, providerErrorCode={ProviderErrorCode}, detail={Detail}",
-                        providerSlug,
-                        platformMessageId,
-                        classification.ProviderErrorCode,
-                        classification.Detail);
-                }
-            }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Immediate Lark typing reaction threw: provider={ProviderSlug}, message={MessageId}",
-                providerSlug,
-                platformMessageId);
-        }
+        var behavior = ChannelPlatformBehavior.Resolve(_groupAdmissionPolicies, registration.Platform);
+        return behavior is null || !await behavior.IsAddressedAsync(activity, registration, runtimeContext, ct);
     }
 
     // Direct-reply paths (TryHandleAgentBuilderAsync) can complete a slash-command reply faster
@@ -3402,264 +3195,16 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         await TryClearTypingReactionAsync(inbound, registration, ct);
     }
 
-    // After a successful reply, remove the bot's "Typing" reaction. Uses list-based discovery (filter by
-    // emoji_type=Typing AND operator_type=app) instead of caching the immediate reaction's
-    // reaction_id locally — the runner is a singleton and cross-turn state on it would violate the
-    // "中间层进程内缓存作为事实源" rule. Filtering on operator_type=app avoids deleting any user
-    // who happened to add the same Typing reaction.
-    private async Task TryClearTypingReactionAsync(
-        InboundMessage inbound,
-        ChannelBotRegistrationEntry? registration,
-        CancellationToken ct)
+    private Task TrySendImmediateTypingAsync(ChatActivity activity, ChannelBotRegistrationEntry registration, CancellationToken ct)
     {
-        if (registration is null)
-            return;
-
-        if (!ShouldClearTypingReaction(inbound, registration, out var accessToken, out var providerSlug, out var platformMessageId))
-            return;
-
-        try
-        {
-            var reactionIds = new List<string>();
-            string? pageToken = null;
-            // Bound the iteration so a misbehaving Lark response (e.g. always-true `has_more`)
-            // can't loop the clear forever. 10 pages × 50 per page = 500 Typing reactions on a
-            // single message — orders of magnitude more than realistic, since this list is
-            // already scoped to one emoji_type and the bot only adds Typing once per inbound.
-            const int MaxListPages = 10;
-            for (var page = 0; page < MaxListPages; page++)
-            {
-                var pathQuery = $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions?reaction_type={TypingReactionEmojiType}&page_size=50";
-                if (pageToken is not null)
-                    pathQuery += $"&page_token={Uri.EscapeDataString(pageToken)}";
-
-                var listResponse = await _nyxClient.ProxyRequestAsync(
-                    accessToken!,
-                    providerSlug!,
-                    pathQuery,
-                    "GET",
-                    body: null,
-                    extraHeaders: null,
-                    ct);
-
-                var listClassification = ClassifyRelayProxyResponse(listResponse);
-                if (listClassification.IsError)
-                {
-                    _logger.LogDebug(
-                        "Lark typing reaction list failed; skipping clear: provider={ProviderSlug}, message={MessageId}, page={Page}, providerErrorCode={ProviderErrorCode}, detail={Detail}",
-                        providerSlug,
-                        platformMessageId,
-                        page,
-                        listClassification.ProviderErrorCode,
-                        listClassification.Detail);
-                    return;
-                }
-
-                var (idsOnPage, nextPageToken) = ParseAppReactionsPage(listResponse);
-                reactionIds.AddRange(idsOnPage);
-                if (string.IsNullOrWhiteSpace(nextPageToken))
-                {
-                    pageToken = null;
-                    break;
-                }
-                pageToken = nextPageToken;
-            }
-
-            foreach (var reactionId in reactionIds)
-            {
-                try
-                {
-                    var deleteResponse = await _nyxClient.ProxyRequestAsync(
-                        accessToken!,
-                        providerSlug!,
-                        $"/open-apis/im/v1/messages/{Uri.EscapeDataString(platformMessageId!)}/reactions/{Uri.EscapeDataString(reactionId)}",
-                        "DELETE",
-                        body: null,
-                        extraHeaders: null,
-                        ct);
-
-                    var deleteClassification = ClassifyRelayProxyResponse(deleteResponse);
-                    if (deleteClassification.IsError)
-                    {
-                        _logger.LogDebug(
-                            "Lark typing reaction delete failed: provider={ProviderSlug}, message={MessageId}, reaction={ReactionId}, providerErrorCode={ProviderErrorCode}, detail={Detail}",
-                            providerSlug,
-                            platformMessageId,
-                            reactionId,
-                            deleteClassification.ProviderErrorCode,
-                            deleteClassification.Detail);
-                    }
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(
-                        ex,
-                        "Lark typing reaction delete threw: provider={ProviderSlug}, message={MessageId}, reaction={ReactionId}",
-                        providerSlug,
-                        platformMessageId,
-                        reactionId);
-                }
-            }
-
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Lark typing reaction clear threw: provider={ProviderSlug}, message={MessageId}",
-                providerSlug,
-                platformMessageId);
-        }
+        var behavior = ChannelPlatformBehavior.Resolve(_typingIndicators, registration.Platform);
+        return behavior?.StartAsync(activity, registration, ct) ?? Task.CompletedTask;
     }
 
-    private static (IReadOnlyList<string> AppReactionIds, string? NextPageToken) ParseAppReactionsPage(string? response)
+    private Task TryClearTypingReactionAsync(InboundMessage inbound, ChannelBotRegistrationEntry? registration, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(response))
-            return (Array.Empty<string>(), null);
-
-        try
-        {
-            return ExtractAppReactionsPage(response);
-        }
-        catch (JsonException)
-        {
-            return (Array.Empty<string>(), null);
-        }
-    }
-
-    private static (List<string> AppReactionIds, string? NextPageToken) ExtractAppReactionsPage(string response)
-    {
-        var ids = new List<string>();
-        string? nextPageToken = null;
-
-        using var document = JsonDocument.Parse(response);
-        var root = document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object)
-            return (ids, null);
-
-        if (!root.TryGetProperty("data", out var dataProp) || dataProp.ValueKind != JsonValueKind.Object)
-            return (ids, null);
-
-        // Pin pagination to has_more=true. Following page_token unconditionally would let a Lark
-        // response that returns a stale token alongside has_more=false re-fetch the same page
-        // until the safety cap fires.
-        var hasMore = dataProp.TryGetProperty("has_more", out var hasMoreProp) &&
-                      hasMoreProp.ValueKind == JsonValueKind.True;
-        if (hasMore &&
-            dataProp.TryGetProperty("page_token", out var pageTokenProp) &&
-            pageTokenProp.ValueKind == JsonValueKind.String)
-        {
-            var token = pageTokenProp.GetString();
-            if (!string.IsNullOrWhiteSpace(token))
-                nextPageToken = token;
-        }
-
-        if (!dataProp.TryGetProperty("items", out var itemsProp) || itemsProp.ValueKind != JsonValueKind.Array)
-            return (ids, nextPageToken);
-
-        foreach (var item in itemsProp.EnumerateArray())
-        {
-            if (item.ValueKind != JsonValueKind.Object)
-                continue;
-
-            // Only delete reactions added by the bot itself (operator_type=app); leave any
-            // user-added Typing reactions alone so the clear doesn't accidentally erase them.
-            if (!item.TryGetProperty("operator", out var operatorProp) ||
-                operatorProp.ValueKind != JsonValueKind.Object)
-            {
-                continue;
-            }
-
-            if (!operatorProp.TryGetProperty("operator_type", out var operatorTypeProp) ||
-                operatorTypeProp.ValueKind != JsonValueKind.String ||
-                !string.Equals(operatorTypeProp.GetString(), "app", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!item.TryGetProperty("reaction_id", out var reactionIdProp) ||
-                reactionIdProp.ValueKind != JsonValueKind.String)
-            {
-                continue;
-            }
-
-            var reactionId = reactionIdProp.GetString();
-            if (!string.IsNullOrWhiteSpace(reactionId))
-                ids.Add(reactionId);
-        }
-
-        return (ids, nextPageToken);
-    }
-
-    private static bool ShouldClearTypingReaction(
-        InboundMessage inbound,
-        ChannelBotRegistrationEntry registration,
-        out string? accessToken,
-        out string? providerSlug,
-        out string? platformMessageId)
-    {
-        accessToken = null;
-        providerSlug = null;
-        platformMessageId = null;
-
-        var platform = NormalizeOptional(inbound.TransportExtras?.NyxPlatform) ??
-                       NormalizeOptional(registration.Platform) ??
-                       NormalizeOptional(inbound.Platform);
-        if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        accessToken = NormalizeOptional(inbound.TransportExtras?.NyxUserAccessToken);
-        providerSlug = NormalizeOptional(registration.NyxProviderSlug);
-        platformMessageId = NormalizeOptional(inbound.TransportExtras?.NyxPlatformMessageId);
-
-        return !string.IsNullOrWhiteSpace(accessToken) &&
-               !string.IsNullOrWhiteSpace(providerSlug) &&
-               !string.IsNullOrWhiteSpace(platformMessageId) &&
-               platformMessageId.StartsWith("om_", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool ShouldSendImmediateLarkReaction(
-        ChatActivity activity,
-        ChannelBotRegistrationEntry registration,
-        out string? accessToken,
-        out string? providerSlug,
-        out string? platformMessageId)
-    {
-        accessToken = null;
-        providerSlug = null;
-        platformMessageId = null;
-
-        if (activity.Type != ActivityType.Message)
-            return false;
-
-        var platform = NormalizeOptional(activity.TransportExtras?.NyxPlatform) ??
-                       NormalizeOptional(registration.Platform) ??
-                       NormalizeOptional(activity.ChannelId?.Value);
-        if (!string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        accessToken = NormalizeOptional(activity.TransportExtras?.NyxUserAccessToken);
-        providerSlug = NormalizeOptional(registration.NyxProviderSlug);
-        platformMessageId = NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId);
-
-        return !string.IsNullOrWhiteSpace(accessToken) &&
-               !string.IsNullOrWhiteSpace(providerSlug) &&
-               !string.IsNullOrWhiteSpace(platformMessageId) &&
-               platformMessageId.StartsWith("om_", StringComparison.OrdinalIgnoreCase);
+        var behavior = registration is null ? null : ChannelPlatformBehavior.Resolve(_typingIndicators, registration.Platform);
+        return behavior is null ? Task.CompletedTask : behavior.ClearAsync(inbound, registration!, ct);
     }
 
     private static ConversationTurnResult ToRelayFailure(EmitResult emit)
@@ -3703,13 +3248,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private static string NormalizeReplyText(string? text) =>
         string.IsNullOrWhiteSpace(text) ? "(no content)" : text.Trim();
 
-    private static string FormatReplyTextForPlatform(string? platform, string text) =>
-        string.Equals(platform?.Trim(), "lark", StringComparison.OrdinalIgnoreCase)
-            ? LarkJsonTableFormatter.FormatAsKeyValueText(text)
-            : text;
-
-    private static bool IsLarkChannel(ChannelId channel) =>
-        string.Equals(channel.Value, "lark", StringComparison.OrdinalIgnoreCase);
+    private string FormatReplyTextForPlatform(string? platform, string text) =>
+        string.IsNullOrWhiteSpace(platform) ? text : ChannelPlatformBehavior.Resolve(_replyFormatters, platform)?.Format(text) ?? text;
 
     private static ConversationTurnResult BuildRelaySentResult(
         string? sentActivityId,

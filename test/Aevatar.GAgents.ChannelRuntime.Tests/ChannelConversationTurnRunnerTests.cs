@@ -48,6 +48,43 @@ public sealed class ChannelConversationTurnRunnerTests
         return resolver;
     }
 
+    [Theory]
+    [InlineData("matrix", ConversationScope.DirectMessage, true)]
+    [InlineData("matrix", ConversationScope.Group, false)]
+    [InlineData("matrix", ConversationScope.Channel, false)]
+    [InlineData("telegram", ConversationScope.DirectMessage, true)]
+    [InlineData("telegram", ConversationScope.Group, true)]
+    [InlineData("telegram", ConversationScope.Channel, true)]
+    public async Task RunInboundAsync_UsesPrivateTextBaselineAndOptionalGroupBehavior(string platform, ConversationScope scope, bool startsTurn)
+    {
+        var registration = BuildRegistrationEntry();
+        registration.Platform = platform;
+        registration.NyxProviderSlug = string.Empty;
+        var runner = CreateRunner(BuildRegistrationQueryPort(registration), new RecordingPlatformAdapter());
+        var activity = BuildInboundActivity("hello", "msg-baseline", scope);
+        activity.ChannelId = ChannelId.From(platform);
+        activity.From.CanonicalId = string.Empty;
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+        (result.LlmReplyRequest is not null).Should().Be(startsTurn);
+        registration.Platform.Should().Be(platform);
+        registration.NyxProviderSlug.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("matrix")]
+    [InlineData("LARK")]
+    public async Task RunInboundAsync_RejectsPlatformMismatchBeforeOptionalOperations(string platform)
+    {
+        var handler = new RecordingJsonHandler("{}");
+        var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), nyxHandler: handler);
+        var activity = BuildInboundActivity("hello", "msg-mismatch", ConversationScope.DirectMessage);
+        activity.ChannelId = ChannelId.From(platform);
+        var result = await runner.RunInboundAsync(activity, CancellationToken.None);
+        result.ErrorCode.Should().Be("channel_platform_mismatch");
+        result.LlmReplyRequest.Should().BeNull();
+        handler.Requests.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task RunInboundAsync_ShouldIgnoreGroupMessage_WhenBotNotMentioned()
     {
@@ -1015,7 +1052,7 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldResolveRegistrationByNyxAgentApiKeyId_WhenCandidatesCollapseToOneScope()
+    public async Task RunInboundAsync_ShouldRejectAmbiguousRegistrationByNyxAgentApiKeyId_EvenWithinOneScope()
     {
         var first = BuildRegistrationEntry("reg-1a");
         first.NyxAgentApiKeyId = "nyx-key-1";
@@ -1047,10 +1084,9 @@ public sealed class ChannelConversationTurnRunnerTests
                 }),
             CancellationToken.None);
 
-        result.Success.Should().BeTrue();
-        result.LlmReplyRequest.Should().NotBeNull();
-        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-1a");
-        result.LlmReplyRequest.Activity.TransportExtras?.NyxAgentApiKeyId.Should().Be("nyx-key-1");
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("registration_not_found");
+        result.LlmReplyRequest.Should().BeNull();
         await registrationByNyxIdentityPort.Received(1)
             .ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>());
         await registrationQueryPort.DidNotReceive()
@@ -1060,7 +1096,7 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldResolveCanonicalScopeCandidate_ByNyxAgentApiKeyId()
+    public async Task RunInboundAsync_ShouldRejectAmbiguousKey_EvenWhenCanonicalScopeSelectsOneCandidate()
     {
         var wrongScope = BuildRegistrationEntry("reg-wrong-scope");
         wrongScope.NyxAgentApiKeyId = "nyx-key-1";
@@ -1098,9 +1134,9 @@ public sealed class ChannelConversationTurnRunnerTests
                 }),
             CancellationToken.None);
 
-        result.Success.Should().BeTrue();
-        result.LlmReplyRequest.Should().NotBeNull();
-        result.LlmReplyRequest!.RegistrationId.Should().Be("reg-canonical");
+        result.Success.Should().BeFalse();
+        result.ErrorCode.Should().Be("registration_not_found");
+        result.LlmReplyRequest.Should().BeNull();
         await registrationByNyxIdentityPort.Received(1)
             .ListByNyxAgentApiKeyIdAsync("nyx-key-1", Arg.Any<CancellationToken>());
         await registrationQueryPort.DidNotReceive()
@@ -2420,7 +2456,9 @@ public sealed class ChannelConversationTurnRunnerTests
     [Fact]
     public async Task RunInboundAsync_ShouldRouteCanonicalSkillTriggerAcrossChannels()
     {
-        var registrationQueryPort = BuildRegistrationQueryPort();
+        var registration = BuildRegistrationEntry();
+        registration.Platform = "telegram";
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(registrationQueryPort, adapter);
 
@@ -2455,7 +2493,9 @@ public sealed class ChannelConversationTurnRunnerTests
     [Fact]
     public async Task RunInboundAsync_ShouldAttachDiscoveryRecoveryForBareCanonicalTrigger()
     {
-        var registrationQueryPort = BuildRegistrationQueryPort();
+        var registration = BuildRegistrationEntry();
+        registration.Platform = "telegram";
+        var registrationQueryPort = BuildRegistrationQueryPort(registration);
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(registrationQueryPort, adapter);
 
@@ -5496,7 +5536,10 @@ public sealed class ChannelConversationTurnRunnerTests
             workflowResumeService: services.GetService<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(),
             workflowDraftRunAdmission: services.GetService<ChannelWorkflowDraftRunAdmission>(),
             remoteToolApprovalPort: remoteToolApprovalPort,
-            botIdentityResolver: botIdentityResolver,
+            groupAdmissionPolicies: [new LarkGroupAdmissionPolicy(botIdentityResolver), new Aevatar.GAgents.Platform.Telegram.TelegramGroupAdmissionPolicy()],
+            typingIndicators: [new LarkTypingIndicator(nyxClient, NullLogger<LarkTypingIndicator>.Instance, relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier())],
+            replyFormatters: [new LarkReplyTextFormatter()],
+            subjectContactResolvers: [new LarkSubjectContactResolver(nyxClient, NullLogger<LarkSubjectContactResolver>.Instance, relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier())],
             nyxIdCurrentUserResolver: services.GetService<INyxIdCurrentUserResolver>(),
             relayTailTextSender: relayTailTextSender ?? new LarkChannelRelayTailTextSender(
                 new LarkOutboundDispatcher(nyxClient, NullLogger.Instance),
@@ -5620,7 +5663,7 @@ public sealed class ChannelConversationTurnRunnerTests
         {
             Id = messageId,
             Type = ActivityType.Message,
-            ChannelId = ChannelId.From("lark"),
+            ChannelId = ChannelId.From(string.IsNullOrWhiteSpace(transportExtras?.NyxPlatform) ? "lark" : transportExtras.NyxPlatform),
             Bot = BotInstanceId.From(botId),
             Conversation = ConversationReference.Create(
                 ChannelId.From("lark"),

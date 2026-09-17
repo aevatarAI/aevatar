@@ -1752,6 +1752,10 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             ? "/api/v1/channel-conversations"
             : $"/api/v1/channel-conversations?bot_id={Uri.EscapeDataString(botId)}", ct);
 
+    public Task<string> ListConversationRoutesAsync(string token, string botId, string? organizationId, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/channel-conversations?bot_id={Uri.EscapeDataString(botId)}" +
+            (string.IsNullOrWhiteSpace(organizationId) ? string.Empty : $"&org_id={Uri.EscapeDataString(organizationId)}"), ct);
+
     public Task<string> GetConversationRouteAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", ct);
 

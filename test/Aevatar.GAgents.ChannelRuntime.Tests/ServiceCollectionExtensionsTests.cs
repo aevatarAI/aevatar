@@ -110,8 +110,8 @@ public sealed class ServiceCollectionExtensionsTests
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
         services.Count(descriptor => descriptor.ServiceType == typeof(IPlatformAdapter))
             .Should().Be(0);
-        services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotProvisioningService))
-            .Should().Be(2);
+        services.Count(descriptor => descriptor.ServiceType == typeof(INyxChannelBotAdoptionService))
+            .Should().Be(1);
         provider.GetServices<IChannelNativeMessageSender>()
             .Select(sender => sender.GetType())
             .Should()
@@ -338,6 +338,8 @@ public sealed class ServiceCollectionExtensionsTests
         provider.GetRequiredService<IInteractiveReplyCollector>().Should().NotBeNull();
         registry.GetNativeProducer(ChannelId.From("lark")).Should().BeOfType<LarkChannelNativeMessageProducer>();
         registry.Get(ChannelId.From("lark")).Should().BeOfType<LarkMessageComposer>();
+        registry.GetNativeProducer(ChannelId.From("feishu")).Should().BeOfType<FeishuLarkFamilyNativeMessageProducer>();
+        registry.Get(ChannelId.From("feishu")).Should().BeOfType<FeishuLarkFamilyMessageComposer>();
     }
 
     [Fact]

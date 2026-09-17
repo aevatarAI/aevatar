@@ -6,35 +6,31 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
-/// <summary>
-/// Result of tearing down the NyxID side of a channel-bot registration.
-/// </summary>
-/// <param name="ChannelBotRemoved">
-/// True when the channel-bot was deleted on NyxID or was already gone (404).
-/// </param>
-/// <param name="AgentKeyRemoved">
-/// True when the Agent Key was deleted on NyxID or was already gone (404).
-/// </param>
-/// <param name="Succeeded">
-/// True only when both hard deletion gates succeeded.
-/// </param>
-/// <param name="Warnings">
-/// Residual best-effort cleanup failures (conversation route / Vault secret).
-/// </param>
+/// <summary>Cleanup result for the registration-owned Agent Key, route and Vault reference.</summary>
 public sealed record NyxChannelBotDeprovisioningResult(
-    bool ChannelBotRemoved,
     bool AgentKeyRemoved,
     bool Succeeded,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    bool ConversationRouteRemoved = true,
+    bool VaultSecretRevoked = true,
+    NyxChannelBotDeprovisioningRequest? RetryRequest = null)
+{
+    // Succeeded retains the unregister contract: remote route/key removal permits tombstoning.
+    // Adoption compensation must additionally retain the Vault handle until revoke is confirmed.
+    public bool CleanupComplete => Succeeded && VaultSecretRevoked;
+}
+
+/// <summary>Known ownership for a route POST whose response did not establish its outcome.</summary>
+public sealed record NyxChannelRouteAcquisitionUncertainty(string ChannelBotId, string? OrganizationId);
 
 public sealed record NyxChannelBotDeprovisioningRequest(
     string RegistrationId,
     string Platform,
     string? ConversationRouteId,
-    string? ChannelBotId,
     string? AgentKeyId,
     SecretReference? SecretReference,
-    bool AgentKeyDeletionRequired = false)
+    bool AgentKeyDeletionRequired = false,
+    NyxChannelRouteAcquisitionUncertainty? UncertainRouteAcquisition = null)
 {
     public static NyxChannelBotDeprovisioningRequest FromRegistration(
         ChannelBotRegistrationEntry registration)
@@ -69,27 +65,15 @@ public sealed record NyxChannelBotDeprovisioningRequest(
             registration.Id,
             registration.Platform,
             registration.NyxConversationRouteId,
-            registration.NyxChannelBotId,
             agentKeyId,
             secretReference,
             AgentKeyDeletionRequired: agentKeyDeletionRequired);
     }
 }
 
-/// <summary>
-/// Tears down the NyxID resources provisioned for a channel-bot registration (conversation
-/// route, channel-bot, Agent Key, and Vault secret) so deleting a registration leaves no orphaned
-/// live credential or platform bot. Platform-neutral: it deletes by
-/// NyxID id with no per-platform branching, so a single implementation serves both Lark and
-/// Telegram registrations.
-/// </summary>
+/// <summary>Cleans registration-owned resources, preserving adopted Bots and existing UserServices.</summary>
 public interface INyxChannelBotDeprovisioningService
 {
-    /// <summary>
-    /// Deletes the registration's NyxID resources in reverse of creation order (conversation
-    /// route → channel-bot → Agent Key → Vault secret) using the caller's bearer. The route and
-    /// Vault operations are best effort; channel-bot and Agent Key deletion are hard gates.
-    /// </summary>
     Task<NyxChannelBotDeprovisioningResult> DeprovisionAsync(
         string accessToken,
         NyxChannelBotDeprovisioningRequest request,
@@ -98,12 +82,6 @@ public interface INyxChannelBotDeprovisioningService
 
 public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisioningService
 {
-    // Deprovision is the reverse of the register-side provisioning saga
-    // (NyxLarkProvisioningService / NyxTelegramProvisioningService): register provisions on
-    // NyxID then writes the local mirror; delete tears down NyxID then tombstones the mirror.
-    // No NyxID call lives in the registration actor — the actor stays a pure local fact owner;
-    // the endpoint orchestrates NyxID teardown before the local unregister command, exactly as
-    // the register endpoint orchestrates provisioning before the local mirror write.
     private readonly NyxIdApiClient _nyxClient;
     private readonly ISecretVault _secretVault;
     private readonly ILogger<NyxChannelBotDeprovisioningService> _logger;
@@ -126,36 +104,52 @@ public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisi
         ArgumentException.ThrowIfNullOrWhiteSpace(accessToken);
         ArgumentNullException.ThrowIfNull(request);
 
+        if (request.UncertainRouteAcquisition is not null)
+        {
+            // A missing response ID is not proof of absence. Keep the newly acquired Key and
+            // Vault handle until the route can be attributed to this request's Bot and Key.
+            var routeId = await ResolveAcquiredRouteAsync(accessToken, request, ct);
+            if (routeId is null)
+                return new(false, false, ["conversation_route_acquisition_unresolved"],
+                    ConversationRouteRemoved: false, VaultSecretRevoked: false, RetryRequest: request);
+
+            var resolvedRequest = request with
+            {
+                ConversationRouteId = routeId,
+                UncertainRouteAcquisition = null,
+            };
+            try
+            {
+                return await DeprovisionAsync(accessToken, resolvedRequest, ct);
+            }
+            catch (Exception ex)
+            {
+                // Preserve the resolved ID even if cancellation interrupts later deletion.
+                // Re-listing after a successful route DELETE cannot recover that ID again.
+                _logger.LogWarning("Resolved route cleanup interrupted: registration={RegistrationId}, failureType={FailureType}",
+                    request.RegistrationId, ex.GetType().Name);
+                return new(false, false, ["owned_cleanup_interrupted"],
+                    ConversationRouteRemoved: false, VaultSecretRevoked: false, RetryRequest: resolvedRequest);
+            }
+        }
+
         var warnings = new List<string>();
 
-        // 1. Conversation route (best-effort; reverse of creation order). A residual failure is
-        //    a warning, not a blocker — the local tombstone removes the mirror regardless.
+        // 1. Conversation route (reverse of creation order). A failed delete keeps the local
+        //    registration visible and retryable because the route is still an owned live handle.
+        var conversationRouteRemoved = true;
         if (!string.IsNullOrWhiteSpace(request.ConversationRouteId))
         {
-            var routeRemoved = await TryDeleteAsync(
+            conversationRouteRemoved = await TryDeleteAsync(
                 () => _nyxClient.DeleteConversationRouteAsync(accessToken, request.ConversationRouteId, ct),
                 request.Platform,
                 "conversation_route",
                 request.ConversationRouteId);
-            if (!routeRemoved)
+            if (!conversationRouteRemoved)
                 warnings.Add($"conversation_route_delete_failed id={request.ConversationRouteId}");
         }
 
-        // 2. Channel-bot (authoritative). NyxID enforces one active channel-bot per app_id, so a
-        //    residual bot is exactly what blocks re-registration; if this hard-fails (non-404),
-        //    the endpoint must NOT tombstone the local mirror so the row stays visible/retryable.
-        var channelBotRemoved = true;
-        if (!string.IsNullOrWhiteSpace(request.ChannelBotId))
-        {
-            channelBotRemoved = await TryDeleteAsync(
-                () => _nyxClient.DeleteChannelBotAsync(accessToken, request.ChannelBotId, ct),
-                request.Platform,
-                "channel_bot",
-                request.ChannelBotId);
-        }
-
-        // 3. Agent Key (hard gate). A live orphaned credential must keep the local registration
-        //    visible and retryable, just like a residual channel-bot does.
+        // A live registration-owned Agent Key keeps the local row visible for retry.
         var agentKeyDeletionRequired = request.AgentKeyDeletionRequired ||
                                       !string.IsNullOrWhiteSpace(request.AgentKeyId);
         var agentKeyRemoved = !agentKeyDeletionRequired;
@@ -168,20 +162,85 @@ public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisi
                 request.AgentKeyId);
         }
 
-        // 4. Vault revoke (best effort) is legal only after the remote key is gone. Missing or
+        // 3. Vault revoke (best effort) is legal only after the remote key is gone. Missing or
         //    invalid references do not block the local unregister, but a failed revoke is surfaced.
+        var vaultSecretRevoked = request.SecretReference is null;
         if (agentKeyRemoved && request.SecretReference is not null)
-            await TryRevokeSecretAsync(request, warnings, ct);
+            vaultSecretRevoked = await TryRevokeSecretAsync(request, warnings, ct);
 
-        var succeeded = channelBotRemoved && agentKeyRemoved;
+        // The registration may only be tombstoned after every owned remote handle is gone. A
+        // route failure is therefore an incomplete cleanup even when key deletion succeeded;
+        // callers retain the registration and its stable IDs for a retry.
+        var succeeded = conversationRouteRemoved && agentKeyRemoved;
         return new NyxChannelBotDeprovisioningResult(
-            ChannelBotRemoved: channelBotRemoved,
             AgentKeyRemoved: agentKeyRemoved,
             Succeeded: succeeded,
-            Warnings: warnings);
+            Warnings: warnings,
+            ConversationRouteRemoved: conversationRouteRemoved,
+            VaultSecretRevoked: vaultSecretRevoked,
+            RetryRequest: succeeded && vaultSecretRevoked ? null : request);
     }
 
-    private async Task TryRevokeSecretAsync(
+    private async Task<string?> ResolveAcquiredRouteAsync(
+        string accessToken,
+        NyxChannelBotDeprovisioningRequest request,
+        CancellationToken ct)
+    {
+        var ownership = request.UncertainRouteAcquisition!;
+        if (!NyxChannelBotIdentity.IsValid(ownership.ChannelBotId) ||
+            !NyxChannelBotIdentity.IsValid(request.AgentKeyId))
+            return null;
+
+        try
+        {
+            var response = await _nyxClient.ListConversationRoutesAsync(
+                accessToken, ownership.ChannelBotId, ownership.OrganizationId, ct);
+            if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+                return null;
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("conversations", out var routes) || routes.ValueKind != JsonValueKind.Array)
+                return null;
+
+            string? ownedRouteId = null;
+            foreach (var route in routes.EnumerateArray())
+            {
+                if (route.ValueKind != JsonValueKind.Object ||
+                    route.EnumerateObject().GroupBy(static p => p.Name, StringComparer.Ordinal).Any(static g => g.Count() != 1) ||
+                    !TryReadIdentity(route, "id", out var routeId) ||
+                    !TryReadIdentity(route, "channel_bot_id", out var botId) ||
+                    !TryReadIdentity(route, "agent_api_key_id", out var keyId))
+                    return null;
+                if (!string.Equals(botId, ownership.ChannelBotId, StringComparison.Ordinal) ||
+                    !string.Equals(keyId, request.AgentKeyId, StringComparison.Ordinal))
+                    continue;
+                if (ownedRouteId is not null)
+                    return null;
+                ownedRouteId = routeId;
+            }
+            // An empty/eventually visible list is not evidence that the POST never committed.
+            return ownedRouteId;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Route acquisition reconciliation failed: registration={RegistrationId}, failureType={FailureType}",
+                request.RegistrationId, ex.GetType().Name);
+            return null;
+        }
+    }
+
+    private static bool TryReadIdentity(JsonElement element, string name, out string? value)
+    {
+        value = null;
+        if (!element.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.String)
+            return false;
+        value = property.GetString();
+        return NyxChannelBotIdentity.IsValid(value);
+    }
+
+    private async Task<bool> TryRevokeSecretAsync(
         NyxChannelBotDeprovisioningRequest request,
         List<string> warnings,
         CancellationToken ct)
@@ -197,7 +256,7 @@ public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisi
                 "Channel credential Vault reference was invalid during deprovision: registration={RegistrationId}, agentKeyId={AgentKeyId}",
                 request.RegistrationId,
                 request.AgentKeyId);
-            return;
+            return false;
         }
 
         try
@@ -219,6 +278,7 @@ public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisi
                     request.AgentKeyId,
                     "vault_revoke_failed");
             }
+            return result.Revoked;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -232,6 +292,7 @@ public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisi
                 request.RegistrationId,
                 request.AgentKeyId,
                 ex.GetType().Name);
+            return false;
         }
     }
 
@@ -249,7 +310,24 @@ public sealed class NyxChannelBotDeprovisioningService : INyxChannelBotDeprovisi
         string resourceType,
         string resourceId)
     {
-        var response = await delete();
+        string response;
+        try
+        {
+            response = await delete();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "NyxID resource deprovision threw: type={ResourceType}, id={ResourceId}, failureType={FailureType}",
+                resourceType,
+                resourceId,
+                ex.GetType().Name);
+            return false;
+        }
 
         if (string.IsNullOrWhiteSpace(response) ||
             !NyxApiResponseHelper.LooksLikeErrorEnvelope(response))

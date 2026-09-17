@@ -260,7 +260,7 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
     }
 
     [Fact]
-    public void Compose_with_link_action_renders_url_in_text_when_buttons_are_unavailable()
+    public void Compose_uses_implemented_keyboard_behavior_even_when_diagnostic_flag_is_false()
     {
         var capabilities = TelegramMessageComposer.DefaultCapabilities.Clone();
         capabilities.SupportsActionButtons = false;
@@ -275,11 +275,11 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
 
         var payload = CreateComposer().Compose(intent, BuildContext(capabilities));
 
-        payload.IsInteractive.ShouldBeFalse();
-        payload.ContentJson.ShouldNotContain("inline_keyboard");
+        payload.IsInteractive.ShouldBeTrue();
+        payload.ContentJson.ShouldContain("inline_keyboard");
         payload.PlainText.ShouldContain("Open NyxID");
         payload.PlainText.ShouldContain("https://nyxid.example/services");
-        CreateComposer().Evaluate(intent, BuildContext(capabilities)).ShouldBe(ComposeCapability.Degraded);
+        CreateComposer().Evaluate(intent, BuildContext(capabilities)).ShouldBe(ComposeCapability.Exact);
     }
 
     [Fact]
@@ -334,6 +334,22 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
     public void DefaultCapabilities_advertises_action_button_support()
     {
         TelegramMessageComposer.DefaultCapabilities.SupportsActionButtons.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Diagnostic_capabilities_do_not_advertise_unimplemented_delete()
+    {
+        TelegramMessageComposer.DefaultCapabilities.SupportsDelete.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Forged_file_descriptor_does_not_enable_unimplemented_attachments()
+    {
+        var capabilities = TelegramMessageComposer.DefaultCapabilities.Clone();
+        capabilities.SupportsFiles = true;
+        var intent = new MessageContent { Text = "file" };
+        intent.Attachments.Add(new AttachmentRef { ExternalUrl = "https://example.com/a.png" });
+        CreateComposer().Evaluate(intent, BuildContext(capabilities)).ShouldBe(ComposeCapability.Unsupported);
     }
 
     private static ComposeContext BuildContext(ChannelCapabilities? capabilities = null) => new()

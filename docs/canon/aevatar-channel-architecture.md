@@ -8,6 +8,59 @@ target_repo: aevatarAI/aevatar
 
 # Aevatar Chat — Multi-Channel Adapter Architecture
 
+## 当前 Channel 平台契约（2026-09-17）
+
+本节将 [平台行为适配设计](../superpowers/specs/2026-09-16-channel-platform-behavior-adapter-design.md) 提升为当前实现约束。后文历史 transport RFC 中的 capability 布尔值仅作诊断描述，不能作为当前 Relay 主链的行为开关。
+
+所有新 registration 都引用调用者已在 NyxID 建立的 `nyx_channel_bot_id`。HTTP、tool、Application 与 Actor 拒绝空白或前后带空格的 ID。请求不接收平台 secret；授权读取的 Bot detail 必须返回精确 ID、合法 platform、与已验证 key owner 一致的 `user_id`，以及 `is_active=true` 和 `active` 或 `pending_webhook` 状态。手工 webhook 的 Bot 不要求 `webhook_registered=true`。组织 owner 继续使用现有管理权限解析与 `target_org_id` / route `org_id`。
+
+`ChannelPlatformId.ParseExternal` 在外部边界先拒绝原始输入中的控制字符，再 trim 并 invariant lowercase；不得先用 `Trim` / `NormalizeOptional` 抹除非法字符。内部使用 `FromCanonical`，拒绝非 canonical、控制字符与嵌入空白。Voice Host 对非空白 channel query 也先执行共享 parser，再判定 native alias；省略或空白 query 保持既有 native 语义。Bot detail、请求断言、JWT/payload、registration、Agent Key 与 OwnerScope 使用同一身份语义；不维护平台目录，也不把 `feishu` 自动改名为 `lark`。已有 Feishu 协议归一化通过明确 adapter 保留身份。
+
+唯一 `INyxChannelBotAdoptionService` 只创建 Aevatar-owned Agent Key、Vault reference 与专用默认 route，然后 dispatch registration command。创建前检查已有默认 route；外部默认 route 冲突时拒绝采用，避免 NyxID 创建默认 route 隐式停用其他 route。NyxID 没有原子 route idempotency key，因此该 preflight 不承诺并发原子保证。
+
+route acquisition 与 command acceptance 分别记录语义。route POST 尚未尝试，或收到已确认在插入前拒绝的响应（NyxID 的 HTTP 400/401/403/404）时，没有 route ID 可以表示未取得 route；POST 已尝试后发生 transport failure、server error、缺少 ID 或其他不可用响应时，不能把空 ID 当成确认不存在。该单请求不确定性通过既有 `NyxChannelBotDeprovisioningRequest` 的 typed `UncertainRouteAcquisition` 携带已验证 Bot ID、组织查询上下文，并以本次新建的 `AgentKeyId` 证明归属。cleanup 只对唯一且精确匹配该 Bot 与新 Key 的 route 执行删除，不采用或删除其他默认 route。取得归属证据失败、响应不可用、匹配不唯一或暂时没有匹配时，结果仍为 incomplete，保留 Key、Vault handle 和现有服务级 retry request；一次空列表不是 POST 已结束且永远不会插入的屏障。取得稳定 route ID 后，`NyxChannelBotDeprovisioningResult.RetryRequest` 保留已解析的 ID 并清除 acquisition uncertainty；服务调用方下一次传入该更新后的请求，后续 route/key/Vault 清理失败或取消均无需重新发现 route。adoption 会将该更新后的请求作为 `CleanupRequest` 返回给服务调用方。
+
+确认 command 未被接受时，补偿复用 `INyxChannelBotDeprovisioningService`，分别返回 route/key 删除与 Vault revoke 结果。清理不完整时保留 registration/Bot/已知 route/key ID，并返回既有 `NyxChannelBotDeprovisioningRequest` 供服务调用方重试；HTTP/tool 暴露稳定 ID、清理状态和脱敏 warnings，不输出 cleanup request 或 Vault reference。只有 owned resources 的清理已确认完成，才告知调用方可再次采用同一个 Bot。此路径没有 accepted registration，不创建临时持久态、新 HTTP/UI 恢复入口或隐式恢复默认 route。真正 command acceptance-unknown 时跳过清理，保留资源并观察 registration，不能借 cleanup request 绕过该安全边界。unregister 只删除 owned route、key、Vault secret 与 local mirror；其远端删除成功与 Vault best-effort 警告语义保持不变。Bot 与 UserService 永远属于 NyxID 生命周期，Aevatar 不创建或删除它们。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    B["Caller-authorized Bot detail"] --> A["One neutral adoption service"]
+    A --> K["Owned key + Vault + dedicated route"]
+    K --> R["Registration Actor -> committed projection"]
+    K -. "confirmed non-acceptance" .-> D["Owned cleanup: route / key / Vault"]
+    K -. "route POST outcome unknown" .-> Q["Reconcile exact Bot + newly created Key"]
+    Q -->|"proven route ID"| D
+    Q -->|"ownership still unknown"| U["Retain Key + Vault + uncertain cleanup request"]
+    D -->|"incomplete"| H["Retain known IDs + updated cleanup request"]
+    D -->|"complete"| Z["Same Bot can be adopted again"]
+    W["Relay callback"] --> V["JWT + hash + canonical identity"]
+    V --> N["Typed protocol normalization"]
+    N --> P["Private plain text baseline"]
+    N --> O["Narrow optional behaviors"]
+    P --> T["Conversation turn"]
+    O --> T
+    T --> C["Composer or plain text fallback"]
+    C --> E["Relay reply token + source message"]
+```
+
+通用默认行为只保证 `DirectMessage + Message + nonempty plain text`。未知会话类型不会被猜成私聊；已识别 group/channel 没有 `IChannelGroupAdmissionPolicy` 时被 ignored，registration 仍有效。sender 可为空，conversation 保留既有 fallback，缺少 reply token 不阻止 turn，实际发送返回 `reply_token_missing_or_expired`。默认文本回复不读取 slug。Lark raw-message fallback 仅适用于 outer content type 为 `unknown` 或省略的 legacy message envelope；显式 `message_delete`、`modal` 等不支持操作即使携带原始 post/text snapshot，也必须返回 typed ignored/unsupported，不能发起 conversation turn。
+
+| 扩展边界 | 当前实现与消费方 |
+|---|---|
+| `INyxIdRelayContentAdapter` / `ConversationAdapter` / `MentionAdapter` | Lark/Feishu 原始协议转换；`NyxIdRelayTransport` 只接受 typed 结果，身份字段由固定层保存 |
+| `INyxIdRelayInteractionAdapter` | Lark/Feishu 和 Telegram 既有 typed Relay submission 解析；不等于原生按钮回调端到端保证 |
+| `IChannelGroupAdmissionPolicy` | Lark mention/reply/slash gate；Telegram Group/Channel opt-in；runner 在副作用前调用 |
+| `IChannelTypingIndicator` | Lark typing reaction 添加与清理；runner 只调接口，缺省无 no-op 实现 |
+| `IChannelReplyTextFormatter` / `IChannelSubjectContactResolver` | Lark JSON 文本格式与联系人补充；保留各自 slug fail-open/跳过语义 |
+| `IMessageComposer` / `IChannelNativeMessageProducer` / `IChannelNativeMessageSender` | 继续复用既有接口、文本 fallback、Lark native/CardKit 与 Telegram send/update |
+
+可选接口按 canonical platform 唯一注册，重复实现立即失败。Composer 的行为来自 concrete renderer，诊断 `Supports*` 布尔值不能开启、关闭实际操作。Telegram 保留 Markdown、64-byte 限制的 inline keyboard、native `sendMessage` / `editMessageText`；不宣称实现 delete 或原生 inbound callback-button。原有 Lark attachment/CardKit/streaming 主链保留，不新增第二套执行框架。
+
+`nyx_provider_slug` 的 proto、`api-{platform}-bot` 默认、Actor 存储、projection、API 和 native 消费保持原样，仅删除 UserService 创建响应覆盖来源。显式选定的既有 UserService ID 只通过授权规划进入 Channel Agent Key grant；不自动补入 platform/slug 派生 service，不新增 service binding。
+
+回归证据和外部约束记录于 [实现验证报告](../audit-scorecard/2026-09-16-channel-platform-behavior-adapter-verification.md)。
+
 ## 1. 背景与动机
 
 `Aevatar.GAgents.ChannelRuntime` 目前承载两个 IM 渠道：Lark（主力）和 Telegram（shim 级）。基于当前产品规划，接入更多消息渠道（候选：Slack / Discord / 以及 gateway 类的 WeChat 个人 bot）是高概率的下一阶段目标。即便具体 channel 组合有变，**任何新 IM 接入都会面临相同的 transport / 消息形态异质性压力**——本 RFC 要解的就是这个抽象层问题，而不是绑死任何特定未来 channel。
@@ -26,7 +79,7 @@ target_repo: aevatarAI/aevatar
 
 **消息形态**：Lark 卡片 / Telegram inline keyboard / Slack Block Kit / Discord Embed + Components / WeChat 富文本。能力也不对齐——Ephemeral / Thread / Modal / Action Buttons 各有支持/不支持。
 
-**当前受支持生产契约**：post-ADR-0012 / issue `#308` 的 ChannelRuntime 已收敛到 Nyx-backed Lark relay。Lark inbound 的唯一活跃入口是 `Aevatar.GAgents.NyxidChat` 映射的 `/api/webhooks/nyxid-relay`，并由 `ConversationGAgent` 承接权威会话事实；`Aevatar.GAgents.Platform.Lark` 只保留 HTTP client、message composer、native message producer、payload redactor 等 outbound/rendering 能力，不拥有 inbound runtime state。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**，不是当前生产契约。
+**当前实现契约**：ChannelRuntime 通过统一 NyxID Relay 入口 `/api/webhooks/nyxid-relay` 接收满足 typed callback 契约的平台消息，并由 `ConversationGAgent` 承接权威会话事实。`Aevatar.GAgents.Platform.Lark` 包含 Lark/Feishu 的外部协议归一化和窄消息行为，以及既有 HTTP client、composer、native producer/sender；它不拥有 inbound runtime state。Telegram 通过同一主链注册已有消息行为。`TelegramPlatformAdapter` 与 `ChannelUserGAgent` 已从当前代码路径移除；本 RFC 下面若提到它们，均应理解为**历史基线/legacy 实现**。本地实现验证不代表已验证生产部署状态。
 
 **Scheduled runner retirement note**：Any later reference in this RFC to `SkillRunnerGAgent`, `SkillRunner`, `SkillRunnerState`, `SkillRunnerScheduleCalculator`, or `skill_runner_id` is also historical. Scheduled workflow/team automation now uses `ScheduledDispatchGAgent` plus workflow/team service invocation. Generic skill loading remains on the normal AI/tool-provider path and NyxidChat slash-skill recovery.
 
@@ -34,8 +87,8 @@ target_repo: aevatarAI/aevatar
 
 ## 2. 目标
 
-1. **抽象层清晰**：新 channel = 实现一个接口 + 过一套 conformance 测试，即可进生产
-2. **业务逻辑 channel-agnostic**：agent / conversation / 调度 / 创作 流程不感知 channel 具体形态，靠 capability 降级
+1. **抽象层清晰**：满足 NyxID Relay 契约的新平台可直接采用私聊文本默认行为；新增平台增强时实现对应窄接口并通过 conformance 测试
+2. **业务逻辑 channel-agnostic**：agent / conversation / 调度 / 创作 流程不感知 channel 具体形态，按已注册行为接口启用增强或使用文本 fallback
 3. **消除 megamodule**：ChannelRuntime 物理拆包，每个包单一职责
 4. **修正会话身份**：`ConversationGAgent` 以 canonical key 存储会话，避免 sender-keyed 的串联 bug
 5. **复用现有抽象**：projection / event-sourcing / streaming / hosted service 这些底层不重做
@@ -174,7 +227,7 @@ sequenceDiagram
 
 **关键流向澄清**（和 §9.5 / §5.6.1 对齐）：当前 Lark inbound 不由 `Aevatar.GAgents.Platform.Lark` 启动本地 durable inbox consumer；NyxID relay webhook 是唯一活跃入口，完成 verify/normalize 后把事实交给 `ConversationGAgent`。adapter 公共 surface 上**没有** `ChannelReader<T>` / `InboundStream` 契约（Codex v11 收窄，见 §5.4）。`ConversationGAgent` 只做权威顺序 + dedup + completion commit，**不在 grain turn 内跑 LLM / 外部 IO**——那些放在 run-scoped runner actor 里，防止 group 场景热点化。对未来 direct adapter，committed ingress facts 仍必须先到 durable 或 actor-owned boundary，再进入 pipeline/read-side observation。
 
-核心思想：**`ChatActivity` 是跨 channel 的统一消息表达，`IMessageComposer` 负责把 intent 翻译成各 channel 的 native payload，`ChannelCapabilities` 声明能力矩阵让业务层按能力降级**。
+核心思想：**`ChatActivity` 是跨 channel 的统一消息表达，`IMessageComposer` 负责把 intent 翻译成各 channel 的 native payload，窄接口声明实际行为，`ChannelCapabilities` 只提供诊断描述**。
 
 ### 4.3 实施约束：跨边界类型 Proto 先行
 
@@ -714,12 +767,11 @@ public interface IChannelMentionAdapter {
 }
 ```
 
-**能力声明契约（不变量）**：adapter 实现类 `is IChannelTypingAdapter` ⟺ `Capabilities.SupportsTyping == true`。runtime 查能力时：
+**能力声明契约（不变量）**：可选行为接口是否存在是 runtime 控制流的唯一权威；`ChannelCapabilities` 中的 `SupportsTyping`、`SupportsReactions`、`SupportsMention` 只由已注册接口/行为 surface 推导，用于诊断和展示。runtime 查能力时：
 
 ```csharp
 // middleware / bot 层使用示例
-if (adapter is IChannelTypingAdapter typingAdapter
-    && adapter.Capabilities.SupportsTyping)
+if (adapter is IChannelTypingAdapter typingAdapter)
 {
     await typingAdapter.StartTypingAsync(conv, ct);
     // ... do work ...
@@ -727,11 +779,11 @@ if (adapter is IChannelTypingAdapter typingAdapter
 }
 ```
 
-`is` check + capability bool 双重验证防止接口实现 / 能力声明漂移（implementer 加了接口忘了更 capability，或反之）。Conformance Suite §8.1 `Capabilities_ImplementedInterfaces_AreConsistent()` 硬 assertion。
+Conformance Suite §8.1 只有在 fixture 提供相应 probe 时才执行可选操作。缺少 probe 时的 bool/descriptor 检查只证明诊断一致性，不证明操作或生命周期效果。当前具体 Protocol fixture 未提供 Typing/Reaction probe；Lark 实际效果由 `ChannelConversationTurnRunnerTests.RunInboundAsync_ShouldSendImmediateLarkReaction_WhenRelayTurnProvidesPlatformMessageId` 与 `RunLlmReplyAsync_ShouldClearTypingReaction_AfterSuccessfulRelayReply` 等真实 runner 的 POST/GET/DELETE 断言证明。能力字段不参与行为分支。
 
 **不做的事**：
 - 不把这些接口塞进 `IChannelOutboundPort` 强制所有 adapter 实现（OpenClaw 的教训——半数 channel 被迫 no-op）
-- 不做"自动 fallback"魔法：如果 adapter 不支持 typing，bot 层显式知道（capability false）而不是假装发了；progressive feedback 的降级策略由 bot 层决定（发不发 ack reaction 替代 typing 是业务决策）
+- 不做"自动 fallback"魔法：如果 adapter 没有 typing 接口，bot 层看到缺少该 surface；progressive feedback 的降级策略由 bot 层决定（发不发 ack reaction 替代 typing 是业务决策）
 - 不把 mention 规范化藏进 middleware：这是 adapter 的职责（adapter 最懂自己的 mention 语法），middleware 不应做 channel-specific 字符串处理
 
 **为什么 Proto 覆盖**：这些接口本身是 C# 契约，不需要 proto（proto 是数据契约）。接口参数里的 `ConversationReference` / `ParticipantRef` 已经在 §4.3 proto 列表里。`IChannelMentionAdapter.StripMentions` 返回 string，不引入新 proto 类型。
@@ -775,7 +827,7 @@ public enum StreamingSupport {
 
 **Typing keepalive interval 取值理由**：各平台的 typing indicator 在无新事件时自动消失的窗口不同——Discord ~10s，Slack ~5s，Telegram ~6s，Lark ~6s。`TypingKeepaliveIntervalMs` 是 "下次重发 typing event" 的目标周期，取值略小于平台的自动消失窗口（留 safety margin）。`TypingTtlMs` 是 bot 层硬上限，避免业务逻辑 hang 时 typing 永远亮着（OpenClaw `src/channels/typing-lifecycle.ts` 的 60s 值经过 7 个 channel 生产验证）。
 
-**SupportsTyping / SupportsReactions 的不变量**：与 §5.4.3 的 opt-in 接口严格对应——adapter 实现 `IChannelTypingAdapter` ⟺ `SupportsTyping == true`。Conformance Suite §8.1 硬 assertion。
+**SupportsTyping / SupportsReactions / SupportsMention 的不变量**：这些字段是可选行为接口集合的派生只读描述。接口存在时必须由提供 probe 的 conformance fixture 或 concrete runner/adapter 测试断言真实操作效果；接口缺失时必须由相应边界测试验证 typed unsupported/缺省结果。仅有 descriptor bool 或 DI 数量断言不构成 operation proof。任何 runtime 控制流不得读取这些 bool 作为第二权威。
 
 ### 5.6 `IBot` + `ITurnContext`
 
@@ -1386,17 +1438,16 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     // 终态，不被中间 Degraded 事件卡死
     [Fact] public async Task Streaming_ReachesTerminalState_EvenIfIntentDegrades() { ... }
 
-    // adapter 实现 IChannelTypingAdapter ⟺ Capabilities.SupportsTyping == true
-    // 实现 IChannelReactionAdapter ⟺ Capabilities.SupportsReactions == true
-    // 防止接口声明 / 能力 bool 漂移（OpenClaw 教训：能力声明和实现割裂会让 bot 层盲调崩溃）
-    [Fact] public async Task Capabilities_ImplementedInterfaces_AreConsistent() { ... }
+    // 可选行为 surface 存在时执行真实操作；缺少 surface 时验证 unsupported 结果。
+    // ChannelCapabilities 只作为由接口集合推导的诊断描述，不作为测试分支条件。
+    [Fact] public async Task CapabilityDescriptors_AreDerivedFromOptionalBehaviorSurfaces() { ... }
 
     // ParticipantRef.CanonicalId 必须来自平台稳定 id。
     // 同一真人在同一 channel 的 N 次交互产生的 ParticipantRef.CanonicalId 全部相等，
     // 即便 DisplayName 在过程中改变
     [Fact] public async Task ParticipantRef_CanonicalId_StableAcrossDisplayNameChanges() { ... }
 
-    // typing lifecycle（仅当 SupportsTyping 时测）：
+    // typing lifecycle（仅当 typing behavior surface 存在时测）：
     // - StartTypingAsync 触发平台 typing event
     // - adapter 内部 keepalive 周期发送，间隔 ≈ TypingKeepaliveIntervalMs
     // - TypingTtlMs 后自动 Stop（即便业务没 call）
@@ -1407,7 +1458,7 @@ public abstract class ChannelAdapterConformanceTests<TAdapter>
     [Fact] public async Task Typing_FailureCircuitBreakerAfterConsecutiveFailures() { ... }
     [Fact] public async Task Typing_StartStop_Idempotent() { ... }
 
-    // ack reaction（仅当 SupportsReactions 时测）——测能力兑现，不测 gating 决策（gating 在 middleware/bot 层）
+    // ack reaction（仅当 reaction behavior surface 存在时测）——测能力兑现，不测 gating 决策（gating 在 middleware/bot 层）
     [Fact] public async Task Reaction_SendAndRemove_Succeeds() { ... }
 
     // mention 规范化：指向本 bot 的 @mention 从 Content.Text 剥离且出现在 Mentions；
@@ -1993,11 +2044,11 @@ Lark webhook / long-connection / gateway 这类 ingress concern 属于 `Channel.
 
 #### 10.1.2 Canonical onboarding / recovery surface
 
-`/channels` 是 channel 注册、恢复和状态确认的唯一产品入口；`/admin#/channels` 只通过同源 iframe 嵌入该页面，不维护第二套注册状态机或模拟 Lark 后台操作。Lark 注册要求 App ID、App Secret 和 Verification Token，Encrypt Key 可选；这些 secret 只沿本次 NyxID provisioning 请求流转，不进入 actor state、Protobuf、read model、响应或日志。
+`/channels` 是 channel 注册、恢复和状态确认的唯一产品入口；`/admin#/channels` 只通过同源 iframe 嵌入该页面，不维护第二套注册状态机或模拟 Lark 后台操作。注册要求已存在的 NyxID Channel Bot ID；平台密钥只在 NyxID 自己的 Bot 创建流程输入，Aevatar registration 不接收或转发这些密钥。
 
-注册请求被接受只表示 NyxID/Aevatar provisioning 已完成到可配置阶段，不表示外部 Lark 应用已可用。registration actor 已提交的 `WebhookUrl` 通过查询响应的 `webhook_url` 原样呈现，作为 Lark Event Subscriptions 的 Request URL；`callback_url` 保持独立语义，不能作为其替代或由 bot id 推导。`pending_webhook` 页面必须明确要求用户在 Lark Developer Console 手工完成 Request URL、token/key 对齐、权限导入、`im.message.receive_v1` 订阅、版本发布与审批，并发送测试消息。Aevatar 不声称自动修改了这些外部设置。
+注册请求被接受只表示 Aevatar adoption 已 accepted for dispatch，不表示外部 Lark 应用已可用。registration actor 已提交的 `WebhookUrl` 通过查询响应的 `webhook_url` 原样呈现，作为 Lark Event Subscriptions 的 Request URL；`callback_url` 保持独立语义，不能作为其替代或由 bot id 推导。`pending_webhook` 页面必须明确要求用户在 Lark Developer Console 手工完成 Request URL、token/key 对齐、权限导入、`im.message.receive_v1` 订阅、版本发布与审批，并发送测试消息。Aevatar 不声称自动修改了这些外部设置。
 
-只有收到验证通过的入站消息且 registration read model 变为 `active`，产品才可宣称接入完成。替换接入必须先确认并成功删除现有 registration，再创建新 registration；这个操作会改变 `nyx_channel_bot_id` 和 `webhook_url`，因此用户必须把新的 Request URL 重新写入 Lark Developer Console。删除或重新注册失败时，UI 保留当前管理页和错误，不做乐观本地变更。
+只有收到验证通过的入站消息且 registration read model 变为 `active`，产品才可宣称接入完成。替换接入必须先确认并成功删除现有 registration，再创建新 registration；adopted Bot 由 NyxID 保留；新 registration 可以引用同一个 Bot，不暗示 Bot ID 或 webhook URL 被重新创建。删除或重新注册失败时，UI 保留当前管理页和错误，不做乐观本地变更。
 
 ### 10.2 Telegram（`agents/platforms/Aevatar.GAgents.Platform.Telegram`）
 
@@ -2006,9 +2057,8 @@ Lark webhook / long-connection / gateway 这类 ingress concern 属于 `Channel.
 - **Inbound conversation type 映射**：通过 `NyxIdRelayConversationTypeMap` 把 NyxID 投递的 `private / group / supergroup / channel` 映射到 `ConversationScope.DirectMessage / Group / Group / Channel`。`message_thread_id`（forum topic）当前未建模。
 - **Outbound 渲染（`TelegramMessageComposer`）**：
   - `intent.Text` + `intent.Cards` 拼成单段纯文本，再做 Telegram **legacy Markdown** 转义（NyxID 中继发送时强制 `parse_mode=Markdown`，详见 NyxID `backend/src/services/channel_adapters/telegram.rs::send_reply`）。escape 集合 = `_`、`*`、`[`、`` ` ``，对应 Telegram legacy Markdown 的四个控制字符；不做 MarkdownV2 escaping，避免给后续可能切换到纯 plain 的 NyxID 留 backward-compat 包袱。
-  - `intent.Actions` 当前**降级为纯文本 bullet 列表**，不再发 `inline_keyboard`。原因：NyxID Telegram adapter 的 `register_webhook` 只订阅 `message` / `edited_message` / `channel_post`，没有订阅 `callback_query`；`parse_inbound` 对 callback query 的测试显式断言返回空。也就是说即使 Aevatar 发出 `inline_keyboard`，按钮点击也不会进入 Aevatar，不会被翻译成 `CardActionSubmission`。`DefaultCapabilities.SupportsActionButtons = false` 把这个事实诚实暴露给 caller。
-  - 如果未来 NyxID 把 `callback_query` 全链路接通，把 `SupportsActionButtons` 翻回 `true` 并恢复 `inline_keyboard` 输出 + `BuildCallbackData` 的 64-byte 截断逻辑；同时更新 runbook。
-- **凭据与 webhook 注册**：bot token 只在注册接口入参里出现，不本地持久化（ADR-0012）。NyxID 的 `POST /api/v1/channel-bots` 在创建 channel bot 的同时已经替运营调用了 Telegram `setWebhook`，并使用 NyxID 自己生成/保存的 `secret_token`；运营**不要**手动再 `setWebhook`，否则会覆盖该 secret 并触发 `x-telegram-bot-api-secret-token` 校验失败。
+  - 可表达的 action 继续生成 inline keyboard，callback data 上限为 64 bytes；超长或不支持的 shape 降级为文本。输出 keyboard 不等于已验证 NyxID 原生 callback-button 全链路。已归一化的 typed Relay submission 解析保留。
+- **凭据与 webhook 注册**：Bot 在 NyxID 自身流程创建；Aevatar 只采用其稳定 Bot ID，不接收 bot token，不调用 `CreateChannelBot` 或 `setWebhook`。
 - **工具支持**：`src/Aevatar.AI.ToolProviders.Telegram` 提供 `telegram_messages_send`（Bot API `sendMessage`）和 `telegram_chats_lookup`（Bot API `getChat`），通过 NyxID `api-telegram-bot` 代理槽位调用。`AddTelegramTools` 已在 `MainnetHostBuilderExtensions` 注册，运行时通过 `IAgentToolSource` 发现。
 - **Capability gap**：当前不支持 ephemeral / thread / confirm dialog / modal / file 附件 / action button click-back。
 

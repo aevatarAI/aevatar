@@ -40,9 +40,9 @@ public sealed class UnifyCallerScopeAcceptanceTests
     }
 
     [Fact]
-    public void OwnerScope_ForChannel_NormalizesPlatformLowercase()
+    public void OwnerScope_ForChannel_PreservesCanonicalPlatform()
     {
-        var scope = OwnerScope.ForChannel("user-A", "Lark", "scope-bot-1", "sender-1");
+        var scope = OwnerScope.ForChannel("user-A", "lark", "scope-bot-1", "sender-1");
 
         scope.Platform.Should().Be("lark");
         scope.IsNyxIdNative.Should().BeFalse();

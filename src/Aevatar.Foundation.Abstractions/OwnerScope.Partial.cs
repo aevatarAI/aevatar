@@ -10,17 +10,9 @@ public sealed partial class OwnerScope
     public const string NyxIdPlatform = "nyxid";
 
     /// <summary>
-    /// Closed canonical set of platform values. Every <see cref="OwnerScope"/> at command-
-    /// handler / resolver-output ingress must carry one of these; anything else is a
-    /// resolver bug or a hand-constructed scope that bypassed the factory normalization.
-    /// </summary>
-    private static readonly System.Collections.Generic.HashSet<string> CanonicalPlatforms =
-        new(System.StringComparer.Ordinal) { "nyxid", "lark", "telegram" };
-
-    /// <summary>
     /// Validates that the scope is well-formed at the command-handler / resolver-output
     /// boundary. Empty <c>nyx_user_id</c> or empty <c>platform</c> is rejected; the
-    /// <c>platform</c> must be one of the canonical values. Non-native platforms
+    /// <c>platform</c> must be a canonical identity. Non-native platforms
     /// additionally require <c>registration_scope_id</c> and <c>sender_id</c>.
     /// </summary>
     public bool TryValidate(out string? error)
@@ -35,9 +27,13 @@ public sealed partial class OwnerScope
             error = "OwnerScope.platform is required (\"nyxid\" for native cli/web; \"lark\"/\"telegram\"/... for channel surfaces)";
             return false;
         }
-        if (!CanonicalPlatforms.Contains(Platform))
+        try
         {
-            error = $"OwnerScope.platform '{Platform}' is not in the canonical set ({{nyxid, lark, telegram}}). Resolvers must produce a canonical lower-case value.";
+            ChannelPlatformId.FromCanonical(Platform);
+        }
+        catch (ArgumentException)
+        {
+            error = $"OwnerScope.platform '{Platform}' must be a canonical lower-case value without whitespace or control characters.";
             return false;
         }
 
@@ -63,7 +59,7 @@ public sealed partial class OwnerScope
 
     /// <summary>
     /// Strict identity equality used at the readmodel filter boundary. <c>Platform</c> is
-    /// matched case-insensitively as defense in depth.
+    /// matched using its canonical ordinal value.
     ///
     /// For the nyxid-native surface the identity is the NyxID account: all four fields
     /// must be character-equal (registration/sender are empty by contract).
@@ -85,7 +81,7 @@ public sealed partial class OwnerScope
     public bool MatchesStrictly(OwnerScope? other)
     {
         if (other is null) return false;
-        if (!string.Equals(Platform, other.Platform, System.StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(Platform, other.Platform, System.StringComparison.Ordinal))
             return false;
 
         if (IsNyxIdNative)
@@ -118,7 +114,7 @@ public sealed partial class OwnerScope
         new()
         {
             NyxUserId = nyxUserId ?? string.Empty,
-            Platform = (platform ?? string.Empty).Trim().ToLowerInvariant(),
+            Platform = ChannelPlatformId.FromCanonical(platform).Value,
             RegistrationScopeId = registrationScopeId ?? string.Empty,
             SenderId = senderId ?? string.Empty,
         };

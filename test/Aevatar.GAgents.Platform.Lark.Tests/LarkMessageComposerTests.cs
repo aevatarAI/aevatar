@@ -8,6 +8,15 @@ namespace Aevatar.GAgents.Platform.Lark.Tests;
 
 public sealed class LarkMessageComposerTests : MessageComposerUnitTests<LarkMessageComposer>
 {
+    [Fact]
+    public void Diagnostic_file_flag_cannot_enable_unimplemented_attachment_composition()
+    {
+        var intent = new MessageContent { Text = "file" };
+        intent.Attachments.Add(new AttachmentRef { ExternalUrl = "https://example.com/a.png" });
+        var context = new ComposeContext { Capabilities = new ChannelCapabilities { SupportsFiles = true } };
+        new LarkMessageComposer().Evaluate(intent, context).ShouldBe(ComposeCapability.Unsupported);
+    }
+
     protected override LarkMessageComposer CreateComposer() => new();
 
     protected override ChannelCapabilities CreateCapabilities() => LarkMessageComposer.DefaultCapabilities.Clone();

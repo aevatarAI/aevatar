@@ -694,7 +694,9 @@ public sealed class ConversationReplyGeneratorTests
               }
             }
             """;
-        var parsed = new NyxIdRelayTransport().Parse(Encoding.UTF8.GetBytes(callbackBody));
+        var parsed = new NyxIdRelayTransport(
+            [new Aevatar.GAgents.Platform.Lark.LarkRelayMessageAdapter()],
+            [new Aevatar.GAgents.Platform.Lark.LarkRelayMessageAdapter()]).Parse(Encoding.UTF8.GetBytes(callbackBody));
         parsed.Success.Should().BeTrue();
 
         var imageBytes = new byte[] { 9, 8, 7 };

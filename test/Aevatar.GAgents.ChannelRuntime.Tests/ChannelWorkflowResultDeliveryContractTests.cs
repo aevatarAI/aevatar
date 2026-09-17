@@ -84,33 +84,35 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         actorNetwork.RegisterActivated(ChannelBotRegistrationGAgent.WellKnownId, registrationAgent);
 
         var provisioningHandler = new QueueHandler();
+        provisioningHandler.Enqueue("""{"id":"bot-456","platform":"lark","user_id":"scope-1","status":"pending_webhook","is_active":true}""");
+        provisioningHandler.Enqueue("""{"conversations":[]}""");
         provisioningHandler.Enqueue(
             $$$"""{"id":"key-123","full_key":"{{{RawAgentKey}}}","purpose":"general","scheduled_write_enabled":false,"scopes":"read write proxy","allow_all_services":true,"allow_all_nodes":true,"allowed_service_ids":[],"allowed_node_ids":[]}""");
-        provisioningHandler.Enqueue("""{"id":"bot-456","status":"pending_webhook"}""");
         provisioningHandler.Enqueue("""{"id":"route-789","default_agent":true}""");
-        provisioningHandler.Enqueue("""{"id":"svc-1"}""");
         var provisioningOptions = new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" };
         var provisioningClient = new NyxIdApiClient(
             provisioningOptions,
             new HttpClient(provisioningHandler));
-        var provisioningService = new NyxLarkProvisioningService(
+        var provisioningService = new NyxChannelBotAdoptionService(
             provisioningClient,
-            provisioningOptions,
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorNetwork, actorNetwork),
             new ChannelAgentKeyProvisioningService(
                 provisioningClient,
                 secretVault,
                 NullLogger<ChannelAgentKeyProvisioningService>.Instance,
                 ChannelAgentKeyWriteMode.NyxIdDefault),
-            CreatePersonalRegistrationOwnerResolver("scope-1"),
-            NullLogger<NyxLarkProvisioningService>.Instance);
+            new NyxChannelBotDeprovisioningService(provisioningClient, secretVault,
+                NullLogger<NyxChannelBotDeprovisioningService>.Instance),
+            NullLogger<NyxChannelBotAdoptionService>.Instance);
 
-        var provisioningResult = await provisioningService.ProvisionAsync(
-            new NyxLarkProvisioningRequest(
+        var registrationFacade = new ChannelRelayRegistrationFacade(provisioningService,
+            new VerifiedNyxChannelBotDetail.Reader(provisioningClient),
+            CreatePersonalRegistrationOwnerResolver("scope-1"), ChannelAgentKeyWriteMode.NyxIdDefault);
+        var provisioningResult = await registrationFacade.RegisterAsync(
+            new ChannelRelayRegistrationRequest(
+                Platform: "lark",
+                NyxChannelBotId: "bot-456",
                 AccessToken: "user-token",
-                AppId: "cli_a1b2c3",
-                AppSecret: "secret-xyz",
-                VerificationToken: "verify-123",
                 WebhookBaseUrl: "https://aevatar.example.com",
                 ScopeId: "scope-1",
                 Label: "Ops Bot",

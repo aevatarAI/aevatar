@@ -483,6 +483,111 @@ public sealed class PolicyAwareVoiceEndpointsTests
     }
 
     [Fact]
+    public async Task PolicyAwareVoice_WhenExternalChannelIsMixedCase_ShouldNormalizeBeforeOwnerScope()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            ForwardToModel("fallback-model"), []));
+        var session = new RecordingVoiceRealtimeSession();
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: []),
+            session);
+        var context = CreateVoiceContext(app, "/ws/voice?channel=LARK");
+        var wsFeature = new FakeHttpWebSocketFeature(new FakeWebSocket(WebSocketState.Open));
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status501NotImplemented);
+        policyPort.LastCallerScope.Should().NotBeNull();
+        policyPort.LastCallerScope!.Platform.Should().Be("lark");
+        wsFeature.AcceptCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PolicyAwareVoice_WhenExternalChannelIsMalformed_ShouldUseForbiddenFailureContract()
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            ForwardToModel("fallback-model"), []));
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: []),
+            new RecordingVoiceRealtimeSession());
+        var context = CreateVoiceContext(app, "/ws/voice?channel=matrix%20room");
+        var wsFeature = new FakeHttpWebSocketFeature(new FakeWebSocket(WebSocketState.Open));
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        (await ReadBodyAsync(context)).Should().Be("Invalid channel identity.");
+        policyPort.LastCallerScope.Should().BeNull();
+        wsFeature.AcceptCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("\tlark")]
+    [InlineData("lark\t")]
+    [InlineData("\nlark")]
+    [InlineData("lark\n")]
+    [InlineData("\rlark")]
+    [InlineData("lark\r")]
+    [InlineData("\u0001lark")]
+    [InlineData("lark\u0001")]
+    [InlineData("la\u0000rk")]
+    [InlineData("\tnyxid")]
+    [InlineData("web\n")]
+    public async Task PolicyAwareVoice_WhenExternalChannelContainsRawControl_ShouldUseForbiddenFailureContract(string rawChannel)
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            ForwardToModel("fallback-model"), []));
+        var session = new RecordingVoiceRealtimeSession();
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: []),
+            session);
+        var context = CreateVoiceContext(app, $"/ws/voice?channel={Uri.EscapeDataString(rawChannel)}");
+        context.Request.Query["channel"].ToString().Should().Be(rawChannel);
+        var wsFeature = new FakeHttpWebSocketFeature(new FakeWebSocket(WebSocketState.Open));
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        (await ReadBodyAsync(context)).Should().Be("Invalid channel identity.");
+        policyPort.LastCallerScope.Should().BeNull();
+        wsFeature.AcceptCalls.Should().Be(0);
+        session.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("nyxid")]
+    [InlineData(" CLI ")]
+    [InlineData("Web")]
+    public async Task PolicyAwareVoice_WhenExternalChannelIsOmittedOrNative_ShouldPreserveNativeOwnerScope(string? rawChannel)
+    {
+        var policyPort = StaticPolicyPort.For(new ChatRoutePolicySnapshot(
+            ForwardToModel("fallback-model"), []));
+        using var app = CreatePolicyAwareApp(
+            policyPort,
+            new RecordingCatalogQueryPort(allowedActorIds: []),
+            new RecordingVoiceRealtimeSession());
+        var query = rawChannel is null ? string.Empty : $"?channel={Uri.EscapeDataString(rawChannel)}";
+        var context = CreateVoiceContext(app, $"/ws/voice{query}");
+        var wsFeature = new FakeHttpWebSocketFeature(new FakeWebSocket(WebSocketState.Open));
+        context.Features.Set<IHttpWebSocketFeature>(wsFeature);
+
+        await GetEndpoint(app, "/ws/voice").RequestDelegate!(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status501NotImplemented);
+        policyPort.LastCallerScope.Should().BeEquivalentTo(RoutingOwnerScope.ForNyxIdNative("user-1"));
+        wsFeature.AcceptCalls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task PolicyAwareVoice_WhenProjectionStaleButRecoveryRematerializes_ShouldAttach()
     {
         // The voice-attach policy the grain still holds; its read-model row starts "missing" (idle-grain

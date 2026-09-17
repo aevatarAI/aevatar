@@ -25,6 +25,15 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
     private const string ApiKeyPath = "/api/v1/api-keys/key-1";
 
     [Fact]
+    public async Task DeprovisionAsync_AdoptedBotIsNeverDeleted()
+    {
+        var handler = new StatusRoutingHandler();
+        var result = await CreateService(handler).DeprovisionAsync(
+            "token", BuildRequest(CredentialReference()), CancellationToken.None);
+        handler.DeletedPaths.Should().NotContain(ChannelBotPath);
+    }
+
+    [Fact]
     public void FromRegistration_ValidNewModelUsesTypedAgentKey()
     {
         var registration = ValidNewModelRegistration();
@@ -92,7 +101,6 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
     {
         var handler = new StatusRoutingHandler();
         handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.OK, "{}");
-        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.OK, "{}");
         handler.Set(HttpMethod.Delete, "/api/v1/api-keys/key-legacy", HttpStatusCode.OK, "{}");
         var request = NyxChannelBotDeprovisioningRequest.FromRegistration(
             new ChannelBotRegistrationEntry
@@ -111,9 +119,8 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
             CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.ChannelBotRemoved.Should().BeTrue();
         result.AgentKeyRemoved.Should().BeFalse();
-        handler.DeletedPaths.Should().Equal(RoutePath, ChannelBotPath);
+        handler.DeletedPaths.Should().Equal(RoutePath);
     }
 
     [Fact]
@@ -122,7 +129,6 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
         var effects = new List<string>();
         var handler = new StatusRoutingHandler(effects);
         handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.OK, "{}");
-        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.OK, "{}");
         handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.OK, "{}");
         var vault = new RecordingSecretVault(effects);
 
@@ -130,16 +136,14 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
             "token", BuildRequest(CredentialReference()), CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        result.ChannelBotRemoved.Should().BeTrue();
         result.AgentKeyRemoved.Should().BeTrue();
         result.Warnings.Should().BeEmpty();
-        handler.DeletedPaths.Should().Equal(RoutePath, ChannelBotPath, ApiKeyPath);
+        handler.DeletedPaths.Should().Equal(RoutePath, ApiKeyPath);
         vault.RevokeRequests.Should().ContainSingle();
         vault.RevokeRequests[0].Ref.Should().Be("vault://channel/key-1");
         vault.RevokeRequests[0].SubjectId.Should().Be("key-1");
         effects.Should().Equal(
             "nyx:route-delete",
-            "nyx:bot-delete",
             "nyx:key-delete",
             "vault:revoke");
     }
@@ -149,17 +153,15 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
     {
         var handler = new StatusRoutingHandler();
         handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.NoContent, string.Empty);
-        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.NoContent, string.Empty);
         handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.NoContent, string.Empty);
 
         var result = await CreateService(handler).DeprovisionAsync(
             "token", BuildRequest(), CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        result.ChannelBotRemoved.Should().BeTrue();
         result.AgentKeyRemoved.Should().BeTrue();
         result.Warnings.Should().BeEmpty();
-        handler.DeletedPaths.Should().Equal(RoutePath, ChannelBotPath, ApiKeyPath);
+        handler.DeletedPaths.Should().Equal(RoutePath, ApiKeyPath);
     }
 
     [Fact]
@@ -167,37 +169,33 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
     {
         var handler = new StatusRoutingHandler();
         handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.NotFound, """{"detail":"gone"}""");
-        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.NotFound, """{"detail":"gone"}""");
         handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.NotFound, """{"detail":"gone"}""");
 
         var result = await CreateService(handler).DeprovisionAsync(
             "token", BuildRequest(), CancellationToken.None);
 
         result.Succeeded.Should().BeTrue();
-        result.ChannelBotRemoved.Should().BeTrue();
         result.AgentKeyRemoved.Should().BeTrue();
         result.Warnings.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task DeprovisionAsync_HardChannelBotFailure_StillAttemptsIndependentAgentKeyAndVault()
+    public async Task DeprovisionAsync_BotFailureCannotBlockOwnedResourceCleanup()
     {
         var effects = new List<string>();
         var handler = new StatusRoutingHandler(effects);
         handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.OK, "{}");
-        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.InternalServerError, """{"detail":"boom"}""");
         handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.OK, "{}");
         var vault = new RecordingSecretVault(effects);
 
         var result = await CreateService(handler, vault).DeprovisionAsync(
             "token", BuildRequest(CredentialReference()), CancellationToken.None);
 
-        result.Succeeded.Should().BeFalse();
-        result.ChannelBotRemoved.Should().BeFalse();
+        result.Succeeded.Should().BeTrue();
         result.AgentKeyRemoved.Should().BeTrue();
-        handler.DeletedPaths.Should().Equal(RoutePath, ChannelBotPath, ApiKeyPath);
+        handler.DeletedPaths.Should().Equal(RoutePath, ApiKeyPath);
         vault.RevokeRequests.Should().ContainSingle();
-        effects.Should().Equal("nyx:route-delete", "nyx:bot-delete", "nyx:key-delete", "vault:revoke");
+        effects.Should().Equal("nyx:route-delete", "nyx:key-delete", "vault:revoke");
     }
 
     [Fact]
@@ -206,7 +204,6 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
         var effects = new List<string>();
         var handler = new StatusRoutingHandler(effects);
         handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.OK, "{}");
-        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.OK, "{}");
         handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.InternalServerError, """{"detail":"key-boom"}""");
         var vault = new RecordingSecretVault(effects);
 
@@ -214,20 +211,18 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
             "token", BuildRequest(CredentialReference()), CancellationToken.None);
 
         result.Succeeded.Should().BeFalse();
-        result.ChannelBotRemoved.Should().BeTrue();
         result.AgentKeyRemoved.Should().BeFalse();
         result.Warnings.Should().BeEmpty();
         vault.RevokeRequests.Should().BeEmpty();
-        effects.Should().Equal("nyx:route-delete", "nyx:bot-delete", "nyx:key-delete");
+        effects.Should().Equal("nyx:route-delete", "nyx:key-delete");
     }
 
     [Fact]
-    public async Task DeprovisionAsync_ResidualRouteAndVaultFailures_StillSucceed_WithWarnings()
+    public async Task DeprovisionAsync_RouteFailure_IsIncompleteEvenWhenKeyCleanupSucceeds()
     {
         var effects = new List<string>();
         var handler = new StatusRoutingHandler(effects);
         handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.InternalServerError, """{"detail":"route-provider-secret"}""");
-        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.OK, "{}");
         handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.OK, "{}");
         var vault = new RecordingSecretVault(effects)
         {
@@ -237,9 +232,9 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
         var result = await CreateService(handler, vault).DeprovisionAsync(
             "token", BuildRequest(CredentialReference()), CancellationToken.None);
 
-        result.Succeeded.Should().BeTrue();
-        result.ChannelBotRemoved.Should().BeTrue();
+        result.Succeeded.Should().BeFalse();
         result.AgentKeyRemoved.Should().BeTrue();
+        result.ConversationRouteRemoved.Should().BeFalse();
         result.Warnings.Should().HaveCount(2);
         result.Warnings.Should().Contain(w => w.Contains("conversation_route_delete_failed") && w.Contains("route-1"));
         result.Warnings.Should().Contain("vault_revoke_failed");
@@ -247,34 +242,62 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
     }
 
     [Fact]
-    public async Task DeprovisionAsync_RouteTransportFailure_RemainsBestEffort()
+    public async Task DeprovisionAsync_RouteFailure_RetainsStableHandleForRetryAndNeverDeletesAdoptedBot()
     {
         var handler = new StatusRoutingHandler();
-        handler.ThrowOn(
-            HttpMethod.Delete,
-            RoutePath,
-            new HttpRequestException("route provider secret"));
-        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.OK, "{}");
+        handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.BadGateway, """{"detail":"route provider secret"}""");
+        handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.OK, "{}");
+
+        var service = CreateService(handler);
+        var request = BuildRequest();
+        var result = await service.DeprovisionAsync(
+            "token", request, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.AgentKeyRemoved.Should().BeTrue();
+        result.ConversationRouteRemoved.Should().BeFalse();
+        result.Warnings.Should().ContainSingle()
+            .Which.Should().Contain("conversation_route_delete_failed id=route-1");
+        result.Warnings.Should().NotContain(w => w.Contains("provider secret", StringComparison.Ordinal));
+        handler.DeletedPaths.Should().Equal(RoutePath, ApiKeyPath);
+
+        // A caller can retry with the same registration-owned route/key identifiers. The adopted
+        // Bot is never part of this cleanup contract and must remain untouched across both turns.
+        handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.NoContent, string.Empty);
+        handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.NotFound, """{"detail":"already gone"}""");
+        var retry = await service.DeprovisionAsync("token", request, CancellationToken.None);
+
+        retry.Succeeded.Should().BeTrue();
+        retry.ConversationRouteRemoved.Should().BeTrue();
+        retry.AgentKeyRemoved.Should().BeTrue();
+        handler.DeletedPaths.Should().Equal(RoutePath, ApiKeyPath, RoutePath, ApiKeyPath);
+        handler.DeletedPaths.Should().NotContain(ChannelBotPath);
+    }
+
+    [Fact]
+    public async Task DeprovisionAsync_RouteTransportFailure_IsIncompleteAndRetryable()
+    {
+        var handler = new StatusRoutingHandler();
+        handler.ThrowOn(HttpMethod.Delete, RoutePath, new HttpRequestException("route provider secret"));
         handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.OK, "{}");
 
         var result = await CreateService(handler).DeprovisionAsync(
             "token", BuildRequest(), CancellationToken.None);
 
-        result.Succeeded.Should().BeTrue();
-        result.ChannelBotRemoved.Should().BeTrue();
+        result.Succeeded.Should().BeFalse();
         result.AgentKeyRemoved.Should().BeTrue();
+        result.ConversationRouteRemoved.Should().BeFalse();
         result.Warnings.Should().ContainSingle()
             .Which.Should().Contain("conversation_route_delete_failed id=route-1");
         result.Warnings.Should().NotContain(w => w.Contains("provider secret", StringComparison.Ordinal));
-        handler.DeletedPaths.Should().Equal(RoutePath, ChannelBotPath, ApiKeyPath);
+        handler.DeletedPaths.Should().Equal(RoutePath, ApiKeyPath);
     }
 
     [Fact]
     public async Task DeprovisionAsync_SkipsBlankIds()
     {
         var handler = new StatusRoutingHandler();
-        // Only the channel-bot has an id; the route and Agent Key are blank and must not be called.
-        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.OK, "{}");
+        // The adopted Bot is external; no owned resource IDs are available to clean.
 
         var result = await CreateService(handler).DeprovisionAsync(
             "token",
@@ -288,28 +311,7 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
         result.Succeeded.Should().BeTrue();
         result.AgentKeyRemoved.Should().BeTrue();
         result.Warnings.Should().BeEmpty();
-        handler.DeletedPaths.Should().Equal(ChannelBotPath);
-    }
-
-    [Fact]
-    public async Task DeprovisionAsync_NoChannelBotId_SucceedsWithoutCallingChannelBotDelete()
-    {
-        var handler = new StatusRoutingHandler();
-        handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.OK, "{}");
-        handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.OK, "{}");
-
-        var result = await CreateService(handler).DeprovisionAsync(
-            "token",
-            BuildRequest() with { ChannelBotId = null },
-            CancellationToken.None);
-
-        // No channel-bot to delete means that gate is vacuously satisfied; the route is best
-        // effort, while the identified Agent Key remains a hard deletion gate.
-        result.Succeeded.Should().BeTrue();
-        result.ChannelBotRemoved.Should().BeTrue();
-        result.AgentKeyRemoved.Should().BeTrue();
-        result.Warnings.Should().BeEmpty();
-        handler.DeletedPaths.Should().Equal(RoutePath, ApiKeyPath);
+        handler.DeletedPaths.Should().BeEmpty();
     }
 
     [Fact]
@@ -363,7 +365,6 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
     {
         var handler = new StatusRoutingHandler();
         handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.OK, "{}");
-        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.OK, "{}");
         handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.OK, "{}");
         return handler;
     }
@@ -374,7 +375,6 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
             RegistrationId: "reg-1",
             Platform: "lark",
             ConversationRouteId: "route-1",
-            ChannelBotId: "bot-1",
             AgentKeyId: "key-1",
             SecretReference: secretReference);
 

@@ -185,6 +185,48 @@ public sealed class NyxIdRelayInteractiveReplyDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_feishu_uses_explicit_lark_family_mapping_with_action_controls()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK,
+            JsonSerializer.Serialize(new { message_id = "mid-feishu", platform_message_id = "pmid-feishu" }));
+        var client = CreateClient(handler);
+        var composer = new LarkMessageComposer();
+        var registry = new ChannelMessageComposerRegistry(
+            new IMessageComposer[] { new FeishuLarkFamilyMessageComposer(composer) },
+            new IChannelNativeMessageProducer[]
+            {
+                new FeishuLarkFamilyNativeMessageProducer(new LarkChannelNativeMessageProducer(composer)),
+            });
+        var dispatcher = new NyxIdRelayInteractiveReplyDispatcher(
+            registry,
+            client,
+            NullLogger<NyxIdRelayInteractiveReplyDispatcher>.Instance);
+        var intent = new MessageContent { Text = "Choose" };
+        intent.Actions.Add(new ActionElement
+        {
+            Kind = ActionElementKind.Button,
+            ActionId = "approve",
+            Label = "Approve",
+            IsPrimary = true,
+        });
+
+        var result = await dispatcher.DispatchAsync(
+            ChannelId.From("feishu"),
+            "msg-feishu",
+            "relay-token",
+            intent,
+            new ComposeContext());
+
+        result.Succeeded.Should().BeTrue();
+        result.FellBackToText.Should().BeFalse();
+        using var document = JsonDocument.Parse(handler.LastRequestBody!);
+        var card = document.RootElement.GetProperty("reply").GetProperty("metadata").GetProperty("card");
+        card.GetProperty("schema").GetString().Should().Be("2.0");
+        card.GetProperty("body").GetProperty("elements").ToString().Should().Contain("Approve");
+        card.GetProperty("body").GetProperty("elements").ToString().Should().Contain("approve");
+    }
+
+    [Fact]
     public async Task DispatchAsync_agent_run_approval_uses_real_lark_producer_and_preserves_typed_identity()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK,

@@ -472,6 +472,36 @@ public sealed class NyxIdRelayAuthValidatorTests
         result.ErrorCode.Should().Be("callback_jwt_platform_mismatch");
     }
 
+    [Theory]
+    [InlineData("matrix room")]
+    [InlineData("matrix\u0000")]
+    [InlineData("matrix\troom")]
+    public async Task ValidateAsync_RejectsInvalidPlatformEvenWhenJwtAndPayloadMatch(string platform)
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var validator = CreateValidator(
+            new NyxRelayOidcDocumentHandler(CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"), () => CreateJwksJson(key)),
+            Issuer);
+        var request = CreateRelayRequest(key, platform: platform);
+        var result = await validator.ValidateAsync(request.HttpContext, request.BodyBytes, request.Payload, CancellationToken.None);
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("callback_jwt_platform_mismatch");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_CanonicalizesExternalJwtAndPayloadPlatform()
+    {
+        using var rsa = RSA.Create(2048);
+        var key = CreateSigningKey(rsa, "kid-1");
+        var validator = CreateValidator(
+            new NyxRelayOidcDocumentHandler(CreateDiscoveryJson(Issuer, $"{Issuer}/jwks"), () => CreateJwksJson(key)),
+            Issuer);
+        var request = CreateRelayRequest(key, platform: " MATRIX ", tokenPlatform: "matrix");
+        var result = await validator.ValidateAsync(request.HttpContext, request.BodyBytes, request.Payload, CancellationToken.None);
+        result.Succeeded.Should().BeTrue();
+    }
+
     [Fact]
     public async Task ValidateAsync_ShouldRejectCorrelationMismatch()
     {

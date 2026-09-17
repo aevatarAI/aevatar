@@ -16,24 +16,135 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ChannelRegistrationToolTests
 {
     [Fact]
+    public async Task ExecuteAsync_IncompleteCompensationExposesOwnedHandlesAndCleanupOutcomes()
+    {
+        var adoption = Substitute.For<INyxChannelBotAdoptionService>();
+        adoption.AdoptAsync(Arg.Any<NyxChannelBotAdoptionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new NyxChannelBotAdoptionResult(false, "error", "lark", "reg-retained", "bot-lark", "key-retained", "route-retained",
+                Error: "local_mirror_dispatch_failed", Note: "Command was not accepted. Owned resource cleanup is incomplete.",
+                Cleanup: new(true, false, ["conversation_route_delete_failed id=route-retained"], false),
+                CleanupRequest: new("reg-retained", "lark", "route-retained", "key-retained",
+                    new SecretReference { Ref = "vault://private-reference" })));
+        using var services = new ServiceCollection().AddSingleton(CreateRegistrationFacade(adoption)).BuildServiceProvider();
+        var tool = CreateTool(services);
+        using var scope = PushNyxToken();
+
+        var response = await tool.ExecuteAsync(
+            """{"action":"register_channel_via_nyx","platform":"lark","nyx_channel_bot_id":"bot-lark","webhook_base_url":"https://aevatar.example.com"}""");
+
+        using var body = JsonDocument.Parse(response);
+        var root = body.RootElement;
+        root.GetProperty("error").GetString().Should().Be("local_mirror_dispatch_failed");
+        root.GetProperty("registration_id").GetString().Should().Be("reg-retained");
+        root.GetProperty("nyx_channel_bot_id").GetString().Should().Be("bot-lark");
+        root.GetProperty("nyx_agent_api_key_id").GetString().Should().Be("key-retained");
+        root.GetProperty("nyx_conversation_route_id").GetString().Should().Be("route-retained");
+        var cleanup = root.GetProperty("cleanup");
+        cleanup.GetProperty("complete").GetBoolean().Should().BeFalse();
+        cleanup.GetProperty("conversation_route_removed").GetBoolean().Should().BeFalse();
+        cleanup.GetProperty("agent_key_removed").GetBoolean().Should().BeTrue();
+        cleanup.GetProperty("vault_secret_revoked").GetBoolean().Should().BeTrue();
+        cleanup.GetProperty("warnings")[0].GetString().Should().Contain("route-retained");
+        response.Should().NotContain("vault://").And.NotContain("cleanup_request").And.NotContain("acceptance_unknown");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UnknownRouteAcquisitionPreservesIncompleteCleanupWithoutInternalHandles()
+    {
+        var adoption = Substitute.For<INyxChannelBotAdoptionService>();
+        adoption.AdoptAsync(Arg.Any<NyxChannelBotAdoptionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new NyxChannelBotAdoptionResult(false, "error", "matrix", "reg-retained", "bot-matrix", "key-retained", null,
+                Error: "provisioning_failed", Note: "Owned resource cleanup is incomplete.",
+                Cleanup: new(false, false, ["conversation_route_acquisition_unresolved"],
+                    ConversationRouteRemoved: false, VaultSecretRevoked: false),
+                CleanupRequest: new("reg-retained", "matrix", null, "key-retained",
+                    new SecretReference { Ref = "vault://private-reference" }, AgentKeyDeletionRequired: true)));
+        using var services = new ServiceCollection().AddSingleton(CreateRegistrationFacade(adoption)).BuildServiceProvider();
+        var tool = CreateTool(services);
+        using var scope = PushNyxToken();
+
+        var response = await tool.ExecuteAsync(
+            """{"action":"register_channel_via_nyx","platform":"matrix","nyx_channel_bot_id":"bot-matrix","webhook_base_url":"https://aevatar.example.com"}""");
+
+        using var body = JsonDocument.Parse(response);
+        var root = body.RootElement;
+        root.GetProperty("status").GetString().Should().Be("error");
+        root.GetProperty("error").GetString().Should().Be("provisioning_failed");
+        root.GetProperty("registration_id").GetString().Should().Be("reg-retained");
+        root.GetProperty("nyx_channel_bot_id").GetString().Should().Be("bot-matrix");
+        root.GetProperty("nyx_agent_api_key_id").GetString().Should().Be("key-retained");
+        root.GetProperty("nyx_conversation_route_id").GetString().Should().BeEmpty();
+        var cleanup = root.GetProperty("cleanup");
+        cleanup.GetProperty("complete").GetBoolean().Should().BeFalse();
+        cleanup.GetProperty("conversation_route_removed").GetBoolean().Should().BeFalse();
+        cleanup.GetProperty("agent_key_removed").GetBoolean().Should().BeFalse();
+        cleanup.GetProperty("vault_secret_revoked").GetBoolean().Should().BeFalse();
+        cleanup.GetProperty("warnings").EnumerateArray().Select(static warning => warning.GetString())
+            .Should().Equal("conversation_route_acquisition_unresolved");
+        response.Should().NotContain("vault://").And.NotContain("cleanup_request")
+            .And.NotContain("CleanupRequest").And.NotContain("cleanupRequest");
+    }
+
+    [Theory]
+    [InlineData("\tmatrix")]
+    [InlineData("matrix\n")]
+    [InlineData("ma trix")]
+    public async Task ExecuteAsync_InvalidPlatformCannotBeTrimmedIntoValidity(string platform)
+    {
+        var adoption = Substitute.For<INyxChannelBotAdoptionService>();
+        adoption.AdoptAsync(Arg.Any<NyxChannelBotAdoptionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new NyxChannelBotAdoptionResult(true, "accepted", "matrix"));
+        using var services = new ServiceCollection().AddSingleton(CreateRegistrationFacade(adoption)).BuildServiceProvider();
+        var tool = CreateTool(services);
+        using var scope = PushNyxToken();
+        var response = await tool.ExecuteAsync(JsonSerializer.Serialize(new
+        {
+            action = "register_channel_via_nyx", platform, nyx_channel_bot_id = "bot-matrix",
+            webhook_base_url = "https://aevatar.example.com",
+        }));
+        response.Should().Contain("invalid_channel_bot_detail");
+        await adoption.DidNotReceiveWithAnyArgs().AdoptAsync(default!, default);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" bot-lark")]
+    [InlineData("bot-lark ")]
+    public async Task ExecuteAsync_RegisterRequiresNonPaddedBotIdBeforeAdoption(string? botId)
+    {
+        var adoption = Substitute.For<INyxChannelBotAdoptionService>();
+        using var services = new ServiceCollection().AddSingleton(CreateRegistrationFacade(adoption)).BuildServiceProvider();
+        var tool = CreateTool(services);
+        using var scope = PushNyxToken();
+        var response = await tool.ExecuteAsync(JsonSerializer.Serialize(new
+        {
+            action = "register_channel_via_nyx", platform = "lark", nyx_channel_bot_id = botId,
+            webhook_base_url = "https://aevatar.example.com",
+        }));
+        response.Should().Contain("missing_nyx_channel_bot_id");
+        await adoption.DidNotReceiveWithAnyArgs().AdoptAsync(default!, default);
+        tool.ParametersSchema.Should().Contain("nyx_channel_bot_id").And.NotContain("bot_token").And.NotContain("credentials").And.NotContain("app_secret");
+    }
+
+    [Fact]
     public void Metadata_ReflectsRelayOnlyContract()
     {
         var tool = CreateTool();
 
         tool.Name.Should().Be("channel_registrations");
         tool.Description.Should().Contain("register_channel_via_nyx");
-        tool.Description.Should().Contain("platform=lark");
-        tool.Description.Should().Contain("platform=telegram");
+        tool.Description.Should().Contain("nyx_channel_bot_id");
         tool.Description.Should().NotContain("register_lark_via_nyx");
         tool.Description.Should().NotContain("rebuild_projection");
         tool.Description.Should().NotContain("repair_lark_mirror");
         tool.ParametersSchema.Should().NotContain("rebuild_projection");
         tool.ParametersSchema.Should().NotContain("reason");
         tool.ParametersSchema.Should().Contain("\"platform\"");
-        tool.ParametersSchema.Should().Contain("\"credentials\"");
-        tool.ParametersSchema.Should().Contain("\"lark\"");
-        tool.ParametersSchema.Should().Contain("\"telegram\"");
-        tool.ParametersSchema.Should().Contain("\"bot_token\"");
+        tool.ParametersSchema.Should().NotContain("\"credentials\"");
+        tool.ParametersSchema.Should().NotContain("\"lark\"");
+        tool.ParametersSchema.Should().NotContain("\"telegram\"");
+        tool.ParametersSchema.Should().NotContain("\"bot_token\"");
         tool.ParametersSchema.Should().Contain("\"service_ids\"");
         tool.ParametersSchema.Should().Contain("\"authorization_mode\"");
         tool.ParametersSchema.Should().NotContain("scope_plan_digest");
@@ -226,10 +337,9 @@ public sealed class ChannelRegistrationToolTests
     [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_LarkReturnsProvisioningResult()
     {
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
-        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
+        provisioningService.AdoptAsync(Arg.Any<NyxChannelBotAdoptionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotAdoptionResult(
                 Succeeded: true,
                 Status: "accepted",
                 Platform: "lark",
@@ -247,24 +357,20 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","platform":"lark","lark":{"app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","encrypt_key":" encrypt-alpha "},"webhook_base_url":"https://aevatar.example.com","default_skill_name":"whatsapp-reply-draft"}""");
+            """{"action":"register_channel_via_nyx","platform":"lark","nyx_channel_bot_id":"bot-lark","lark":{"app_id":"cli_123","app_secret":"secret","verification_token":"verify-123","encrypt_key":" encrypt-alpha "},"webhook_base_url":"https://aevatar.example.com","default_skill_name":"whatsapp-reply-draft"}""");
         using var doc = JsonDocument.Parse(json);
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
         doc.RootElement.GetProperty("platform").GetString().Should().Be("lark");
         doc.RootElement.GetProperty("registration_id").GetString().Should().Be("reg-1");
-        await provisioningService.Received(1).ProvisionAsync(
-            Arg.Is<NyxChannelBotProvisioningRequest>(request =>
-                request.Platform == "lark" &&
-                request.AccessToken == "test-token" &&
-                request.ScopeId == "scope-1" &&
-                request.Lark != null &&
-                request.Lark.AppId == "cli_123" &&
-                request.Lark.AppSecret == "secret" &&
-                request.Lark.VerificationToken == "verify-123" &&
-                request.Lark.EncryptKey == "encrypt-alpha" &&
-                request.WebhookBaseUrl == "https://aevatar.example.com" &&
-                request.DefaultSkillName == "whatsapp-reply-draft"),
+        await provisioningService.Received(1).AdoptAsync(
+            Arg.Is<NyxChannelBotAdoptionRequest>(request =>
+                request.Registration.Platform == "lark" &&
+                request.Registration.AccessToken == "test-token" &&
+                request.Registration.ScopeId == "scope-1" &&
+                request.Registration.NyxChannelBotId == "bot-lark" &&
+                request.Registration.WebhookBaseUrl == "https://aevatar.example.com" &&
+                request.Registration.DefaultSkillName == "whatsapp-reply-draft"),
             Arg.Any<CancellationToken>());
     }
 
@@ -278,12 +384,11 @@ public sealed class ChannelRegistrationToolTests
     public async Task ExecuteAsync_RegisterChannelViaNyx_RejectsInvalidServiceIdsBeforeProvisioning(
         string serviceIdsJson)
     {
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
-        provisioningService.ProvisionAsync(
-                Arg.Any<NyxChannelBotProvisioningRequest>(),
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
+        provisioningService.AdoptAsync(
+                Arg.Any<NyxChannelBotAdoptionRequest>(),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+            .Returns(Task.FromResult(new NyxChannelBotAdoptionResult(
                 Succeeded: true,
                 Status: "accepted",
                 Platform: "lark",
@@ -295,21 +400,20 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            $$"""{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist","service_ids":{{serviceIdsJson}}}""");
+            $$"""{"action":"register_channel_via_nyx","platform":"lark","nyx_channel_bot_id":"bot-lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist","service_ids":{{serviceIdsJson}}}""");
         using var document = JsonDocument.Parse(json);
 
         document.RootElement.TryGetProperty("error_code", out var errorCode).Should().BeTrue();
         errorCode.GetString().Should().Be("invalid_service_ids");
-        await provisioningService.DidNotReceive().ProvisionAsync(
-            Arg.Any<NyxChannelBotProvisioningRequest>(),
+        await provisioningService.DidNotReceive().AdoptAsync(
+            Arg.Any<NyxChannelBotAdoptionRequest>(),
             Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_WhenNyxIdDefaultHasServiceIds_RejectsBeforeProvisioning()
     {
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(CreateRegistrationFacade(provisioningService))
             .BuildServiceProvider();
@@ -317,25 +421,24 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"nyxid_default","service_ids":["svc-conflict"]}""");
+            """{"action":"register_channel_via_nyx","platform":"lark","nyx_channel_bot_id":"bot-lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"nyxid_default","service_ids":["svc-conflict"]}""");
         using var document = JsonDocument.Parse(json);
 
         document.RootElement.GetProperty("error_code").GetString().Should().Be("invalid_service_ids");
-        await provisioningService.DidNotReceive().ProvisionAsync(
-            Arg.Any<NyxChannelBotProvisioningRequest>(),
+        await provisioningService.DidNotReceive().AdoptAsync(
+            Arg.Any<NyxChannelBotAdoptionRequest>(),
             Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_WhenServiceIdsAreMissing_SelectsNyxIdDefault()
     {
-        NyxChannelBotProvisioningRequest? captured = null;
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
-        provisioningService.ProvisionAsync(
-                Arg.Do<NyxChannelBotProvisioningRequest>(request => captured = request),
+        ChannelRelayRegistrationRequest? captured = null;
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
+        provisioningService.AdoptAsync(
+                Arg.Do<NyxChannelBotAdoptionRequest>(request => captured = request.Registration),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+            .Returns(Task.FromResult(new NyxChannelBotAdoptionResult(
                 Succeeded: true,
                 Status: "accepted",
                 Platform: "lark",
@@ -347,7 +450,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com"}""");
+            """{"action":"register_channel_via_nyx","platform":"lark","nyx_channel_bot_id":"bot-lark","webhook_base_url":"https://aevatar.example.com"}""");
 
         captured.Should().NotBeNull();
         captured!.ServiceSelection.AuthorizationMode.Should()
@@ -358,13 +461,12 @@ public sealed class ChannelRegistrationToolTests
     [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_WhenServiceIdsArePresentWithoutMode_SelectsExplicitAllowlist()
     {
-        NyxChannelBotProvisioningRequest? captured = null;
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
-        provisioningService.ProvisionAsync(
-                Arg.Do<NyxChannelBotProvisioningRequest>(request => captured = request),
+        ChannelRelayRegistrationRequest? captured = null;
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
+        provisioningService.AdoptAsync(
+                Arg.Do<NyxChannelBotAdoptionRequest>(request => captured = request.Registration),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+            .Returns(Task.FromResult(new NyxChannelBotAdoptionResult(
                 Succeeded: true,
                 Status: "accepted",
                 Platform: "lark",
@@ -376,7 +478,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","service_ids":["svc-legacy"]}""");
+            """{"action":"register_channel_via_nyx","platform":"lark","nyx_channel_bot_id":"bot-lark","webhook_base_url":"https://aevatar.example.com","service_ids":["svc-legacy"]}""");
 
         captured.Should().NotBeNull();
         captured!.ServiceSelection.AuthorizationMode.Should()
@@ -387,13 +489,12 @@ public sealed class ChannelRegistrationToolTests
     [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_WhenExplicitModeOmitsServiceIds_SelectsEmptyExplicitAllowlist()
     {
-        NyxChannelBotProvisioningRequest? captured = null;
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
-        provisioningService.ProvisionAsync(
-                Arg.Do<NyxChannelBotProvisioningRequest>(request => captured = request),
+        ChannelRelayRegistrationRequest? captured = null;
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
+        provisioningService.AdoptAsync(
+                Arg.Do<NyxChannelBotAdoptionRequest>(request => captured = request.Registration),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+            .Returns(Task.FromResult(new NyxChannelBotAdoptionResult(
                 Succeeded: true,
                 Status: "accepted",
                 Platform: "lark",
@@ -405,7 +506,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist"}""");
+            """{"action":"register_channel_via_nyx","platform":"lark","nyx_channel_bot_id":"bot-lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist"}""");
 
         captured.Should().NotBeNull();
         captured!.ServiceSelection.AuthorizationMode.Should()
@@ -420,13 +521,12 @@ public sealed class ChannelRegistrationToolTests
         string serviceIdsJson,
         string[] expectedServiceIds)
     {
-        NyxChannelBotProvisioningRequest? captured = null;
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
-        provisioningService.ProvisionAsync(
-                Arg.Do<NyxChannelBotProvisioningRequest>(request => captured = request),
+        ChannelRelayRegistrationRequest? captured = null;
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
+        provisioningService.AdoptAsync(
+                Arg.Do<NyxChannelBotAdoptionRequest>(request => captured = request.Registration),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+            .Returns(Task.FromResult(new NyxChannelBotAdoptionResult(
                 Succeeded: true,
                 Status: "accepted",
                 Platform: "lark",
@@ -438,7 +538,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            $$"""{"action":"register_channel_via_nyx","platform":"lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist","service_ids":{{serviceIdsJson}}}""");
+            $$"""{"action":"register_channel_via_nyx","platform":"lark","nyx_channel_bot_id":"bot-lark","webhook_base_url":"https://aevatar.example.com","authorization_mode":"explicit_service_allowlist","service_ids":{{serviceIdsJson}}}""");
         using var document = JsonDocument.Parse(json);
 
         document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
@@ -451,10 +551,9 @@ public sealed class ChannelRegistrationToolTests
     [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_TelegramReturnsProvisioningResult()
     {
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("telegram");
-        provisioningService.ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
+        provisioningService.AdoptAsync(Arg.Any<NyxChannelBotAdoptionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotAdoptionResult(
                 Succeeded: true,
                 Status: "accepted",
                 Platform: "telegram",
@@ -472,28 +571,26 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken();
         var json = await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","platform":"telegram","telegram":{"bot_token":"123:abc"},"webhook_base_url":"https://aevatar.example.com"}""");
+            """{"action":"register_channel_via_nyx","platform":"telegram","nyx_channel_bot_id":"bot-telegram","telegram":{"bot_token":"123:abc"},"webhook_base_url":"https://aevatar.example.com"}""");
         using var doc = JsonDocument.Parse(json);
 
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
         doc.RootElement.GetProperty("platform").GetString().Should().Be("telegram");
         doc.RootElement.GetProperty("nyx_provider_slug").GetString().Should().Be("api-telegram-bot");
-        await provisioningService.Received(1).ProvisionAsync(
-            Arg.Is<NyxChannelBotProvisioningRequest>(request =>
-                request.Platform == "telegram" &&
-                request.AccessToken == "test-token" &&
-                request.ScopeId == "scope-1" &&
-                request.Credentials != null &&
-                request.Credentials["bot_token"] == "123:abc" &&
-                request.WebhookBaseUrl == "https://aevatar.example.com"),
+        await provisioningService.Received(1).AdoptAsync(
+            Arg.Is<NyxChannelBotAdoptionRequest>(request =>
+                request.Registration.Platform == "telegram" &&
+                request.Registration.AccessToken == "test-token" &&
+                request.Registration.ScopeId == "scope-1" &&
+                request.Registration.NyxChannelBotId == "bot-telegram" &&
+                request.Registration.WebhookBaseUrl == "https://aevatar.example.com"),
             Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_RejectsMissingScopeContext()
     {
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(CreateRegistrationFacade(provisioningService))
             .BuildServiceProvider();
@@ -501,21 +598,20 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken(null);
         var json = await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","platform":"lark","lark":{"app_id":"cli_123","app_secret":"secret"},"webhook_base_url":"https://aevatar.example.com"}""");
+            """{"action":"register_channel_via_nyx","platform":"lark","nyx_channel_bot_id":"bot-lark","lark":{"app_id":"cli_123","app_secret":"secret"},"webhook_base_url":"https://aevatar.example.com"}""");
 
         json.Should().Contain("scope_id is required");
-        await provisioningService.DidNotReceive().ProvisionAsync(Arg.Any<NyxChannelBotProvisioningRequest>(), Arg.Any<CancellationToken>());
+        await provisioningService.DidNotReceive().AdoptAsync(Arg.Any<NyxChannelBotAdoptionRequest>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_JsonScopeCannotReplaceMissingOwnerScopeContext()
     {
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
-        provisioningService.ProvisionAsync(
-                Arg.Any<NyxChannelBotProvisioningRequest>(),
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
+        provisioningService.AdoptAsync(
+                Arg.Any<NyxChannelBotAdoptionRequest>(),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+            .Returns(Task.FromResult(new NyxChannelBotAdoptionResult(
                 Succeeded: true,
                 Status: "accepted",
                 Platform: "lark",
@@ -527,24 +623,23 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken(null);
         var json = await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","scope_id":"owner-alpha","platform":"lark","lark":{"app_id":"cli_123","app_secret":"secret"},"webhook_base_url":"https://aevatar.example.com"}""");
+            """{"action":"register_channel_via_nyx","scope_id":"owner-alpha","platform":"lark","nyx_channel_bot_id":"bot-lark","lark":{"app_id":"cli_123","app_secret":"secret"},"webhook_base_url":"https://aevatar.example.com"}""");
 
         json.Should().Contain("scope_id is required");
-        await provisioningService.DidNotReceive().ProvisionAsync(
-            Arg.Any<NyxChannelBotProvisioningRequest>(),
+        await provisioningService.DidNotReceive().AdoptAsync(
+            Arg.Any<NyxChannelBotAdoptionRequest>(),
             Arg.Any<CancellationToken>());
     }
 
     [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_UsesOwnerScopeInsteadOfAmbientScope()
     {
-        NyxChannelBotProvisioningRequest? captured = null;
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
-        provisioningService.ProvisionAsync(
-                Arg.Do<NyxChannelBotProvisioningRequest>(request => captured = request),
+        ChannelRelayRegistrationRequest? captured = null;
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
+        provisioningService.AdoptAsync(
+                Arg.Do<NyxChannelBotAdoptionRequest>(request => captured = request.Registration),
                 Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new NyxChannelBotProvisioningResult(
+            .Returns(Task.FromResult(new NyxChannelBotAdoptionResult(
                 Succeeded: true,
                 Status: "accepted",
                 Platform: "lark",
@@ -556,7 +651,7 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken("ambient-scope", "owner-alpha");
         var json = await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","platform":"lark","lark":{"app_id":"cli_123","app_secret":"secret"},"webhook_base_url":"https://aevatar.example.com"}""");
+            """{"action":"register_channel_via_nyx","platform":"lark","nyx_channel_bot_id":"bot-lark","lark":{"app_id":"cli_123","app_secret":"secret"},"webhook_base_url":"https://aevatar.example.com"}""");
 
         json.Should().Contain("\"status\":\"accepted\"");
         captured.Should().NotBeNull();
@@ -566,8 +661,7 @@ public sealed class ChannelRegistrationToolTests
     [Fact]
     public async Task ExecuteAsync_RegisterChannelViaNyx_JsonScopeMustMatchOwnerScopeContext()
     {
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
         using var serviceProvider = new ServiceCollection()
             .AddSingleton(CreateRegistrationFacade(provisioningService))
             .BuildServiceProvider();
@@ -575,11 +669,11 @@ public sealed class ChannelRegistrationToolTests
 
         using var scope = PushNyxToken("ambient-scope", "owner-alpha");
         var json = await tool.ExecuteAsync(
-            """{"action":"register_channel_via_nyx","scope_id":"owner-beta","platform":"lark","lark":{"app_id":"cli_123","app_secret":"secret"},"webhook_base_url":"https://aevatar.example.com"}""");
+            """{"action":"register_channel_via_nyx","scope_id":"owner-beta","platform":"lark","nyx_channel_bot_id":"bot-lark","lark":{"app_id":"cli_123","app_secret":"secret"},"webhook_base_url":"https://aevatar.example.com"}""");
 
         json.Should().Contain("scope_id does not match the current NyxID registration owner scope");
-        await provisioningService.DidNotReceive().ProvisionAsync(
-            Arg.Any<NyxChannelBotProvisioningRequest>(),
+        await provisioningService.DidNotReceive().AdoptAsync(
+            Arg.Any<NyxChannelBotAdoptionRequest>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -712,7 +806,6 @@ public sealed class ChannelRegistrationToolTests
             Arg.Is<NyxChannelBotDeprovisioningRequest>(request =>
                 request.RegistrationId == "reg-1" &&
                 request.ConversationRouteId == "route-1" &&
-                request.ChannelBotId == "bot-1" &&
                 request.AgentKeyId == "key-1"),
             Arg.Any<CancellationToken>());
     }
@@ -737,7 +830,6 @@ public sealed class ChannelRegistrationToolTests
                 Arg.Any<NyxChannelBotDeprovisioningRequest>(),
                 Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new NyxChannelBotDeprovisioningResult(
-                ChannelBotRemoved: true,
                 AgentKeyRemoved: false,
                 Succeeded: false,
                 Warnings: Array.Empty<string>())));
@@ -859,8 +951,7 @@ public sealed class ChannelRegistrationToolTests
 
         var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
         var commandFacade = ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime);
-        var provisioningService = Substitute.For<INyxChannelBotProvisioningService>();
-        provisioningService.Platform.Returns("lark");
+        var provisioningService = Substitute.For<INyxChannelBotAdoptionService>();
         var registrationFacade = CreateRegistrationFacade(provisioningService);
         var deprovisioningService = CreateSuccessfulDeprovisioningService();
 
@@ -1018,8 +1109,8 @@ public sealed class ChannelRegistrationToolTests
     }
 
     private static ChannelRelayRegistrationFacade CreateRegistrationFacade(
-        params INyxChannelBotProvisioningService[] provisioningServices) =>
-        new(provisioningServices, ChannelAgentKeyWriteMode.NyxIdDefault);
+        params INyxChannelBotAdoptionService[] provisioningServices) =>
+        ChannelAdoptionFacadeTestSupport.Create(provisioningServices.SingleOrDefault());
 
     private static INyxChannelBotDeprovisioningService CreateSuccessfulDeprovisioningService()
     {
@@ -1029,7 +1120,6 @@ public sealed class ChannelRegistrationToolTests
                 Arg.Any<NyxChannelBotDeprovisioningRequest>(),
                 Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new NyxChannelBotDeprovisioningResult(
-                ChannelBotRemoved: true,
                 AgentKeyRemoved: true,
                 Succeeded: true,
                 Warnings: Array.Empty<string>())));

@@ -73,14 +73,13 @@ public sealed class ChannelsEndpointsTests
     }
 
     [Fact]
-    public void EmbeddedPage_RequiresCompleteLarkCredentials_AndForwardsOptionalEncryptKey()
+    public void EmbeddedPage_RequiresExistingBotIdWithoutPlatformSecrets()
     {
         var html = ReadEmbeddedHtml();
-
-        html.Should().Contain(
-            "requiredOk:(c)=> !!(c.app_id.trim() && c.app_secret.trim() && c.verification_token.trim())");
-        html.Should().Contain("{ name:\"encrypt_key\"");
-        html.Should().Contain("encrypt_key:c.encrypt_key.trim()");
+        html.Should().Contain("nyx_channel_bot_id:c.nyx_channel_bot_id");
+        html.Should().NotContain("app_secret:");
+        html.Should().NotContain("bot_token:");
+        html.Should().NotContain("verification_token:");
     }
 
     [Fact]

@@ -11,7 +11,6 @@ using Aevatar.GAgents.Scheduled;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
-using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelBotServiceConnection;
 using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationExplicitAuthorization;
 using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan;
 
@@ -42,11 +41,9 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
             IChannelRegistrationNyxIdAuthorizationPort,
             ChannelRegistrationNyxIdAuthorizationPort>();
         services.TryAddSingleton<ChannelRegistrationAuthorizationPlanner>();
-        services.TryAddSingleton<IChannelRegistrationDependencyResolver, ChannelRegistrationConfiguredDependencyResolver>();
-        services.TryAddSingleton<IChannelRegistrationBotConnectionPort, ChannelRegistrationNyxIdBotConnectionPort>();
         services.TryAddSingleton<INyxIdCurrentUserResolver, NyxIdCurrentUserResolver>();
         services.TryAddSingleton<IChannelRegistrationOwnerResolver, ChannelRegistrationOwnerResolver>();
-        services.TryAddSingleton<ChannelRegistrationExplicitAuthorizationPreparation>();
+        services.TryAddSingleton<ChannelRegistrationExplicitAuthorizationPlanner>();
         services.TryAddSingleton(sp => new ChannelAgentKeyProvisioningService(
             sp.GetRequiredService<NyxIdApiClient>(),
             sp.GetRequiredService<ISecretVault>(),
@@ -59,7 +56,9 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
             sp.GetRequiredService<ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>(),
             sp.GetRequiredService<ICommandDispatchService<ChannelBotUpdateRuntimeConfigCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>()));
         services.TryAddSingleton(sp => new ChannelRelayRegistrationFacade(
-            sp.GetServices<INyxChannelBotProvisioningService>(),
+            sp.GetRequiredService<INyxChannelBotAdoptionService>(),
+            sp.GetRequiredService<VerifiedNyxChannelBotDetail.Reader>(),
+            sp.GetRequiredService<IChannelRegistrationOwnerResolver>(),
             sp.GetService<NyxIdRelayOptions>()?.ChannelAgentKeyWriteMode ??
             ChannelAgentKeyWriteMode.Disabled));
         services.TryAddSingleton<ChannelBotRegistrationCommandEnvelopeFactory>();
@@ -98,17 +97,13 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<
             IChannelWorkflowResultDeliveryRepairService,
             ChannelWorkflowResultDeliveryRepairService>();
-        services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
+        services.TryAddSingleton<VerifiedNyxChannelBotDetail.Reader>();
+        services.TryAddSingleton<INyxChannelBotAdoptionService, NyxChannelBotAdoptionService>();
         services.TryAddSingleton<IChannelNyxIdAgentKeyReadinessPort, ChannelNyxIdAgentKeyReadinessPort>();
-        services.TryAddSingleton<INyxTelegramProvisioningService, NyxTelegramProvisioningService>();
         services.TryAddSingleton<INyxChannelBotDeprovisioningService, NyxChannelBotDeprovisioningService>();
         services.TryAddSingleton<INyxIdRelayScopeResolver, NyxIdRelayScopeResolver>();
         services.TryAddSingleton<IChannelRelayActivityRecorder, ChannelRelayActivityRecorder>();
         services.TryAddSingleton<ChannelDeliveryTargetResolver>();
-
-        // Provisioning service set — both Lark + Telegram are concrete provisioning sources.
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxLarkProvisioningService>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxTelegramProvisioningService>());
 
         services.TryAddSingleton<ChannelPlatformReplyService>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();

@@ -15,7 +15,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
     {
         SupportsEphemeral = false,
         SupportsEdit = true,
-        SupportsDelete = true,
+        SupportsDelete = false,
         SupportsThread = false,
         Streaming = StreamingSupport.EditLoopRateLimited,
         SupportsFiles = false,
@@ -43,8 +43,8 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         var effectiveText = BuildRenderedText(
             intent,
             maxLength,
-            capabilities.SupportsActionButtons ? inlineKeyboardActions : Array.Empty<ActionElement>());
-        if (inlineKeyboardActions.Length > 0 && capabilities.SupportsActionButtons)
+            inlineKeyboardActions);
+        if (inlineKeyboardActions.Length > 0)
         {
             var inlineKeyboard = inlineKeyboardActions
                 .Select(action => new[]
@@ -86,20 +86,18 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         var actionCandidates = GetInlineKeyboardActionCandidates(intent);
         var renderableActions = GetInlineKeyboardActions(intent);
 
-        if (intent.Disposition == MessageDisposition.Ephemeral && !capabilities.SupportsEphemeral)
+        if (intent.Disposition == MessageDisposition.Ephemeral)
             degraded = true;
-        if (intent.Attachments.Count > 0 && !capabilities.SupportsFiles)
+        if (intent.Attachments.Count > 0)
             return ComposeCapability.Unsupported;
-        if (intent.Actions.Count > 0 && !capabilities.SupportsActionButtons)
-            degraded = true;
-        if (capabilities.SupportsActionButtons && renderableActions.Length < actionCandidates.Length)
+        if (renderableActions.Length < actionCandidates.Length)
             degraded = true;
 
         var maxLength = ResolveTextLimit(capabilities.MaxMessageLength, TelegramTextLimit);
         if (BuildRenderedText(
                 intent,
                 int.MaxValue,
-                capabilities.SupportsActionButtons ? renderableActions : Array.Empty<ActionElement>()).Length > maxLength)
+                renderableActions).Length > maxLength)
             degraded = true;
 
         return degraded ? ComposeCapability.Degraded : ComposeCapability.Exact;

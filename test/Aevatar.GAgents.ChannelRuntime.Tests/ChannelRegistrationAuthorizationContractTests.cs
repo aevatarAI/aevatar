@@ -376,6 +376,31 @@ public sealed class ChannelRegistrationAuthorizationContractTests
         ChannelRegistrationAuthorizationContract.IsValidNewCommand(command).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" bot-alpha")]
+    [InlineData("bot-alpha ")]
+    [InlineData("bot\u0000alpha")]
+    public void IsValidNewCommand_RejectsMissingOrPaddedBotIdentity(string botId)
+    {
+        var command = ValidCommand();
+        command.NyxChannelBotId = botId;
+        ChannelRegistrationAuthorizationContract.IsValidNewCommand(command).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("Matrix")]
+    [InlineData(" matrix ")]
+    [InlineData("matrix room")]
+    public void IsValidNewCommand_RejectsNonCanonicalPlatform(string platform)
+    {
+        var command = ValidCommand();
+        command.Platform = platform;
+        ChannelRegistrationAuthorizationContract.IsValidNewCommand(command).Should().BeFalse();
+    }
+
     private static ChannelBotRegistrationEntry ValidEntry()
     {
         var credential = ValidCredential("scope-alpha");
@@ -396,6 +421,8 @@ public sealed class ChannelRegistrationAuthorizationContractTests
         return new ChannelBotRegisterCommand
         {
             RequestedId = "reg-alpha",
+            Platform = "matrix",
+            NyxChannelBotId = "bot-alpha",
             ScopeId = "scope-alpha",
             NyxAgentApiKeyId = credential.ApiKeyId,
             WorkflowResultDeliveryCredential = credential.SecretReference.Clone(),
@@ -427,6 +454,8 @@ public sealed class ChannelRegistrationAuthorizationContractTests
         var command = new ChannelBotRegisterCommand
         {
             RequestedId = "reg-explicit",
+            Platform = "matrix",
+            NyxChannelBotId = "bot-explicit",
             ScopeId = "scope-alpha",
             NyxAgentApiKeyId = credential.ApiKeyId,
             WorkflowResultDeliveryCredential = credential.SecretReference.Clone(),

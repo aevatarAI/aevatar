@@ -20,14 +20,6 @@ public class NyxIdRelayOptions
         ChannelAgentKeyWriteMode.Disabled;
 
     /// <summary>
-    /// NyxID service slugs that every restricted channel registration Agent Key must include for
-    /// server-owned runtime dependencies such as the configured LLM and Ornn routes. Registration
-    /// resolves these host facts against the owner's verified inventory before creating the Key;
-    /// they are not public registration input and do not become runtime connected-service selectors.
-    /// </summary>
-    public List<string> ChannelAgentKeyRequiredServiceSlugs { get; set; } = [];
-
-    /// <summary>
     /// Deprecated compatibility setting. LLM reply generation no longer applies this value as
     /// a hard timeout; long Ornn skill workflows must keep running until they finish or return
     /// an explicit tool/skill failure. Kept so older configuration files still bind cleanly.
