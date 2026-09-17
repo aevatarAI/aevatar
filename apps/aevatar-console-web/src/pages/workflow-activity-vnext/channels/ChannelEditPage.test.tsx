@@ -158,6 +158,10 @@ it('binds an existing bot with shared Ornn skills, keeps selection on refresh an
       screen.queryByLabelText(/Bot token|Channel name|Label/),
     ).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('checkbox', { name: /GitHub/ }));
+    expect(
+      screen.queryByRole('button', { name: 'Refresh skills' }),
+    ).not.toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('combobox'));
     fireEvent.click(screen.getByRole('button', { name: 'Refresh skills' }));
     await waitFor(() =>
       expect(
@@ -167,7 +171,15 @@ it('binds an existing bot with shared Ornn skills, keeps selection on refresh an
     expect(
       screen.getByText('support', { selector: '.ant-select-content' }),
     ).toBeInTheDocument();
-    fireEvent.mouseDown(screen.getByRole('combobox'));
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toHaveAttribute(
+        'aria-expanded',
+        'true',
+      );
+      expect(
+        screen.getByRole('textbox', { name: 'Search skills' }),
+      ).toBeVisible();
+    });
     const create = await screen.findByRole('link', {
       name: /Create new skill/,
     });

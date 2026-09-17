@@ -145,7 +145,24 @@ export default function ChannelSkillField({
                     event.stopPropagation();
                   }}
                 />
-                <p>{t('channels.skills.available', 'Available in Ornn')}</p>
+                <div className="channels__skill-list-heading">
+                  <p>{t('channels.skills.available', 'Available in Ornn')}</p>
+                  <AevatarTooltip
+                    title={t('channels.skills.refresh', 'Refresh skills')}
+                  >
+                    <Button
+                      type="text"
+                      icon={<ReloadOutlined />}
+                      aria-label={t(
+                        'channels.skills.refresh',
+                        'Refresh skills',
+                      )}
+                      disabled={disabled || skills.isFetching}
+                      loading={skills.isFetching && !skills.isFetchingNextPage}
+                      onClick={() => void skills.refetch()}
+                    />
+                  </AevatarTooltip>
+                </div>
               </div>
               {menu}
               {skills.hasNextPage ? (
@@ -181,15 +198,6 @@ export default function ChannelSkillField({
             </>
           )}
         />
-        <AevatarTooltip title={t('channels.skills.refresh', 'Refresh skills')}>
-          <Button
-            icon={<ReloadOutlined />}
-            aria-label={t('channels.skills.refresh', 'Refresh skills')}
-            disabled={disabled || skills.isFetching}
-            loading={skills.isFetching && !skills.isFetchingNextPage}
-            onClick={() => void skills.refetch()}
-          />
-        </AevatarTooltip>
       </div>
       {error || skills.isError ? (
         <p id={`${id}-error`} className="channels__form-error" role="alert">

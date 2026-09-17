@@ -18,8 +18,9 @@ Telegram token creation flow.
   platform credentials or editable channel name. Edit retains its existing
   NyxID Label action and shares the Skill and Services controls.
 - Skill creation opens https://ornn.chrono-ai.fun/skills/new/generate in a
-  new tab. Its tooltip explains the return-and-refresh action. Refresh is
-  always visible beside the selector and preserves the current selection.
+  new tab. Its tooltip explains the return-and-refresh action. The refresh icon
+  sits at the right of the popup's Available in Ornn heading. Refresh preserves
+  the selected skill and keeps the dropdown open.
 - Match Figma's DM Sans typography, continuous white surface, restrained blue
   actions, 60px guide icons and neutral connecting arrows. At a 1440px viewport,
   the inventory content is 1080px wide; the table has a 46px header and 88px

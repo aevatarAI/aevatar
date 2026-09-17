@@ -65,12 +65,13 @@ export const channelsCss = `
 .channels__bot-summary .channels__identity { min-width: 0; }
 .channels__skill-controls { align-items: center; display: flex; gap: 8px; }
 .channels__skill-controls .ant-select { flex: 1; min-width: 0; height: 40px; }
-.channels__skill-controls > .ant-btn { flex: 0 0 40px; height: 40px; }
 .channels__skill-popup { padding: 8px; }
 .channels__skill-search { padding: 4px 4px 0; }
 .channels__skill-search .ant-input-affix-wrapper { background: var(--wa-subtle); border-color: var(--wa-line); border-radius: 4px; font-family: inherit; min-height: 36px; }
 .channels__skill-search .ant-input, .channels__skill-search .ant-input-prefix { font-family: inherit; font-size: 13px; }
-.channels__skill-search p { color: var(--wa-muted); font-size: 10px; font-weight: 600; margin: 16px 4px 8px; text-transform: uppercase; }
+.channels__skill-list-heading { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin: 8px 0 4px 4px; }
+.channels__skill-list-heading p { color: var(--wa-muted); font-size: 10px; font-weight: 600; margin: 0; text-transform: uppercase; }
+.channels__skill-list-heading .ant-btn { color: var(--wa-muted); flex: 0 0 32px; height: 32px; padding: 0; width: 32px; }
 .channels__skill-popup .ant-select-item { padding: 10px 8px; }
 .channels__skill-option { display: flex; flex-direction: column; gap: 4px; white-space: normal; overflow-wrap: anywhere; }
 .channels__skill-option strong { color: var(--wa-ink); font-size: 13px; font-weight: 500; line-height: 20px; }

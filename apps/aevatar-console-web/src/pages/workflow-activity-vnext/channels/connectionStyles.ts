@@ -50,7 +50,6 @@ export const channelConnectionCss = `
 .channels__connection-status { border-top: 1px solid var(--channels-border); color: var(--wa-muted); font-size: 12px; line-height: 20px; margin-top: 24px; padding-top: 16px; }
 .channels__connection-status p { margin: 0 0 12px; }
 .channels__connection-form .ant-btn { white-space: normal; height: auto; }
-.channels__connection-form .channels__skill-controls > .ant-btn { height: 40px; box-shadow: none; }
 .channels__bot-summary .channels__dot { display: none; }
 @media (max-width: 767px) {
   .channels__name-fields { gap: 0; grid-template-columns: 1fr; }
