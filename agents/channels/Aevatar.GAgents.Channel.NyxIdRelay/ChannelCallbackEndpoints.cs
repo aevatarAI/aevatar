@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
@@ -685,6 +686,11 @@ public static class ChannelCallbackEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
+        runtimeConfig = ApplyServiceSelectionDefaults(
+            runtimeConfig,
+            serviceSelection,
+            verifiedServices.ServiceSlugs);
+
         ChannelAgentKeyCredential? updatedAgentKey = null;
         if (serviceSelection.Specified)
         {
@@ -745,6 +751,44 @@ public static class ChannelCallbackEndpoints
             skill_name = runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
         });
     }
+
+    private static ChannelBotRuntimeConfig? ApplyServiceSelectionDefaults(
+        ChannelBotRuntimeConfig? runtimeConfig,
+        ChannelRegistrationServiceSelection serviceSelection,
+        IReadOnlyList<string> verifiedServiceSlugs)
+    {
+        if (!serviceSelection.Specified ||
+            serviceSelection.AuthorizationMode != ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist ||
+            verifiedServiceSlugs.Count == 0)
+        {
+            return runtimeConfig;
+        }
+
+        var normalized = runtimeConfig?.Clone() ?? new ChannelBotRuntimeConfig();
+        if (normalized.CredentialSourceMode == ChannelBotRuntimeCredentialSourceMode.Unspecified)
+            normalized.CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
+        if (!normalized.ToolSetRefs.Contains(ToolSetNames.ChannelReplyDefault))
+            normalized.ToolSetRefs.Add(ToolSetNames.ChannelReplyDefault);
+
+        if (!HasNyxIdServiceSelectors(normalized))
+        {
+            foreach (var slug in verifiedServiceSlugs)
+            {
+                if (string.IsNullOrWhiteSpace(slug))
+                    continue;
+
+                normalized.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+                {
+                    ServiceSlug = slug,
+                });
+            }
+        }
+
+        return normalized;
+    }
+
+    private static bool HasNyxIdServiceSelectors(ChannelBotRuntimeConfig? runtimeConfig) =>
+        runtimeConfig?.NyxidServiceSelectors.Any(static selector => !string.IsNullOrWhiteSpace(selector.ServiceSlug)) == true;
 
     private static async Task<IResult> HandleRepairWorkflowResultDeliveryAsync(
         string registrationId,

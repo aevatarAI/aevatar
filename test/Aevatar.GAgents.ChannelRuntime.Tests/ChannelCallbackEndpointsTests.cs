@@ -11,6 +11,7 @@ using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
@@ -1044,6 +1045,63 @@ public sealed class ChannelCallbackEndpointsTests
         command.DefaultSkillName.Should().Be("booking-capacity");
         command.RuntimeConfig.Instructions.Should().Be("Trimmed instructions.");
         command.RuntimeConfig.NyxidServiceSelectors.Single().ServiceSlug.Should().Be("api-calendar");
+    }
+
+    [Fact]
+    public async Task HandleUpdateRegistrationAsync_DerivesRuntimeSelectorsFromServiceIds()
+    {
+        var queryPort = QueryPortWith(ExplicitModelRegistration("reg-service-ids", "scope-1", "key-service-ids", "svc-calendar"));
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "skill_name": "booking-capacity",
+              "authorization_mode": "explicit_service_allowlist",
+              "service_ids": ["svc-calendar"]
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+        var nyxClient = CreateNyxClient(new RecordingNyxHttpMessageHandler(request =>
+        {
+            if (request.Method == HttpMethod.Put && request.RequestUri!.AbsolutePath == "/api/v1/api-keys/key-service-ids")
+            {
+                return JsonResponse("""{"id":"key-service-ids","full_key":"updated-secret-value","scopes":"read write proxy","platform":"generic","purpose":"general","scheduled_write_enabled":false,"durable_grants":[],"allow_all_services":false,"allow_all_nodes":true,"allowed_service_ids":["svc-calendar"],"allowed_node_ids":[]}""");
+            }
+
+            return NotFoundResponse(request);
+        }));
+
+        var result = await InvokeAsync(
+            "HandleUpdateRegistrationAsync",
+            "reg-service-ids",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            OwnerResolver("scope-1"),
+            AuthorizationPlanner(("svc-calendar", "api-calendar")),
+            nyxClient,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        capturedEnvelope.Should().NotBeNull();
+        var command = capturedEnvelope!.Payload.Unpack<ChannelBotUpdateRuntimeConfigCommand>();
+        command.DefaultSkillName.Should().Be("booking-capacity");
+        command.RuntimeConfig.CredentialSourceMode.Should().Be(ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey);
+        command.RuntimeConfig.ToolSetRefs.Should().Contain(ToolSetNames.ChannelReplyDefault);
+        command.RuntimeConfig.NyxidServiceSelectors.Should().ContainSingle();
+        command.RuntimeConfig.NyxidServiceSelectors[0].ServiceSlug.Should().Be("api-calendar");
+        command.RegistrationServiceAllowlist.ServiceIds.Should().ContainSingle().Which.Should().Be("svc-calendar");
     }
 
     [Fact]

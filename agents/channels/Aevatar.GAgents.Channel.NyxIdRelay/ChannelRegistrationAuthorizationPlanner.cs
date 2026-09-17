@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgents.Channel.Runtime;
 using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection;
 
@@ -74,7 +75,9 @@ internal static class ChannelRegistrationLocalMirrorRuntimeConfig
         VerifiedChannelRegistrationExplicitAuthorization? authorization)
     {
         var config = runtimeConfig?.Clone();
-        var normalizedDefaultSkillName = defaultSkillName?.Trim();
+        var normalizedDefaultSkillName = string.IsNullOrWhiteSpace(defaultSkillName)
+            ? config?.DefaultSkill?.Name?.Trim()
+            : defaultSkillName.Trim();
         if (string.IsNullOrWhiteSpace(normalizedDefaultSkillName))
             return config;
 
@@ -85,6 +88,8 @@ internal static class ChannelRegistrationLocalMirrorRuntimeConfig
         };
         if (config.CredentialSourceMode == ChannelBotRuntimeCredentialSourceMode.Unspecified)
             config.CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
+        if (!config.ToolSetRefs.Contains(ToolSetNames.ChannelReplyDefault))
+            config.ToolSetRefs.Add(ToolSetNames.ChannelReplyDefault);
         return config;
     }
 }
