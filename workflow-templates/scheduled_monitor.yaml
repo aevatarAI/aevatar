@@ -1,0 +1,26 @@
+name: scheduled_monitor
+description: >-
+  Evaluate one supplied observation against its baseline and monitoring policy, then produce an evidence-linked status report. Use this starter after attaching a workflow Schedule when each invocation provides the observation timestamp, baseline, current values, thresholds, and escalation policy needed for one monitoring evaluation. This YAML does not create or mutate schedules.
+roles:
+  - id: monitor_analyst
+    name: Monitor Analyst
+    system_prompt: >-
+      Evaluate one monitoring observation against only the supplied baseline, thresholds, and policy. Report status as OK, WATCH, or ALERT with exact evidence, distinguish missing data from normal data, identify threshold breaches, and propose the next human action. Do not claim that an alert was delivered, a schedule was changed, or remediation occurred. Return concise Markdown.
+    temperature: 0.1
+    max_tokens: 1200
+    allowed_tools: []
+steps:
+  - id: evaluate_observation
+    type: llm_call
+    target_role: monitor_analyst
+    parameters:
+      prompt_prefix: >-
+        Evaluate this timestamped observation against its supplied baseline, thresholds, and escalation policy:
+    next: record_monitor_result
+
+  - id: record_monitor_result
+    type: assign
+    parameters:
+      target: scheduled_monitor_result
+      value: >-
+        MONITOR EVALUATION COMPLETE. No alert was sent and no schedule was changed. ${steps.evaluate_observation.output}
