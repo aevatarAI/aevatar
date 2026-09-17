@@ -97,18 +97,20 @@ internal static class ChannelRegistrationLocalMirrorRuntimeConfig
         VerifiedChannelRegistrationExplicitAuthorization? authorization)
     {
         var config = runtimeConfig?.Clone();
-        var normalizedDefaultSkillName = defaultSkillName?.Trim();
-        if (config is null && !string.IsNullOrWhiteSpace(normalizedDefaultSkillName))
+        var normalizedDefaultSkillName = string.IsNullOrWhiteSpace(defaultSkillName)
+            ? config?.DefaultSkill?.Name?.Trim()
+            : defaultSkillName.Trim();
+        if (!string.IsNullOrWhiteSpace(normalizedDefaultSkillName))
         {
-            config = new ChannelBotRuntimeConfig
+            config ??= new ChannelBotRuntimeConfig();
+            config.DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
             {
-                DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
-                {
-                    Name = normalizedDefaultSkillName,
-                },
-                CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
-                ToolSetRefs = { ToolSetNames.ChannelReplyDefault },
+                Name = normalizedDefaultSkillName,
             };
+            if (config.CredentialSourceMode == ChannelBotRuntimeCredentialSourceMode.Unspecified)
+                config.CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
+            if (!config.ToolSetRefs.Contains(ToolSetNames.ChannelReplyDefault))
+                config.ToolSetRefs.Add(ToolSetNames.ChannelReplyDefault);
         }
 
         if (authorization is null)
@@ -118,8 +120,10 @@ internal static class ChannelRegistrationLocalMirrorRuntimeConfig
             return null;
 
         config ??= new ChannelBotRuntimeConfig();
-        config.NyxidServiceSelectors.Clear();
-        config.NyxidServiceSelectors.AddRange(authorization.RuntimeSelectors.Select(static selector => selector.Clone()));
+        // Preserve the deployed API's explicit endpoint selection; absent selectors
+        // derive only from the caller's verified service allowlist.
+        if (config.NyxidServiceSelectors.Count == 0)
+            config.NyxidServiceSelectors.AddRange(authorization.RuntimeSelectors.Select(static selector => selector.Clone()));
         if (config.CredentialSourceMode == ChannelBotRuntimeCredentialSourceMode.Unspecified)
             config.CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
         return config;

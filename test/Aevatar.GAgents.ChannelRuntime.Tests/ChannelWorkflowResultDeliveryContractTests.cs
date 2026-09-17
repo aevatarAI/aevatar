@@ -84,7 +84,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         actorNetwork.RegisterActivated(ChannelBotRegistrationGAgent.WellKnownId, registrationAgent);
 
         var provisioningHandler = new QueueHandler();
-        provisioningHandler.Enqueue("""{"id":"bot-456","platform":"lark","user_id":"scope-1","status":"pending_webhook","is_active":true}""");
+        provisioningHandler.Enqueue("""{"id":"bot-456","platform":"lark","user_id":"scope-1","status":"pending_webhook","is_active":true,"webhook_url":"https://nyx.example/api/v1/webhooks/channel/lark/bot-456"}""");
         provisioningHandler.Enqueue("""{"conversations":[]}""");
         provisioningHandler.Enqueue(
             $$$"""{"id":"key-123","full_key":"{{{RawAgentKey}}}","purpose":"general","scheduled_write_enabled":false,"scopes":"read write proxy","allow_all_services":true,"allow_all_nodes":true,"allowed_service_ids":[],"allowed_node_ids":[]}""");
@@ -104,28 +104,38 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
             new NyxChannelBotDeprovisioningService(provisioningClient, secretVault,
                 NullLogger<NyxChannelBotDeprovisioningService>.Instance),
             NullLogger<NyxChannelBotAdoptionService>.Instance);
-
-        var registrationFacade = new ChannelRelayRegistrationFacade(provisioningService,
-            new VerifiedNyxChannelBotDetail.Reader(provisioningClient),
-            CreatePersonalRegistrationOwnerResolver("scope-1"), ChannelAgentKeyWriteMode.NyxIdDefault);
-        var provisioningResult = await registrationFacade.RegisterAsync(
-            new ChannelRelayRegistrationRequest(
-                Platform: "lark",
-                NyxChannelBotId: "bot-456",
-                AccessToken: "user-token",
-                WebhookBaseUrl: "https://aevatar.example.com",
-                ScopeId: "scope-1",
-                Label: "Ops Bot",
-                NyxProviderSlug: "api-lark-bot"),
+        var verifiedBot = await new VerifiedNyxChannelBotDetail.Reader(provisioningClient)
+            .ReadAsync(
+                "user-token",
+                "bot-456",
+                null,
+                new VerifiedChannelRegistrationOwner(
+                    "scope-1",
+                    new ChannelRegistrationKeyOwner(ChannelRegistrationKeyOwnerKind.Personal, "scope-1"),
+                    null),
+                CancellationToken.None);
+        verifiedBot.Succeeded.Should().BeTrue();
+        var provisioningResult = await provisioningService.AdoptAsync(
+            new NyxChannelBotAdoptionRequest(
+                verifiedBot.Bot!,
+                new ChannelRelayRegistrationRequest(
+                    Platform: verifiedBot.Bot!.Platform.Value,
+                    NyxChannelBotId: verifiedBot.Bot.Id,
+                    AccessToken: "user-token",
+                    WebhookBaseUrl: "https://aevatar.example.com",
+                    ScopeId: "scope-1",
+                    Label: "Ops Bot",
+                    NyxProviderSlug: "api-lark-bot")),
             CancellationToken.None);
 
         provisioningResult.Succeeded.Should().BeTrue();
         provisioningResult.WorkflowResultDeliveryEnabled.Should().BeTrue();
+        var registrationId = provisioningResult.RegistrationId!;
         projectionHook.Publications.Should().NotBeEmpty();
-        documentStore.Documents.Should().ContainKey(provisioningResult.RegistrationId!);
+        documentStore.Documents.Should().ContainKey(registrationId);
 
         var registrationQuery = new ChannelBotRegistrationQueryPort(documentStore);
-        var projectedRegistration = await registrationQuery.GetAsync(provisioningResult.RegistrationId!);
+        var projectedRegistration = await registrationQuery.GetAsync(registrationId);
         projectedRegistration.Should().NotBeNull();
         projectedRegistration!.WorkflowResultDeliveryCredential.Should().NotBeNull();
         projectedRegistration.NyxAgentApiKeyId.Should().Be("key-123");
@@ -135,14 +145,14 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
 
         var turnRunner = CreateTurnRunner(registrationQuery);
         var turn = await turnRunner.RunInboundAsync(
-            BuildInboundActivity(provisioningResult.RegistrationId!),
+            BuildInboundActivity(registrationId),
             CancellationToken.None);
 
         turn.Success.Should().BeTrue();
         turn.LlmReplyRequest.Should().NotBeNull();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(turn.LlmReplyRequest!.ToolContext);
         toolContext.Caller.ScopeId.Should().Be("scope-1");
-        toolContext.Channel.BotRegistrationId.Should().Be(provisioningResult.RegistrationId);
+        toolContext.Channel.BotRegistrationId.Should().Be(registrationId);
         toolContext.Channel.WorkflowResultDeliveryCredential.Should().NotBeNull();
         toolContext.Channel.WorkflowResultDeliveryCredential!.SecretReference
             .Should().Be(projectedRegistration.WorkflowResultDeliveryCredential);
@@ -418,22 +428,6 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         registrationLogger.Messages.Concat(invocationLogger.Messages).Should().OnlyContain(message =>
             !message.Contains(rawRepairedAgentKey, StringComparison.Ordinal) &&
             !message.Contains(stored.Reference.Ref, StringComparison.Ordinal));
-    }
-
-    private static IChannelRegistrationOwnerResolver CreatePersonalRegistrationOwnerResolver(
-        string scopeId)
-    {
-        var resolver = Substitute.For<IChannelRegistrationOwnerResolver>();
-        resolver.ResolveAsync(Arg.Any<string>(), scopeId, Arg.Any<CancellationToken>())
-            .Returns(new ChannelRegistrationOwnerResolution(
-                new VerifiedChannelRegistrationOwner(
-                    scopeId,
-                    new ChannelRegistrationKeyOwner(
-                        ChannelRegistrationKeyOwnerKind.Personal,
-                        scopeId),
-                    null),
-                string.Empty));
-        return resolver;
     }
 
     private static ServiceProvider BuildEventSourcingServices(

@@ -22,7 +22,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
     public async Task RegisterAsync_AdoptsAnyAuthorizedPlatformWithOnlyOwnedResources(string platform)
     {
         var fixture = new Fixture(platform);
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
         result.Succeeded.Should().BeTrue(result.Error);
         result.Status.Should().Be("accepted");
         result.NyxChannelBotId.Should().Be("bot-owned");
@@ -47,7 +47,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
     public async Task RegisterAsync_ExplicitGrantPreservesExactSelectionWithoutPlatformService(string platform)
     {
         var fixture = new Fixture(platform, explicitGrant: true);
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
         result.Succeeded.Should().BeTrue(result.Error);
         fixture.Command!.RegistrationServiceAllowlist.ServiceIds.Should().Equal("svc-selected");
         fixture.Command.ChannelAgentKey.Grant.AllowedServiceIds.Should().Equal("svc-selected");
@@ -68,7 +68,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
     public async Task RegisterAsync_InvalidOpaqueBotIdFailsBeforeAnyRequest(string id)
     {
         var fixture = new Fixture();
-        var result = await fixture.Facade.RegisterAsync(fixture.Request with { NyxChannelBotId = id });
+        var result = await fixture.RegisterAsync(fixture.Request with { NyxChannelBotId = id });
         result.Error.Should().Be("missing_nyx_channel_bot_id");
         fixture.Handler.Requests.Should().BeEmpty();
         fixture.Command.Should().BeNull();
@@ -76,7 +76,6 @@ public sealed class NyxChannelBotAdoptionServiceTests
 
     [Theory]
     [InlineData("id", "bot-foreign", "invalid_channel_bot_detail")]
-    [InlineData("platform", "telegram", "channel_bot_platform_mismatch")]
     [InlineData("platform", "bad platform", "invalid_channel_bot_detail")]
     [InlineData("user_id", "other-owner", "channel_bot_not_found_or_forbidden")]
     [InlineData("user_id", " owner-1", "invalid_channel_bot_detail")]
@@ -88,7 +87,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
     {
         var fixture = new Fixture();
         fixture.Handler.Detail[field] = value;
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
         result.Error.Should().Be(error);
         fixture.Handler.Requests.Should().ContainSingle().Which.Method.Should().Be("GET");
         fixture.Command.Should().BeNull();
@@ -104,7 +103,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
     {
         var fixture = new Fixture();
         fixture.Handler.Detail.Remove(field);
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
         result.Error.Should().Be("invalid_channel_bot_detail");
         fixture.Handler.Requests.Should().ContainSingle();
     }
@@ -117,7 +116,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         var fixture = new Fixture();
         fixture.Handler.Detail["status"] = status;
         fixture.Handler.Detail["webhook_registered"] = false;
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
+        (await fixture.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
     }
 
     [Fact]
@@ -125,7 +124,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
     {
         var fixture = new Fixture();
         fixture.Handler.Detail["is_active"] = false;
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Error.Should().Be("channel_bot_not_adoptable");
+        (await fixture.RegisterAsync(fixture.Request)).Error.Should().Be("channel_bot_not_adoptable");
         fixture.Handler.Requests.Should().ContainSingle();
     }
 
@@ -136,7 +135,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
     {
         var fixture = new Fixture();
         fixture.Handler.DetailStatus = status;
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Error.Should().Be("channel_bot_not_found_or_forbidden");
+        (await fixture.RegisterAsync(fixture.Request)).Error.Should().Be("channel_bot_not_found_or_forbidden");
         fixture.Handler.Requests.Should().ContainSingle();
     }
 
@@ -149,35 +148,82 @@ public sealed class NyxChannelBotAdoptionServiceTests
     {
         var fixture = new Fixture();
         fixture.Handler.DetailBody = body;
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Error.Should().Be("invalid_channel_bot_detail");
+        (await fixture.RegisterAsync(fixture.Request)).Error.Should().Be("invalid_channel_bot_detail");
         fixture.Handler.Requests.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task RegisterAsync_NormalizesExternalDetailAndPreservesEmptySlug()
+    public async Task RegisterAsync_NormalizesVerifiedPlatformAndDefaultsEmptyProviderSlug()
     {
         var fixture = new Fixture("matrix");
         fixture.Handler.Detail["platform"] = " MATRIX ";
-        var result = await fixture.Facade.RegisterAsync(fixture.Request with { Platform = "matrix", NyxProviderSlug = "" });
+        var result = await fixture.RegisterAsync(fixture.Request with { Platform = "matrix", NyxProviderSlug = "" });
         result.Succeeded.Should().BeTrue(result.Error);
         fixture.Command!.Platform.Should().Be("matrix");
-        fixture.Command.NyxProviderSlug.Should().BeEmpty();
+        fixture.Command.NyxProviderSlug.Should().Be("api-matrix-bot");
+        result.NyxProviderSlug.Should().Be("api-matrix-bot");
     }
 
     [Theory]
+    [InlineData("telegram")]
     [InlineData(" Matrix ")]
     [InlineData("MATRIX")]
     [InlineData("matrix room")]
-    public async Task RegisterAsync_RejectsNonCanonicalApplicationPlatformBeforeOwnerOrDetailReads(string platform)
+    [InlineData("")]
+    public async Task RegisterAsync_UsesVerifiedPlatformInsteadOfLegacyCallerPlatform(string legacyPlatform)
     {
         var fixture = new Fixture("matrix");
 
-        var result = await fixture.Facade.RegisterAsync(fixture.Request with { Platform = platform });
+        var result = await fixture.RegisterAsync(fixture.Request with { Platform = legacyPlatform });
+
+        result.Succeeded.Should().BeTrue(result.Error);
+        result.Platform.Should().Be("matrix");
+        fixture.Command!.Platform.Should().Be("matrix");
+        fixture.Handler.Requests.First().Path.Should().Be("/api/v1/channel-bots/bot-owned");
+    }
+
+    [Theory]
+    [InlineData("reg-requested")]
+    [InlineData(" reg-requested ")]
+    public async Task RegisterAsync_PreservesRequestedRegistrationIdAndAcceptedReceipt(string requestedRegistrationId)
+    {
+        var fixture = new Fixture();
+
+        var result = await fixture.RegisterAsync(fixture.Request with
+        {
+            RequestedRegistrationId = requestedRegistrationId,
+        });
+
+        result.Succeeded.Should().BeTrue(result.Error);
+        result.RegistrationId.Should().Be("reg-requested");
+        fixture.Command!.RequestedId.Should().Be("reg-requested");
+        result.Receipt.Should().NotBeNull();
+        result.Receipt!.ActorId.Should().Be(ChannelBotRegistrationGAgent.WellKnownId);
+        result.Receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        result.Receipt.CommandId.Should().Be(fixture.DispatchedEnvelope!.Id);
+        result.Receipt.CommandId.Should().NotBe(result.RegistrationId);
+        result.Receipt.CorrelationId.Should().Be(result.Receipt.CommandId);
+        result.NyxProviderSlug.Should().Be("opaque-requested-slug");
+    }
+
+    [Theory]
+    [InlineData("route-foreign")]
+    [InlineData(" route-foreign ")]
+    public async Task RegisterAsync_RejectsSpecifiedRouteBeforeOwnedResourceWrites(string conversationRouteId)
+    {
+        var fixture = new Fixture();
+
+        var result = await fixture.RegisterAsync(fixture.Request, conversationRouteId);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be("invalid_channel_bot_detail");
-        fixture.Handler.Requests.Should().BeEmpty();
+        result.Error.Should().Be("channel_route_not_accessible");
+        var detailRequest = fixture.Handler.Requests.Should().ContainSingle().Which;
+        detailRequest.Method.Should().Be("GET");
+        detailRequest.Path.Should().Be("/api/v1/channel-bots/bot-owned");
         fixture.Command.Should().BeNull();
+        fixture.Handler.RouteActive.Should().BeFalse();
+        fixture.Handler.KeyActive.Should().BeFalse();
+        fixture.Vault.Revocations.Should().Be(0);
     }
 
     [Fact]
@@ -185,7 +231,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
     {
         var fixture = new Fixture();
         fixture.Handler.Routes = """{"conversations":[{"id":"route-foreign","channel_bot_id":"bot-owned","agent_api_key_id":"key-foreign","default_agent":true,"is_active":true}]}""";
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Error.Should().Be("channel_bot_not_adoptable");
+        (await fixture.RegisterAsync(fixture.Request)).Error.Should().Be("channel_route_not_accessible");
         fixture.Handler.Requests.Should().OnlyContain(x => x.Method == "GET");
         fixture.Command.Should().BeNull();
     }
@@ -194,7 +240,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
     public async Task RegisterAsync_OrganizationCarriesVerifiedOwnerToKeyAndRoutes()
     {
         var fixture = new Fixture(organization: true);
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
         result.Succeeded.Should().BeTrue(result.Error);
         fixture.Handler.Requests.Single(x => x.Path.StartsWith("/api/v1/channel-conversations?", StringComparison.Ordinal))
             .Path.Should().Contain("org_id=org-1");
@@ -209,7 +255,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
     public async Task RegisterAsync_ConfirmedDispatchFailureCompensatesOnlyOwnedRouteKeyAndSecret()
     {
         var fixture = new Fixture(actorUnavailable: true);
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
         result.Error.Should().Be("local_mirror_dispatch_failed");
         fixture.Handler.Requests.Where(x => x.Method == "DELETE").Select(x => x.Path).Should().Equal(
             "/api/v1/channel-conversations/route-owned", "/api/v1/api-keys/key-owned");
@@ -223,7 +269,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         result.CleanupRequest.Should().BeNull();
 
         fixture.ActorUnavailable = false;
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
+        (await fixture.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
         fixture.Command!.NyxChannelBotId.Should().Be("bot-owned");
     }
 
@@ -236,7 +282,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         fixture.Handler.RouteDeleteStatus = HttpStatusCode.ServiceUnavailable;
         fixture.Handler.RouteDeleteThrows = transportFailure;
 
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be("local_mirror_dispatch_failed");
@@ -257,7 +303,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         result.CleanupRequest.SecretReference.Should().NotBeNull();
         fixture.Command.Should().BeNull();
         fixture.Handler.RouteActive.Should().BeTrue();
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Error.Should().Be("channel_bot_not_adoptable");
+        (await fixture.RegisterAsync(fixture.Request)).Error.Should().Be("channel_route_not_accessible");
 
         fixture.Handler.RouteDeleteStatus = HttpStatusCode.NoContent;
         fixture.Handler.RouteDeleteThrows = false;
@@ -266,7 +312,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         cleanup.CleanupComplete.Should().BeTrue();
         fixture.Handler.RouteActive.Should().BeFalse();
         fixture.ActorUnavailable = false;
-        var readopted = await fixture.Facade.RegisterAsync(fixture.Request);
+        var readopted = await fixture.RegisterAsync(fixture.Request);
         readopted.Succeeded.Should().BeTrue(readopted.Error);
         readopted.NyxChannelBotId.Should().Be("bot-owned");
         fixture.Handler.Requests.Where(x => x.Method == "DELETE").Should().OnlyContain(x =>
@@ -287,7 +333,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         fixture.Vault.RevokeRejected = failure == "vault-rejected";
         fixture.Vault.RevokeThrows = failure == "vault-transport";
 
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
 
         result.Error.Should().Be("local_mirror_dispatch_failed");
         result.RegistrationId.Should().NotBeNullOrWhiteSpace();
@@ -313,7 +359,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         var cleanup = await fixture.Deprovisioning.DeprovisionAsync("caller-token", result.CleanupRequest, CancellationToken.None);
         cleanup.CleanupComplete.Should().BeTrue();
         fixture.ActorUnavailable = false;
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
+        (await fixture.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
         fixture.Command!.NyxChannelBotId.Should().Be("bot-owned");
         fixture.Handler.Requests.Where(x => x.Method == "DELETE").Should().OnlyContain(x =>
             x.Path == "/api/v1/channel-conversations/route-owned" || x.Path == "/api/v1/api-keys/key-owned");
@@ -330,7 +376,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         var fixture = new Fixture();
         fixture.Handler.RouteCreateResponseFailure = responseFailure;
 
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
 
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be("provisioning_failed");
@@ -345,7 +391,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
             "/api/v1/channel-conversations/route-owned", "/api/v1/api-keys/key-owned");
 
         fixture.Handler.RouteCreateResponseFailure = null;
-        var readopted = await fixture.Facade.RegisterAsync(fixture.Request);
+        var readopted = await fixture.RegisterAsync(fixture.Request);
         readopted.Succeeded.Should().BeTrue(readopted.Error);
         readopted.NyxChannelBotId.Should().Be("bot-owned");
     }
@@ -364,7 +410,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         fixture.Handler.RouteCreateResponseFailure = "transport";
         fixture.Handler.OwnershipEvidenceFailure = evidenceFailure;
 
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
 
         result.Error.Should().Be("provisioning_failed");
         result.Cleanup!.CleanupComplete.Should().BeFalse("unavailable ownership evidence is not proof of absence");
@@ -386,7 +432,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         fixture.Vault.Revocations.Should().Be(0);
 
         fixture.Handler.OwnershipEvidenceFailure = null;
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Error.Should().Be("channel_bot_not_adoptable");
+        (await fixture.RegisterAsync(fixture.Request)).Error.Should().Be("channel_route_not_accessible");
         var recovered = await fixture.Deprovisioning.DeprovisionAsync("caller-token", result.CleanupRequest, CancellationToken.None);
         recovered.CleanupComplete.Should().BeTrue();
         fixture.Handler.RouteActive.Should().BeFalse();
@@ -396,7 +442,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         fixture.Handler.Requests.Where(x => x.Method == "DELETE").Select(x => x.Path).Should().Equal(
             "/api/v1/channel-conversations/route-owned", "/api/v1/api-keys/key-owned");
         fixture.Handler.RouteCreateResponseFailure = null;
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
+        (await fixture.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
     }
 
     [Theory]
@@ -408,7 +454,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         var fixture = new Fixture();
         fixture.Handler.RouteCreateResponseFailure = "transport";
         fixture.Handler.OwnershipEvidenceFailure = "http";
-        var adoption = await fixture.Facade.RegisterAsync(fixture.Request);
+        var adoption = await fixture.RegisterAsync(fixture.Request);
         adoption.CleanupRequest.Should().NotBeNull();
 
         fixture.Handler.OwnershipEvidenceFailure = null;
@@ -434,7 +480,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         fixture.Handler.RouteActive.Should().BeFalse();
         fixture.Handler.KeyActive.Should().BeFalse();
         fixture.Handler.RouteCreateResponseFailure = null;
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
+        (await fixture.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
     }
 
     [Theory]
@@ -447,7 +493,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         var fixture = new Fixture();
         fixture.Handler.RouteCreateRejection = status;
 
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
 
         result.Error.Should().Be("provisioning_failed");
         result.Cleanup!.CleanupComplete.Should().BeTrue();
@@ -459,14 +505,14 @@ public sealed class NyxChannelBotAdoptionServiceTests
         fixture.Handler.Requests.Where(x => x.Method == "DELETE").Select(x => x.Path).Should().Equal("/api/v1/api-keys/key-owned");
         fixture.Handler.Requests.Count(x => x.Method == "GET" && x.Path.StartsWith("/api/v1/channel-conversations?", StringComparison.Ordinal)).Should().Be(1);
         fixture.Handler.RouteCreateRejection = null;
-        (await fixture.Facade.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
+        (await fixture.RegisterAsync(fixture.Request)).Succeeded.Should().BeTrue();
     }
 
     [Fact]
     public async Task RegisterAsync_UnknownDispatchAcceptancePreservesOwnedResourcesForObservation()
     {
         var fixture = new Fixture(dispatchUnknown: true);
-        var result = await fixture.Facade.RegisterAsync(fixture.Request);
+        var result = await fixture.RegisterAsync(fixture.Request);
         result.Error.Should().Be("local_mirror_acceptance_unknown_remote_cleanup_skipped");
         fixture.Handler.Requests.Should().NotContain(x => x.Method == "DELETE");
         fixture.Vault.Revocations.Should().Be(0);
@@ -476,17 +522,35 @@ public sealed class NyxChannelBotAdoptionServiceTests
         result.NyxConversationRouteId.Should().Be("route-owned");
         result.Cleanup.Should().BeNull();
         result.CleanupRequest.Should().BeNull();
+        result.Receipt.Should().BeNull();
     }
 
     private sealed class Fixture
     {
+        private readonly ChannelRegistrationAdoptionFacade _facade;
         public AdoptionHandler Handler { get; }
         public RecordingVault Vault { get; } = new();
-        public ChannelRelayRegistrationFacade Facade { get; }
         public ChannelRelayRegistrationRequest Request { get; }
         public ChannelBotRegisterCommand? Command { get; private set; }
+        public EventEnvelope? DispatchedEnvelope { get; private set; }
         public bool ActorUnavailable { get; set; }
         public INyxChannelBotDeprovisioningService Deprovisioning { get; }
+
+        public Task<NyxChannelBotAdoptionResult> RegisterAsync(
+            ChannelRelayRegistrationRequest request,
+            string? conversationRouteId = null) =>
+            _facade.AdoptAsync(
+                new ChannelRegistrationAdoptionRequest(
+                    request.RequestedRegistrationId,
+                    request.NyxChannelBotId,
+                    conversationRouteId,
+                    request.NyxProviderSlug,
+                    request.RuntimeConfig),
+                request.ServiceSelection,
+                request.AccessToken,
+                request.ScopeId,
+                request.WebhookBaseUrl,
+                CancellationToken.None);
 
         public Fixture(string platform = "lark", bool organization = false, bool actorUnavailable = false, bool dispatchUnknown = false, bool explicitGrant = false)
         {
@@ -505,7 +569,8 @@ public sealed class NyxChannelBotAdoptionServiceTests
             dispatch.DispatchAsync(Arg.Any<string>(), Arg.Any<EventEnvelope>(), Arg.Any<CancellationToken>())
                 .Returns(call =>
                 {
-                    Command = call.Arg<EventEnvelope>().Payload.Unpack<ChannelBotRegisterCommand>();
+                    DispatchedEnvelope = call.Arg<EventEnvelope>();
+                    Command = DispatchedEnvelope.Payload.Unpack<ChannelBotRegisterCommand>();
                     if (dispatchUnknown) throw new InvalidOperationException("transport lost acknowledgement");
                     return ActorDispatchPortTestSupport.AcceptAsync(call);
                 });
@@ -521,7 +586,13 @@ public sealed class NyxChannelBotAdoptionServiceTests
                 .Returns(new ChannelRegistrationOwnerResolution(new(organization ? "actor-1" : ownerId, new(
                     organization ? ChannelRegistrationKeyOwnerKind.Organization : ChannelRegistrationKeyOwnerKind.Personal,
                     ownerId), organization ? ownerId : null), ""));
-            Facade = new(service, new VerifiedNyxChannelBotDetail.Reader(client), owners, ChannelAgentKeyWriteMode.NyxIdDefault);
+            var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+            queryPort.QueryAllSnapshotsAsync(Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationSnapshot>>([]));
+            queryPort.GetSnapshotAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<ChannelBotRegistrationSnapshot?>(null));
+            _facade = new(queryPort, owners, new VerifiedNyxChannelBotDetail.Reader(client), service,
+                ChannelAgentKeyWriteMode.NyxIdDefault);
             Request = new(platform, "caller-token", "https://aevatar.example.com", ownerId, "label", "opaque-requested-slug", "bot-owned",
                 RequestedServiceSelection: explicitGrant ? ChannelRegistrationServiceSelection.Explicit(["svc-selected"]) : null);
         }

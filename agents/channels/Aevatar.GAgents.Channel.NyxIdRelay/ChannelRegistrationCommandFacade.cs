@@ -119,6 +119,7 @@ public sealed class ChannelRegistrationCommandFacade
         ChannelBotRuntimeConfig? runtimeConfig,
         string defaultSkillName,
         ChannelRegistrationServiceSelection serviceSelection,
+        ChannelAgentKeyCredential? channelAgentKey = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(serviceSelection);
@@ -137,6 +138,7 @@ public sealed class ChannelRegistrationCommandFacade
                             ServiceIds = { serviceSelection.ServiceIds },
                         }
                         : null,
+                ChannelAgentKey = channelAgentKey?.Clone(),
             },
             ct);
         return ResolveReceipt(result);
@@ -152,62 +154,6 @@ public sealed class ChannelRegistrationCommandFacade
     }
 }
 
-/// <summary>Validates caller-authorized existing Bot identity before adoption.</summary>
-public sealed class ChannelRelayRegistrationFacade(
-    INyxChannelBotAdoptionService adoptionService,
-    VerifiedNyxChannelBotDetail.Reader botReader,
-    IChannelRegistrationOwnerResolver ownerResolver,
-    ChannelAgentKeyWriteMode writeMode = ChannelAgentKeyWriteMode.Disabled)
-{
-    public async Task<NyxChannelBotAdoptionResult> RegisterAsync(
-        ChannelRelayRegistrationRequest request, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (!NyxChannelBotIdentity.IsValid(request.NyxChannelBotId))
-            return Failure("missing_nyx_channel_bot_id");
-        if (string.IsNullOrWhiteSpace(request.Platform))
-            return Failure("invalid_channel_bot_detail");
-        ChannelPlatformId canonicalPlatform;
-        try
-        {
-            // Application callers already cross the external Host/tool boundary. Keep this
-            // assertion canonical and reject missed normalization before owner/detail reads.
-            canonicalPlatform = ChannelPlatformId.FromCanonical(request.Platform);
-        }
-        catch (ArgumentException)
-        {
-            return Failure("invalid_channel_bot_detail");
-        }
-        if (string.IsNullOrWhiteSpace(request.AccessToken))
-            return Failure("missing_access_token");
-        if (string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
-            return Failure("missing_webhook_base_url");
-        if (!NyxRelayCallbackUrl.IsSecureBaseUrl(request.WebhookBaseUrl))
-            return Failure("insecure_webhook_base_url");
-        if (string.IsNullOrWhiteSpace(request.ScopeId))
-            return Failure("missing_scope_id");
-        if (writeMode != ChannelAgentKeyWriteMode.NyxIdDefault)
-            return Failure("channel_agent_key_write_gate_closed");
-
-        var owner = await ownerResolver.ResolveAsync(request.AccessToken, request.ScopeId, ct);
-        if (!owner.Succeeded)
-            return Failure(owner.ErrorCode);
-        var detail = await botReader.ReadAsync(request.AccessToken, request.NyxChannelBotId,
-            canonicalPlatform.Value, owner.Owner!, ct);
-        if (!detail.Succeeded)
-            return Failure(detail.ErrorCode);
-        var canonicalRequest = request with { Platform = detail.Bot!.Platform.Value };
-        var result = await adoptionService.AdoptAsync(new(detail.Bot, canonicalRequest), ct);
-        return result.Succeeded ? result : result with
-        {
-            Error = NyxApiResponseHelper.NormalizePublicFailureReason(result.Error),
-            ErrorDetail = null,
-        };
-
-        NyxChannelBotAdoptionResult Failure(string error) => new(false, "error", request.Platform, Error: error);
-    }
-}
-
 public sealed record ChannelRelayRegistrationRequest(
     string Platform,
     string AccessToken,
@@ -218,7 +164,8 @@ public sealed record ChannelRelayRegistrationRequest(
     string NyxChannelBotId,
     string DefaultSkillName = "",
     ChannelBotRuntimeConfig? RuntimeConfig = null,
-    ChannelRegistrationServiceSelection? RequestedServiceSelection = null)
+    ChannelRegistrationServiceSelection? RequestedServiceSelection = null,
+    string? RequestedRegistrationId = null)
 {
     public ChannelRegistrationServiceSelection ServiceSelection =>
         RequestedServiceSelection ?? ChannelRegistrationServiceSelection.NyxIdDefault;

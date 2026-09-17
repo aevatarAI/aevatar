@@ -10,22 +10,27 @@ target_repo: aevatarAI/aevatar
 
 ## 当前 Channel 平台契约（2026-09-17）
 
-本节将 [平台行为适配设计](../superpowers/specs/2026-09-16-channel-platform-behavior-adapter-design.md) 提升为当前实现约束。后文历史 transport RFC 中的 capability 布尔值仅作诊断描述，不能作为当前 Relay 主链的行为开关。
+本节将 [平台行为适配设计](../superpowers/specs/2026-09-16-channel-platform-behavior-adapter-design.md) 提升为当前实现约束，并记录 2026-09-17 合并已上线 `feature/integrate` 时确认的接口取舍；本节的注册入口契约替代原设计中 HTTP/tool 双入口和调用方 platform 断言的约定。后文历史 transport RFC 中的 capability 布尔值仅作诊断描述，不能作为当前 Relay 主链的行为开关。
 
-所有新 registration 都引用调用者已在 NyxID 建立的 `nyx_channel_bot_id`。HTTP、tool、Application 与 Actor 拒绝空白或前后带空格的 ID。请求不接收平台 secret；授权读取的 Bot detail 必须返回精确 ID、合法 platform、与已验证 key owner 一致的 `user_id`，以及 `is_active=true` 和 `active` 或 `pending_webhook` 状态。手工 webhook 的 Bot 不要求 `webhook_registered=true`。组织 owner 继续使用现有管理权限解析与 `target_org_id` / route `org_id`。
+所有新 registration 都引用调用者已在 NyxID 建立的 `nyx_channel_bot_id`。HTTP、Application 与 Actor 拒绝空白、前后带空格或控制字符的 ID。请求不接收平台 secret；授权读取的 Bot detail 必须返回精确 ID、合法 platform、与已验证 key owner 一致的 `user_id`，以及 `is_active=true` 和 `active` 或 `pending_webhook` 状态。手工 webhook 的 Bot 不要求 `webhook_registered=true`。组织 owner 继续使用现有管理权限解析与 `target_org_id` / route `org_id`。
 
-`ChannelPlatformId.ParseExternal` 在外部边界先拒绝原始输入中的控制字符，再 trim 并 invariant lowercase；不得先用 `Trim` / `NormalizeOptional` 抹除非法字符。内部使用 `FromCanonical`，拒绝非 canonical、控制字符与嵌入空白。Voice Host 对非空白 channel query 也先执行共享 parser，再判定 native alias；省略或空白 query 保持既有 native 语义。Bot detail、请求断言、JWT/payload、registration、Agent Key 与 OwnerScope 使用同一身份语义；不维护平台目录，也不把 `feishu` 自动改名为 `lark`。已有 Feishu 协议归一化通过明确 adapter 保留身份。
+`ChannelPlatformId.ParseExternal` 在外部边界先拒绝原始输入中的控制字符，再 trim 并 invariant lowercase；不得先用 `Trim` / `NormalizeOptional` 抹除非法字符。内部使用 `FromCanonical`，拒绝非 canonical、控制字符与嵌入空白。Voice Host 对非空白 channel query 也先执行共享 parser，再判定 native alias；省略或空白 query 保持既有 native 语义。Bot detail、JWT/payload、registration、Agent Key 与 OwnerScope 使用同一身份语义；不维护平台目录，也不把 `feishu` 自动改名为 `lark`。已有 Feishu 协议归一化通过明确 adapter 保留身份。
 
-唯一 `INyxChannelBotAdoptionService` 只创建 Aevatar-owned Agent Key、Vault reference 与专用默认 route，然后 dispatch registration command。创建前检查已有默认 route；外部默认 route 冲突时拒绝采用，避免 NyxID 创建默认 route 隐式停用其他 route。NyxID 没有原子 route idempotency key，因此该 preflight 不承诺并发原子保证。
+注册 HTTP 的入参与响应结构保持已上线来源分支的契约：`nyx_channel_bot_id` 必填，保留可选 `registration_id`、`nyx_conversation_route_id`、`nyx_provider_slug`、授权服务选择、`skill_name` 与 typed `runtime_config`，不要求调用方提供 `platform`；platform 仅来自授权读取且经过验证的 Bot detail。webhook base URL 优先使用 `NyxIdRelayOptions.WebhookBaseUrl`，缺省使用当前请求的 scheme/host，并执行 HTTPS 校验。成功仍返回 HTTP 202、`status=accepted`、registration/command/correlation ID、platform、slug、Bot/Key/route ID、callback/webhook URL 与 `workflow_result_delivery_status=registration_pending`；这只承诺 command accepted，不承诺投影已可见。错误保留来源分支的响应字段和公开映射，不新增 cleanup/Vault 载荷。`register_channel_via_nyx` 已退役并返回 `retired_action`，工具仅提供 list/delete；注册详情与运行配置更新继续保留，更新复用已有 Key 并沿 command/event/state 更新 typed credential。
+
+唯一 `INyxChannelBotAdoptionService` 只创建 Aevatar-owned Agent Key、Vault reference 与专用默认 route，然后 dispatch registration command。`ChannelRegistrationAdoptionFacade` 先验证身份、检查 Bot 绑定和 registration ID，再进入这条主链。`nyx_conversation_route_id` 字段保留但不构成归属证明；新注册指定既有 route ID 时返回 `channel_route_not_accessible`，不复用、改写或恢复它。创建前检查已有默认 route；外部默认 route 冲突时同样拒绝采用，避免 NyxID 创建默认 route 隐式停用其他 route。NyxID 没有原子 route idempotency key，因此该 preflight 不承诺并发原子保证。
 
 route acquisition 与 command acceptance 分别记录语义。route POST 尚未尝试，或收到已确认在插入前拒绝的响应（NyxID 的 HTTP 400/401/403/404）时，没有 route ID 可以表示未取得 route；POST 已尝试后发生 transport failure、server error、缺少 ID 或其他不可用响应时，不能把空 ID 当成确认不存在。该单请求不确定性通过既有 `NyxChannelBotDeprovisioningRequest` 的 typed `UncertainRouteAcquisition` 携带已验证 Bot ID、组织查询上下文，并以本次新建的 `AgentKeyId` 证明归属。cleanup 只对唯一且精确匹配该 Bot 与新 Key 的 route 执行删除，不采用或删除其他默认 route。取得归属证据失败、响应不可用、匹配不唯一或暂时没有匹配时，结果仍为 incomplete，保留 Key、Vault handle 和现有服务级 retry request；一次空列表不是 POST 已结束且永远不会插入的屏障。取得稳定 route ID 后，`NyxChannelBotDeprovisioningResult.RetryRequest` 保留已解析的 ID 并清除 acquisition uncertainty；服务调用方下一次传入该更新后的请求，后续 route/key/Vault 清理失败或取消均无需重新发现 route。adoption 会将该更新后的请求作为 `CleanupRequest` 返回给服务调用方。
 
-确认 command 未被接受时，补偿复用 `INyxChannelBotDeprovisioningService`，分别返回 route/key 删除与 Vault revoke 结果。清理不完整时保留 registration/Bot/已知 route/key ID，并返回既有 `NyxChannelBotDeprovisioningRequest` 供服务调用方重试；HTTP/tool 暴露稳定 ID、清理状态和脱敏 warnings，不输出 cleanup request 或 Vault reference。只有 owned resources 的清理已确认完成，才告知调用方可再次采用同一个 Bot。此路径没有 accepted registration，不创建临时持久态、新 HTTP/UI 恢复入口或隐式恢复默认 route。真正 command acceptance-unknown 时跳过清理，保留资源并观察 registration，不能借 cleanup request 绕过该安全边界。unregister 只删除 owned route、key、Vault secret 与 local mirror；其远端删除成功与 Vault best-effort 警告语义保持不变。Bot 与 UserService 永远属于 NyxID 生命周期，Aevatar 不创建或删除它们。
+确认 command 未被接受时，补偿复用 `INyxChannelBotDeprovisioningService`，分别返回 route/key 删除与 Vault revoke 结果。清理不完整时保留 registration/Bot/已知 route/key ID，并返回既有 `NyxChannelBotDeprovisioningRequest` 供服务调用方重试；内部服务保留清理状态与稳定句柄；注册 HTTP 保持已上线错误响应字段，不输出 cleanup request 或 Vault reference，也不新增恢复入口。只有 owned resources 的清理已确认完成，才告知调用方可再次采用同一个 Bot。此路径没有 accepted registration，不创建临时持久态、新 HTTP/UI 恢复入口或隐式恢复默认 route。真正 command acceptance-unknown 时跳过清理，保留资源并观察 registration，不能借 cleanup request 绕过该安全边界。unregister 只删除 owned route、key、Vault secret 与 local mirror；route 或 Key 删除失败都阻止 local tombstone，已有 readmodel 的稳定资源 ID 可用于重试；Vault 在远端 Key 已删除后保留 best-effort 警告语义。Bot 与 UserService 永远属于 NyxID 生命周期，Aevatar 不创建或删除它们。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-    B["Caller-authorized Bot detail"] --> A["One neutral adoption service"]
+    HAPI["Deployed HTTP request / response contract"] --> F["Adoption facade: owner + Bot detail + duplicate checks"]
+    F --> B["Verified Bot identity and inferred platform"]
+    B --> A["One neutral adoption service"]
+    A -->|"foreign default or requested route"| X["Reject without writes"]
     A --> K["Owned key + Vault + dedicated route"]
     K --> R["Registration Actor -> committed projection"]
     K -. "confirmed non-acceptance" .-> D["Owned cleanup: route / key / Vault"]

@@ -107,7 +107,10 @@ public sealed record NyxChannelBotAdoptionResult(
     string? Note = null,
     string? ErrorDetail = null,
     NyxChannelBotDeprovisioningResult? Cleanup = null,
-    NyxChannelBotDeprovisioningRequest? CleanupRequest = null);
+    NyxChannelBotDeprovisioningRequest? CleanupRequest = null,
+    ChannelRegistrationCommandAcceptedReceipt? Receipt = null,
+    string? NyxProviderSlug = null,
+    string? ExistingRegistrationId = null);
 
 public interface INyxChannelBotAdoptionService
 {
@@ -138,7 +141,7 @@ public sealed class NyxChannelBotAdoptionService(
         if (!string.Equals(registration.Platform, platform, StringComparison.Ordinal) ||
             !string.Equals(registration.ScopeId, bot.Owner.KeyOwner.Id, StringComparison.Ordinal))
             return Failure("invalid_channel_bot_detail");
-        var registrationId = Guid.NewGuid().ToString("N");
+        var registrationId = registration.RequestedRegistrationId ?? Guid.NewGuid().ToString("N");
         var relayCallbackUrl = NyxRelayCallbackUrl.Build(registration.WebhookBaseUrl);
         string? routeId = null;
         NyxChannelRouteAcquisitionUncertainty? uncertainRouteAcquisition = null;
@@ -150,7 +153,7 @@ public sealed class NyxChannelBotAdoptionService(
             var routes = await client.ListConversationRoutesAsync(registration.AccessToken, bot.Id,
                 bot.Owner.TargetOrganizationId, ct);
             if (!HasNoActiveDefaultRoute(routes, bot.Id))
-                return Failure("channel_bot_not_adoptable");
+                return Failure("channel_route_not_accessible");
             VerifiedChannelRegistrationExplicitAuthorization? authorization = null;
             if (registration.ServiceSelection.AuthorizationMode == ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist)
             {
@@ -161,6 +164,11 @@ public sealed class NyxChannelBotAdoptionService(
                     return Failure(prepared.ErrorCode);
                 authorization = prepared.Authorization;
             }
+            if (ChannelBotRuntimeConfigValidation.ValidateSelectorAuthorization(
+                    registration.RuntimeConfig,
+                    registration.ServiceSelection.AuthorizationMode,
+                    authorization?.RuntimeSelectors.Select(static selector => selector.ServiceSlug).ToArray() ?? []).Count > 0)
+                return Failure("invalid_runtime_config");
             key = authorization is null
                 ? await keys.ProvisionAsync(platform, registration.AccessToken, relayCallbackUrl,
                     registration.ScopeId, registrationId, bot.Owner, ct)
@@ -203,10 +211,12 @@ public sealed class NyxChannelBotAdoptionService(
             }
             if (!ChannelRegistrationAuthorizationContract.IsValidNewCommand(command))
                 throw new InvalidOperationException("channel_authorization_contract_invalid");
-            await commandFacade.RegisterLocalMirrorAsync(command, ct);
+            var receipt = await commandFacade.RegisterLocalMirrorAsync(command, ct);
             return new(true, "accepted", platform, registrationId, bot.Id, key.ApiKeyId, routeId,
                 true, relayCallbackUrl, bot.WebhookUrl,
-                Note: "Existing NyxID Bot adopted; the local registration command was accepted. Read model visibility is asynchronous.");
+                Note: "Existing NyxID Bot adopted; the local registration command was accepted. Read model visibility is asynchronous.",
+                Receipt: receipt,
+                NyxProviderSlug: registration.NyxProviderSlug);
         }
         catch (Exception ex)
         {

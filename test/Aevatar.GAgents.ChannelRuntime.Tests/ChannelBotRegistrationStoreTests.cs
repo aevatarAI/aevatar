@@ -218,6 +218,25 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.DefaultSkillName.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task HandleRegister_PersistsNyxBackedNonTraditionalPlatform()
+    {
+        await _agent.HandleRegister(NewRegistration(
+            registrationId: "reg-whatsapp",
+            platform: "whatsapp",
+            apiKeyId: "key-whatsapp"));
+
+        var entry = _agent.State.Registrations.Should().ContainSingle().Subject;
+        entry.Id.Should().Be("reg-whatsapp");
+        entry.Platform.Should().Be("whatsapp");
+        entry.NyxProviderSlug.Should().Be("api-whatsapp-bot");
+        entry.NyxChannelBotId.Should().Be("bot-1");
+        entry.NyxAgentApiKeyId.Should().Be("key-whatsapp");
+        entry.ChannelAgentKey.Should().NotBeNull();
+        entry.ChannelAgentKey.ApiKeyId.Should().Be("key-whatsapp");
+        entry.Tombstoned.Should().BeFalse();
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -311,6 +330,47 @@ public sealed class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.RuntimeConfig!.NyxidServiceSelectors.Should().ContainSingle();
         entry.RuntimeConfig.NyxidServiceSelectors[0].ServiceSlug.Should().Be("api-google-workspace");
         entry.RuntimeConfig.NyxidServiceSelectors[0].EndpointNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleUpdateRuntimeConfig_WhenChannelAgentKeyIsPresent_UpdatesAuthorizationFacts()
+    {
+        await _agent.HandleRegister(NewRegistration("reg-runtime-key", apiKeyId: "key-runtime-old"));
+        var newSecretReference = TestDeliverySecretReference("reg-runtime-key-new");
+        var newCredential = new ChannelAgentKeyCredential
+        {
+            ApiKeyId = "key-runtime-new",
+            SecretReference = newSecretReference.Clone(),
+            Grant = new ChannelAgentKeyGrantSnapshot
+            {
+                AllowAllServices = false,
+                AllowAllNodes = false,
+                AllowedServiceIds = { "svc-calendar" },
+                AllowedNodeIds = { "node-runtime" },
+                ScopePlanDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            },
+        };
+
+        await _agent.HandleUpdateRuntimeConfig(new ChannelBotUpdateRuntimeConfigCommand
+        {
+            RegistrationId = "reg-runtime-key",
+            AuthorizationMode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
+            RegistrationServiceAllowlist = new ChannelRegistrationServiceAllowlist
+            {
+                ServiceIds = { "svc-calendar" },
+            },
+            ChannelAgentKey = newCredential.Clone(),
+            UpdatedAtUnixMs = 2,
+        });
+
+        var entry = _agent.State.Registrations.Single();
+        entry.AuthorizationMode.Should().Be(ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist);
+        entry.RegistrationServiceAllowlist.Should().NotBeNull();
+        entry.RegistrationServiceAllowlist.ServiceIds.Should().Equal("svc-calendar");
+        entry.ChannelAgentKey.Should().Be(newCredential);
+        entry.ChannelAgentKey.Should().NotBeSameAs(newCredential);
+        entry.NyxAgentApiKeyId.Should().Be("key-runtime-new");
+        entry.WorkflowResultDeliveryCredential.Should().Be(newSecretReference);
     }
 
     [Fact]

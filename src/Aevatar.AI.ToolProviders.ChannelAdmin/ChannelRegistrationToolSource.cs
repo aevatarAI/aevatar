@@ -5,7 +5,7 @@ using Aevatar.GAgents.Channel.Runtime;
 namespace Aevatar.AI.ToolProviders.ChannelAdmin;
 
 /// <summary>
-/// Tool source that exposes channel_registrations tool to NyxIdChatGAgent.
+/// Exposes the list/delete channel_registrations tool to NyxIdChatGAgent.
 /// </summary>
 public sealed class ChannelRegistrationToolSource : IAgentToolSource
 {
@@ -17,18 +17,15 @@ public sealed class ChannelRegistrationToolSource : IAgentToolSource
     //   New principle: Channel registration 暴露 typed application command facade(reuse existing CQRS command dispatch skeleton);Host 仅 adapt HTTP;provisioning adapters 只调 existing NyxID REST surfaces(**不修改 NyxID 仓库**);local mirror writes 进 standard command skeleton via narrow dispatch port。**不引入新 actor type / 新 envelope / 新 projection phase**(reflector force-pick minimal,排除 structural 的 ChannelRelayRegistrationRunGAgent)。
     private readonly IChannelBotRegistrationQueryPort _queryPort;
     private readonly ChannelRegistrationCommandFacade _commandFacade;
-    private readonly ChannelRelayRegistrationFacade _registrationFacade;
     private readonly INyxChannelBotDeprovisioningService _deprovisioningService;
 
     public ChannelRegistrationToolSource(
         IChannelBotRegistrationQueryPort queryPort,
         ChannelRegistrationCommandFacade commandFacade,
-        ChannelRelayRegistrationFacade registrationFacade,
         INyxChannelBotDeprovisioningService deprovisioningService)
     {
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _commandFacade = commandFacade ?? throw new ArgumentNullException(nameof(commandFacade));
-        _registrationFacade = registrationFacade ?? throw new ArgumentNullException(nameof(registrationFacade));
         _deprovisioningService = deprovisioningService ?? throw new ArgumentNullException(nameof(deprovisioningService));
     }
 
@@ -40,7 +37,6 @@ public sealed class ChannelRegistrationToolSource : IAgentToolSource
             new ChannelRegistrationTool(
                 _queryPort,
                 _commandFacade,
-                _registrationFacade,
                 _deprovisioningService),
         ];
         return Task.FromResult(tools);

@@ -22,7 +22,7 @@ namespace Aevatar.GAgents.Channel.NyxIdRelay;
 public static class NyxIdRelayChannelServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the NyxID relay channel: API client, provisioning services (Lark + Telegram),
+    /// Registers the NyxID relay channel: API client, platform-neutral Bot adoption,
     /// scope resolver, channel reply service, outbound port, and interactive reply dispatcher.
     /// </summary>
     // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
@@ -44,6 +44,12 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<INyxIdCurrentUserResolver, NyxIdCurrentUserResolver>();
         services.TryAddSingleton<IChannelRegistrationOwnerResolver, ChannelRegistrationOwnerResolver>();
         services.TryAddSingleton<ChannelRegistrationExplicitAuthorizationPlanner>();
+        services.TryAddSingleton(sp => new ChannelRegistrationAdoptionFacade(
+            sp.GetRequiredService<IChannelBotRegistrationQueryPort>(),
+            sp.GetRequiredService<IChannelRegistrationOwnerResolver>(),
+            sp.GetRequiredService<VerifiedNyxChannelBotDetail.Reader>(),
+            sp.GetRequiredService<INyxChannelBotAdoptionService>(),
+            sp.GetService<NyxIdRelayOptions>()?.ChannelAgentKeyWriteMode ?? ChannelAgentKeyWriteMode.Disabled));
         services.TryAddSingleton(sp => new ChannelAgentKeyProvisioningService(
             sp.GetRequiredService<NyxIdApiClient>(),
             sp.GetRequiredService<ISecretVault>(),
@@ -55,12 +61,6 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
             sp.GetRequiredService<ICommandDispatchPipeline<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>(),
             sp.GetRequiredService<ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>(),
             sp.GetRequiredService<ICommandDispatchService<ChannelBotUpdateRuntimeConfigCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>()));
-        services.TryAddSingleton(sp => new ChannelRelayRegistrationFacade(
-            sp.GetRequiredService<INyxChannelBotAdoptionService>(),
-            sp.GetRequiredService<VerifiedNyxChannelBotDetail.Reader>(),
-            sp.GetRequiredService<IChannelRegistrationOwnerResolver>(),
-            sp.GetService<NyxIdRelayOptions>()?.ChannelAgentKeyWriteMode ??
-            ChannelAgentKeyWriteMode.Disabled));
         services.TryAddSingleton<ChannelBotRegistrationCommandEnvelopeFactory>();
         services.TryAddSingleton<ChannelRegistrationCommandReceiptFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<ChannelBotRegistrationCommandTarget>, ActorCommandTargetDispatcher<ChannelBotRegistrationCommandTarget>>();

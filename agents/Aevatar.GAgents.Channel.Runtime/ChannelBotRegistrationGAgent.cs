@@ -165,6 +165,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
                 : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             AuthorizationMode = cmd.AuthorizationMode,
             RegistrationServiceAllowlist = cmd.RegistrationServiceAllowlist?.Clone(),
+            ChannelAgentKey = cmd.ChannelAgentKey?.Clone(),
         });
         Logger.LogInformation("Updated channel bot runtime config: id={Id}", registrationId);
     }
@@ -546,6 +547,12 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
                 ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist
                     ? evt.RegistrationServiceAllowlist?.Clone() ?? new ChannelRegistrationServiceAllowlist()
                     : null;
+        }
+        if (evt.ChannelAgentKey is not null)
+        {
+            entry.ChannelAgentKey = evt.ChannelAgentKey.Clone();
+            entry.NyxAgentApiKeyId = entry.ChannelAgentKey.ApiKeyId;
+            entry.WorkflowResultDeliveryCredential = entry.ChannelAgentKey.SecretReference?.Clone();
         }
         return next;
     }
