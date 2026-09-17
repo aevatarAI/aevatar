@@ -273,22 +273,55 @@ public sealed class ChannelRegistrationAuthorizationPlannerTests
     }
 
     [Fact]
-    public async Task PlanAsync_PersonalAndOrganizationServices_ReturnsOwnerForbiddenWithoutScopePlan()
+    public async Task PlanAsync_PersonalOwnerWithAllowedOrganizationService_ReturnsVerifiedScopePlan()
     {
+        var personalOwner = PersonalPrincipal("owner-alpha");
+        var organizationOwner = OrganizationPrincipal("org-alpha");
         var port = new StubNyxIdAuthorizationPort(
             UserServices(
                 PersonalService("svc-personal", "personal"),
-                OrganizationService("svc-org", "org-alpha")),
+                OrganizationService("svc-org", "org-alpha", NyxIdOrganizationRole.Member)),
             ScopePlan(
                 "owner-alpha",
-                PersonalPrincipal("owner-alpha"),
-                ServiceGrant("svc-personal", PersonalPrincipal("owner-alpha"))));
+                personalOwner,
+                ServiceGrant("svc-org", organizationOwner),
+                ServiceGrant("svc-personal", personalOwner)));
         var planner = new ChannelRegistrationAuthorizationPlanner(port);
 
         var result = await PlanAsync(
             planner,
             "owner-alpha",
             ["svc-org", "svc-personal"]);
+
+        result.Succeeded.Should().BeTrue();
+        result.Plan!.KeyOwner.Should().Be(new ChannelRegistrationKeyOwner(
+            ChannelRegistrationKeyOwnerKind.Personal,
+            "owner-alpha"));
+        result.Plan.TargetOrganizationId.Should().BeNull();
+        result.Plan.AllowedServiceIds.Should().Equal("svc-org", "svc-personal");
+        port.ScopePlanRequests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new ScopePlanRequest("owner-token", ["svc-org", "svc-personal"], null));
+    }
+
+    [Fact]
+    public async Task PlanAsync_PersonalOwnerWithDisallowedOrganizationService_ReturnsOwnerForbiddenWithoutScopePlan()
+    {
+        var port = new StubNyxIdAuthorizationPort(
+            UserServices(OrganizationService(
+                "svc-org",
+                "org-alpha",
+                NyxIdOrganizationRole.Member,
+                allowed: false)),
+            ScopePlan(
+                "owner-alpha",
+                PersonalPrincipal("owner-alpha"),
+                ServiceGrant("svc-org", OrganizationPrincipal("org-alpha"))));
+        var planner = new ChannelRegistrationAuthorizationPlanner(port);
+
+        var result = await PlanAsync(
+            planner,
+            "owner-alpha",
+            ["svc-org"]);
 
         AssertFailure(result, "service_owner_forbidden");
         port.ScopePlanRequests.Should().BeEmpty();
