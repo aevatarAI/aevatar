@@ -2,9 +2,10 @@ import {
   ExportOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { Button, Select } from 'antd';
+import { Button, Input, type InputRef, Select } from 'antd';
 import * as React from 'react';
 import { searchChannelSkills } from '@/shared/api/channelSkillsApi';
 import { t } from '@/shared/i18n/messages';
@@ -29,6 +30,16 @@ export default function ChannelSkillField({
   const id = React.useId();
   const [search, setSearch] = React.useState('');
   const [term, setTerm] = React.useState('');
+  const [open, setOpen] = React.useState(false);
+  const selectRef = React.useRef<React.ComponentRef<typeof Select>>(null);
+  const searchRef = React.useRef<InputRef>(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() =>
+      searchRef.current?.focus(),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
   React.useEffect(() => {
     const timer = window.setTimeout(() => setTerm(search.trim()), 250);
     return () => window.clearTimeout(timer);
@@ -45,12 +56,12 @@ export default function ChannelSkillField({
     enabled: Boolean(scopeId),
   });
   // The registration contract accepts a name, not an Ornn GUID.
-  const names = [
-    ...new Set(
+  const choices = [
+    ...new Map(
       skills.data?.pages.flatMap((page) =>
-        page.items.map((skill) => skill.name),
+        page.items.map((skill) => [skill.name, skill] as const),
       ) ?? [],
-    ),
+    ).values(),
   ];
   const config = getOrnnRuntimeConfig();
   const createHref = config.configurationError
@@ -67,20 +78,40 @@ export default function ChannelSkillField({
       <div className="channels__skill-controls">
         <Select
           id={id}
+          ref={selectRef}
           value={value || undefined}
+          open={open && !disabled}
+          onOpenChange={(nextOpen) => {
+            setOpen(nextOpen);
+            if (!nextOpen) setSearch('');
+          }}
           disabled={disabled}
           allowClear
-          showSearch
-          filterOption={false}
-          onSearch={setSearch}
+          showSearch={false}
+          virtual={false}
+          classNames={{ popup: { root: 'channels__skill-popup' } }}
           onChange={(name) => {
             onChange(name ?? '');
             setSearch('');
+            setOpen(false);
+            selectRef.current?.focus();
           }}
           placeholder={t('channels.skills.placeholder', 'Select a skill')}
           aria-invalid={Boolean(error)}
           aria-describedby={error || skills.isError ? `${id}-error` : undefined}
-          options={names.map((name) => ({ value: name, label: name }))}
+          options={choices.map((skill) => ({
+            value: skill.name,
+            label: skill.name,
+            description: skill.description,
+          }))}
+          optionRender={(option) => (
+            <div className="channels__skill-option">
+              <strong>{option.data.label}</strong>
+              {option.data.description ? (
+                <span>{option.data.description}</span>
+              ) : null}
+            </div>
+          )}
           notFoundContent={
             skills.isFetching ? (
               <AevatarLoadingDots
@@ -97,6 +128,25 @@ export default function ChannelSkillField({
           }
           popupRender={(menu) => (
             <>
+              <div className="channels__skill-search">
+                <Input
+                  ref={searchRef}
+                  prefix={<SearchOutlined />}
+                  value={search}
+                  aria-label={t('channels.skills.search', 'Search skills')}
+                  placeholder={t('channels.skills.search', 'Search skills')}
+                  onChange={(event) => setSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'ArrowDown' || event.key === 'Escape') {
+                      event.preventDefault();
+                      selectRef.current?.focus();
+                      if (event.key === 'Escape') setOpen(false);
+                    }
+                    event.stopPropagation();
+                  }}
+                />
+                <p>{t('channels.skills.available', 'Available in Ornn')}</p>
+              </div>
               {menu}
               {skills.hasNextPage ? (
                 <Button

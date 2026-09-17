@@ -9,6 +9,7 @@ import { Button } from 'antd';
 import * as React from 'react';
 import {
   ChannelApiError,
+  ChannelContractUnavailableError,
   type ChannelRegistration,
 } from '@/shared/api/channelsApi';
 import { t } from '@/shared/i18n/messages';
@@ -91,10 +92,12 @@ export function ChannelIdentity({
   registration,
   label,
   pending,
+  secondary = 'identifier',
 }: {
   readonly registration: ChannelRegistration;
   readonly label: string | null;
   readonly pending: boolean;
+  readonly secondary?: 'identifier' | 'platform';
 }) {
   const identifier = registration.botId ?? registration.id;
   return (
@@ -107,15 +110,21 @@ export function ChannelIdentity({
               ? t('channels.name.loading', 'Loading name…')
               : t('channels.name.unavailable', 'Name unavailable'))}
         </strong>
-        <AevatarTooltip title={identifier}>
-          <button
-            type="button"
-            className="channels__identifier channels__identifier-trigger"
-            aria-label={t('channels.identifier.showFull', 'Show full ID')}
-          >
-            {compactChannelIdentifier(identifier)}
-          </button>
-        </AevatarTooltip>
+        {secondary === 'platform' ? (
+          <span className="channels__muted">
+            {platformName(registration.platform)}
+          </span>
+        ) : (
+          <AevatarTooltip title={identifier}>
+            <button
+              type="button"
+              className="channels__identifier channels__identifier-trigger"
+              aria-label={t('channels.identifier.showFull', 'Show full ID')}
+            >
+              {compactChannelIdentifier(identifier)}
+            </button>
+          </AevatarTooltip>
+        )}
       </div>
     </div>
   );
@@ -294,15 +303,20 @@ export function ChannelLoadError({
   return (
     <div className="channels__state" role="alert">
       <p>
-        {unavailable
+        {error instanceof ChannelContractUnavailableError
           ? t(
-              'channels.error.unavailable',
-              'This channel is unavailable or you do not have access.',
+              'channels.error.contract',
+              'Bot binding is not available yet. Please try again later.',
             )
-          : t(
-              'channels.error.load',
-              'Could not load channels. Please try again.',
-            )}
+          : unavailable
+            ? t(
+                'channels.error.unavailable',
+                'This channel is unavailable or you do not have access.',
+              )
+            : t(
+                'channels.error.load',
+                'Could not load channels. Please try again.',
+              )}
       </p>
       <Button loading={pending} onClick={retry}>
         {t('channels.retry', 'Try again')}

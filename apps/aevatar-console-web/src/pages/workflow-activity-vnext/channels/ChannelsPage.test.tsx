@@ -186,3 +186,22 @@ it('loads exact detail and confirms removal when the bot remains as unbound inve
     fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE'),
   ).toHaveLength(1);
 });
+
+it('identifies an older server response without showing an empty inventory or allowing binding', async () => {
+  fetchMock.mockResolvedValue(
+    response([
+      { ...row, binding_status: undefined, default_skill_name: 'support' },
+    ]),
+  );
+  renderWithQueryClient(<ChannelsPage scopeId="scope-alpha" />);
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Bot binding is not available yet. Please try again later.',
+  );
+  expect(screen.queryByText('No bots yet')).not.toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'Bind' })).not.toBeInTheDocument();
+  expect(
+    fetchMock.mock.calls.every(
+      ([, init]) => !init?.method || init.method === 'GET',
+    ),
+  ).toBe(true);
+});

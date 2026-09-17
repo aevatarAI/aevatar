@@ -30,6 +30,7 @@ import ChannelServicePicker from './ChannelServicePicker';
 import ChannelSkillField from './ChannelSkillField';
 import { channelConnectionCss } from './connectionStyles';
 import {
+  ChannelBadge,
   ChannelIdentity,
   ChannelLoadError,
   InboundStatus,
@@ -124,6 +125,14 @@ export default function ChannelConfigurationPage({
           </a>
         </nav>
         <h1>{title}</h1>
+        {!editing ? (
+          <p>
+            {t(
+              'channels.bind.description',
+              'Choose a skill and the services this bot can use.',
+            )}
+          </p>
+        ) : null}
       </div>
       {initial ? (
         <ConfigurationForm
@@ -422,8 +431,15 @@ function ConfigurationForm({
             registration={initial}
             label={savedLabel || initial.label}
             pending={false}
+            secondary="platform"
           />
-          <InboundStatus value={initial.nyxStatus ?? undefined} />
+          {editing ? (
+            <InboundStatus value={initial.nyxStatus ?? undefined} />
+          ) : (
+            <ChannelBadge>
+              {t('channels.binding.unbound', 'Not bound')}
+            </ChannelBadge>
+          )}
         </div>
         {editing ? (
           <div className="channels__field">

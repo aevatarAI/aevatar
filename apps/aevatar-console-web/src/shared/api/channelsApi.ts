@@ -51,6 +51,13 @@ export class ChannelApiError extends Error {
   }
 }
 
+export class ChannelContractUnavailableError extends Error {
+  constructor() {
+    super('Channel binding is not available on this server.');
+    this.name = 'ChannelContractUnavailableError';
+  }
+}
+
 export type ChannelRegistrationFailure =
   | 'services'
   | 'skill'
@@ -70,7 +77,7 @@ export class ChannelRegistrationError extends ChannelApiError {
 }
 
 export function normalizeChannelSkill(value: string): string {
-  return value.trim().replace(/^\//, '').toLowerCase();
+  return value.trim().replace(/^\/+/, '').toLowerCase();
 }
 
 function decodeRegistration(value: unknown): ChannelRegistration {
@@ -78,6 +85,8 @@ function decodeRegistration(value: unknown): ChannelRegistration {
   const id = readOptionalString(row, 'id', 'Registration ID') || null;
   const botId = readString(row, 'nyx_channel_bot_id', 'Bot ID');
   const bindingStatus = row.binding_status;
+  if (bindingStatus === undefined && 'default_skill_name' in row)
+    throw new ChannelContractUnavailableError();
   if (
     !botId.trim() ||
     !['bound', 'unbound'].includes(String(bindingStatus)) ||

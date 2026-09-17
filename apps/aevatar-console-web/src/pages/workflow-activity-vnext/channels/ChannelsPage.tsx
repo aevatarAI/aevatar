@@ -37,10 +37,12 @@ function ConnectionGuide() {
         </h2>
         <Button
           type="primary"
+          className="channels__add-bot"
           href="https://nyx.chrono-ai.fun/channel-bots"
           target="_blank"
           rel="noopener noreferrer"
           icon={<ExportOutlined />}
+          iconPlacement="end"
         >
           {t('channels.guide.add', 'Add bot in NyxID')}
         </Button>
@@ -56,7 +58,7 @@ function ConnectionGuide() {
             ),
           },
           {
-            icon: <LinkOutlined />,
+            icon: <LinkOutlined rotate={45} />,
             title: t('channels.guide.bind', 'Refresh and bind'),
             description: t(
               'channels.guide.bindHelp',
@@ -127,6 +129,10 @@ export default function ChannelsPage({
       activeSection="channels"
       scopeId={scopeId}
       title={t('workflowActivityVNext.nav.channels', 'Channels')}
+      description={t(
+        'channels.description',
+        'Bring your NyxID bots into Aevatar.',
+      )}
       mainClassName="channels__main"
       contentClassName="channels__content"
     >
@@ -147,6 +153,8 @@ export default function ChannelsPage({
           </h2>
           <Button
             icon={<ReloadOutlined />}
+            iconPlacement="end"
+            className="channels__refresh"
             loading={refreshing}
             disabled={registrations.isPending || refreshing}
             onClick={() => void refresh()}
@@ -209,23 +217,35 @@ export default function ChannelsPage({
                       </td>
                       <td>{platformName(row.platform)}</td>
                       <td>
-                        <ChannelSkill skill={row.skill} />
+                        {row.skill ? (
+                          <ChannelSkill skill={row.skill} />
+                        ) : (
+                          <span className="channels__muted">&ndash;</span>
+                        )}
                       </td>
                       <td>
-                        <InboundStatus value={row.nyxStatus ?? undefined} />
+                        {row.bindingStatus === 'unbound' ? (
+                          <span className="channels__muted">&ndash;</span>
+                        ) : (
+                          <InboundStatus value={row.nyxStatus ?? undefined} />
+                        )}
                       </td>
                       <td>
-                        <DeliveryStatus
-                          value={row.workflowDeliveryStatus}
-                          platform={row.platform}
-                        />
+                        {row.bindingStatus === 'unbound' ? (
+                          <span className="channels__muted">&ndash;</span>
+                        ) : (
+                          <DeliveryStatus
+                            value={row.workflowDeliveryStatus}
+                            platform={row.platform}
+                          />
+                        )}
                       </td>
                       <td>
                         {row.bindingStatus === 'bound' ? (
-                          <ChannelBadge tone="success">
+                          <span className="channels__bound">
                             <CheckOutlined aria-hidden="true" />
                             {t('channels.binding.bound', 'Bound')}
-                          </ChannelBadge>
+                          </span>
                         ) : row.availabilityStatus === 'available' ? (
                           <ChannelLink
                             className="channels__bind"
@@ -246,9 +266,10 @@ export default function ChannelsPage({
                             href={buildChannelDetailsHref(scopeId, row.id)}
                           >
                             {t('channels.manage', 'Manage')}
-                            <ArrowRightOutlined aria-hidden="true" />
                           </ChannelLink>
-                        ) : null}
+                        ) : (
+                          <span className="channels__muted">&ndash;</span>
+                        )}
                       </td>
                     </tr>
                   ))}

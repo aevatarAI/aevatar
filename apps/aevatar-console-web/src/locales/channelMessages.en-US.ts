@@ -1,4 +1,6 @@
 export default {
+  'channels.error.contract':
+    'Bot binding is not available yet. Please try again later.',
   'channels.guide.title': 'How to connect a bot',
   'channels.guide.add': 'Add bot in NyxID',
   'channels.guide.addHelp': 'Create your bot in NyxID.',
@@ -18,6 +20,8 @@ export default {
   'channels.binding.unavailable': 'Unavailable',
   'channels.status.disabled': 'Disabled',
   'channels.skills.placeholder': 'Select a skill',
+  'channels.skills.search': 'Search skills',
+  'channels.skills.available': 'Available in Ornn',
   'channels.skills.loading': 'Loading skills',
   'channels.skills.failed': 'Could not load skills. Use Refresh to try again.',
   'channels.skills.empty': 'No skills found',
@@ -27,6 +31,8 @@ export default {
     'Opens Ornn in a new tab. Create your skill, then return here and refresh the list.',
   'channels.skills.refresh': 'Refresh skills',
   'channels.bind.title': 'Bind bot',
+  'channels.bind.description':
+    'Choose a skill and the services this bot can use.',
   'channels.bind.success': 'Bot bound successfully.',
   'channels.bind.confirming': 'Confirming your changes...',
   'channels.bind.delayed':
@@ -76,8 +82,7 @@ export default {
   'channels.edit.discardHelp': 'Your unsaved channel changes will be lost.',
   'workflowActivityVNext.nav.channels': 'Channels',
   'channels.title': 'Connect your channels to your agent',
-  'channels.description':
-    'Choose a channel to connect your bot and select the services it can use.',
+  'channels.description': 'Bring your NyxID bots into Aevatar.',
   'channels.intro':
     'Once connected, talk to your Aevatar bot directly from the channel.',
   'channels.available': 'Available channels',
@@ -169,7 +174,7 @@ export default {
   'channels.connect.hideToken': 'Hide bot token',
   'channels.connect.botFather': 'Get token from BotFather',
   'channels.connect.name': 'Channel name',
-  'channels.connect.skillName': 'Skill name',
+  'channels.connect.skillName': 'Skill',
   'channels.connect.skillNameDefault': 'Defaults to the Telegram bot name',
   'channels.connect.optional': '(optional)',
   'channels.connect.botNameDefault':

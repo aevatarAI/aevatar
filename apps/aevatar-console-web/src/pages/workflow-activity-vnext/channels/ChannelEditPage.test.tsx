@@ -78,7 +78,7 @@ function catalogue(input: RequestInfo | URL) {
           {
             guid: 'skill-guid',
             name: 'support',
-            description: '',
+            description: 'Help customers with support requests.',
             myAccessReason: 'shared-via-org',
           },
           { guid: 'skill-guid-new', name: 'new-support', description: '' },
@@ -116,7 +116,7 @@ async function chooseSkill(name: string) {
   fireEvent.mouseDown(await screen.findByRole('combobox'));
   fireEvent.click(
     await screen.findByText(name, {
-      selector: '.ant-select-item-option-content',
+      selector: '.channels__skill-option strong',
     }),
   );
 }
@@ -135,6 +135,24 @@ it('binds an existing bot with shared Ornn skills, keeps selection on refresh an
       '/scopes/scope-alpha/workflow-activity-vnext/channels/bind/bot-alpha',
     );
     renderWithQueryClient(<WorkflowActivityVNextPage />);
+    fireEvent.mouseDown(await screen.findByRole('combobox'));
+    expect(
+      await screen.findByText('Help customers with support requests.'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search skills' }), {
+      target: { value: 'support' },
+    });
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(250);
+    });
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).includes('q=support')),
+      ).toBe(true),
+    );
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search skills' }), {
+      key: 'Escape',
+    });
     await chooseSkill('support');
     expect(
       screen.queryByLabelText(/Bot token|Channel name|Label/),

@@ -20,6 +20,14 @@ Telegram token creation flow.
 - Skill creation opens https://ornn.chrono-ai.fun/skills/new/generate in a
   new tab. Its tooltip explains the return-and-refresh action. Refresh is
   always visible beside the selector and preserves the current selection.
+- Match Figma's DM Sans typography, continuous white surface, restrained blue
+  actions, 60px guide icons and neutral connecting arrows. At a 1440px viewport,
+  the inventory content is 1080px wide; the table has a 46px header and 88px
+  rows, horizontal separators and no enclosing card border.
+- The binding form identifies the bot by label and platform and shows Not
+  bound. The Skill popup contains a search input, skill names and descriptions,
+  and the external creation footer. Keyboard users can move from search into
+  the options with Arrow Down and dismiss the popup with Escape.
 
 ## API Contract
 
@@ -60,10 +68,22 @@ are supported.
 
 ## Deployment And Verification
 
-The reference `origin/feature/integrate` still exposes the old channel contract
-at implementation time. Deploy the #3652 backend contract before enabling this
-frontend. There is no token-provisioning fallback, synthetic inventory, or
-local backend substitute.
+The #3652 contract was merged into `feature/integrate` by
+[backend PR #3653](https://github.com/aevatarAI/aevatar/pull/3653).
+During live verification on 2026-09-17, the remote deployment initially returned
+HTTP 200 with the old inventory shape, which the new decoder rejected. The UI
+now distinguishes an unavailable binding contract from a generic load failure.
+It never infers a binding state from legacy fields or treats failed decoding as
+an empty inventory.
+
+The remote deployment subsequently exposed the new exact-detail GET/POST
+routes and the new inventory shape. Verification against that real deployment
+displayed nine bots (eight bound and one unbound), loaded NyxID services and
+Ornn skills, and confirmed server search, keyboard selection and retention
+after refreshing skills. Desktop (1440px) and mobile (375px) screenshots were
+inspected in the existing Chrome session. No production bot or service grant
+was mutated during this verification; write confirmation and uncertain-write
+behavior are covered by focused tests.
 
 Focused tests cover inventory/null identities, request shapes and safe
 decoding, private Ornn proxy authorization/pagination, static guidance,

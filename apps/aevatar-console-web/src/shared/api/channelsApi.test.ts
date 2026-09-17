@@ -1,5 +1,5 @@
 import { authFetch } from '@/shared/auth/fetch';
-import { channelsApi } from './channelsApi';
+import { ChannelContractUnavailableError, channelsApi } from './channelsApi';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
 const fetchMock = jest.mocked(authFetch);
@@ -71,6 +71,14 @@ it('reads bound and unbound inventory without scope IDs and projects only safe f
     response({ error: 'nyxid_channel_bots_unavailable' }, 502),
   );
   await expect(channelsApi.list()).rejects.toMatchObject({ status: 502 });
+  fetchMock.mockResolvedValue(
+    response([
+      { ...bound, binding_status: undefined, default_skill_name: 'support' },
+    ]),
+  );
+  await expect(channelsApi.list()).rejects.toBeInstanceOf(
+    ChannelContractUnavailableError,
+  );
 });
 
 it('adopts and updates through the narrow contract and keeps admission separate from completion', async () => {
@@ -87,7 +95,7 @@ it('adopts and updates through the narrow contract and keeps admission separate 
     ),
   );
   const config = {
-    skillName: ' /Support ',
+    skillName: ' //Support ',
     authorizationMode: 'explicit_service_allowlist' as const,
     serviceIds: ['us-work'],
   };
