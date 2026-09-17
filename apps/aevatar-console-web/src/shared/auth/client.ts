@@ -213,7 +213,7 @@ export class NyxIDAuthClient {
     if (prompt) {
       url.searchParams.set('prompt', prompt);
     }
-    if (flow === "serviceAccessReview") {
+    if (options.flow === 'serviceAccessReview') {
       for (const resource of options.resources ?? []) {
         if (resource.trim()) url.searchParams.append('resource', resource);
       }
