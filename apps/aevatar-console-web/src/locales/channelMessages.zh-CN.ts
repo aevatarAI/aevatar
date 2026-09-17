@@ -168,8 +168,12 @@ export default {
   'channels.connect.servicesHelp': '仅显示当前 NyxID 授权范围内可用的服务。',
   'channels.connect.servicesLoading': '正在加载服务',
   'channels.connect.servicesError': '无法加载服务，请重试后再连接。',
-  'channels.connect.servicesEmpty':
-    '当前 NyxID 授权范围内暂无可用服务。可以连接机器人，但不授予服务访问权限。',
+  'channels.connect.servicesEmpty': '当前 NyxID 授权范围内暂无可用服务。',
+  'channels.connect.serviceRequired': '必选',
+  'channels.connect.requiredServicesMissing':
+    '必选服务不可用：{services}。请检查 NyxID 访问权限后重试。',
+  'channels.edit.replaceDefaults':
+    '保存后将使用所选服务替代 NyxID 默认授权范围。',
   'channels.connect.searchServices': '按名称或标识搜索服务',
   'channels.connect.serviceUnavailable': '不可用',
   'channels.connect.personal': '个人',

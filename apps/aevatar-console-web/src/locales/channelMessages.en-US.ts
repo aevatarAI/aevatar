@@ -192,7 +192,12 @@ export default {
   'channels.connect.servicesError':
     'Could not load your services. Retry before connecting.',
   'channels.connect.servicesEmpty':
-    'No services are available with your current NyxID authorization. You can connect this bot without service access.',
+    'No services are available with your current NyxID authorization.',
+  'channels.connect.serviceRequired': 'Required',
+  'channels.connect.requiredServicesMissing':
+    'Required services unavailable: {services}. Check your NyxID access, then retry.',
+  'channels.edit.replaceDefaults':
+    'Saving replaces NyxID default access with the selected services.',
   'channels.connect.searchServices': 'Search services by name or slug',
   'channels.connect.serviceUnavailable': 'Unavailable',
   'channels.connect.personal': 'Personal',

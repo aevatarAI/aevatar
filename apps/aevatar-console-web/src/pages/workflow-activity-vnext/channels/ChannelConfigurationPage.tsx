@@ -47,6 +47,8 @@ type Target =
   | { readonly botId: string; readonly registrationId?: never }
   | { readonly registrationId: string; readonly botId?: never };
 
+const requiredServiceSlugs = ['ornn-api', 'chrono-llm-public'] as const;
+
 export default function ChannelConfigurationPage({
   scopeId,
   ...target
@@ -176,12 +178,9 @@ function ConfigurationForm({
 }) {
   const baseline = channelConfiguration(initial);
   const [skillName, setSkillName] = React.useState(initial.skill?.name ?? '');
-  const [serviceIds, setServiceIds] = React.useState<readonly string[]>(
+  const [chosenServiceIds, setServiceIds] = React.useState<readonly string[]>(
     baseline?.serviceIds ?? [],
   );
-  const [authorizationMode, setAuthorizationMode] = React.useState<
-    ChannelConfiguration['authorizationMode']
-  >(baseline?.authorizationMode ?? 'explicit_service_allowlist');
   const [label, setLabel] = React.useState(initial.label ?? '');
   const [savedLabel, setSavedLabel] = React.useState(initial.label ?? '');
   const [receipt, setReceipt] = React.useState<ChannelReceipt | null>(null);
@@ -198,6 +197,21 @@ function ConfigurationForm({
   const mounted = React.useRef(true);
   const labelId = React.useId();
   const services = useChannelServiceChoices(scopeId);
+  const requiredServices = (services.data ?? []).filter(
+    (service) =>
+      service.active &&
+      service.allowed &&
+      requiredServiceSlugs.some((slug) => service.slug === slug),
+  );
+  const requiredIds = requiredServices.map((service) => service.id);
+  const missingRequiredSlugs = requiredServiceSlugs.filter(
+    (slug) => !requiredServices.some((service) => service.slug === slug),
+  );
+  const serviceIds = [...new Set([...chosenServiceIds, ...requiredIds])];
+  const servicesReady =
+    !services.isPending &&
+    !services.isError &&
+    missingRequiredSlugs.length === 0;
   const toast = useConsoleToast();
   const client = useQueryClient();
   const listHref = buildWorkflowActivitySectionHref(scopeId, 'channels');
@@ -208,13 +222,13 @@ function ConfigurationForm({
   const config: ChannelConfiguration = {
     skillName,
     serviceIds,
-    authorizationMode,
+    authorizationMode: 'explicit_service_allowlist',
   };
   const configDirty = !editing || !channelConfigMatches(initial, config);
   const labelDirty = editing && label.trim() !== savedLabel;
   const dirty = editing
     ? configDirty || labelDirty
-    : Boolean(skillName || serviceIds.length);
+    : Boolean(skillName || chosenServiceIds.length);
   const busy = submitting || Boolean(receipt) || uncertain;
   const options = [
     ...(services.data ?? []),
@@ -319,7 +333,13 @@ function ConfigurationForm({
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    if (lock.current || busy || completed.current || (editing && !dirty))
+    if (
+      lock.current ||
+      busy ||
+      completed.current ||
+      !servicesReady ||
+      (editing && !dirty)
+    )
       return;
     setFailure(null);
     if (labelDirty && !isValidChannelBotLabel(label)) {
@@ -463,17 +483,16 @@ function ConfigurationForm({
         <ChannelServicePicker
           services={options}
           selectedIds={serviceIds}
-          onChange={(ids) => {
-            setServiceIds(ids);
-            setAuthorizationMode('explicit_service_allowlist');
-          }}
+          requiredIds={requiredIds}
+          missingRequiredSlugs={missingRequiredSlugs}
+          onChange={setServiceIds}
           loading={services.isPending}
           failed={services.isError}
           refreshing={services.isFetching}
           disabled={busy}
           retry={() => void services.refetch()}
           editing={editing}
-          usesDefaults={authorizationMode === 'nyxid_default'}
+          replacesDefaults={baseline?.authorizationMode === 'nyxid_default'}
         />
         {failure ? (
           <p role="alert" className="channels__form-error">
@@ -515,12 +534,7 @@ function ConfigurationForm({
               submitting ||
               (Boolean(receipt) && !delayed && !observation.isError)
             }
-            disabled={
-              busy ||
-              (editing && !dirty) ||
-              services.isPending ||
-              services.isError
-            }
+            disabled={busy || (editing && !dirty) || !servicesReady}
           >
             {editing
               ? t('channels.edit.save', 'Save changes')

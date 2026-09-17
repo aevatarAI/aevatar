@@ -17,6 +17,15 @@ Telegram token creation flow.
 - Bind uses the existing Skill and Services form controls. It contains no
   platform credentials or editable channel name. Edit retains its existing
   NyxID Label action and shares the Skill and Services controls.
+- Bind and Edit preselect and lock services whose exact slugs are `ornn-api`
+  and `chrono-llm-public`. Individual and bulk deselection retain both; other
+  services remain optional. Resolve their real UserService IDs from the current
+  authorized, active NyxID inventory, never from labels or slug-as-ID fallbacks.
+  Missing required access blocks submission and offers retry after correcting
+  NyxID access. Save uses an explicit allowlist containing both required IDs and
+  the optional selections. Editing an older NyxID-default configuration explains
+  that saving replaces defaults with these selected services; the UI does not
+  infer which services were included in those defaults.
 - Skill creation opens https://ornn.chrono-ai.fun/skills/new/generate in a
   new tab. Its tooltip explains the return-and-refresh action. The refresh icon
   sits at the right of the popup's Available in Ornn heading. Refresh preserves

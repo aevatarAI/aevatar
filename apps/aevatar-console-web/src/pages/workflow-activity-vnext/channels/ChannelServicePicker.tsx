@@ -8,6 +8,8 @@ import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
 export default function ChannelServicePicker({
   services,
   selectedIds,
+  requiredIds,
+  missingRequiredSlugs,
   onChange,
   loading,
   failed,
@@ -15,10 +17,12 @@ export default function ChannelServicePicker({
   disabled,
   retry,
   editing = false,
-  usesDefaults = false,
+  replacesDefaults = false,
 }: {
   readonly services: readonly ChannelServiceChoice[];
   readonly selectedIds: readonly string[];
+  readonly requiredIds: readonly string[];
+  readonly missingRequiredSlugs: readonly string[];
   readonly onChange: (ids: string[]) => void;
   readonly loading: boolean;
   readonly failed: boolean;
@@ -26,7 +30,7 @@ export default function ChannelServicePicker({
   readonly disabled: boolean;
   readonly retry: () => void;
   readonly editing?: boolean;
-  readonly usesDefaults?: boolean;
+  readonly replacesDefaults?: boolean;
 }) {
   const [search, setSearch] = React.useState('');
   const term = search.trim().toLocaleLowerCase();
@@ -36,6 +40,7 @@ export default function ChannelServicePicker({
   const selectableIds = visible
     .filter((service) => service.active && service.allowed)
     .map((service) => service.id);
+  const optionalIds = selectableIds.filter((id) => !requiredIds.includes(id));
   const selectedCount = selectableIds.filter((id) =>
     selectedIds.includes(id),
   ).length;
@@ -51,11 +56,9 @@ export default function ChannelServicePicker({
           {t('channels.connect.services', 'Services')}
         </h2>
         <span aria-live="polite">
-          {usesDefaults
-            ? t('channels.edit.defaults', 'NyxID defaults')
-            : t('channels.connect.selected', '{count} selected', {
-                count: selectedIds.length,
-              })}
+          {t('channels.connect.selected', '{count} selected', {
+            count: selectedIds.length,
+          })}
         </span>
       </div>
       <p className="channels__form-help">
@@ -96,7 +99,7 @@ export default function ChannelServicePicker({
               )
             : t(
                 'channels.connect.servicesEmpty',
-                'No services are available with your current NyxID authorization. You can connect this bot without service access.',
+                'No services are available with your current NyxID authorization.',
               )}
         </div>
       ) : (
@@ -119,12 +122,12 @@ export default function ChannelServicePicker({
             <Checkbox
               checked={allSelected}
               indeterminate={selectedCount > 0 && !allSelected}
-              disabled={disabled || !selectableIds.length}
+              disabled={disabled || !optionalIds.length}
               onChange={(event) =>
                 onChange(
                   event.target.checked
                     ? [...new Set([...selectedIds, ...selectableIds])]
-                    : selectedIds.filter((id) => !selectableIds.includes(id)),
+                    : selectedIds.filter((id) => !optionalIds.includes(id)),
                 )
               }
             >
@@ -138,6 +141,7 @@ export default function ChannelServicePicker({
               visible.map((service) => {
                 const selected = selectedIds.includes(service.id);
                 const unavailable = !service.active || !service.allowed;
+                const required = requiredIds.includes(service.id);
                 return (
                   <div
                     className={`channels__service-option${selected ? ' channels__service-option--selected' : ''}`}
@@ -145,7 +149,9 @@ export default function ChannelServicePicker({
                   >
                     <Checkbox
                       checked={selected}
-                      disabled={disabled || (unavailable && !selected)}
+                      disabled={
+                        disabled || required || (unavailable && !selected)
+                      }
                       onChange={(event) =>
                         onChange(
                           event.target.checked
@@ -159,6 +165,9 @@ export default function ChannelServicePicker({
                       </span>
                       <span className="channels__service-slug">
                         {service.slug}
+                        {required
+                          ? ` (${t('channels.connect.serviceRequired', 'Required')})`
+                          : null}
                       </span>
                     </Checkbox>
                     <span className="channels__service-source">
@@ -186,14 +195,31 @@ export default function ChannelServicePicker({
           </div>
         </div>
       )}
-      {!usesDefaults ? (
-        <p className="channels__form-help">
-          {t(
-            'channels.connect.selectionHelp',
-            'Only selected services will be available to this bot.',
-          )}
-        </p>
+      {!loading && !failed && missingRequiredSlugs.length ? (
+        <div className="channels__service-state" role="alert">
+          <p>
+            {t(
+              'channels.connect.requiredServicesMissing',
+              'Required services unavailable: {services}. Check your NyxID access, then retry.',
+              { services: missingRequiredSlugs.join(', ') },
+            )}
+          </p>
+          <Button loading={refreshing} onClick={retry} disabled={disabled}>
+            {t('channels.retry', 'Try again')}
+          </Button>
+        </div>
       ) : null}
+      <p className="channels__form-help">
+        {replacesDefaults
+          ? t(
+              'channels.edit.replaceDefaults',
+              'Saving replaces NyxID default access with the selected services.',
+            )
+          : t(
+              'channels.connect.selectionHelp',
+              'Only selected services will be available to this bot.',
+            )}
+      </p>
     </section>
   );
 }
