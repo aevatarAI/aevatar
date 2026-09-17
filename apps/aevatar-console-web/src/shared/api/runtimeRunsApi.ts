@@ -7,19 +7,19 @@ import type {
 } from "@aevatar-react-sdk/types";
 import { authFetch } from "@/shared/auth/fetch";
 import {
-  decodeWorkflowResumeResponseBody,
-  decodeWorkflowSignalResponseBody,
-} from "./runtimeDecoders";
-import { requestJson, withQuery } from "./http/client";
-import { readResponseError, readResponseErrorDetails } from "./http/error";
-import {
   encodeAppScriptCommandBase64,
   encodeStringValueBase64,
   getAppScriptCommandEndpointId,
   getAppScriptCommandTypeUrl,
-  isAutoEncodableTextPayloadTypeUrl,
   getStringValueTypeUrl,
+  isAutoEncodableTextPayloadTypeUrl,
 } from "@/shared/runs/protobufPayload";
+import { requestJson, withQuery } from "./http/client";
+import { readResponseError, readResponseErrorDetails } from "./http/error";
+import {
+  decodeWorkflowResumeResponseBody,
+  decodeWorkflowSignalResponseBody,
+} from "./runtimeDecoders";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -28,12 +28,19 @@ const JSON_HEADERS = {
 
 export class RuntimeRunsApiError extends Error {
   readonly code?: string;
+  readonly fieldErrors?: Readonly<Record<string, readonly string[]>>;
   readonly status: number;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    fieldErrors?: Readonly<Record<string, readonly string[]>>,
+  ) {
     super(message);
     this.name = "RuntimeRunsApiError";
     this.code = code;
+    this.fieldErrors = fieldErrors;
     this.status = status;
   }
 }
@@ -365,7 +372,13 @@ export const runtimeRunsApi = {
     );
 
     if (!response.ok) {
-      throw new Error(await readResponseError(response));
+      const details = await readResponseErrorDetails(response);
+      throw new RuntimeRunsApiError(
+        details.message,
+        response.status,
+        details.code,
+        details.fieldErrors,
+      );
     }
 
     return response;
@@ -405,6 +418,7 @@ export const runtimeRunsApi = {
         details.message,
         response.status,
         details.code,
+        details.fieldErrors,
       );
     }
 
@@ -422,7 +436,13 @@ export const runtimeRunsApi = {
     );
 
     if (!response.ok) {
-      throw new Error(await readResponseError(response));
+      const details = await readResponseErrorDetails(response);
+      throw new RuntimeRunsApiError(
+        details.message,
+        response.status,
+        details.code,
+        details.fieldErrors,
+      );
     }
 
     return response;

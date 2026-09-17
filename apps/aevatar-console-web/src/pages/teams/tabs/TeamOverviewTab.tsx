@@ -6,9 +6,10 @@ import {
   PlayCircleOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
-import { Button, Space, Tooltip, Typography, theme } from "antd";
+import { Button, Space, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { AevatarInspectorEmpty } from "@/shared/ui/aevatarPageShells";
 import {
   DetailPill,
@@ -232,7 +233,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
               <DetailPill compact style={currentRunPillStyle} text={currentRunPillText} />
             </Space>
           </div>
-          <Tooltip title={teamRunDisabled ? teamRunDisabledReason : undefined}>
+          <AevatarTooltip title={teamRunDisabled ? teamRunDisabledReason : undefined}>
             <Button
               disabled={teamRunDisabled}
               icon={<PlayCircleOutlined />}
@@ -243,7 +244,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                 id: "teams.detail.overview.quickRun.runTeam",
               })}
             </Button>
-          </Tooltip>
+          </AevatarTooltip>
         </div>
         <div
           style={{
@@ -271,11 +272,11 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
               <Typography.Text style={{ fontSize: 12 }} type="secondary">
                 {item.label}
               </Typography.Text>
-              <Tooltip title={item.tooltip}>
+              <AevatarTooltip title={item.tooltip}>
                 <Typography.Text strong ellipsis>
                   {item.value}
                 </Typography.Text>
-              </Tooltip>
+              </AevatarTooltip>
             </div>
           ))}
         </div>
@@ -347,11 +348,11 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                 <Typography.Text style={{ fontSize: 12 }} type="secondary">
                   {row.label}
                 </Typography.Text>
-                <Tooltip title={row.noteTooltip || row.note}>
+                <AevatarTooltip title={row.noteTooltip || row.note}>
                   <Typography.Text strong ellipsis>
                     {row.value}
                   </Typography.Text>
-                </Tooltip>
+                </AevatarTooltip>
               </div>
             ))}
           </div>
@@ -418,7 +419,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                   </Space>
                 </div>
                 <Space.Compact>
-                  <Tooltip
+                  <AevatarTooltip
                     title={
                       row.canRun
                         ? runMemberLabel
@@ -438,9 +439,9 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                       size="small"
                       type={row.canRun ? "primary" : "default"}
                     />
-                  </Tooltip>
+                  </AevatarTooltip>
                   {row.configureLabel ? (
-                    <Tooltip
+                    <AevatarTooltip
                       title={
                         row.canConfigure
                           ? row.configureLabel
@@ -460,7 +461,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                         size="small"
                         type={row.canConfigure ? "default" : "dashed"}
                       />
-                    </Tooltip>
+                    </AevatarTooltip>
                   ) : null}
                 </Space.Compact>
               </div>
@@ -527,7 +528,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                     <Typography.Text style={{ fontSize: 12 }} type="secondary">
                       <ClockCircleOutlined /> {run.updatedLabel}
                     </Typography.Text>
-                    <Tooltip
+                    <AevatarTooltip
                       title={
                         <div style={{ display: "grid", gap: 4 }}>
                           {run.detailItems.map((item) => (
@@ -546,7 +547,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                       >
                         <InfoCircleOutlined />
                       </span>
-                    </Tooltip>
+                    </AevatarTooltip>
                   </Space>
                   <Typography.Text strong>{run.memberLabel}</Typography.Text>
                   <Typography.Text style={{ fontSize: 12 }} type="secondary">
@@ -555,7 +556,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                   <FactLine rows={2} secondary text={run.outputPreview} />
                 </div>
                 {run.detailsHref ? (
-                  <Tooltip
+                  <AevatarTooltip
                     title={intl.formatMessage({
                       id: "teams.detail.overview.history.actions.view",
                     })}
@@ -569,7 +570,7 @@ const TeamOverviewTab: React.FC<TeamOverviewTabProps> = ({
                       onClick={handleNavigate(run.detailsHref)}
                       size="small"
                     />
-                  </Tooltip>
+                  </AevatarTooltip>
                 ) : null}
               </div>
             ))}

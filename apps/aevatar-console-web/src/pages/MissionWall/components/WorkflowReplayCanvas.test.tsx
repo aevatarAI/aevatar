@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { WorkflowReplayCanvas } from "./WorkflowReplayCanvas";
 
@@ -41,7 +41,7 @@ jest.mock("@xyflow/react", () => {
       }, []);
       return React.createElement(
         "div",
-        { "data-testid": "react-flow-mock" },
+        null,
         props.nodes?.map((node: any) =>
           React.createElement("div", { key: node.id }, node.data.node.stepId),
         ),
@@ -160,7 +160,6 @@ describe("WorkflowReplayCanvas", () => {
   it("renders the workflow flow with directional runtime edges", () => {
     render(React.createElement(WorkflowReplayCanvas, { graph: graphFixture() }));
 
-    expect(screen.getByTestId("react-flow-mock")).toBeInTheDocument();
     expect(screen.getByText("validate_input")).toBeInTheDocument();
     expect(screen.getByText("validate_report")).toBeInTheDocument();
     expect(screen.queryByText(/Focused steps/i)).not.toBeInTheDocument();
@@ -199,8 +198,9 @@ describe("WorkflowReplayCanvas", () => {
       React.createElement(WorkflowReplayCanvas, { graph: graphFixture() }),
     );
 
-    await screen.findByTestId("react-flow-mock");
-    expect(mockFitView).toHaveBeenCalledTimes(FIT_VIEW_ATTEMPT_COUNT);
+    await waitFor(() =>
+      expect(mockFitView).toHaveBeenCalledTimes(FIT_VIEW_ATTEMPT_COUNT),
+    );
 
     const reactFlowProps = mockReactFlowRender.mock.calls.at(-1)?.[0] as any;
     expect(reactFlowProps.fitView).toBe(true);
@@ -232,8 +232,9 @@ describe("WorkflowReplayCanvas", () => {
       React.createElement(WorkflowReplayCanvas, { graph: graphFixture() }),
     );
 
-    await screen.findByTestId("react-flow-mock");
-    expect(mockFitView).toHaveBeenCalledTimes(FIT_VIEW_ATTEMPT_COUNT);
+    await waitFor(() =>
+      expect(mockFitView).toHaveBeenCalledTimes(FIT_VIEW_ATTEMPT_COUNT),
+    );
 
     const reactFlowProps = mockReactFlowRender.mock.calls.at(-1)?.[0] as any;
     reactFlowProps.onMove?.({ type: "mousemove" }, { x: 120, y: 0, zoom: 1 });
@@ -253,10 +254,11 @@ describe("WorkflowReplayCanvas", () => {
   it("retries the initial fit across several animation frames so late node measurement cannot leave a blank grid", async () => {
     render(React.createElement(WorkflowReplayCanvas, { graph: graphFixture() }));
 
-    await screen.findByTestId("react-flow-mock");
+    await waitFor(() =>
+      expect(mockFitView).toHaveBeenCalledTimes(FIT_VIEW_ATTEMPT_COUNT),
+    );
 
     expect(mockRequestAnimationFrame).toHaveBeenCalledTimes(FIT_VIEW_ATTEMPT_COUNT);
-    expect(mockFitView).toHaveBeenCalledTimes(FIT_VIEW_ATTEMPT_COUNT);
     expect(mockFitView).toHaveBeenLastCalledWith(
       expect.objectContaining({
         nodes: expect.arrayContaining([

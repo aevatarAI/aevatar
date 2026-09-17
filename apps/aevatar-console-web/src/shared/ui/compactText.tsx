@@ -1,5 +1,6 @@
-import { Tag, Tooltip, Typography } from "antd";
+import { Tag, Typography } from "antd";
 import React from "react";
+import AevatarTooltip from './AevatarTooltip';
 import { isMachineIdentifierValue } from "./userFacingIdentifiers";
 
 export const aevatarMonoFontFamily = '"IBM Plex Mono", "SF Mono", monospace';
@@ -79,7 +80,7 @@ export const AevatarCompactText: React.FC<AevatarCompactTextProps> = ({
     </Typography.Text>
   );
 
-  return displayValue !== value ? <Tooltip title={value}>{content}</Tooltip> : content;
+  return displayValue !== value ? <AevatarTooltip title={value}>{content}</AevatarTooltip> : content;
 };
 
 type AevatarCompactTagProps = {
@@ -131,5 +132,5 @@ export const AevatarCompactTag: React.FC<AevatarCompactTagProps> = ({
     </Tag>
   );
 
-  return displayValue !== value ? <Tooltip title={value}>{tag}</Tooltip> : tag;
+  return displayValue !== value ? <AevatarTooltip title={value}>{tag}</AevatarTooltip> : tag;
 };

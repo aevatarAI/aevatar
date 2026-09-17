@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.docs_only_route.outputs.docs_only }}
+      frontend_only: ${{ steps.docs_only_route.outputs.frontend_only }}
       all_changed: ${{ steps.filter.outputs.all_changed }}
       core_code: ${{ steps.filter.outputs.core_code }}
       product_runtime: ${{ steps.filter.outputs.product_runtime }}
@@ -130,18 +131,29 @@ jobs:
             console_web:
               - 'apps/aevatar-console-web/**'
               - '.github/workflows/ci.yml'
+            frontend_paths:
+              - 'apps/aevatar-console-web/**'
 
-      - name: Resolve Doc-Only Route
+      - name: Resolve Change Scope
         id: docs_only_route
         env:
           ALL_CHANGED_COUNT: ${{ steps.filter.outputs.all_changed_count }}
           DOCS_ONLY_COUNT: ${{ steps.filter.outputs.docs_only_count }}
+          FRONTEND_CHANGED_COUNT: ${{ steps.filter.outputs.frontend_paths_count }}
         run: |
           if [ "${ALL_CHANGED_COUNT:-0}" != "0" ] && [ "${ALL_CHANGED_COUNT:-0}" = "${DOCS_ONLY_COUNT:-0}" ]; then
             echo "docs_only=true" >> "$GITHUB_OUTPUT"
           else
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
           fi
+          if [ "${ALL_CHANGED_COUNT:-0}" != "0" ] && [ "${ALL_CHANGED_COUNT:-0}" = "${FRONTEND_CHANGED_COUNT:-0}" ]; then
+            echo "frontend_only=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify Change Scope Routing
+        run: python3 tools/ci/tests/test_ci_change_scope.py
 
   fkst-host-policy:
     if: |
@@ -233,19 +245,54 @@ jobs:
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
 
+  console-web-tests:
+    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.2.1
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/aevatar-console-web/pnpm-lock.yaml
+
+      - name: Install console-web dependencies
+        run: pnpm --dir apps/aevatar-console-web install --frozen-lockfile
+
+      - name: Test console-web shard
+        run: pnpm --dir apps/aevatar-console-web test --runInBand --shard=${{ matrix.shard }}/4
+
   console-web:
     # Refactor (iter16/cluster-ci-systemic-refactor):
     #   Old pattern: console-web skipped scheduled CI and ran for every PR, workflow_dispatch, main/dev push, or console_web changes
     #   New principle: gate on changes.outputs.console_web per Phase 9 #716 r3 consensus A
-    if: needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
-    needs: changes
+    # Keep the existing required check name and fail it if any test shard fails
+    # or is cancelled. All tests run once across the four Jest partitions.
+    if: always() && needs.changes.outputs.docs_only == 'false' && needs.changes.outputs.console_web == 'true'
+    needs: [changes, console-web-tests]
     runs-on: ubuntu-latest
-    # The serial suite grew into this budget: recent runs took 19m02s, 19m35s,
-    # 19m57s, then 20m10s and 20m17s, the last two cancelled mid-test at the
-    # 20m cap. The ~18m of test work is real, so give it headroom rather than
-    # letting every run decide the build on runner jitter.
-    timeout-minutes: 35
+    # Retain the base branch's budget for typecheck, build, and canvas benchmark.
+    timeout-minutes: 45
     steps:
+      - name: Require all console-web test shards
+        env:
+          TEST_SHARDS_RESULT: ${{ needs.console-web-tests.result }}
+        run: test "$TEST_SHARDS_RESULT" = success
+
       - uses: actions/checkout@v4
 
       - name: Setup pnpm
@@ -267,11 +314,21 @@ jobs:
       - name: Type-check console-web
         run: pnpm --dir apps/aevatar-console-web tsc
 
-      - name: Test console-web
-        run: pnpm --dir apps/aevatar-console-web test --runInBand
-
       - name: Build console-web
+        env:
+          AEVATAR_WORKFLOW_CANVAS_BENCHMARK: '1'
         run: pnpm --dir apps/aevatar-console-web build
+
+      - name: Benchmark workflow canvas
+        run: pnpm --dir apps/aevatar-console-web benchmark:workflow-canvas
+
+      - name: Upload workflow canvas benchmark
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-canvas-benchmark
+          path: apps/aevatar-console-web/artifacts/workflow-canvas-benchmark
+          if-no-files-found: warn
 
   slow-test-guards:
     needs: changes
@@ -388,11 +445,17 @@ jobs:
     #   Old pattern: coverage_quality_guard.sh 吞 test fail 继续 emit coverage;split-test-guards 漏跑 22 orphan project
     #   New principle: strict-coverage fail-fast(不吞 fail);aevatar.slnx-or-slow-test 唯一测试权威;
     #   retire slnf 测试执行(只保留 slnf build boundary);slow-tests 独立 CI job
+    # Frontend-only PRs do not need backend coverage, regardless of their target branch.
+    # Mixed changes and changes to CI/build infrastructure retain this gate.
     if: |
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
-      needs.changes.outputs.docs_only == 'false'
+      (
+        github.event_name == 'pull_request' &&
+        needs.changes.outputs.frontend_only != 'true' &&
+        needs.changes.outputs.docs_only == 'false'
+      )
     runs-on: ubuntu-latest
     # Full coverage takes 34-35 minutes after a roughly 10-minute restore/build,
     # then still needs time to upload the report. Keep the fail-fast guard while

@@ -9,6 +9,7 @@ import {
   resolveAntdLocale,
   resolveProIntl,
 } from '../src/shared/i18n/localeProvider';
+import { ConsoleToastProvider } from '../src/shared/ui/ConsoleToast';
 
 const activeQueryClients = new Set<QueryClient>();
 
@@ -39,7 +40,9 @@ export function renderWithQueryClient(
   const view = render(
     <ConfigProvider locale={resolveAntdLocale('en-US')}>
       <ProConfigProvider intl={resolveProIntl('en-US')}>
-        <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+        <ConsoleToastProvider>
+          <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+        </ConsoleToastProvider>
       </ProConfigProvider>
     </ConfigProvider>,
   );

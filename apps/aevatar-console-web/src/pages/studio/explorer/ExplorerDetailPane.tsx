@@ -1,6 +1,7 @@
 import { Alert, Button, Input, Space, Spin, Tag, Typography } from "antd";
 import React from "react";
 import type { ExplorerManifestEntry } from "@/shared/api/explorerApi";
+import { useConsoleToast } from "@/shared/ui/ConsoleToast";
 import ExplorerContentView from "./ExplorerContentView";
 import { t } from "@/shared/i18n/messages";
 
@@ -116,9 +117,8 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
   scopeId,
   selectedEntry,
 }) => {
+  const toast = useConsoleToast();
   const [draft, setDraft] = React.useState("");
-  const [saveError, setSaveError] = React.useState<string | null>(null);
-  const [deleteError, setDeleteError] = React.useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
   const [isDeleting, setIsDeleting] = React.useState(false);
@@ -139,8 +139,6 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
   }, [isDirty, onDirtyStateChange]);
 
   React.useEffect(() => {
-    setSaveError(null);
-    setDeleteError(null);
     setConfirmDelete(false);
     setDraft(content ?? "");
     if (selectedEntry?.type === "chat-history") {
@@ -259,7 +257,6 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
               <Button
                 onClick={() => {
                   setDraft(content ?? "");
-                  setSaveError(null);
                 }}
                 disabled={!isDirty || isSaving || isDeleting}
               >
@@ -273,13 +270,15 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                     return;
                   }
 
-                  setSaveError(null);
                   setIsSaving(true);
                   try {
                     await onSaveFile(selectedEntry.key, draft);
-                  } catch (error) {
-                    setSaveError(
-                      error instanceof Error ? error.message : "Failed to save explorer file."
+                  } catch {
+                    toast.error(
+                      t(
+                        "pages.studio.explorer.explorerdetailpane.could.not.save.file.toast",
+                        "Could not save file. Try again.",
+                      ),
                     );
                   } finally {
                     setIsSaving(false);
@@ -292,7 +291,6 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                 loading={isDeleting}
                 disabled={isSaving || !onDeleteFile}
                 onClick={() => {
-                  setDeleteError(null);
                   setConfirmDelete(true);
                 }}
               >
@@ -323,14 +321,16 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                       return;
                     }
 
-                    setDeleteError(null);
                     setIsDeleting(true);
                     try {
                       await onDeleteFile(selectedEntry.key);
                       setConfirmDelete(false);
-                    } catch (error) {
-                      setDeleteError(
-                        error instanceof Error ? error.message : "Failed to delete explorer file."
+                    } catch {
+                      toast.error(
+                        t(
+                          "pages.studio.explorer.explorerdetailpane.could.not.delete.file.toast",
+                          "Could not delete file. Try again.",
+                        ),
                       );
                     } finally {
                       setIsDeleting(false);
@@ -340,17 +340,6 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                   {t("pages.studio.explorer.explorerdetailpane.delete.now", "Delete now")}</Button>
               </Space>
             }
-          />
-        ) : null}
-        {saveError ? (
-          <Alert type="error" showIcon message={t("pages.studio.explorer.explorerdetailpane.could.not.save.file", "Could not save file")} description={saveError} />
-        ) : null}
-        {deleteError ? (
-          <Alert
-            type="error"
-            showIcon
-            message={t("pages.studio.explorer.explorerdetailpane.could.not.delete.file", "Could not delete file")}
-            description={deleteError}
           />
         ) : null}
       </div>
@@ -377,7 +366,6 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
               value={draft}
               onChange={(event) => {
                 setDraft(event.target.value);
-                setSaveError(null);
               }}
             />
           ) : (

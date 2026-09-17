@@ -324,10 +324,16 @@ describe('DeploymentsPage', () => {
 
     renderDeploymentsPage();
 
-    expect(await screen.findByText('正在加载发布服务')).toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveAttribute(
+      'data-variant',
+      'table',
+    );
+    expect(screen.getByText('正在加载发布服务')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
     expect(
-      screen.getByText('发布对象清单仍在加载，返回前不会把当前范围误判为空。'),
-    ).toBeInTheDocument();
+      screen.queryByText('发布对象清单仍在加载，返回前不会把当前范围误判为空。'),
+    ).toBeNull();
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4);
     expect(screen.queryByText('当前范围没有服务')).toBeNull();
 
