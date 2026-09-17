@@ -70,7 +70,35 @@ const receipt = {
   registration_id: 'reg-alpha',
   command_id: 'cmd-one',
 };
-function catalogue(input: RequestInfo | URL) {
+const serviceCatalogue = [
+  {
+    id: 'user-service-github',
+    slug: 'api-github',
+    label: 'GitHub',
+    is_active: true,
+    credential_source: { type: 'personal' },
+  },
+  {
+    id: 'user-service-ornn',
+    slug: 'ornn-api',
+    label: 'Ornn',
+    is_active: true,
+    credential_source: { type: 'personal' },
+  },
+  {
+    id: 'user-service-llm',
+    slug: 'chrono-llm-public',
+    label: 'Chrono LLM',
+    is_active: true,
+    credential_source: { type: 'personal' },
+  },
+];
+const selectedServiceIds = [
+  'user-service-github',
+  'user-service-llm',
+  'user-service-ornn',
+];
+function catalogue(input: RequestInfo | URL, services = serviceCatalogue) {
   if (String(input).includes('/skill-search'))
     return response({
       data: {
@@ -87,18 +115,7 @@ function catalogue(input: RequestInfo | URL) {
       },
       error: null,
     });
-  if (String(input).endsWith('/user-services'))
-    return response({
-      services: [
-        {
-          id: 'user-service-github',
-          slug: 'api-github',
-          label: 'GitHub',
-          is_active: true,
-          credential_source: { type: 'personal' },
-        },
-      ],
-    });
+  if (String(input).endsWith('/user-services')) return response({ services });
   return null;
 }
 const posts = () =>
@@ -108,7 +125,9 @@ beforeEach(() => {
   Object.values(mockToast).forEach((mock) => {
     mock.mockReset();
   });
-  persistAuthSession(createNyxIDServiceSession());
+  persistAuthSession(
+    createNyxIDServiceSession({ allowed_service_ids: selectedServiceIds }),
+  );
   jest.spyOn(history, 'push').mockImplementation(() => {});
   jest.spyOn(history, 'replace').mockImplementation(() => {});
 });
@@ -127,7 +146,12 @@ it('binds with shared Ornn skills, retains refresh selection and opens the regis
     let committed = false;
     fetchMock.mockImplementation(async (input, init) => {
       if (init?.method === 'POST') return response(receipt, 202);
-      return catalogue(input) ?? response([committed ? row : unbound]);
+      return (
+        catalogue(input) ??
+        response([
+          committed ? { ...row, service_ids: selectedServiceIds } : unbound,
+        ])
+      );
     });
     window.history.replaceState(
       {},
@@ -199,7 +223,7 @@ it('binds with shared Ornn skills, retains refresh selection and opens the regis
       nyx_channel_bot_id: 'bot-alpha',
       skill_name: 'support',
       authorization_mode: 'explicit_service_allowlist',
-      service_ids: ['user-service-github'],
+      service_ids: selectedServiceIds,
     });
     expect(mockToast.success).not.toHaveBeenCalled();
     expect(history.replace).not.toHaveBeenCalled();
@@ -243,6 +267,7 @@ it('preserves Label editing and requires a newer matching configuration before r
           ...row,
           label: 'reg-alpha',
           skill_name: committed ? 'new-support' : 'support',
+          service_ids: committed ? selectedServiceIds : row.service_ids,
           state_version: committed ? 13 : 12,
         })
       );
@@ -264,7 +289,7 @@ it('preserves Label editing and requires a newer matching configuration before r
     expect(JSON.parse(String(posts()[0][1]?.body))).toEqual({
       skill_name: 'new-support',
       authorization_mode: 'explicit_service_allowlist',
-      service_ids: ['user-service-github'],
+      service_ids: selectedServiceIds,
     });
     expect(mockToast.success).not.toHaveBeenCalled();
     committed = true;
@@ -315,7 +340,7 @@ it('attributes an insecure callback rejection to the server and retains the bind
       nyx_channel_bot_id: 'bot-alpha',
       skill_name: 'support',
       authorization_mode: 'explicit_service_allowlist',
-      service_ids: ['user-service-github'],
+      service_ids: selectedServiceIds,
     });
     expect(posts()).toHaveLength(1);
     expect(mockToast.success).not.toHaveBeenCalled();
@@ -346,6 +371,170 @@ it('does not repeat an adoption after an uncertain transport result', async () =
     fireEvent.click(bind);
     expect(posts()).toHaveLength(1);
     expect(document.body).not.toHaveTextContent('TEST_SECRET');
+  } finally {
+    cleanup();
+    jest.useRealTimers();
+  }
+});
+
+it('locks required services through individual, bulk and filtered deselection and submits their real IDs', async () => {
+  jest.useFakeTimers();
+  try {
+    fetchMock.mockImplementation(async (input, init) => {
+      if (init?.method === 'POST') return response(receipt, 202);
+      return catalogue(input) ?? response([unbound]);
+    });
+    renderWithQueryClient(
+      <ChannelConfigurationPage scopeId="scope-alpha" botId="bot-alpha" />,
+    );
+    const ornn = await screen.findByRole('checkbox', { name: /ornn-api/ });
+    const llm = screen.getByRole('checkbox', { name: /chrono-llm-public/ });
+    for (const required of [ornn, llm]) {
+      expect(required).toBeChecked();
+      expect(required).toBeDisabled();
+      fireEvent.click(required);
+      expect(required).toBeChecked();
+    }
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    const github = screen.getByRole('checkbox', { name: /GitHub/ });
+    expect(github).toBeEnabled();
+    expect(github).not.toBeChecked();
+    const selectAll = screen.getByRole('checkbox', { name: 'Select all' });
+    fireEvent.click(selectAll);
+    expect(github).toBeChecked();
+    expect(screen.getByText('3 selected')).toBeInTheDocument();
+    fireEvent.click(selectAll);
+    expect(github).not.toBeChecked();
+    expect(ornn).toBeChecked();
+    expect(llm).toBeChecked();
+    const search = screen.getByRole('textbox', {
+      name: 'Search services by name or slug',
+    });
+    fireEvent.change(search, { target: { value: 'ornn-api' } });
+    expect(
+      screen.getByRole('checkbox', { name: 'Select all results' }),
+    ).toBeDisabled();
+    fireEvent.change(search, { target: { value: 'GitHub' } });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select all results' }),
+    );
+    expect(screen.getByRole('checkbox', { name: /GitHub/ })).toBeChecked();
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select all results' }),
+    );
+    fireEvent.change(search, { target: { value: '' } });
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Bind bot' }));
+    await screen.findByText('Confirming your changes...');
+    expect(JSON.parse(String(posts()[0][1]?.body))).toEqual({
+      nyx_channel_bot_id: 'bot-alpha',
+      skill_name: '',
+      authorization_mode: 'explicit_service_allowlist',
+      service_ids: ['user-service-llm', 'user-service-ornn'],
+    });
+  } finally {
+    cleanup();
+    jest.useRealTimers();
+  }
+});
+
+it.each([
+  ['missing', 'ornn-api'],
+  ['inactive', 'chrono-llm-public'],
+  ['unauthorized', 'ornn-api'],
+  ['similar slug', 'chrono-llm-public'],
+])('blocks submission with a %s required service and recovers on retry', async (condition, slug) => {
+  jest.useFakeTimers();
+  try {
+    let restored = false;
+    const unavailableId = serviceCatalogue.find(
+      (service) => service.slug === slug,
+    )?.id;
+    if (condition === 'unauthorized')
+      persistAuthSession(
+        createNyxIDServiceSession({
+          allowed_service_ids: selectedServiceIds.filter(
+            (id) => id !== unavailableId,
+          ),
+        }),
+      );
+    const unavailableServices = serviceCatalogue
+      .filter((service) => condition !== 'missing' || service.slug !== slug)
+      .map((service) =>
+        service.slug !== slug
+          ? service
+          : {
+              ...service,
+              is_active: condition !== 'inactive',
+              slug: condition === 'similar slug' ? `${slug}-other` : slug,
+              label: slug,
+            },
+      );
+    fetchMock.mockImplementation(
+      async (input) =>
+        catalogue(input, restored ? serviceCatalogue : unavailableServices) ??
+        response([unbound]),
+    );
+    renderWithQueryClient(
+      <ChannelConfigurationPage scopeId="scope-alpha" botId="bot-alpha" />,
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      `Required services unavailable: ${slug}.`,
+    );
+    expect(screen.getByRole('button', { name: 'Bind bot' })).toBeDisabled();
+    fireEvent.submit(screen.getByRole('form', { name: 'Bind bot' }));
+    expect(posts()).toHaveLength(0);
+    restored = true;
+    persistAuthSession(
+      createNyxIDServiceSession({ allowed_service_ids: selectedServiceIds }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: 'Bind bot' })).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: /ornn-api/ })).toBeChecked();
+    expect(
+      screen.getByRole('checkbox', { name: /chrono-llm-public/ }),
+    ).toBeChecked();
+  } finally {
+    cleanup();
+    jest.useRealTimers();
+  }
+});
+
+it('explains replacing legacy NyxID defaults and saves the required explicit allowlist', async () => {
+  jest.useFakeTimers();
+  try {
+    const defaults = {
+      ...row,
+      authorization_mode: 'nyxid_default',
+      service_ids: [],
+    };
+    fetchMock.mockImplementation(async (input, init) => {
+      if (init?.method === 'POST') return response(receipt, 202);
+      if (input === '/api/channels/registrations') return response([defaults]);
+      return catalogue(input) ?? response(defaults);
+    });
+    renderWithQueryClient(
+      <ChannelConfigurationPage
+        scopeId="scope-alpha"
+        registrationId="reg-alpha"
+      />,
+    );
+    await screen.findByRole('checkbox', { name: /ornn-api/ });
+    expect(
+      screen.getByText(
+        'Saving replaces NyxID default access with the selected services.',
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await screen.findByText('Confirming your changes...');
+    expect(JSON.parse(String(posts()[0][1]?.body))).toEqual({
+      skill_name: 'support',
+      authorization_mode: 'explicit_service_allowlist',
+      service_ids: ['user-service-llm', 'user-service-ornn'],
+    });
   } finally {
     cleanup();
     jest.useRealTimers();
