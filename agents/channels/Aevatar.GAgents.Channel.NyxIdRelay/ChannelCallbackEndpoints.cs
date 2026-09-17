@@ -527,13 +527,17 @@ public static class ChannelCallbackEndpoints
         HttpContext http,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] NyxIdApiClient nyxClient,
+        string? scope,
         CancellationToken ct)
     {
         var accessToken = ResolveBearerAccessToken(http);
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
 
-        var callerScope = ResolveScopeId(http, null, required: false).ScopeId;
+        var scopeResolution = ResolveScopeId(http, scope, required: false);
+        if (scopeResolution.Error is not null)
+            return Results.BadRequest(new { error = scopeResolution.Error });
+        var callerScope = scopeResolution.ScopeId;
 
         var botResponse = await nyxClient.ListChannelBotsAsync(accessToken, ct);
         if (NyxApiResponseHelper.LooksLikeErrorEnvelope(botResponse))
