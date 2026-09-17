@@ -1105,6 +1105,56 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task HandleUpdateRegistrationAsync_RestoresAgentKeyGrant_WhenDispatchFailsAfterGrantUpdate()
+    {
+        var queryPort = QueryPortWith(ExplicitModelRegistration("reg-restore", "scope-1", "key-restore", "svc-alpha"));
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Any<EventEnvelope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<DispatchAdmission>(new InvalidOperationException("dispatch failed")));
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "authorization_mode": "explicit_service_allowlist",
+              "service_ids": ["svc-calendar"]
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+        var nyxHandler = new RecordingNyxHttpMessageHandler(request =>
+        {
+            if (request.Method == HttpMethod.Put && request.RequestUri!.AbsolutePath == "/api/v1/api-keys/key-restore")
+            {
+                return JsonResponse("""{"id":"key-restore","full_key":"updated-secret-value","scopes":"read write proxy","platform":"generic","purpose":"general","scheduled_write_enabled":false,"durable_grants":[],"allow_all_services":false,"allow_all_nodes":true,"allowed_service_ids":["svc-calendar"],"allowed_node_ids":[]}""");
+            }
+
+            return NotFoundResponse(request);
+        });
+
+        var act = async () => await InvokeAsync(
+            "HandleUpdateRegistrationAsync",
+            "reg-restore",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            OwnerResolver("scope-1"),
+            AuthorizationPlanner(("svc-calendar", "api-calendar")),
+            CreateNyxClient(nyxHandler),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        nyxHandler.Requests
+            .Where(request => request.Method == HttpMethod.Put &&
+                request.RequestUri!.AbsolutePath == "/api/v1/api-keys/key-restore")
+            .Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task HandleUpdateRegistrationAsync_ReturnsFieldError_WhenSelectorIsNotAuthorized()
     {
         var registration = ExplicitModelRegistration("reg-explicit-update", "scope-1", "key-explicit", "svc-calendar");
