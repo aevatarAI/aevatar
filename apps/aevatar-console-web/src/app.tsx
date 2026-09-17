@@ -29,6 +29,10 @@ import {
 import { getNyxIDRuntimeConfig } from './shared/auth/config';
 import { ProtectedRouteRedirectGate } from './shared/auth/ProtectedRouteRedirectGate';
 import {
+  PUBLIC_ROUTES,
+  requiresGlobalAuthGate,
+} from './shared/auth/routeAccess';
+import {
   buildAuthInitialState,
   loadStoredAuthSession,
   sanitizeReturnTo,
@@ -45,16 +49,6 @@ import {
 import { getNavigationSelectedKeys } from './shared/navigation/navigationMenuSelection';
 import { queryClient } from './shared/query/queryClient';
 
-const WORKFLOW_CANVAS_BENCHMARK_ROUTE = '/workflow-canvas-benchmark';
-const WORKFLOW_CANVAS_BENCHMARK_ENABLED =
-  process.env.AEVATAR_WORKFLOW_CANVAS_BENCHMARK === '1';
-const PUBLIC_ROUTES = new Set([
-  '/login',
-  '/auth/callback',
-  ...(WORKFLOW_CANVAS_BENCHMARK_ENABLED
-    ? [WORKFLOW_CANVAS_BENCHMARK_ROUTE]
-    : []),
-]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
 const FULLSCREEN_DISPLAY_ROUTES = new Set(['/runtime/mission-wall']);
 const WORKFLOW_ACTIVITY_VNEXT_ROUTE =
@@ -64,7 +58,6 @@ const STUDIO_HOST_ROUTES = new Set([
   '/scopes/:scopeId/teams/:teamId/members/new/workflow',
   '/scopes/:scopeId/teams/:teamId/members/:memberId/workflow',
 ]);
-const SELF_MANAGED_AUTH_ROUTES = new Set(["/studio"]);
 
 function isFullscreenDisplayRoute(pathname: string): boolean {
   return (
@@ -90,11 +83,10 @@ function isStudioHostRoute(pathname: string): boolean {
   );
 }
 
-export function requiresGlobalAuthGate(pathname: string): boolean {
-  return !PUBLIC_ROUTES.has(pathname) && !SELF_MANAGED_AUTH_ROUTES.has(pathname);
-}
-
-function shouldDefaultCollapseLayout(pathname: string, search: string): boolean {
+function shouldDefaultCollapseLayout(
+  pathname: string,
+  search: string,
+): boolean {
   if (!isStudioHostRoute(pathname)) {
     return false;
   }
@@ -789,19 +781,17 @@ export const layout = ({
           const requiresGlobalAuth = requiresGlobalAuthGate(pathname);
           const liveSession = loadStoredAuthSession();
           const needsProtectedRouteRedirect =
-            requiresGlobalAuth &&
-            !liveSession &&
-            !hasRestorableAuthSession();
+            requiresGlobalAuth && !liveSession && !hasRestorableAuthSession();
 
           const content = needsProtectedRouteRedirect ? (
             <ProtectedRouteRedirectGate pathname={pathname} />
           ) : requiresGlobalAuth && !liveSession ? (
-              <AuthSessionBootstrap pathname={pathname}>
-                {children}
-              </AuthSessionBootstrap>
-            ) : (
-              children
-            );
+            <AuthSessionBootstrap pathname={pathname}>
+              {children}
+            </AuthSessionBootstrap>
+          ) : (
+            children
+          );
           return (
             <ConsoleRuntimeProviders
               isFullscreenDisplayRoute={isDisplayRoute}

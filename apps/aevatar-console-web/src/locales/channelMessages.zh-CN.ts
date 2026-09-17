@@ -1,4 +1,43 @@
 export default {
+  'channels.guide.title': '如何连接 Bot',
+  'channels.guide.add': '前往 NyxID 添加 Bot',
+  'channels.guide.addHelp': '在 NyxID 中添加 Bot。',
+  'channels.guide.bind': '刷新并绑定',
+  'channels.guide.bindHelp': '返回此页面，刷新表格后点击绑定。',
+  'channels.guide.view': '查看已绑定的 Bot',
+  'channels.guide.viewHelp': '在下方表格中查看 Bot 和对应的 Skill。',
+  'channels.guide.step': '步骤 {number}',
+  'channels.bots.title': 'Channel Bot',
+  'channels.bots.empty': '暂无 Bot',
+  'channels.bots.emptyHelp': '在 NyxID 添加 Bot 后，刷新此表格。',
+  'channels.column.binding': '绑定',
+  'channels.binding.bind': '绑定',
+  'channels.binding.bound': '已绑定',
+  'channels.binding.unbound': '未绑定',
+  'channels.binding.unavailable': '不可用',
+  'channels.status.disabled': '已停用',
+  'channels.skills.placeholder': '选择 Skill',
+  'channels.skills.loading': '正在加载 Skill',
+  'channels.skills.failed': '无法加载 Skill，请点击刷新重试。',
+  'channels.skills.empty': '未找到 Skill',
+  'channels.skills.more': '加载更多 Skill',
+  'channels.skills.create': '创建新 Skill',
+  'channels.skills.createHelp':
+    '将在新标签页打开 Ornn。创建 Skill 后，请返回此处刷新列表。',
+  'channels.skills.refresh': '刷新 Skill',
+  'channels.bind.title': '绑定 Bot',
+  'channels.bind.success': 'Bot 绑定成功。',
+  'channels.bind.confirming': '正在确认更改…',
+  'channels.bind.delayed':
+    '请求已受理，绑定信息尚未更新。你可以返回 Channels 刷新表格查看。',
+  'channels.bind.uncertain':
+    '无法确认请求结果。请先返回 Channels 刷新列表，再决定是否重试。',
+  'channels.bind.conflict':
+    '无法绑定此 Bot。请刷新列表，并到 NyxID 检查绑定与路由。',
+  'channels.bind.failed':
+    '无法保存此 Bot，请检查 Skill、Services 和 NyxID 授权后重试。',
+  'channels.edit.partialConfigSave':
+    'Label 已保存，但配置更新失败。请检查选择后重试。',
   'channels.edit.label': 'Label',
   'channels.edit.labelError': 'Label 不能为空；如果名称过长，请缩短后重试。',
   'channels.edit.labelFailed': '无法保存 Label，请检查后重试。',

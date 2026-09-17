@@ -3,7 +3,6 @@ import {
   DeleteOutlined,
   EditOutlined,
   ExportOutlined,
-  ReloadOutlined,
 } from '@ant-design/icons';
 import { Button, Modal } from 'antd';
 import * as React from 'react';
@@ -11,7 +10,6 @@ import { channelsApi } from '@/shared/api/channelsApi';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
-import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import {
   buildChannelEditHref,
@@ -28,11 +26,7 @@ import {
   InboundStatus,
   platformName,
 } from './presentation';
-import {
-  useChannelBotIdentities,
-  useChannelRegistrations,
-  useChannelStatus,
-} from './queries';
+import { useChannelDetail, useChannelRegistrations } from './queries';
 import { channelsCss } from './styles';
 
 // Figma links to the NyxID website, separate from its API/OIDC authority.
@@ -50,16 +44,13 @@ export default function ChannelDetailsPage({
   const [removalAccepted, setRemovalAccepted] = React.useState(false);
   const [hasWarnings, setHasWarnings] = React.useState(false);
   const [removeError, setRemoveError] = React.useState(false);
-  const registrations = useChannelRegistrations(scopeId);
-  const registration = registrations.data?.find(
-    (row) => row.id === registrationId && row.scopeId === scopeId,
+  const detail = useChannelDetail(scopeId, registrationId);
+  const registrations = useChannelRegistrations(scopeId, removalAccepted);
+  const registration = detail.data;
+  const stillListed = registrations.data?.some(
+    (row) => row.id === registrationId,
   );
-  const bots = useChannelBotIdentities(scopeId, Boolean(registration?.botId));
-  const channelName = bots.data?.find(
-    (bot) =>
-      bot.id === registration?.botId && bot.platform === registration?.platform,
-  )?.label;
-  const status = useChannelStatus(scopeId, registration ? registrationId : '');
+  const channelName = registration?.label;
   const toast = useConsoleToast();
   const completed = React.useRef(false);
   const listHref = buildWorkflowActivitySectionHref(scopeId, 'channels');
@@ -69,7 +60,7 @@ export default function ChannelDetailsPage({
       !removalAccepted ||
       !registrations.isSuccess ||
       registrations.isFetching ||
-      registration ||
+      stillListed ||
       completed.current
     )
       return;
@@ -87,7 +78,7 @@ export default function ChannelDetailsPage({
     removalAccepted,
     registrations.isSuccess,
     registrations.isFetching,
-    registration,
+    stillListed,
     hasWarnings,
     listHref,
     toast,
@@ -166,17 +157,17 @@ export default function ChannelDetailsPage({
           </div>
         ) : null}
       </div>
-      {registrations.isPending ? (
+      {detail.isPending ? (
         <AevatarContentSkeleton
           ariaLabel={t('channels.details.loading', 'Loading channel details')}
           variant="list"
           rows={6}
         />
-      ) : registrations.isError && !registration ? (
+      ) : detail.isError && !registration ? (
         <ChannelLoadError
-          error={registrations.error}
-          pending={registrations.isFetching}
-          retry={() => void registrations.refetch()}
+          error={detail.error}
+          pending={detail.isFetching}
+          retry={() => void detail.refetch()}
         />
       ) : !registration ? (
         <div className="channels__state" role="status">
@@ -203,34 +194,13 @@ export default function ChannelDetailsPage({
               <div className="channels__identity-copy">
                 <h1>
                   {channelName ??
-                    (registration.botId && bots.isPending
-                      ? t('channels.name.loading', 'Loading name…')
-                      : t('channels.name.unavailable', 'Name unavailable'))}
-                  {registration.botId && !channelName && !bots.isPending ? (
-                    <AevatarTooltip
-                      title={t('channels.name.retry', 'Reload channel name')}
-                    >
-                      <Button
-                        type="text"
-                        icon={<ReloadOutlined />}
-                        aria-label={t(
-                          'channels.name.retry',
-                          'Reload channel name',
-                        )}
-                        loading={bots.isFetching}
-                        onClick={() => void bots.refetch()}
-                      />
-                    </AevatarTooltip>
-                  ) : null}
+                    t('channels.name.unavailable', 'Name unavailable')}
                 </h1>
                 <p className="channels__identifier">
                   {t('channels.registration', 'Registration')} {registration.id}
                 </p>
               </div>
-              <InboundStatus
-                value={status.isError ? undefined : status.data?.status}
-                pending={status.isPending}
-              />
+              <InboundStatus value={registration.nyxStatus ?? undefined} />
             </div>
             <dl className="channels__facts">
               <div>
@@ -255,20 +225,14 @@ export default function ChannelDetailsPage({
               <div>
                 <dt>{t('channels.inboundMessages', 'Inbound messages')}</dt>
                 <dd>
-                  <InboundStatus
-                    value={status.isError ? undefined : status.data?.status}
-                    pending={status.isPending}
-                  />
+                  <InboundStatus value={registration.nyxStatus ?? undefined} />
                 </dd>
               </div>
               <div>
                 <dt>{t('channels.column.delivery', 'Workflow delivery')}</dt>
                 <dd>
                   <DeliveryStatus
-                    value={
-                      status.data?.workflowDeliveryStatus ??
-                      registration.workflowDeliveryStatus
-                    }
+                    value={registration.workflowDeliveryStatus}
                     platform={registration.platform}
                   />
                 </dd>

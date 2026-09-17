@@ -94,7 +94,7 @@ export default [
     hideInMenu: true,
   },
   {
-    path: '/scopes/:scopeId/workflow-activity-vnext/channels/connect/telegram',
+    path: '/scopes/:scopeId/workflow-activity-vnext/channels/bind/:botId',
     component: './workflow-activity-vnext',
     hideInMenu: true,
   },

@@ -1,5 +1,10 @@
 # Channel Runtime Editor
 
+> Superseded by [Channel Bot Adoption](superpowers/specs/2026-09-17-channel-bot-adoption.md).
+> The current editor shares the binding form, uses the registration detail/update
+> endpoints, and supports Skill and Services alongside the existing NyxID Label
+> action. The runtime-config API and token-based creation described below are historical.
+
 Channel details now provides an Edit action at
 `/scopes/:scopeId/workflow-activity-vnext/channels/:registrationId/edit`.
 Edit and Remove sit at the top right beside the breadcrumb, with a 12px gap.

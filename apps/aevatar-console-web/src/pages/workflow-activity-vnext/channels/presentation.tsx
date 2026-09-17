@@ -193,6 +193,10 @@ export function InboundStatus({
       <ChannelBadge>{t('channels.status.checking', 'Checking…')}</ChannelBadge>
     );
   switch (value?.toLowerCase()) {
+    case 'disabled':
+      return (
+        <ChannelBadge>{t('channels.status.disabled', 'Disabled')}</ChannelBadge>
+      );
     case 'active':
       return (
         <ChannelBadge tone="success">
@@ -228,6 +232,12 @@ export function DeliveryStatus({
   readonly platform: string;
 }) {
   switch (value) {
+    case 'unbound':
+      return (
+        <ChannelBadge>
+          {t('channels.binding.unbound', 'Not bound')}
+        </ChannelBadge>
+      );
     case 'enabled':
       return (
         <ChannelBadge tone="success">

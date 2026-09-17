@@ -2,10 +2,9 @@ import React from 'react';
 import { t } from '@/shared/i18n/messages';
 import ActivityPage from './activity/ActivityPage';
 import RunDetailPage from './activity/RunDetailPage';
+import ChannelConfigurationPage from './channels/ChannelConfigurationPage';
 import ChannelDetailsPage from './channels/ChannelDetailsPage';
-import ChannelEditPage from './channels/ChannelEditPage';
 import ChannelsPage from './channels/ChannelsPage';
-import TelegramConnectionPage from './channels/TelegramConnectionPage';
 import { useConsoleLocation } from './hooks/useConsoleLocation';
 import SettingsPage from './settings/SettingsPage';
 import WorkflowActivityVNextShell from './WorkflowActivityVNextShell';
@@ -58,13 +57,20 @@ const WorkflowActivityVNextPage: React.FC = () => {
     return <ActivityPage scopeId={scopeId} />;
   }
 
-  if (pathname.endsWith('/channels/connect/telegram')) {
-    return <TelegramConnectionPage key={scopeId} scopeId={scopeId} />;
+  const channelBindMatch = /\/channels\/bind\/([^/]+)$/.exec(pathname);
+  if (channelBindMatch) {
+    return (
+      <ChannelConfigurationPage
+        key={`${scopeId}:bind:${channelBindMatch[1]}`}
+        scopeId={scopeId}
+        botId={decodeURIComponent(channelBindMatch[1])}
+      />
+    );
   }
   const channelEditMatch = /\/channels\/([^/]+)\/edit$/.exec(pathname);
   if (channelEditMatch) {
     return (
-      <ChannelEditPage
+      <ChannelConfigurationPage
         key={`${scopeId}:${channelEditMatch[1]}`}
         scopeId={scopeId}
         registrationId={decodeURIComponent(channelEditMatch[1])}

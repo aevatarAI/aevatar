@@ -17,16 +17,20 @@ jest.mock('@/shared/auth/config', () => ({
 }));
 const fetchMock = jest.mocked(authFetch);
 const listPath = '/api/channels/registrations';
-const statusPath = `${listPath}/reg-selected/status`;
+const detailPath = `${listPath}/reg-selected`;
 const inventoryPath = 'https://nyx.example.test/api/v1/user-services';
 const registration = {
+  state_version: 12,
   id: 'reg-selected',
   platform: 'telegram',
-  scope_id: 'scope-alpha',
+  nyx_channel_bot_id: 'bot-selected',
+  label: 'Selected bot',
+  binding_status: 'bound',
+  nyx_status: 'active',
   owned: true,
   authorization_mode: 'explicit_service_allowlist',
   service_ids: ['us-work', 'us-model', 'us-ornn', 'us-deleted'],
-  default_skill_name: 'review-skill',
+  skill_name: 'review-skill',
 };
 const service = {
   id: 'us-work',
@@ -71,9 +75,8 @@ beforeEach(() => {
   );
   fetchMock.mockImplementation(async (input) => {
     if (input === '/api/auth/me') return response({ authenticated: false });
+    if (input === detailPath) return response(registration);
     if (input === listPath) return response([registration]);
-    if (input === statusPath)
-      return response({ registration_id: 'reg-selected', status: 'active' });
     if (input === inventoryPath) return response(inventory);
     throw new Error('Unexpected test request');
   });
@@ -106,13 +109,13 @@ it('shows saved authorizations by exact ID, including services outside current g
       ),
     ).not.toContain('TEST_ONLY_SECRET');
     // The shared account header has its own reconnect behavior. Check only
-    // channel-owned requests, keeping registrations, status and names covered.
+    // channel-owned requests, keeping registration detail and service names covered.
     const channelReads = () =>
       fetchMock.mock.calls
         .map(([input]) => input)
         .filter((input) => input !== '/api/auth/me')
         .sort();
-    const expectedReads = [listPath, statusPath, inventoryPath].sort();
+    const expectedReads = [detailPath, listPath, inventoryPath].sort();
     expect(channelReads()).toEqual(expectedReads);
     await act(async () => {
       await jest.advanceTimersByTimeAsync(60_000);
@@ -134,9 +137,8 @@ it('keeps saved IDs and other details on name lookup failure, then retries only 
   let inventoryReads = 0;
   fetchMock.mockImplementation(async (input) => {
     if (input === '/api/auth/me') return response({ authenticated: false });
+    if (input === detailPath) return response(registration);
     if (input === listPath) return response([registration]);
-    if (input === statusPath)
-      return response({ registration_id: 'reg-selected', status: 'active' });
     if (input === inventoryPath)
       return ++inventoryReads === 1
         ? response({ error: 'TEST_ONLY_SECRET' }, 503)
@@ -156,10 +158,7 @@ it('keeps saved IDs and other details on name lookup failure, then retries only 
   expect(await screen.findByText('GitHub work')).toBeInTheDocument();
   expect(inventoryReads).toBe(2);
   expect(
-    fetchMock.mock.calls.filter(([input]) => input === listPath),
-  ).toHaveLength(1);
-  expect(
-    fetchMock.mock.calls.filter(([input]) => input === statusPath),
+    fetchMock.mock.calls.filter(([input]) => input === detailPath),
   ).toHaveLength(1);
 });
 

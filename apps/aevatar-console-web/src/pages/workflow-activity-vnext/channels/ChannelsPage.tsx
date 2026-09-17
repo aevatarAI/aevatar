@@ -1,20 +1,22 @@
-import { ArrowRightOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useQueryClient } from '@tanstack/react-query';
+import {
+  ArrowRightOutlined,
+  CheckOutlined,
+  ExportOutlined,
+  LinkOutlined,
+  ReloadOutlined,
+  RobotOutlined,
+  TableOutlined,
+} from '@ant-design/icons';
 import { Button } from 'antd';
 import * as React from 'react';
-import type { ChannelRegistration } from '@/shared/api/channelsApi';
 import { t } from '@/shared/i18n/messages';
 import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
 import { AevatarLoadingOverlay } from '@/shared/ui/AevatarLoading';
 import { useConsoleToast } from '@/shared/ui/ConsoleToast';
-import {
-  buildChannelDetailsHref,
-  buildTelegramConnectionHref,
-} from '../navigation';
+import { buildChannelBindHref, buildChannelDetailsHref } from '../navigation';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import {
   ChannelBadge,
-  ChannelIcon,
   ChannelIdentity,
   ChannelLink,
   ChannelLoadError,
@@ -23,68 +25,76 @@ import {
   InboundStatus,
   platformName,
 } from './presentation';
-import {
-  channelKeys,
-  useChannelBotIdentities,
-  useChannelRegistrations,
-  useChannelStatus,
-} from './queries';
+import { useChannelRegistrations } from './queries';
 import { channelsCss } from './styles';
 
-const platforms = ['telegram', 'whatsapp'] as const;
-
-function ConnectedRow({
-  registration,
-  scopeId,
-  label,
-  namePending,
-}: {
-  readonly registration: ChannelRegistration;
-  readonly scopeId: string;
-  readonly label: string | null;
-  readonly namePending: boolean;
-}) {
-  const status = useChannelStatus(scopeId, registration.id);
+function ConnectionGuide() {
   return (
-    <tr>
-      <td data-label={t('channels.column.name', 'Channel name')}>
-        <ChannelIdentity
-          registration={registration}
-          label={label}
-          pending={namePending}
-        />
-      </td>
-      <td data-label={t('channels.column.channel', 'Channel')}>
-        {platformName(registration.platform)}
-      </td>
-      <td data-label={t('channels.column.skill', 'Skill')}>
-        <ChannelSkill skill={registration.skill} />
-      </td>
-      <td data-label={t('channels.column.inbound', 'Inbound')}>
-        <InboundStatus
-          value={status.isError ? undefined : status.data?.status}
-          pending={status.isPending}
-        />
-      </td>
-      <td data-label={t('channels.column.delivery', 'Workflow delivery')}>
-        <DeliveryStatus
-          value={
-            status.data?.workflowDeliveryStatus ??
-            registration.workflowDeliveryStatus
-          }
-          platform={registration.platform}
-        />
-      </td>
-      <td className="channels__row-action">
-        <ChannelLink
-          className="channels__manage"
-          href={buildChannelDetailsHref(scopeId, registration.id)}
+    <section className="channels__guide" aria-labelledby="channel-guide-title">
+      <div className="channels__section-heading">
+        <h2 id="channel-guide-title">
+          {t('channels.guide.title', 'How to connect a bot')}
+        </h2>
+        <Button
+          type="primary"
+          href="https://nyx.chrono-ai.fun/channel-bots"
+          target="_blank"
+          rel="noopener noreferrer"
+          icon={<ExportOutlined />}
         >
-          {t('channels.manage', 'Manage')}
-          <ArrowRightOutlined aria-hidden="true" />
-        </ChannelLink>
-      </td>
-    </tr>
+          {t('channels.guide.add', 'Add bot in NyxID')}
+        </Button>
+      </div>
+      <ol className="channels__guide-steps">
+        {[
+          {
+            icon: <RobotOutlined />,
+            title: t('channels.guide.add', 'Add bot in NyxID'),
+            description: t(
+              'channels.guide.addHelp',
+              'Create your bot in NyxID.',
+            ),
+          },
+          {
+            icon: <LinkOutlined />,
+            title: t('channels.guide.bind', 'Refresh and bind'),
+            description: t(
+              'channels.guide.bindHelp',
+              'Return here, refresh the table, then choose Bind.',
+            ),
+          },
+          {
+            icon: <TableOutlined />,
+            title: t('channels.guide.view', 'View your bound bot'),
+            description: t(
+              'channels.guide.viewHelp',
+              'Find your bot and its skill in the table below.',
+            ),
+          },
+        ].map((step, index) => (
+          <li key={step.title}>
+            <span className="channels__guide-icon" aria-hidden="true">
+              {step.icon}
+            </span>
+            <div>
+              <span className="channels__guide-number">
+                {t('channels.guide.step', 'STEP {number}', {
+                  number: `0${index + 1}`,
+                })}
+              </span>
+              <h3>{step.title}</h3>
+              <p>{step.description}</p>
+            </div>
+            {index < 2 ? (
+              <ArrowRightOutlined
+                className="channels__guide-arrow"
+                aria-hidden="true"
+              />
+            ) : null}
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -94,53 +104,15 @@ export default function ChannelsPage({
   readonly scopeId: string;
 }) {
   const registrations = useChannelRegistrations(scopeId);
-  const hasBotIds = Boolean(registrations.data?.some((row) => row.botId));
-  const bots = useChannelBotIdentities(scopeId, hasBotIds);
   const toast = useConsoleToast();
-  const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = React.useState(false);
   const refreshInFlight = React.useRef(false);
-  const reportedNamesError = React.useRef(0);
-  React.useEffect(() => {
-    if (
-      refreshing ||
-      !bots.isError ||
-      bots.isFetching ||
-      bots.errorUpdatedAt === reportedNamesError.current
-    )
-      return;
-    reportedNamesError.current = bots.errorUpdatedAt;
-    if (!registrations.isError)
-      toast.error(
-        t(
-          'channels.error.names',
-          'Could not load channel names. Use Refresh to try again.',
-        ),
-      );
-  }, [
-    bots.errorUpdatedAt,
-    bots.isError,
-    bots.isFetching,
-    refreshing,
-    registrations.isError,
-    toast,
-  ]);
   async function refresh() {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
     setRefreshing(true);
     try {
-      const [result] = await Promise.all([
-        registrations.refetch(),
-        queryClient.refetchQueries({
-          queryKey: ['channels', scopeId, 'status'],
-          type: 'active',
-        }),
-        queryClient.refetchQueries({
-          queryKey: channelKeys.bots(scopeId),
-          type: 'active',
-        }),
-      ]);
+      const result = await registrations.refetch();
       if (result.isError)
         toast.error(
           t('channels.error.refresh', 'Could not refresh channels. Try again.'),
@@ -154,96 +126,25 @@ export default function ChannelsPage({
     <WorkflowActivityVNextShell
       activeSection="channels"
       scopeId={scopeId}
-      title={t('channels.title', 'Connect your channels to your agent')}
-      description={t(
-        'channels.description',
-        'Choose a channel to connect your bot and select the services it can use.',
-      )}
+      title={t('workflowActivityVNext.nav.channels', 'Channels')}
       mainClassName="channels__main"
       contentClassName="channels__content"
     >
       <style>{channelsCss}</style>
-      <p className="channels__intro">
-        {t(
-          'channels.intro',
-          'Once connected, talk to your Aevatar bot directly from the channel.',
-        )}
-      </p>
-      <section aria-labelledby="available-channels">
-        <h2 id="available-channels" className="channels__section-label">
-          {t('channels.available', 'Available channels')}
-        </h2>
-        <div className="channels__platforms">
-          {platforms.map((platform) => {
-            const available = platform === 'telegram';
-            return (
-              <article
-                className={`channels__platform${available ? '' : ' channels__platform--soon'}`}
-                key={platform}
-              >
-                <div className="channels__platform-top">
-                  <ChannelIcon platform={platform} />
-                  <ChannelBadge tone={available ? 'success' : 'neutral'}>
-                    {available
-                      ? t('channels.availableNow', 'Available')
-                      : t('channels.soon', 'Soon')}
-                  </ChannelBadge>
-                </div>
-                <h3>{platformName(platform)}</h3>
-                <p>
-                  {t(
-                    `channels.platform.${platform}.description`,
-                    {
-                      telegram:
-                        'Connect with a BotFather bot token. Webhook setup is handled for you.',
-                      whatsapp: 'Chat with your bot on WhatsApp.',
-                    }[platform],
-                  )}
-                </p>
-                {available ? (
-                  <ChannelLink
-                    className="channels__connect"
-                    href={buildTelegramConnectionHref(scopeId)}
-                    aria-label={t(
-                      'channels.connectPlatform',
-                      'Connect {platform}',
-                      { platform: platformName(platform) },
-                    )}
-                  >
-                    {t('channels.connect', 'Connect')}
-                    <ArrowRightOutlined aria-hidden="true" />
-                  </ChannelLink>
-                ) : (
-                  <span className="channels__muted">
-                    {t('channels.soon', 'Soon')}
-                  </span>
-                )}
-              </article>
-            );
-          })}
-        </div>
-      </section>
+      <ConnectionGuide />
       <section
-        aria-labelledby="connected-channels"
+        aria-labelledby="channel-bots-title"
         className="channels__connections"
       >
         <div className="channels__section-heading">
-          <div>
-            <h2 id="connected-channels">
-              {t('channels.connected', 'Connected')}
-              {registrations.data ? (
-                <span className="channels__count">
-                  {registrations.data.length}
-                </span>
-              ) : null}
-            </h2>
-            <p>
-              {t(
-                'channels.connectedDescription',
-                'Channels connected to your account.',
-              )}
-            </p>
-          </div>
+          <h2 id="channel-bots-title">
+            {t('channels.bots.title', 'Channel bots')}
+            {registrations.data ? (
+              <span className="channels__count">
+                {registrations.data.length}
+              </span>
+            ) : null}
+          </h2>
           <Button
             icon={<ReloadOutlined />}
             loading={refreshing}
@@ -264,50 +165,96 @@ export default function ChannelsPage({
           <ChannelLoadError
             error={registrations.error}
             pending={registrations.isFetching}
-            retry={() => void registrations.refetch()}
+            retry={() => void refresh()}
           />
         ) : registrations.data?.length ? (
           <div className="channels__table-wrap" aria-busy={refreshing}>
-            <table
-              className="channels__table"
-              aria-labelledby="connected-channels"
-              inert={refreshing}
+            <section
+              className="channels__table-scroll"
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users must be able to scroll the table at narrow widths.
+              tabIndex={0}
+              aria-labelledby="channel-bots-title"
             >
-              <thead>
-                <tr>
-                  {[
-                    ['name', 'Channel name'],
-                    ['channel', 'Channel'],
-                    ['skill', 'Skill'],
-                    ['inbound', 'Inbound'],
-                    ['delivery', 'Workflow delivery'],
-                    ['actions', 'Actions'],
-                  ].map(([key, label]) => (
-                    <th scope="col" key={key}>
-                      {t(`channels.column.${key}`, label)}
-                    </th>
+              <table
+                className="channels__table"
+                aria-labelledby="channel-bots-title"
+                inert={refreshing}
+              >
+                <thead>
+                  <tr>
+                    {[
+                      ['name', 'Channel name'],
+                      ['channel', 'Channel'],
+                      ['skill', 'Skill'],
+                      ['inbound', 'Inbound'],
+                      ['delivery', 'Workflow delivery'],
+                      ['binding', 'Binding'],
+                      ['actions', 'Actions'],
+                    ].map(([key, label]) => (
+                      <th scope="col" key={key}>
+                        {t(`channels.column.${key}`, label)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {registrations.data.map((row) => (
+                    <tr key={row.botId}>
+                      <td>
+                        <ChannelIdentity
+                          registration={row}
+                          label={row.label}
+                          pending={false}
+                        />
+                      </td>
+                      <td>{platformName(row.platform)}</td>
+                      <td>
+                        <ChannelSkill skill={row.skill} />
+                      </td>
+                      <td>
+                        <InboundStatus value={row.nyxStatus ?? undefined} />
+                      </td>
+                      <td>
+                        <DeliveryStatus
+                          value={row.workflowDeliveryStatus}
+                          platform={row.platform}
+                        />
+                      </td>
+                      <td>
+                        {row.bindingStatus === 'bound' ? (
+                          <ChannelBadge tone="success">
+                            <CheckOutlined aria-hidden="true" />
+                            {t('channels.binding.bound', 'Bound')}
+                          </ChannelBadge>
+                        ) : row.availabilityStatus === 'available' ? (
+                          <ChannelLink
+                            className="channels__bind"
+                            href={buildChannelBindHref(scopeId, row.botId)}
+                          >
+                            {t('channels.binding.bind', 'Bind')}
+                          </ChannelLink>
+                        ) : (
+                          <ChannelBadge>
+                            {t('channels.binding.unavailable', 'Unavailable')}
+                          </ChannelBadge>
+                        )}
+                      </td>
+                      <td className="channels__row-action">
+                        {row.bindingStatus === 'bound' && row.id ? (
+                          <ChannelLink
+                            className="channels__manage"
+                            href={buildChannelDetailsHref(scopeId, row.id)}
+                          >
+                            {t('channels.manage', 'Manage')}
+                            <ArrowRightOutlined aria-hidden="true" />
+                          </ChannelLink>
+                        ) : null}
+                      </td>
+                    </tr>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {registrations.data.map((registration) => (
-                  <ConnectedRow
-                    key={registration.id}
-                    registration={registration}
-                    scopeId={scopeId}
-                    label={
-                      bots.data?.find(
-                        (bot) =>
-                          bot.id === registration.botId &&
-                          bot.platform.toLowerCase() ===
-                            registration.platform.toLowerCase(),
-                      )?.label ?? null
-                    }
-                    namePending={Boolean(registration.botId) && bots.isPending}
-                  />
-                ))}
-              </tbody>
-            </table>
+                </tbody>
+              </table>
+            </section>
             {refreshing ? (
               <AevatarLoadingOverlay
                 ariaLabel={t('channels.loading', 'Loading channels')}
@@ -316,12 +263,11 @@ export default function ChannelsPage({
           </div>
         ) : (
           <div className="channels__state">
-            <ChannelIcon platform="unknown" />
-            <h3>{t('channels.empty.title', 'No channels connected yet')}</h3>
+            <h3>{t('channels.bots.empty', 'No bots yet')}</h3>
             <p>
               {t(
-                'channels.empty.description',
-                'Connect Telegram above to start talking to your agent.',
+                'channels.bots.emptyHelp',
+                'Add a bot in NyxID, then refresh this table.',
               )}
             </p>
           </div>
