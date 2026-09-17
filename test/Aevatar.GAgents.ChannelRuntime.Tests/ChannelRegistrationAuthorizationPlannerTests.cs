@@ -4,7 +4,6 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using FluentAssertions;
 using Xunit;
 using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection;
-using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 

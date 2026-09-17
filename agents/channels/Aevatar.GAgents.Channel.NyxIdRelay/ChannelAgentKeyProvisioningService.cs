@@ -579,9 +579,10 @@ public sealed class ChannelAgentKeyProvisioningService(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(platform);
         var normalized = platform.Trim().ToLowerInvariant();
-        return normalized is "lark" or "telegram"
-            ? normalized
-            : throw new ArgumentException("Unsupported channel platform.", nameof(platform));
+        if (normalized.Any(char.IsControl))
+            throw new ArgumentException("Invalid channel platform.", nameof(platform));
+
+        return normalized;
     }
 
     private sealed class ParsedChannelAgentKey(

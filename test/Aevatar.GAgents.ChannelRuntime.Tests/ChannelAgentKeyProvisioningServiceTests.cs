@@ -41,7 +41,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     [InlineData("org-alpha", true)]
     public async Task ProvisionExplicitAsync_UsesOnlyVerifiedPlanAndPersistsItsDigest(string? organizationId, bool requiresNodes)
     {
-        var authorization = await ChannelRegistrationExplicitAuthorizationPreparationTests.PrepareVerifiedAsync(organizationId, requiresNodes);
+        var authorization = await PrepareVerifiedAsync(organizationId, requiresNodes);
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", CreateResponse(
             allowAllServicesJson: "false", allowAllNodesJson: "false", allowedServiceIdsJson: "[\"svc-alpha\"]",
@@ -73,7 +73,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     public async Task ProvisionExplicitAsync_ScopeDoesNotMatchVerifiedKeyOwner_RejectsBeforeCreate(
         string? organizationId)
     {
-        var authorization = await ChannelRegistrationExplicitAuthorizationPreparationTests.PrepareVerifiedAsync(
+        var authorization = await PrepareVerifiedAsync(
             organizationId);
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", RestrictedResponse());
@@ -105,7 +105,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     [InlineData("secret")]
     public async Task ProvisionExplicitAsync_ResponseDrift_CompensatesBeforeVaultWithoutLeakingSecrets(string drift)
     {
-        var authorization = await ChannelRegistrationExplicitAuthorizationPreparationTests.PrepareVerifiedAsync();
+        var authorization = await PrepareVerifiedAsync();
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", CreateResponse(
             fullKey: drift == "secret" ? null : RawFullKey,
@@ -132,7 +132,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     [InlineData("{\"error\":true,\"status\":\"secret\",\"body\":\"{}\"}", "channel_authorization_contract_invalid")]
     public async Task ProvisionExplicitAsync_ErrorWithoutCreatedId_DoesNotInventCleanup(string response, string code)
     {
-        var authorization = await ChannelRegistrationExplicitAuthorizationPreparationTests.PrepareVerifiedAsync();
+        var authorization = await PrepareVerifiedAsync();
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", response);
         var vault = new RecordingSecretVault();
@@ -153,7 +153,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     [InlineData("\"scopes\":\"admin\",")]
     public async Task ProvisionExplicitAsync_DuplicateContractField_FailsClosed(string duplicate)
     {
-        var authorization = await ChannelRegistrationExplicitAuthorizationPreparationTests.PrepareVerifiedAsync();
+        var authorization = await PrepareVerifiedAsync();
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", "{" + duplicate + RestrictedResponse()[1..]);
         handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-alpha", "{}");
@@ -167,7 +167,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     [Fact]
     public async Task ProvisionExplicitAsync_NyxIdTypedStalePlanConflict_ReturnsStableScopePlanChanged()
     {
-        var authorization = await ChannelRegistrationExplicitAuthorizationPreparationTests.PrepareVerifiedAsync();
+        var authorization = await PrepareVerifiedAsync();
         var handler = new RecordingHandler { PostStatus = HttpStatusCode.Conflict };
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys",
             "{\"error\":\"api_key_scope_plan_stale\",\"error_code\":9007,\"message\":\"nyxid_ag_channel_secret_alpha\"}");
@@ -183,7 +183,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     [InlineData("key-alpha\n")]
     public async Task ProvisionExplicitAsync_NoncanonicalCreatedId_NeverDeletesAnotherAddress(string id)
     {
-        var authorization = await ChannelRegistrationExplicitAuthorizationPreparationTests.PrepareVerifiedAsync();
+        var authorization = await PrepareVerifiedAsync();
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys",
             RestrictedResponse().Replace("\"key-alpha\"", JsonSerializer.Serialize(id), StringComparison.Ordinal));
@@ -196,7 +196,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     [Fact]
     public async Task ProvisionExplicitAsync_AmbiguousCreatedId_NeverChoosesCleanupTarget()
     {
-        var authorization = await ChannelRegistrationExplicitAuthorizationPreparationTests.PrepareVerifiedAsync();
+        var authorization = await PrepareVerifiedAsync();
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", "{\"id\":\"key-other\"," + RestrictedResponse()[1..]);
         handler.Enqueue(HttpMethod.Delete, "/api/v1/api-keys/key-alpha", "{}");
@@ -211,7 +211,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     [InlineData("caller-cancelled")]
     public async Task ProvisionExplicitAsync_VaultFailure_CompensationIgnoresCallerCancellation(string failure)
     {
-        var authorization = await ChannelRegistrationExplicitAuthorizationPreparationTests.PrepareVerifiedAsync();
+        var authorization = await PrepareVerifiedAsync();
         using var caller = new CancellationTokenSource();
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", RestrictedResponse());
@@ -239,7 +239,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     [InlineData(true)]
     public async Task ProvisionExplicitAsync_CreateCancellation_DistinguishesCallerFromTimeout(bool callerCancelled)
     {
-        var authorization = await ChannelRegistrationExplicitAuthorizationPreparationTests.PrepareVerifiedAsync();
+        var authorization = await PrepareVerifiedAsync();
         using var caller = new CancellationTokenSource();
         var handler = new RecordingHandler
         {
@@ -262,6 +262,66 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
         CancellationToken ct = default)
         => service.ProvisionAsync("telegram", "owner-token", "https://aevatar.example.com/api/webhooks/nyxid-relay",
             authorization.Plan.KeyOwner.Id, "reg-alpha", authorization, ct);
+
+    private static async Task<VerifiedChannelRegistrationExplicitAuthorization> PrepareVerifiedAsync(
+        string? organizationId = null,
+        bool requiresNodes = false)
+    {
+        var owner = organizationId is null
+            ? PersonalOwner("scope-alpha")
+            : new VerifiedChannelRegistrationOwner(
+                "user-alpha",
+                new ChannelRegistrationKeyOwner(ChannelRegistrationKeyOwnerKind.Organization, organizationId),
+                organizationId);
+        var ownerPrincipal = organizationId is null
+            ? new NyxIdScopePlanPrincipal("scope-alpha", NyxIdScopePlanPrincipalKind.Personal)
+            : new NyxIdScopePlanPrincipal(organizationId, NyxIdScopePlanPrincipalKind.Organization);
+        var service = new NyxIdUserService(
+            "svc-alpha",
+            "service-alpha",
+            Label: "service-alpha",
+            CatalogServiceName: "service-alpha",
+            IsActive: true,
+            organizationId is null
+                ? new NyxIdUserServiceCredentialSource(NyxIdUserServiceCredentialSourceKind.Personal)
+                : new NyxIdUserServiceCredentialSource(
+                    NyxIdUserServiceCredentialSourceKind.Organization,
+                    organizationId,
+                    OrganizationRole: NyxIdOrganizationRole.Admin,
+                    Allowed: true));
+        var nodeGrant = requiresNodes
+            ? new NyxIdScopePlanNodeGrant(NyxIdScopePlanNodeGrantKind.Required, ["node-alpha"])
+            : new NyxIdScopePlanNodeGrant(NyxIdScopePlanNodeGrantKind.NotRequired, []);
+        var scopePlan = new NyxIdApiKeyScopePlan(
+            NyxIdApiAccessResponseParser.ScopePlanAuthority,
+            NyxIdApiAccessResponseParser.ScopePlanContractVersion,
+            NyxIdApiAccessResponseParser.ScopePlanPolicyVersion,
+            new NyxIdScopePlanPrincipal(owner.AuthenticatedActorId, NyxIdScopePlanPrincipalKind.Personal),
+            ownerPrincipal,
+            [new NyxIdScopePlanServiceGrant("svc-alpha", ownerPrincipal, nodeGrant)],
+            ["svc-alpha"],
+            requiresNodes ? ["node-alpha"] : [],
+            DateTimeOffset.Parse("2026-09-10T00:00:00Z"),
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            new NyxIdScopePlanFreshness(
+                NyxIdScopePlanFreshnessMode.MutationRevalidatedSnapshot,
+                "scope_plan_digest",
+                NyxIdScopePlanPostCreationDrift.FailClosed),
+            new NyxIdScopePlanCompleteness(
+                true,
+                true,
+                NyxIdScopePlanRouteCandidateBasis.ActiveConfiguredRoutes,
+                true));
+        var planner = new ChannelRegistrationAuthorizationPlanner(new StubAuthorizationPort(service, scopePlan));
+        var result = await planner.PlanAsync(new ChannelRegistrationAuthorizationPlanningRequest(
+            "owner-token",
+            owner,
+            ["svc-alpha"],
+            []), CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue(result.ErrorCode);
+        return new VerifiedChannelRegistrationExplicitAuthorization(result.Plan!);
+    }
 
     [Fact]
     public async Task ProvisionAsync_DefaultWriteGate_RejectsBeforeExternalCalls()
@@ -609,6 +669,31 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
         Fingerprint = "sha256:test",
         CreatedAtUnixMs = 1788912000000,
     };
+
+    private sealed class StubAuthorizationPort(
+        NyxIdUserService service,
+        NyxIdApiKeyScopePlan scopePlan) : IChannelRegistrationNyxIdAuthorizationPort
+    {
+        public Task<NyxIdApiAccessResult<NyxIdUserServices>> ReadUserServicesAsync(
+            string accessToken,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new NyxIdApiAccessResult<NyxIdUserServices>(
+                new NyxIdUserServices([service]),
+                null));
+        }
+
+        public Task<NyxIdApiAccessResult<NyxIdApiKeyScopePlan>> PlanApiKeyScopeAsync(
+            string accessToken,
+            IReadOnlyList<string> selectedServiceIds,
+            string? targetOrganizationId,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new NyxIdApiAccessResult<NyxIdApiKeyScopePlan>(scopePlan, null));
+        }
+    }
 
     private sealed class RecordingHandler(List<string>? effects = null) : HttpMessageHandler
     {

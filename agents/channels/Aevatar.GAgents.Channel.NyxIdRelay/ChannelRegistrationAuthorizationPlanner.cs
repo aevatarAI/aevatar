@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
+using Aevatar.GAgents.Channel.Runtime;
 using static Aevatar.GAgents.Channel.NyxIdRelay.VerifiedChannelRegistrationServiceSelection;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
@@ -48,6 +50,49 @@ public sealed record ChannelRegistrationAuthorizationPlanningResult(
 public sealed record ChannelRegistrationServiceVerificationResult(
     VerifiedChannelRegistrationServiceSelection? Selection,
     string ErrorCode);
+
+public sealed class VerifiedChannelRegistrationExplicitAuthorization
+{
+    public VerifiedChannelRegistrationExplicitAuthorization(
+        VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan plan)
+    {
+        Plan = plan ?? throw new ArgumentNullException(nameof(plan));
+    }
+
+    public VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan Plan { get; }
+}
+
+public sealed class ChannelRegistrationAuthorizationPlanner(
+    IChannelRegistrationNyxIdAuthorizationPort authorizationPort)
+    : VerifiedChannelRegistrationServiceSelection.VerifiedChannelRegistrationAuthorizationPlan.ChannelRegistrationAuthorizationPlanner(
+        authorizationPort);
+
+internal static class ChannelRegistrationLocalMirrorRuntimeConfig
+{
+    public static ChannelBotRuntimeConfig? Build(
+        ChannelBotRuntimeConfig? runtimeConfig,
+        string? defaultSkillName,
+        VerifiedChannelRegistrationExplicitAuthorization? authorization)
+    {
+        var config = runtimeConfig?.Clone();
+        var normalizedDefaultSkillName = string.IsNullOrWhiteSpace(defaultSkillName)
+            ? config?.DefaultSkill?.Name?.Trim()
+            : defaultSkillName.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedDefaultSkillName))
+            return config;
+
+        config ??= new ChannelBotRuntimeConfig();
+        config.DefaultSkill = new ChannelBotRuntimeDefaultSkillConfig
+        {
+            Name = normalizedDefaultSkillName,
+        };
+        if (config.CredentialSourceMode == ChannelBotRuntimeCredentialSourceMode.Unspecified)
+            config.CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
+        if (!config.ToolSetRefs.Contains(ToolSetNames.ChannelReplyDefault))
+            config.ToolSetRefs.Add(ToolSetNames.ChannelReplyDefault);
+        return config;
+    }
+}
 
 public sealed class VerifiedChannelRegistrationServiceSelection
 {
@@ -121,7 +166,7 @@ public sealed class VerifiedChannelRegistrationServiceSelection
 
         public string ScopePlanDigest { get; }
 
-        public sealed class ChannelRegistrationAuthorizationPlanner(
+        public class ChannelRegistrationAuthorizationPlanner(
             IChannelRegistrationNyxIdAuthorizationPort authorizationPort)
         {
             private readonly IChannelRegistrationNyxIdAuthorizationPort _authorizationPort =

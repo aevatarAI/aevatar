@@ -7,11 +7,9 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
 
 /// <summary>
-/// Shared parsing / rollback helpers for the Nyx-side responses consumed by per-platform
-/// provisioning services (<see cref="NyxLarkProvisioningService"/>, <see cref="NyxTelegramProvisioningService"/>,
-/// future platforms). Centralized here so the Lark and Telegram services do not drift on the
-/// JSON shape Nyx returns and the failure-string contract surfaced through the registration
-/// endpoint stays uniform.
+/// Shared parsing / rollback helpers for NyxID responses consumed by channel registration
+/// adoption, route binding, Agent Key, and cleanup flows. Centralized here so JSON response
+/// parsing and public failure normalization stay uniform.
 /// </summary>
 internal static class NyxApiResponseHelper
 {
@@ -486,10 +484,13 @@ internal static class NyxApiResponseHelper
         "nyx_api_base_url_not_configured",
         "channel_bot_id_request_failed",
         "channel_bot_already_exists",
+        "registration_id_already_exists",
         "local_mirror_dispatch_failed",
         "local_mirror_accepted_remote_cleanup_skipped",
         "local_mirror_acceptance_unknown_remote_cleanup_skipped",
         "channel_agent_key_write_gate_closed",
+        "ambiguous_channel_bot_route",
+        "channel_route_not_accessible",
         "service_allowlist_not_supported",
         "provisioning_failed",
     ];

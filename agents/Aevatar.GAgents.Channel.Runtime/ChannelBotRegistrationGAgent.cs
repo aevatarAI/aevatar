@@ -46,10 +46,8 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     // ─── Commands ───
 
     /// <summary>
-    /// Platforms whose registrations are allowed to land in the local mirror. Aligned with the
-    /// set of <c>INyxChannelBotProvisioningService</c> registered on the supported production
-    /// contract. Anything outside this set is treated as a retired direct-callback dispatch and
-    /// dropped without persistence so legacy producers cannot resurface old wire shapes.
+    /// Platforms whose legacy direct-callback registrations are allowed to land in the local mirror.
+    /// NyxID-backed registrations are platform-neutral when they carry a channel bot id.
     /// </summary>
     private static readonly HashSet<string> SupportedPlatforms =
         new(StringComparer.OrdinalIgnoreCase)
@@ -58,10 +56,14 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             "telegram",
         };
 
+    private static bool IsSupportedRegistration(ChannelBotRegisterCommand cmd) =>
+        SupportedPlatforms.Contains(cmd.Platform ?? string.Empty) ||
+        !string.IsNullOrWhiteSpace(cmd.Platform) && !string.IsNullOrWhiteSpace(cmd.NyxChannelBotId);
+
     [EventHandler]
     public async Task HandleRegister(ChannelBotRegisterCommand cmd)
     {
-        if (!SupportedPlatforms.Contains(cmd.Platform ?? string.Empty))
+        if (!IsSupportedRegistration(cmd))
         {
             Logger.LogWarning(
                 "Ignoring registration request for unsupported platform: platform={Platform}, requestedId={RequestedId}",
@@ -197,6 +199,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
                 : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             AuthorizationMode = cmd.AuthorizationMode,
             RegistrationServiceAllowlist = cmd.RegistrationServiceAllowlist?.Clone(),
+            ChannelAgentKey = cmd.ChannelAgentKey?.Clone(),
         });
         Logger.LogInformation("Updated channel bot runtime config: id={Id}", registrationId);
     }
@@ -578,6 +581,12 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
                 ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist
                     ? evt.RegistrationServiceAllowlist?.Clone() ?? new ChannelRegistrationServiceAllowlist()
                     : null;
+        }
+        if (evt.ChannelAgentKey is not null)
+        {
+            entry.ChannelAgentKey = evt.ChannelAgentKey.Clone();
+            entry.NyxAgentApiKeyId = entry.ChannelAgentKey.ApiKeyId;
+            entry.WorkflowResultDeliveryCredential = entry.ChannelAgentKey.SecretReference?.Clone();
         }
         return next;
     }
