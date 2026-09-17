@@ -121,7 +121,7 @@ async function chooseSkill(name: string) {
   );
 }
 
-it('binds an existing bot with shared Ornn skills, keeps selection on refresh and waits for bound inventory', async () => {
+it('binds with shared Ornn skills, retains refresh selection and opens the registration detail only after bound inventory', async () => {
   jest.useFakeTimers();
   try {
     let committed = false;
@@ -214,8 +214,9 @@ it('binds an existing bot with shared Ornn skills, keeps selection on refresh an
       expect(mockToast.success).toHaveBeenCalledWith('Bot bound successfully.'),
     );
     expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/channels',
+      '/scopes/scope-alpha/workflow-activity-vnext/channels/reg-alpha',
     );
+    expect(history.replace).toHaveBeenCalledTimes(1);
     expect(posts()).toHaveLength(1);
   } finally {
     cleanup();

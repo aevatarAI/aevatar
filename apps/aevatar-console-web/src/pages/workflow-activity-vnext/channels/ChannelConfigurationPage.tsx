@@ -291,6 +291,7 @@ function ConfigurationForm({
     const actual = observation.data;
     if (
       !actual ||
+      !actual.id ||
       !submitted ||
       completed.current ||
       actual.bindingStatus !== 'bound' ||
@@ -306,25 +307,15 @@ function ConfigurationForm({
     )
       return;
     completed.current = true;
-    if (actual.id)
-      client.setQueryData(channelKeys.detail(scopeId, actual.id), actual);
+    client.setQueryData(channelKeys.detail(scopeId, actual.id), actual);
     void client.invalidateQueries({ queryKey: channelKeys.list(scopeId) });
     toast.success(
       editing
         ? t('channels.edit.saved', 'Channel changes saved.')
         : t('channels.bind.success', 'Bot bound successfully.'),
     );
-    history.replace(returnHref);
-  }, [
-    observation.data,
-    submitted,
-    initial,
-    editing,
-    client,
-    scopeId,
-    returnHref,
-    toast,
-  ]);
+    history.replace(buildChannelDetailsHref(scopeId, actual.id));
+  }, [observation.data, submitted, initial, editing, client, scopeId, toast]);
 
   async function save(event: React.FormEvent) {
     event.preventDefault();

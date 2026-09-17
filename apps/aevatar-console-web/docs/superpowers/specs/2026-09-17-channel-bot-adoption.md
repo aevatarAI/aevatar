@@ -53,8 +53,11 @@ the editable bot name.
 
 A successful write receipt is admission only. Bind automatically observes the
 inventory for the receipt's registration ID and the original bot ID with a
-bound state and matching configuration. Edit observes the exact detail until a
-newer authoritative state version contains the requested configuration.
+bound state and matching configuration. Once confirmed, it opens the existing
+Manage/detail page for that observed registration ID, showing the bound bot
+and its configuration. Acceptance alone does not navigate, and the NyxID bot
+ID is never substituted for the registration ID. Edit observes the exact detail
+until a newer authoritative state version contains the requested configuration.
 Observation is bounded to 30 seconds. Delay or read failure preserves the
 receipt and offers a return to Channels without repeating the write. An
 uncertain transport result also prevents a duplicate write from this form.
