@@ -7,10 +7,14 @@ internal sealed record NyxIdServiceInstanceBinding(NyxIdServiceInstance Instance
 public sealed class NyxIdServiceInstanceClient
 {
     private readonly NyxIdApiClient _client;
+    private readonly INyxIdRecommendedSkillRefCreator _recommendedSkillRefCreator;
 
-    public NyxIdServiceInstanceClient(NyxIdApiClient client)
+    public NyxIdServiceInstanceClient(
+        NyxIdApiClient client,
+        INyxIdRecommendedSkillRefCreator? recommendedSkillRefCreator = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
+        _recommendedSkillRefCreator = recommendedSkillRefCreator ?? EmptyNyxIdRecommendedSkillRefCreator.Instance;
     }
 
     internal static bool IsCallerExecutable(NyxIdServiceInstance instance)
@@ -47,6 +51,8 @@ public sealed class NyxIdServiceInstanceClient
                 NyxIdServiceAccessTokenSource.Organization));
         }
 
+        await CreateMissingRecommendedSkillRefsAsync(candidates, ct).ConfigureAwait(false);
+
         var exact = new Dictionary<string, NyxIdServiceInstanceBinding>(StringComparer.Ordinal);
         var conflicts = new HashSet<string>(StringComparer.Ordinal);
         foreach (var candidate in candidates)
@@ -78,10 +84,13 @@ public sealed class NyxIdServiceInstanceClient
     {
         var response = await _client.ListServicesAsync(agentKey, ct);
         EnsureDiscoverySucceeded(response);
-        return ParseBindings(
+        var bindings = ParseBindings(
                 response,
                 agentKey,
                 NyxIdServiceAccessTokenSource.User)
+            .ToArray();
+        await CreateMissingRecommendedSkillRefsAsync(bindings, ct).ConfigureAwait(false);
+        return bindings
             .OrderBy(static binding => binding.Instance.UserServiceId, StringComparer.Ordinal)
             .ToArray();
     }
@@ -209,7 +218,7 @@ public sealed class NyxIdServiceInstanceClient
         }
     }
 
-    private static IReadOnlyList<NyxIdServiceInstanceBinding> ParseBindings(
+    private IReadOnlyList<NyxIdServiceInstanceBinding> ParseBindings(
         string? json,
         string token,
         NyxIdServiceAccessTokenSource tokenSource)
@@ -241,7 +250,7 @@ public sealed class NyxIdServiceInstanceClient
         }
     }
 
-    private static NyxIdServiceInstanceBinding? ParseSingleBinding(
+    private NyxIdServiceInstanceBinding? ParseSingleBinding(
         string? json,
         string token,
         NyxIdServiceAccessTokenSource tokenSource)
@@ -268,7 +277,7 @@ public sealed class NyxIdServiceInstanceClient
         }
     }
 
-    private static NyxIdServiceInstanceBinding? ParseBinding(
+    private NyxIdServiceInstanceBinding? ParseBinding(
         JsonElement item,
         string token,
         NyxIdServiceAccessTokenSource tokenSource)
@@ -298,6 +307,7 @@ public sealed class NyxIdServiceInstanceClient
             routeConstraint.CatalogServiceId = catalogId;
         else
             routeConstraint.ServiceSlug = slug;
+        var recommendedSkillRefs = ParseRecommendedSkillRefs(item);
         var instance = new NyxIdServiceInstance
         {
             UserServiceId = id,
@@ -321,8 +331,28 @@ public sealed class NyxIdServiceInstanceClient
             instance.OpenapiSpecUrl = openApiSpecUrl;
         if (nodeId is not null)
             instance.NodeId = nodeId;
-        instance.RecommendedSkillRefs.Add(ParseRecommendedSkillRefs(item));
+        instance.RecommendedSkillRefs.Add(recommendedSkillRefs);
         return new NyxIdServiceInstanceBinding(instance, token);
+    }
+
+    private async Task CreateMissingRecommendedSkillRefsAsync(
+        IReadOnlyList<NyxIdServiceInstanceBinding> bindings,
+        CancellationToken ct)
+    {
+        foreach (var binding in bindings)
+        {
+            if (binding.Instance.RecommendedSkillRefs.Count > 0 ||
+                !binding.Instance.IsActive ||
+                !binding.Instance.CredentialAllowed)
+            {
+                continue;
+            }
+
+            var createdRefs = await _recommendedSkillRefCreator
+                .CreateRecommendedSkillRefsAsync(binding.Instance, ct)
+                .ConfigureAwait(false);
+            binding.Instance.RecommendedSkillRefs.Add(createdRefs);
+        }
     }
 
     private static IReadOnlyList<NyxIdRecommendedSkillRef> ParseRecommendedSkillRefs(JsonElement item)

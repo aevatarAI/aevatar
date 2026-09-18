@@ -143,10 +143,15 @@ internal sealed class NyxIdConnectedServiceOperationTool :
 
     public ToolPresentationDescriptor Presentation { get; }
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+    public ToolApprovalMode ApprovalMode => RequiresOperationApproval
+        ? ToolApprovalMode.AlwaysRequire
+        : ToolApprovalMode.NeverRequire;
 
     public bool IsReadOnly =>
         OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly;
+
+    private bool RequiresOperationApproval =>
+        OperationAdmission.ExecutionPolicy.Approval == AgentToolOperationApproval.Required;
 
     public bool IsDestructive => false;
 
@@ -186,8 +191,10 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         };
     }
 
+    public bool? RequiresApproval(string argumentsJson) => RequiresOperationApproval;
+
     public AgentToolCallSafety GetCallSafety(string argumentsJson) => new(
-        RequiresApproval: false,
+        RequiresApproval: RequiresOperationApproval,
         IsReadOnly,
         IsDestructive: false);
 
@@ -221,10 +228,11 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             NyxIdAccessToken = executionToken,
             SourceReadableNyxIdAccessToken = sourceReadableToken,
         };
+        var operationAdmission = ResolveOperationAdmission(argumentsJson);
         using var scope = AgentToolContextScope.Push(current with
         {
             Credentials = credentials,
-            OperationAdmission = OperationAdmission,
+            OperationAdmission = operationAdmission,
         });
 
         var outcome = IsReadOnly

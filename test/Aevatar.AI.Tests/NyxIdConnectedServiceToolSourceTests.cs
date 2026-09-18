@@ -1150,6 +1150,235 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task DynamicEffect_ApprovalRequiredPolicy_WaitsBeforeProxyAndResumesExactCall()
+    {
+        const string arguments = """{"body":{"name":"order-alpha"}}""";
+        const string requestId = "request-effect-alpha";
+        const string callId = "call-effect";
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(Instance("usvc-alpha", "api-shop", "svc-shop"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-alpha", "api-shop", ApprovalRequiredEffectEndpoint("endpoint-create")));
+        var source = CreateSource(handler, enableEffects: true);
+        var executor = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new AppendedVerificationAuditTrail(),
+            new StableVerificationIdentityHasher());
+        var executionOwner = AgentToolExecutionOwners.Actor("conversation-alpha");
+        var executionContext = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, callId),
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "user-token",
+            },
+            ExecutionOwner = executionOwner,
+        };
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
+        tool.GetCallSafety(arguments).Should().Be(new AgentToolCallSafety(true, false, false));
+
+        var waiting = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            arguments,
+            executionContext,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null));
+
+        waiting.Kind.Should().Be(AgentToolExecutionOutcomeKind.ApprovalRequired);
+        waiting.TerminalInvoked.Should().BeFalse();
+        waiting.IsMutation.Should().BeTrue();
+        waiting.Receipt.Status.Should().Be(AgentToolReceiptStatus.ApprovalRequired);
+        handler.ProxyRequests.Should().BeEmpty();
+
+        var approved = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            arguments,
+            executionContext,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            new AgentToolApprovalGrant(
+                executionOwner,
+                waiting.Receipt.ApprovalRequestId,
+                requestId,
+                tool.Name,
+                callId,
+                AgentToolArgumentsDigest.ComputeSha256(arguments))));
+
+        approved.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        approved.TerminalInvoked.Should().BeTrue();
+        approved.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DynamicEffect_ApprovalNonePolicy_ExecutesThroughGenericEntryWithoutApprovalPause()
+    {
+        const string arguments = """{"body":{"name":"order-alpha"}}""";
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(Instance("usvc-alpha", "api-shop", "svc-shop"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-alpha", "api-shop", EffectEndpoint("endpoint-create")));
+        var source = CreateSource(handler, enableEffects: true);
+        var executor = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new AppendedVerificationAuditTrail(),
+            new StableVerificationIdentityHasher());
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var outcome = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            arguments,
+            AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-effect-alpha", "call-effect"),
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "user-token",
+                },
+                ExecutionOwner = AgentToolExecutionOwners.Actor("conversation-alpha"),
+            },
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.NeverRequire);
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DynamicEffect_ApprovalRequiredPolicy_MismatchedGrantDoesNotProxy()
+    {
+        const string arguments = """{"body":{"name":"order-alpha"}}""";
+        const string requestId = "request-effect-alpha";
+        const string callId = "call-effect";
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(Instance("usvc-alpha", "api-shop", "svc-shop"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-alpha", "api-shop", ApprovalRequiredEffectEndpoint("endpoint-create")));
+        var source = CreateSource(handler, enableEffects: true);
+        var executor = new AdmittedAgentToolExecutor(
+            AlwaysStartingAgentToolAdmissionLedger.Instance,
+            new AppendedVerificationAuditTrail(),
+            new StableVerificationIdentityHasher());
+        var executionOwner = AgentToolExecutionOwners.Actor("conversation-alpha");
+        var executionContext = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity(requestId, callId),
+            Credentials = AgentToolCredentials.Empty with
+            {
+                NyxIdAccessToken = "user-token",
+            },
+            ExecutionOwner = executionOwner,
+        };
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var waiting = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            arguments,
+            executionContext,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null));
+
+        var denied = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            """{"body":{"name":"order-beta"}}""",
+            executionContext,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            new AgentToolApprovalGrant(
+                executionOwner,
+                waiting.Receipt.ApprovalRequestId,
+                requestId,
+                tool.Name,
+                callId,
+                AgentToolArgumentsDigest.ComputeSha256(arguments))));
+
+        denied.Kind.Should().Be(AgentToolExecutionOutcomeKind.Denied);
+        denied.FailureCode.Should().Be("approval_grant_mismatch");
+        denied.TerminalInvoked.Should().BeFalse();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DynamicEffect_DuplicateSubmission_DoesNotReplayNonReplayableProxyCall()
+    {
+        const string arguments = """{"body":{"name":"order-alpha"}}""";
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(Instance("usvc-alpha", "api-shop", "svc-shop"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-alpha", "api-shop", EffectEndpoint("endpoint-create")));
+        var source = CreateSource(handler, enableEffects: true);
+        var executor = new AdmittedAgentToolExecutor(
+            new DeduplicatingAdmissionLedger(),
+            new AppendedVerificationAuditTrail(),
+            new StableVerificationIdentityHasher());
+        var request = new AgentToolExecutionRequest(
+            Tool: null!,
+            ArgumentsJson: arguments,
+            ExecutionContext: AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-effect-alpha", "call-effect"),
+                Credentials = AgentToolCredentials.Empty with
+                {
+                    NyxIdAccessToken = "user-token",
+                },
+                ExecutionOwner = AgentToolExecutionOwners.Actor("conversation-alpha"),
+            },
+            ApprovalContinuationMode: AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        request = request with { Tool = tool };
+        var first = await executor.ExecuteAsync(request);
+        var duplicate = await executor.ExecuteAsync(request);
+
+        first.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        duplicate.Kind.Should().Be(AgentToolExecutionOutcomeKind.Failed);
+        duplicate.FailureCode.Should().Be("tool_execution_already_started");
+        duplicate.TerminalInvoked.Should().BeFalse();
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DynamicEffect_ProviderTimeoutFailure_ReturnsUncertainReceiptWithoutRetry()
+    {
+        var handler = new FakeNyxIdHandler
+        {
+            ProxyStatusCode = HttpStatusCode.GatewayTimeout,
+            ProxyResponseBody = """{"error":"timeout"}""",
+        };
+        handler.KeysByToken["user-token"] = Keys(Instance("usvc-alpha", "api-shop", "svc-shop"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-alpha", "api-shop", EffectEndpoint("endpoint-create")));
+        var source = CreateSource(handler, enableEffects: true);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-effect",
+            tool.Name,
+            """{"body":{"name":"order-alpha"}}""");
+
+        using var result = JsonDocument.Parse(outcome.ResultJson);
+        result.RootElement.GetProperty("kind").GetString()
+            .Should().Be("connected_service_effect_receipt");
+        result.RootElement.GetProperty("status").GetString().Should().Be("error");
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task DynamicEffect_ConfiguredReadBack_FreezesExactReadSelectorFromTypedArguments()
     {
         var handler = new FakeNyxIdHandler();
@@ -2195,6 +2424,31 @@ public class NyxIdConnectedServiceToolSourceTests
         }
         """;
 
+    private static string ApprovalRequiredEffectEndpoint(string endpointId) => $$"""
+        {
+          "endpoint_id": "{{endpointId}}",
+          "name": "create_order",
+          "method": "POST",
+          "path": "/orders",
+          "parameters": [],
+          "request_body_schema": {
+            "type": "object",
+            "properties": { "name": { "type": "string" } },
+            "required": ["name"],
+            "additionalProperties": false
+          },
+          "request_content_type": "application/json",
+          "request_body_required": true,
+          "execution_policy": {
+            "risk": "write",
+            "approval": "required",
+            "enforcement_owner": "aevatar",
+            "allowed_execution_modes": ["interactive"]
+          },
+          "response": { "content_types": ["application/json"], "binary_artifact": false }
+        }
+        """;
+
     private static NyxIdAssistantOperationReadBackBinding LarkMessageReadBackBinding() => new()
     {
         CatalogServiceSlug = "api-lark-bot",
@@ -2520,6 +2774,21 @@ public class NyxIdConnectedServiceToolSourceTests
             var outcome = await inner.ExecuteAsync(request, ct);
             Outcomes.Add(outcome);
             return outcome;
+        }
+    }
+
+    private sealed class DeduplicatingAdmissionLedger : IAgentToolAdmissionLedger
+    {
+        private readonly HashSet<string> _admissionIds = new(StringComparer.Ordinal);
+
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default)
+        {
+            var status = _admissionIds.Add(fact.AdmissionId)
+                ? AgentToolAdmissionStatus.Started
+                : AgentToolAdmissionStatus.Duplicate;
+            return Task.FromResult(new AgentToolAdmissionResult(status));
         }
     }
 

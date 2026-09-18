@@ -27,6 +27,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
     private readonly INyxIdApiClientFactory? _apiClientFactory;
     private readonly INyxIdConnectedServiceCapabilityIssuer? _capabilityIssuer;
     private readonly IExactRemoteSkillFetcher? _exactSkillFetcher;
+    private readonly INyxIdRecommendedSkillRefCreator _recommendedSkillRefCreator;
     private readonly ILogger _logger;
 
     public ChannelNyxIdConnectedServiceInventoryToolSource(
@@ -35,13 +36,15 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         INyxIdApiClientFactory? apiClientFactory = null,
         INyxIdConnectedServiceCapabilityIssuer? capabilityIssuer = null,
         ILogger<ChannelNyxIdConnectedServiceInventoryToolSource>? logger = null,
-        IExactRemoteSkillFetcher? exactSkillFetcher = null)
+        IExactRemoteSkillFetcher? exactSkillFetcher = null,
+        INyxIdRecommendedSkillRefCreator? recommendedSkillRefCreator = null)
     {
         _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _options = options;
         _apiClientFactory = apiClientFactory;
         _capabilityIssuer = capabilityIssuer;
         _exactSkillFetcher = exactSkillFetcher;
+        _recommendedSkillRefCreator = recommendedSkillRefCreator ?? EmptyNyxIdRecommendedSkillRefCreator.Instance;
         _logger = logger ?? NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance;
     }
 
@@ -138,7 +141,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         try
         {
             var reader = new NyxIdConnectedServiceInventoryReader(
-                new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
+                new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient(), _recommendedSkillRefCreator));
             var senderContext = context with
             {
                 // This read is authorized by the bound sender, independently of
@@ -242,7 +245,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             return RecommendedSkillFailure("inventory_source_unavailable");
 
         var reader = new NyxIdConnectedServiceInventoryReader(
-            new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
+            new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient(), _recommendedSkillRefCreator));
         var senderContext = context with
         {
             CredentialSource = AgentToolCredentialSource.BearerToken,

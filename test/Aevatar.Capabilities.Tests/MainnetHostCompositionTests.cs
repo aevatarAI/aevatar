@@ -1352,8 +1352,11 @@ public sealed class MainnetHostCompositionTests
             nyxIdChatDefault.Sources,
             AgentToolExecutionContext.Empty);
         nyxIdChatDefaultDiscovery.IsSuccess.Should().BeTrue(nyxIdChatDefaultDiscovery.Failure?.Detail);
-        nyxIdChatDefaultDiscovery.Tools.Select(static tool => tool.Name).Should()
-            .ContainSingle(name => name == "scheduled_agent_creator");
+        var nyxIdChatDefaultToolNames = nyxIdChatDefaultDiscovery.Tools
+            .Select(static tool => tool.Name)
+            .ToArray();
+        nyxIdChatDefaultToolNames.Should().ContainSingle(name => name == "scheduled_agent_creator");
+        nyxIdChatDefaultToolNames.Should().NotContain("nyxid_proxy");
 
         var nyxIdConnectedServices = registry.Resolve(ToolSetNames.NyxIdConnectedServices);
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
