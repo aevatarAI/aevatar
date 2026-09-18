@@ -82,6 +82,37 @@ public sealed class NyxIdServiceInstanceClientTests
     }
 
     [Fact]
+    public async Task ReadAsync_RecommendedSkillRefs_MapsExactOrnnReferenceWithoutCatalogBackfill()
+    {
+        var handler = new InventoryHandler();
+        handler.KeysByToken["user-token"] = Keys("""
+            {"id":"us-personal","slug":"calendar","catalog_service_id":"catalog-calendar",
+             "catalog_service_slug":"api-calendar","is_active":true,"connected":true,"status":"active",
+             "credential_source":{"type":"personal"},
+             "recommended_skill_refs":[{
+               "source":"ornn",
+               "skill_id":"11111111-1111-1111-1111-111111111111",
+               "literal_version":"1.2",
+               "manifest_digest":"sha256:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+               "display_name":"Calendar Reader",
+               "recommendation_name":"read-calendar-events",
+               "revision":"rev-1"
+             }]}
+            """);
+
+        var result = await CreateReader(handler).ReadAsync("user-token", organizationToken: null);
+
+        var skillRef = result.Instances.Should().ContainSingle().Subject.RecommendedSkillRefs
+            .Should().ContainSingle().Subject;
+        skillRef.Source.Should().Be(NyxIdRecommendedSkillSource.Ornn);
+        skillRef.SkillId.Should().Be("11111111-1111-1111-1111-111111111111");
+        skillRef.LiteralVersion.Should().Be("1.2");
+        skillRef.ManifestDigest.Should().StartWith("sha256:");
+        skillRef.RecommendationName.Should().Be("read-calendar-events");
+        skillRef.Revision.Should().Be("rev-1");
+    }
+
+    [Fact]
     public async Task ReadAsync_GenuineEmptyKeys_ReturnsEmptyInventory()
     {
         var handler = new InventoryHandler();
