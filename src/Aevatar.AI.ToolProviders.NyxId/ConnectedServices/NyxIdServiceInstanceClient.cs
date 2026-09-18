@@ -321,7 +321,64 @@ public sealed class NyxIdServiceInstanceClient
             instance.OpenapiSpecUrl = openApiSpecUrl;
         if (nodeId is not null)
             instance.NodeId = nodeId;
+        instance.RecommendedSkillRefs.Add(ParseRecommendedSkillRefs(item));
         return new NyxIdServiceInstanceBinding(instance, token);
+    }
+
+    private static IReadOnlyList<NyxIdRecommendedSkillRef> ParseRecommendedSkillRefs(JsonElement item)
+    {
+        if (!item.TryGetProperty("recommended_skill_refs", out var refsElement) || refsElement.ValueKind == JsonValueKind.Null)
+            return [];
+        if (refsElement.ValueKind != JsonValueKind.Array)
+            throw new NyxIdServiceInventoryContractException();
+
+        var refs = new List<NyxIdRecommendedSkillRef>();
+        foreach (var refElement in refsElement.EnumerateArray())
+        {
+            var skillRef = ParseRecommendedSkillRef(refElement)
+                ?? throw new NyxIdServiceInventoryContractException();
+            refs.Add(skillRef);
+        }
+
+        return refs;
+    }
+
+    private static NyxIdRecommendedSkillRef? ParseRecommendedSkillRef(JsonElement item)
+    {
+        if (item.ValueKind != JsonValueKind.Object)
+            return null;
+        if (!TryParseRecommendedSkillSource(ReadString(item, "source") ?? ReadString(item, "provider"), out var source))
+            return null;
+        var skillId = ReadString(item, "skill_id") ?? ReadString(item, "id") ?? ReadString(item, "guid");
+        var literalVersion = ReadString(item, "literal_version") ?? ReadString(item, "version");
+        var manifestDigest = ReadString(item, "manifest_digest") ?? ReadString(item, "digest") ?? ReadString(item, "skill_hash");
+        if (string.IsNullOrWhiteSpace(skillId) ||
+            string.IsNullOrWhiteSpace(literalVersion) ||
+            string.IsNullOrWhiteSpace(manifestDigest))
+        {
+            return null;
+        }
+
+        return new NyxIdRecommendedSkillRef
+        {
+            Source = source,
+            SkillId = skillId.Trim(),
+            LiteralVersion = literalVersion.Trim(),
+            ManifestDigest = manifestDigest.Trim(),
+            DisplayName = ReadString(item, "display_name") ?? ReadString(item, "name") ?? string.Empty,
+            RecommendationName = ReadString(item, "recommendation_name") ?? ReadString(item, "recommended_name") ?? string.Empty,
+            Revision = ReadString(item, "revision") ?? string.Empty,
+        };
+    }
+
+    private static bool TryParseRecommendedSkillSource(string? value, out NyxIdRecommendedSkillSource source)
+    {
+        source = value switch
+        {
+            "ornn" => NyxIdRecommendedSkillSource.Ornn,
+            _ => NyxIdRecommendedSkillSource.Unspecified,
+        };
+        return source != NyxIdRecommendedSkillSource.Unspecified;
     }
 
     private static bool TryReadNodeId(JsonElement item, out string? nodeId)
@@ -445,6 +502,7 @@ public sealed class NyxIdServiceInstanceClient
         string.Equals(left.EndpointUrl, right.EndpointUrl, StringComparison.Ordinal) &&
         string.Equals(left.OpenapiSpecUrl, right.OpenapiSpecUrl, StringComparison.Ordinal) &&
         string.Equals(left.NodeId, right.NodeId, StringComparison.Ordinal) &&
+        left.RecommendedSkillRefs.SequenceEqual(right.RecommendedSkillRefs) &&
         Equals(left.CallerExecutionReadiness, right.CallerExecutionReadiness) &&
         Equals(left.RouteConstraint, right.RouteConstraint);
 
