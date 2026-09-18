@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.Configuration;
 using Google.Protobuf.WellKnownTypes;
 
@@ -86,6 +87,33 @@ public sealed class NyxIdAssistantReadBackPagination
 /// Server-owned exact effect-to-read contract. Endpoint identities and argument mappings are
 /// configuration facts; the model supplies values only through the admitted effect schema.
 /// </summary>
+public sealed class NyxIdRecommendedSkillCreationTemplate
+{
+    public string CatalogServiceSlug { get; set; } = string.Empty;
+
+    public string ServiceSlug { get; set; } = string.Empty;
+
+    public string SkillName { get; set; } = string.Empty;
+
+    public string Description { get; set; } = string.Empty;
+
+    public string Version { get; set; } = "1.0";
+
+    public string Category { get; set; } = "tool-based";
+
+    public string InstructionsMarkdown { get; set; } = string.Empty;
+
+    public List<string> Tags { get; set; } = [];
+
+    public List<string> ToolList { get; set; } = [];
+
+    public string DisplayName { get; set; } = string.Empty;
+
+    public string RecommendationName { get; set; } = string.Empty;
+
+    public string Revision { get; set; } = string.Empty;
+}
+
 public sealed class NyxIdAssistantOperationReadBackBinding
 {
     public string CatalogServiceSlug { get; set; } = string.Empty;
@@ -183,6 +211,15 @@ public sealed class NyxIdToolOptions
     /// </summary>
     public string? PublicTransportFallbackBaseUrl { get; set; }
 
+    /// <summary>Operator-owned NyxID OAuth client identity.</summary>
+    public string? ClientId { get; set; }
+
+    /// <summary>Operator-owned NyxID OAuth client secret. Never expose this through tools.</summary>
+    public string? ClientSecret { get; set; }
+
+    /// <summary>Optional OAuth scope for server-owned NyxID client-credentials token exchange.</summary>
+    public string? ClientCredentialsScope { get; set; }
+
     /// <summary>
     /// Maximum time to wait for response headers from an explicitly configured internal transport
     /// before replaying a safe request once against <see cref="PublicTransportFallbackBaseUrl"/>.
@@ -247,6 +284,13 @@ public sealed class NyxIdToolOptions
     /// the effect honestly unverifiable and never falls back to endpoint-name heuristics.
     /// </summary>
     public List<NyxIdAssistantOperationReadBackBinding> AssistantOperationReadBackBindings { get; set; } = [];
+
+    /// <summary>
+    /// Operator-owned templates used to publish exact Ornn recommended skills for service types whose
+    /// NyxID inventory does not yet publish recommended_skill_refs. Matching is by catalog_service_slug
+    /// first, then display slug.
+    /// </summary>
+    public List<NyxIdRecommendedSkillCreationTemplate> RecommendedSkillCreationTemplates { get; set; } = [];
 
     public NyxIdManagedWorkflowAdmissionMode ManagedWorkflowAdmissionMode { get; set; } =
         NyxIdManagedWorkflowAdmissionMode.Shadow;
