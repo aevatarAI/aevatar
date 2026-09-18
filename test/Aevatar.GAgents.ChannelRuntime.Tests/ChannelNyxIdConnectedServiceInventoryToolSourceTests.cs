@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
@@ -13,6 +14,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
@@ -34,7 +36,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 SenderTenant: "tenant-1"),
         });
 
-        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync());
 
         using var schema = JsonDocument.Parse(tool.ParametersSchema);
         schema.RootElement.GetProperty("properties").EnumerateObject().Count().Should().Be(0);
@@ -67,7 +69,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 NyxUserId: null,
                 SenderTenant: "tenant-1"),
         });
-        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync("""{"user_service_id":"unverified-service"}""");
 
@@ -128,7 +130,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             Request = new AgentToolRequestIdentity("request-inventory-1", "call-inventory-1"),
         });
 
-        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync());
 
         tool.Name.Should().Be("nyxid_service_inventory");
         handler.Authorization.Should().BeNull("tool discovery must not query the sender's live inventory");
@@ -202,7 +204,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 "ou_sender_1"),
         });
 
-        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync());
 
         tool.Name.Should().Be("nyxid_service_inventory");
         handler.Authorization.Should().BeNull("tool discovery must not query the sender's live inventory");
@@ -264,7 +266,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 "ou_sender_1"),
         });
 
-        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync("{}");
 
@@ -323,7 +325,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 "ou_sender_1"),
         });
 
-        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync());
 
         handler.Authorization.Should().BeNull("tool discovery must not query the sender's live inventory");
         await issuer.DidNotReceiveWithAnyArgs()
@@ -387,7 +389,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 SenderTenant: "tenant-1"),
         });
 
-        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync());
         var result = await tool.ExecuteAsync("{}");
 
         using var document = JsonDocument.Parse(result);
@@ -426,7 +428,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 "ou_sender_1"),
         });
 
-        var tool = (await source.DiscoverToolsAsync(cts.Token)).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync(cts.Token));
 
         cts.IsCancellationRequested.Should().BeFalse("discovery must not issue a capability");
         Func<Task> act = () => tool.ExecuteAsync("{}", cts.Token);
@@ -470,7 +472,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             };
         }
         using var scope = AgentToolContextScope.Push(outerContext);
-        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync());
 
         var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
             tool, "{}", outerContext, AgentToolApprovalContinuationMode.None, ApprovalGrant: null));
@@ -540,7 +542,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 "bot-owner-token", "bot-owner-org-token", "strict-sender-token"),
         };
         using var scope = AgentToolContextScope.Push(context);
-        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync());
 
         var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
             tool, "{}", context, AgentToolApprovalContinuationMode.None, ApprovalGrant: null));
@@ -575,7 +577,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         {
             Credentials = new AgentToolCredentials(null, null, "strict-sender-token"),
         });
-        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var tool = InventoryTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync("{}");
 
@@ -585,6 +587,137 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             .Should().Be(AgentToolReceiptStatus.Success);
         handler.RequestPath.Should().Be("/api/v1/keys");
     }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_WithSenderBinding_ExposesInventoryAndRecommendedSkillLoader()
+    {
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(new RecordingExecutionPort());
+        using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            SenderBinding = new AgentToolSenderBindingContext(
+                "bnd-sender-1",
+                NyxUserId: null,
+                SenderTenant: "tenant-1"),
+        });
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Select(static tool => tool.Name).Should().BeEquivalentTo(
+            "nyxid_service_inventory",
+            "nyxid_load_recommended_skill");
+        RecommendedSkillTool(tools).ParametersSchema.Should().Contain("manifest_digest");
+    }
+
+    [Fact]
+    public async Task LoadRecommendedSkillAsync_WhenRefMatchesCurrentInventory_LoadsExactOrnnMainDocument()
+    {
+        var manifestDigest = "sha256:" + new string('0', 64);
+        var handler = new InventoryHandler { KeysResponse = KeysWithRecommendedSkill(manifestDigest) };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        issuer.IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                "bnd-sender-1",
+                Arg.Any<CancellationToken>())
+            .Returns(new CapabilityHandle { AccessToken = "strict-sender-token", Scope = "proxy" });
+        var fetcher = new RecordingExactFetcher(ExactRemoteSkillFetchResult.Success(
+            "11111111-1111-1111-1111-111111111111",
+            "1.2",
+            "calendar-reader",
+            "publisher-alpha",
+            ByteString.CopyFrom(new byte[32]),
+            "# Calendar Reader\n\nUse list events."));
+        var auditRecords = new List<AuditRecord>();
+        var executionPort = CreateAdmittedExecutionPort(auditRecords);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            issuer,
+            exactSkillFetcher: fetcher);
+        var context = CreateRegistrationContext() with
+        {
+            Credentials = new AgentToolCredentials(null, null, "strict-sender-token"),
+        };
+        using var scope = AgentToolContextScope.Push(context);
+        var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
+        var arguments = $$"""
+            {
+              "user_service_id":"user-service-1",
+              "source":"ornn",
+              "skill_id":"11111111-1111-1111-1111-111111111111",
+              "literal_version":"1.2",
+              "manifest_digest":"{{manifestDigest}}"
+            }
+            """;
+
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool, arguments, context, AgentToolApprovalContinuationMode.None, ApprovalGrant: null));
+
+        using var document = JsonDocument.Parse(outcome.ResultJson);
+        document.RootElement.GetProperty("status").GetString().Should().Be("success");
+        document.RootElement.GetProperty("main_document").GetString().Should().Contain("Calendar Reader");
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ResultJson.Should().Contain("Calendar Reader");
+        fetcher.ObservedToken.Should().Be("strict-sender-token");
+        fetcher.ObservedRef.Should().BeEquivalentTo(new ExactRemoteSkillRef
+        {
+            Guid = "11111111-1111-1111-1111-111111111111",
+            LiteralVersion = "1.2",
+        });
+        var terminalRecords = auditRecords.Where(record => record.LifecyclePhase == AuditLifecyclePhase.Terminal).ToArray();
+        terminalRecords.Should().HaveCount(2);
+        terminalRecords.Should().OnlyContain(record => record.Outcome == AuditOutcome.Success);
+        terminalRecords.Select(record => record.OperationName).Should().BeEquivalentTo(
+            "nyxid_load_recommended_skill",
+            "nyxid_recommended_skill_reader");
+    }
+
+    [Fact]
+    public async Task LoadRecommendedSkillAsync_WhenRefIsNotVisible_DoesNotFetchExactSkill()
+    {
+        var handler = new InventoryHandler { KeysResponse = KeysWithRecommendedSkill("sha256:" + new string('0', 64)) };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        issuer.IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                "bnd-sender-1",
+                Arg.Any<CancellationToken>())
+            .Returns(new CapabilityHandle { AccessToken = "strict-sender-token", Scope = "proxy" });
+        var fetcher = new RecordingExactFetcher(ExactRemoteSkillFetchResult.Failed(
+            ExactRemoteSkillFetchFailureCode.Failed));
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            issuer,
+            exactSkillFetcher: fetcher);
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext() with
+        {
+            Credentials = new AgentToolCredentials(null, null, "strict-sender-token"),
+        });
+        var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync("""
+            {
+              "user_service_id":"user-service-1",
+              "source":"ornn",
+              "skill_id":"22222222-2222-2222-2222-222222222222",
+              "literal_version":"1.2",
+              "manifest_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Be("recommended_skill_ref_not_visible");
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    private static IAgentTool InventoryTool(IReadOnlyList<IAgentTool> tools) =>
+        tools.Should().ContainSingle(tool => tool.Name == "nyxid_service_inventory").Subject;
+
+    private static IAgentTool RecommendedSkillTool(IReadOnlyList<IAgentTool> tools) =>
+        tools.Should().ContainSingle(tool => tool.Name == "nyxid_load_recommended_skill").Subject;
 
     private static AgentToolExecutionContext CreateRegistrationContext()
     {
@@ -619,6 +752,34 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration("registration-1"),
         };
     }
+
+    private static string KeysWithRecommendedSkill(string manifestDigest) => $$"""
+        {
+          "keys": [
+            {
+              "id": "user-service-1",
+              "slug": "calendar",
+              "catalog_service_id": "catalog-calendar",
+              "label": "Calendar",
+              "is_active": true,
+              "connected": true,
+              "status": "active",
+              "credential_source": { "type": "personal" },
+              "recommended_skill_refs": [
+                {
+                  "source": "ornn",
+                  "skill_id": "11111111-1111-1111-1111-111111111111",
+                  "literal_version": "1.2",
+                  "manifest_digest": "{{manifestDigest}}",
+                  "display_name": "Calendar Reader",
+                  "recommendation_name": "read-calendar-events",
+                  "revision": "rev-1"
+                }
+              ]
+            }
+          ]
+        }
+        """;
 
     private static AdmittedAgentToolExecutor CreateAdmittedExecutionPort(List<AuditRecord> auditRecords)
     {
@@ -724,6 +885,24 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 TerminalInvoked: true,
                 Retryable: false,
                 AuditCompleted: true);
+        }
+    }
+
+    private sealed class RecordingExactFetcher(ExactRemoteSkillFetchResult result) : IExactRemoteSkillFetcher
+    {
+        public int CallCount { get; private set; }
+        public string? ObservedToken { get; private set; }
+        public ExactRemoteSkillRef? ObservedRef { get; private set; }
+
+        public Task<ExactRemoteSkillFetchResult> FetchAsync(
+            string accessToken,
+            ExactRemoteSkillRef skillRef,
+            CancellationToken ct = default)
+        {
+            CallCount++;
+            ObservedToken = accessToken;
+            ObservedRef = skillRef.Clone();
+            return Task.FromResult(result);
         }
     }
 

@@ -36,6 +36,21 @@ enum NyxIdServiceNodeStatus {
   NYX_ID_SERVICE_NODE_STATUS_INACCESSIBLE = 6;
 }
 
+enum NyxIdRecommendedSkillSource {
+  NYX_ID_RECOMMENDED_SKILL_SOURCE_UNSPECIFIED = 0;
+  NYX_ID_RECOMMENDED_SKILL_SOURCE_ORNN = 1;
+}
+
+message NyxIdRecommendedSkillRef {
+  NyxIdRecommendedSkillSource source = 1;
+  string skill_id = 2;
+  string literal_version = 3;
+  string manifest_digest = 4;
+  string display_name = 5;
+  string recommendation_name = 6;
+  string revision = 7;
+}
+
 message NyxIdServiceCallerExecutionReadiness {
   NyxIdServiceCredentialStatus credential_status = 1;
   bool connected = 2;
@@ -67,6 +82,7 @@ message NyxIdServiceInstance {
   optional string catalog_service_slug = 14;
   NyxIdServiceCallerExecutionReadiness caller_execution_readiness = 15;
   optional string openapi_spec_url = 16;
+  repeated NyxIdRecommendedSkillRef recommended_skill_refs = 17;
 }
 
 message NyxIdServiceUpdateRequest {
