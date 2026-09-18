@@ -463,6 +463,68 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             error = errorCode,
         });
 
+    private static AgentToolReceipt? CreateRecommendedSkillReceipt(
+        string callId,
+        string toolName,
+        string resultJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("result_type", out var resultType) ||
+                !string.Equals(resultType.GetString(), "nyxid_recommended_skill_load", StringComparison.Ordinal) ||
+                !root.TryGetProperty("status", out var statusValue) ||
+                statusValue.ValueKind != JsonValueKind.String ||
+                !root.TryGetProperty("loaded", out var loadedValue) ||
+                loadedValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                return null;
+            }
+
+            var loaded = loadedValue.GetBoolean();
+            var status = statusValue.GetString();
+            if (loaded && string.Equals(status, "success", StringComparison.Ordinal))
+            {
+                return new AgentToolReceipt
+                {
+                    CallId = callId ?? string.Empty,
+                    ToolName = toolName ?? string.Empty,
+                    Status = AgentToolReceiptStatus.Success,
+                    ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                    ResultJson = resultJson ?? string.Empty,
+                };
+            }
+
+            var errorCode = ReadOptionalString(root, "error") ??
+                ReadOptionalString(root, "failure_code") ??
+                "nyxid_recommended_skill_load_failed";
+            const string errorMessage = "The recommended skill could not be loaded.";
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = toolName ?? string.Empty,
+                Status = AgentToolReceiptStatus.Error,
+                ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                ErrorCode = errorCode,
+                ErrorMessage = errorMessage,
+                ResultJson = resultJson ?? string.Empty,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadOptionalString(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String)
+            return null;
+        return Normalize(value.GetString());
+    }
+
     private sealed record RecommendedSkillArguments(
         string UserServiceId,
         string SkillId,
@@ -517,6 +579,13 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         public bool IsReadOnly => true;
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            CreateRecommendedSkillReceipt(callId, toolName, resultJson);
+
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             source.ExecuteRecommendedSkillLoadAsync(argumentsJson, ct);
     }
@@ -534,6 +603,13 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             """{"type":"object","properties":{},"required":[],"additionalProperties":false}""";
         public bool IsReadOnly => true;
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            CreateRecommendedSkillReceipt(callId, toolName, resultJson);
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             source.ReadRecommendedSkillAsync(reader, exactSkillFetcher, token, arguments, ct);

@@ -627,20 +627,21 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             "publisher-alpha",
             ByteString.CopyFrom(new byte[32]),
             "# Calendar Reader\n\nUse list events."));
-        var executionPort = new RecordingExecutionPort();
+        var auditRecords = new List<AuditRecord>();
+        var executionPort = CreateAdmittedExecutionPort(auditRecords);
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             executionPort,
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             issuer,
             exactSkillFetcher: fetcher);
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext() with
+        var context = CreateRegistrationContext() with
         {
             Credentials = new AgentToolCredentials(null, null, "strict-sender-token"),
-        });
+        };
+        using var scope = AgentToolContextScope.Push(context);
         var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
-
-        var result = await tool.ExecuteAsync($$"""
+        var arguments = $$"""
             {
               "user_service_id":"user-service-1",
               "source":"ornn",
@@ -648,18 +649,28 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
               "literal_version":"1.2",
               "manifest_digest":"{{manifestDigest}}"
             }
-            """);
+            """;
 
-        using var document = JsonDocument.Parse(result);
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool, arguments, context, AgentToolApprovalContinuationMode.None, ApprovalGrant: null));
+
+        using var document = JsonDocument.Parse(outcome.ResultJson);
         document.RootElement.GetProperty("status").GetString().Should().Be("success");
         document.RootElement.GetProperty("main_document").GetString().Should().Contain("Calendar Reader");
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ResultJson.Should().Contain("Calendar Reader");
         fetcher.ObservedToken.Should().Be("strict-sender-token");
         fetcher.ObservedRef.Should().BeEquivalentTo(new ExactRemoteSkillRef
         {
             Guid = "11111111-1111-1111-1111-111111111111",
             LiteralVersion = "1.2",
         });
-        executionPort.Requests.Should().ContainSingle(request => request.Tool.Name == "nyxid_recommended_skill_reader");
+        var terminalRecords = auditRecords.Where(record => record.LifecyclePhase == AuditLifecyclePhase.Terminal).ToArray();
+        terminalRecords.Should().HaveCount(2);
+        terminalRecords.Should().OnlyContain(record => record.Outcome == AuditOutcome.Success);
+        terminalRecords.Select(record => record.OperationName).Should().BeEquivalentTo(
+            "nyxid_load_recommended_skill",
+            "nyxid_recommended_skill_reader");
     }
 
     [Fact]
