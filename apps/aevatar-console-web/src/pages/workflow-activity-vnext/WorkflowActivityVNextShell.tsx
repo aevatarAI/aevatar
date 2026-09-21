@@ -189,7 +189,11 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
         </div>
         <div className="wa-vnext__topbar-actions">
           <ConsoleLanguageSwitch />
-          <ConsoleAuthActions principal={accountPrincipal} />
+          <ConsoleAuthActions
+            principal={accountPrincipal}
+            settingsHref={buildWorkflowActivitySectionHref(scopeId, 'settings')}
+            onNavigate={onNavigate}
+          />
         </div>
       </header>
       <aside className="wa-vnext__rail">
@@ -228,7 +232,11 @@ const WorkflowActivityVNextShell: React.FC<ShellProps> = ({
         />
         <div className="wa-vnext__drawer-actions">
           <ConsoleLanguageSwitch />
-          <ConsoleAuthActions principal={accountPrincipal} />
+          <ConsoleAuthActions
+            principal={accountPrincipal}
+            settingsHref={buildWorkflowActivitySectionHref(scopeId, 'settings')}
+            onNavigate={onNavigate}
+          />
         </div>
       </Drawer>
     </div>

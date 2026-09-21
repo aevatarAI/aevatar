@@ -1,5 +1,10 @@
 # Workflow + Activity + Settings vNext
 
+> Current routing: [Console Entry And Canonical Routes](../../superpowers/specs/2026-09-21-console-entry-routes.md)
+> replaces the original preview URL namespace and legacy-route exposure rules.
+> Keep legacy page source and tests while exposing only the current console.
+> Visual assets and the data, identity, auth and localization contracts remain.
+
 ## Repository Implementation Baseline
 
 Status: **Normative for the Workflow Activity vNext frontend**.

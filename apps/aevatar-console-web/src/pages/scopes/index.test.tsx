@@ -31,7 +31,7 @@ it.each([
   renderWithQueryClient(React.createElement(ConsoleScopeEntry));
   await waitFor(() =>
     expect(history.replace).toHaveBeenCalledWith(
-      `/scopes/${scopeId}/workflow-activity-vnext/workflows`,
+      `/scopes/${scopeId}/workflows`,
     ),
   );
 });
@@ -59,7 +59,7 @@ it('waits for current authentication instead of routing from an earlier account 
   await act(async () => resolve(currentSession));
   await waitFor(() => expect(history.replace).toHaveBeenCalledTimes(1));
   expect(history.replace).toHaveBeenCalledWith(
-    '/scopes/scope-current/workflow-activity-vnext/workflows',
+    '/scopes/scope-current/workflows',
   );
 });
 
@@ -87,7 +87,7 @@ it('fails closed on session lookup failure and resolves the current scope on man
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
   await waitFor(() =>
     expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-retried/workflow-activity-vnext/workflows',
+      '/scopes/scope-retried/workflows',
     ),
   );
 });

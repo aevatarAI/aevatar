@@ -19,8 +19,7 @@ const runtimeConfig: NyxIDRuntimeConfig = {
     'openid profile email offline_access urn:nyxid:scope:broker_binding proxy',
 };
 
-const reviewReturnTo =
-  '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
+const reviewReturnTo = '/scopes/scope-alpha/settings?section=account';
 
 function installLocationAssignSpy() {
   const assign = jest.fn();
@@ -146,35 +145,35 @@ describe('NyxIDAuthClient', () => {
     );
   });
 
-  it("starts service access review with exact resources and a caller return", async () => {
+  it('starts service access review with exact resources and a caller return', async () => {
     const assign = installLocationAssignSpy();
 
     await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
-      flow: "serviceAccessReview",
-      resources: ["https://nyx.example/api/v1/proxy/s/api-github"],
-      returnTo: "/chat?conversationId=chatc-alpha&accessReview=action-alpha",
+      flow: 'serviceAccessReview',
+      resources: ['https://nyx.example/api/v1/proxy/s/api-github'],
+      returnTo: '/chat?conversationId=chatc-alpha&accessReview=action-alpha',
     });
 
     const authorizeUrl = new URL(assign.mock.calls[0][0]);
-    expect(authorizeUrl.searchParams.get("prompt")).toBe("consent");
-    expect(authorizeUrl.searchParams.getAll("resource")).toEqual([
-      "https://nyx.example/api/v1/proxy/s/api-github",
+    expect(authorizeUrl.searchParams.get('prompt')).toBe('consent');
+    expect(authorizeUrl.searchParams.getAll('resource')).toEqual([
+      'https://nyx.example/api/v1/proxy/s/api-github',
     ]);
 
     const pending = JSON.parse(
       window.localStorage.getItem(
-        "aevatar-console:nyxid:pending:console-client-1",
-      ) ?? "{}",
+        'aevatar-console:nyxid:pending:console-client-1',
+      ) ?? '{}',
     );
     expect(pending).toEqual(
       expect.objectContaining({
-        flow: "serviceAccessReview",
-        returnTo: "/chat?conversationId=chatc-alpha&accessReview=action-alpha",
+        flow: 'serviceAccessReview',
+        returnTo: '/chat?conversationId=chatc-alpha&accessReview=action-alpha',
       }),
     );
   });
 
-  it("forces consent while preserving a canonical workflow return URL", async () => {
+  it('forces consent while preserving a canonical workflow return URL', async () => {
     const assign = installLocationAssignSpy();
 
     await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
@@ -336,7 +335,7 @@ describe('NyxIDAuthClient', () => {
         clientId: 'broker-client-1',
         codeVerifier: 'pkce-verifier',
         redirectUri: 'http://localhost:8000/auth/callback',
-        returnTo: '/scopes/scope-1/workflow-activity-vnext/workflows',
+        returnTo: '/scopes/scope-1/workflows',
         scope: 'openid urn:nyxid:scope:broker_binding proxy',
         state: 'state-1',
         flow: 'signIn',
@@ -356,7 +355,7 @@ describe('NyxIDAuthClient', () => {
     ).rejects.toMatchObject({
       flow: 'signIn',
       reason: 'requiredServiceAccessMissing',
-      returnTo: '/scopes/scope-1/workflow-activity-vnext/workflows',
+      returnTo: '/scopes/scope-1/workflows',
     });
   });
 

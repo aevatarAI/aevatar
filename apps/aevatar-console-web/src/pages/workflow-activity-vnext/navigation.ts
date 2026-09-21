@@ -27,7 +27,7 @@ function buildQuerySuffix(
 }
 
 export function buildWorkflowActivityBaseHref(scopeId: string): string {
-  return `/scopes/${encode(scopeId)}/workflow-activity-vnext`;
+  return `/scopes/${encode(scopeId)}`;
 }
 
 export function buildWorkflowActivitySectionHref(

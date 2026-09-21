@@ -1,5 +1,10 @@
 # Workflow + Activity + Settings vNext User Paths
 
+> Route precedence: [Console Entry And Canonical Routes](2026-09-21-console-entry-routes.md)
+> supersedes the original preview namespace and legacy route exposure rules.
+> Legacy page source and tests remain; only current console pages are routed.
+> The visual, identity, API, auth and localization contracts below still apply.
+
 ## Status
 
 Proposed as the normative user-path companion to

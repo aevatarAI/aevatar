@@ -117,12 +117,8 @@ describe('auth session storage', () => {
   it('accepts only safe in-app redirect targets', () => {
     expect(sanitizeReturnTo('/workflows')).toBe('/workflows');
     expect(
-      sanitizeReturnTo(
-        '/scopes/scope-b/workflow-activity-vnext/workflows/wf-b?run=1#output',
-      ),
-    ).toBe(
-      '/scopes/scope-b/workflow-activity-vnext/workflows/wf-b?run=1#output',
-    );
+      sanitizeReturnTo('/scopes/scope-b/workflows/wf-b?run=1#output'),
+    ).toBe('/scopes/scope-b/workflows/wf-b?run=1#output');
     expect(sanitizeReturnTo('/runs?tab=active')).toBe(
       '/runtime/runs?tab=active',
     );

@@ -85,7 +85,7 @@ it('renders static guidance and unbound bot actions, preserving rows during manu
   ).toHaveAttribute('href', 'https://nyx.chrono-ai.fun/channel-bots');
   expect(within(table).getByRole('link', { name: 'Bind' })).toHaveAttribute(
     'href',
-    '/scopes/scope-alpha/workflow-activity-vnext/channels/bind/bot%3Atwo%2Fa',
+    '/scopes/scope-alpha/channels/bind/bot%3Atwo%2Fa',
   );
   expect(within(table).getAllByRole('link', { name: /Manage/ })).toHaveLength(
     1,
@@ -178,7 +178,7 @@ it('loads exact detail and confirms removal when the bot remains as unbound inve
   );
   await waitFor(() =>
     expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/channels',
+      '/scopes/scope-alpha/channels',
     ),
   );
   expect(mockToast.warning).toHaveBeenCalled();

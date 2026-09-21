@@ -100,6 +100,18 @@ pnpm --dir apps/aevatar-console-web build
   backend as documented in `README.md`.
 - Do not introduce port `5000`; Web API examples must also avoid `5050`.
 
+## Current Console Entry Decision
+
+- Follow `docs/superpowers/specs/2026-09-21-console-entry-routes.md` for the
+  current public route table. Workflows, Activity, Channels and Settings use
+  `/scopes/:scopeId/<resource>` without a `workflow-activity-vnext` URL segment.
+- Keep legacy Teams, Members and other page code and tests. Their definitions
+  in `config/legacyRoutes.ts` are intentionally not registered by the public
+  router. Do not delete these pages or re-expose them as part of route cleanup.
+- This explicit user decision overrides the original namespace-isolation and
+  legacy-route-exposure requirements below. All identity, API, visual,
+  authentication and localization contracts still apply.
+
 ## Product Identity and Routing
 
 - Do not model Studio workflow as a global linear
@@ -137,7 +149,7 @@ pnpm --dir apps/aevatar-console-web build
 
 - Before changing any route, page, component, hook, query, adapter, model,
   style, locale, or test for
-  `/scopes/:scopeId/workflow-activity-vnext`, read all three of these sources
+  the Workflows, Activity, Channels or Settings console, read all three sources
   completely:
   `docs/design-baselines/workflow-activity-vnext/README.md` and
   `docs/superpowers/specs/2026-08-04-workflow-activity-vnext-design.md` and
@@ -181,9 +193,9 @@ pnpm --dir apps/aevatar-console-web build
   from `apps/aevatar-console-web/` before and after changing the baseline. The
   verifier must confirm the declared hash, deterministic generator output, and
   exact 17-frame inventory.
-- Keep this feature frontend-only and isolated to its new route namespace.
-  Do not change backend code or alter existing Workflow, Run, Settings, Studio,
-  Team, member, redirect, or menu behavior to implement it.
+- Keep this feature frontend-only. Apply the Current Console Entry Decision
+  for routes and navigation; preserve legacy page implementations, shared
+  dependencies and backend contracts.
 
 ## UI and Interaction
 

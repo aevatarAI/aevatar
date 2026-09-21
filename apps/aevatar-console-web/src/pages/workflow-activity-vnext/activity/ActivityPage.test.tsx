@@ -69,7 +69,7 @@ jest.mock('@/shared/ui/ConsoleHeaderActions', () => ({
 jest.mock('../hooks/useConsoleLocation', () => ({
   useConsoleLocation: () => ({
     hash: '',
-    pathname: '/scopes/scope-alpha/workflow-activity-vnext/activity',
+    pathname: '/scopes/scope-alpha/activity',
     search: mockSearch,
   }),
 }));
@@ -189,7 +189,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
       screen.getByRole('button', { name: 'Remove workflow filter wf-alpha' }),
     );
     expect(history.replace).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity',
+      '/scopes/scope-alpha/activity',
     );
   });
 
@@ -259,7 +259,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
       }),
     );
     expect(history.replace).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha',
+      '/scopes/scope-alpha/activity?workflowId=wf-alpha',
     );
   });
 
@@ -279,7 +279,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
       ),
     );
     expect(history.replace).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha',
+      '/scopes/scope-alpha/activity?workflowId=wf-alpha&schedule=schedule-alpha',
     );
     expect(
       screen.queryByRole('button', { name: /Remove source filter/ }),
@@ -342,7 +342,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
     );
     await waitFor(() =>
       expect(history.replace).toHaveBeenLastCalledWith(
-        '/scopes/scope-alpha/workflow-activity-vnext/activity?origin=draft',
+        '/scopes/scope-alpha/activity?origin=draft',
       ),
     );
   });
@@ -390,7 +390,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
 
     expect(history.replace).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity?q=support&status=failed',
+      '/scopes/scope-alpha/activity?q=support&status=failed',
     );
     expect(mockListActivityRuns).toHaveBeenCalledTimes(1);
   });
@@ -485,7 +485,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
     fireEvent.click(searchButton);
 
     expect(history.replace).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity?q=support',
+      '/scopes/scope-alpha/activity?q=support',
     );
     await waitFor(() => expect(mockListActivityRuns).toHaveBeenCalledTimes(2));
     expect(searchButton).toHaveAttribute('aria-busy', 'true');
@@ -587,7 +587,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
     fireEvent.click(customerRunRow);
 
     expect(history.push).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer?workflowId=wf-alpha',
+      '/scopes/scope-alpha/activity/run-customer?workflowId=wf-alpha',
     );
   });
 
@@ -611,7 +611,7 @@ describe('Workflow Activity vNext Activity ledger', () => {
 
     fireEvent.keyDown(customerRunRow, { key: 'Enter' });
     expect(history.push).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-customer?workflowId=wf-alpha',
+      '/scopes/scope-alpha/activity/run-customer?workflowId=wf-alpha',
     );
 
     fireEvent.keyDown(customerRunRow, { key: ' ' });

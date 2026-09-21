@@ -156,7 +156,7 @@ it('binds with shared Ornn skills, retains refresh selection and opens the regis
     window.history.replaceState(
       {},
       '',
-      '/scopes/scope-alpha/workflow-activity-vnext/channels/bind/bot-alpha',
+      '/scopes/scope-alpha/channels/bind/bot-alpha',
     );
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     fireEvent.mouseDown(await screen.findByRole('combobox'));
@@ -238,7 +238,7 @@ it('binds with shared Ornn skills, retains refresh selection and opens the regis
       expect(mockToast.success).toHaveBeenCalledWith('Bot bound successfully.'),
     );
     expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/channels/reg-alpha',
+      '/scopes/scope-alpha/channels/reg-alpha',
     );
     expect(history.replace).toHaveBeenCalledTimes(1);
     expect(posts()).toHaveLength(1);
@@ -275,7 +275,7 @@ it('preserves Label editing and requires a newer matching configuration before r
     window.history.replaceState(
       {},
       '',
-      '/scopes/scope-alpha/workflow-activity-vnext/channels/reg-alpha/edit',
+      '/scopes/scope-alpha/channels/reg-alpha/edit',
     );
     renderWithQueryClient(<WorkflowActivityVNextPage />);
     expect(await screen.findByLabelText('Label')).toHaveValue('Support bot');
@@ -300,7 +300,7 @@ it('preserves Label editing and requires a newer matching configuration before r
       expect(mockToast.success).toHaveBeenCalledWith('Channel changes saved.'),
     );
     expect(history.replace).toHaveBeenCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/channels/reg-alpha',
+      '/scopes/scope-alpha/channels/reg-alpha',
     );
     expect(posts()).toHaveLength(1);
   } finally {

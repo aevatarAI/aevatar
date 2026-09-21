@@ -1187,7 +1187,7 @@ describe('WorkflowScheduleSurface', () => {
     });
     expect(relatedRunsLink).toHaveAttribute(
       'href',
-      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha',
+      '/scopes/scope-alpha/activity?workflowId=wf-alpha&schedule=schedule-alpha',
     );
     expect(relatedRunsLink).toHaveAttribute('target', '_blank');
     expect(relatedRunsLink).toHaveAttribute('rel', 'noopener noreferrer');
@@ -1231,7 +1231,7 @@ describe('WorkflowScheduleSurface', () => {
     });
     expect(runLink).toHaveAttribute(
       'href',
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-alpha?workflowId=wf-alpha&schedule=schedule-alpha',
+      '/scopes/scope-alpha/activity/run-alpha?workflowId=wf-alpha&schedule=schedule-alpha',
     );
     expect(runLink).toHaveAttribute('target', '_blank');
     expect(runLink).toHaveAttribute('rel', 'noopener noreferrer');
@@ -1288,7 +1288,7 @@ describe('WorkflowScheduleSurface', () => {
     });
     expect(relatedRunsLink).toHaveAttribute(
       'href',
-      '/scopes/scope-alpha/workflow-activity-vnext/activity?workflowId=wf-alpha&schedule=schedule-alpha',
+      '/scopes/scope-alpha/activity?workflowId=wf-alpha&schedule=schedule-alpha',
     );
     expect(relatedRunsLink).toHaveAttribute('target', '_blank');
     expect(relatedRunsLink).toHaveAttribute('rel', 'noopener noreferrer');

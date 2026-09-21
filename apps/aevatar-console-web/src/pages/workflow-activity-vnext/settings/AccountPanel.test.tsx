@@ -46,7 +46,7 @@ describe('Workflow Activity vNext account panel', () => {
   it('starts service access review with the canonical Account settings URL', async () => {
     render(
       <AccountPanel
-        accountSettingsHref="/scopes/scope-alpha/workflow-activity-vnext/settings?section=account"
+        accountSettingsHref="/scopes/scope-alpha/settings?section=account"
         identity={identity}
       />,
     );
@@ -58,8 +58,7 @@ describe('Workflow Activity vNext account panel', () => {
     await waitFor(() =>
       expect(mockLoginWithRedirect).toHaveBeenCalledWith({
         flow: 'serviceAccessReview',
-        returnTo:
-          '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account',
+        returnTo: '/scopes/scope-alpha/settings?section=account',
       }),
     );
   });
@@ -71,7 +70,7 @@ describe('Workflow Activity vNext account panel', () => {
 
     render(
       <AccountPanel
-        accountSettingsHref="/scopes/scope-alpha/workflow-activity-vnext/settings?section=account"
+        accountSettingsHref="/scopes/scope-alpha/settings?section=account"
         identity={identity}
       />,
     );
@@ -94,7 +93,7 @@ describe('Workflow Activity vNext account panel', () => {
   it('keeps identity and access facts primary without placeholder product status', () => {
     render(
       <AccountPanel
-        accountSettingsHref="/scopes/scope-alpha/workflow-activity-vnext/settings?section=account"
+        accountSettingsHref="/scopes/scope-alpha/settings?section=account"
         identity={{
           ...identity,
           emailVerified: true,
@@ -131,7 +130,7 @@ describe('Workflow Activity vNext account panel', () => {
   it('shows provider user IDs when they use a machine identifier shape', () => {
     render(
       <AccountPanel
-        accountSettingsHref="/scopes/scope-alpha/workflow-activity-vnext/settings?section=account"
+        accountSettingsHref="/scopes/scope-alpha/settings?section=account"
         identity={{
           ...identity,
           support: {
@@ -149,7 +148,7 @@ describe('Workflow Activity vNext account panel', () => {
   it('renders a compact signed-in state when optional profile fields are absent', () => {
     render(
       <AccountPanel
-        accountSettingsHref="/scopes/scope-alpha/workflow-activity-vnext/settings?section=account"
+        accountSettingsHref="/scopes/scope-alpha/settings?section=account"
         identity={{
           ...identity,
           displayName: { kind: 'not_provided' },

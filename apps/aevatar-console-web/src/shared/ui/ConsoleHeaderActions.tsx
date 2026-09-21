@@ -48,6 +48,8 @@ type ConsoleHeaderActionThemeProps = {
 };
 
 type ConsoleAuthActionsProps = ConsoleHeaderActionThemeProps & {
+  readonly settingsHref?: string;
+  readonly onNavigate?: (target: string) => void;
   readonly principal?: {
     readonly authenticated: boolean;
     readonly displayName: string;
@@ -111,6 +113,8 @@ export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
 export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
   dropdownRootClassName,
   principal,
+  settingsHref = '/settings',
+  onNavigate,
 }) => {
   const intl = useIntl();
   const storedSession = loadRestorableAuthSession();
@@ -180,7 +184,8 @@ export const ConsoleAuthActions: React.FC<ConsoleAuthActionsProps> = ({
         ],
         onClick: ({ key }) => {
           if (key === 'settings') {
-            history.push('/settings');
+            if (onNavigate) onNavigate(settingsHref);
+            else history.push(settingsHref);
             return;
           }
 

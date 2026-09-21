@@ -52,7 +52,7 @@ import { queryClient } from './shared/query/queryClient';
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
 const FULLSCREEN_DISPLAY_ROUTES = new Set(['/runtime/mission-wall']);
 const WORKFLOW_ACTIVITY_VNEXT_ROUTE =
-  /^\/scopes\/[^/]+\/workflow-activity-vnext(?:\/|$)/;
+  /^\/scopes\/[^/]+\/(?:workflows|activity|channels|settings)(?:\/|$)/;
 const STUDIO_HOST_ROUTES = new Set([
   '/studio',
   '/scopes/:scopeId/teams/:teamId/members/new/workflow',
@@ -706,7 +706,11 @@ const ConsoleRuntimeProviders: React.FC<ConsoleRuntimeProvidersProps> = ({
         <ConsoleToastProvider>
           <QueryClientProvider client={queryClient}>
             <LiveOpsAttentionBridge
-              enabled={!isPublicRoute && !isStudioRoute}
+              enabled={
+                !isPublicRoute &&
+                !isStudioRoute &&
+                !isWorkflowActivityVNextRoute(pathname)
+              }
               pathname={pathname}
               search={search}
             />
