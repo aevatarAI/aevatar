@@ -1090,9 +1090,15 @@ async function streamSse(
   let ended = false;
   try {
     while (true) {
-      if (signal?.aborted) throw signal.reason ?? new DOMException('Request cancelled.', 'AbortError');
+      if (signal?.aborted)
+        throw (
+          signal.reason ?? new DOMException('Request cancelled.', 'AbortError')
+        );
       const { done, value } = await reader.read();
-      if (signal?.aborted) throw signal.reason ?? new DOMException('Request cancelled.', 'AbortError');
+      if (signal?.aborted)
+        throw (
+          signal.reason ?? new DOMException('Request cancelled.', 'AbortError')
+        );
       buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
       let boundary = /\r?\n\r?\n/.exec(buffer);
       while (boundary) {
@@ -2778,8 +2784,31 @@ export const studioApi = {
     return requestJson('/api/studio/context');
   },
 
-  getAuthSession(): Promise<StudioAuthSession> {
-    return requestJson('/api/auth/me');
+  async getAuthSession(): Promise<StudioAuthSession> {
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        const error = new DOMException(
+          'Account request timed out',
+          'TimeoutError',
+        );
+        reject(error);
+        controller.abort();
+      }, 15_000);
+    });
+
+    try {
+      // Bound session restoration and body reads as well as the network request.
+      return await Promise.race([
+        requestJson<StudioAuthSession>('/api/auth/me', {
+          signal: controller.signal,
+        }),
+        deadline,
+      ]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
   },
 
   getWorkspaceSettings(
@@ -4146,7 +4175,9 @@ export const studioApi = {
     );
 
     if (!completed || !generatedText.trim()) {
-      throw new Error('Workflow generation ended without a completed workflow.');
+      throw new Error(
+        'Workflow generation ended without a completed workflow.',
+      );
     }
     return generatedText;
   },

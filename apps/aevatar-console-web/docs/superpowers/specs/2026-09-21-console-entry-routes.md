@@ -36,6 +36,12 @@ account profile and uses the authoritative scope; it never substitutes a
 fixed workspace. Login and callback keep their existing routes and preserve
 safe deep-link queries and fragments.
 
+Account reads have a 15-second deadline covering session restoration, the
+request and response-body reading. A stalled read is aborted and the home
+shows its existing Retry action. Retrying starts a new read; a late result
+from a timed-out read cannot supply the destination scope. Network failures
+do not clear the login session or substitute a cached workspace.
+
 Legacy business routes and the former `workflow-activity-vnext` URL namespace
 are unregistered and resolve to 404, including direct visits. This prevents
 users from entering the preserved pages through old links. Their code,
