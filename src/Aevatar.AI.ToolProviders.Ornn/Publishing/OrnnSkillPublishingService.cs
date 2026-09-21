@@ -40,6 +40,9 @@ public sealed class OrnnSkillPublishingService
         var formatValidation = await _formatValidator.ValidateAsync(accessToken, package.ZipBytes, ct).ConfigureAwait(false);
         if (!formatValidation.IsValid)
         {
+            if (!string.IsNullOrWhiteSpace(formatValidation.Error) && formatValidation.Violations.Count == 0)
+                return OrnnSkillPublishingResult.Failed("format_validation_unavailable", formatValidation.Error);
+
             return OrnnSkillPublishingResult.FormatValidationFailed(
                 formatValidation.Violations,
                 formatValidation.Error);

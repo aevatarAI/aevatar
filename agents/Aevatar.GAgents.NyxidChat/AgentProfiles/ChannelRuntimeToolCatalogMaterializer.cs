@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
@@ -78,10 +77,9 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             string.Join(',', runtimeConfig.ToolSetRefs),
             sources.Count);
 
-        var discoveryToolContext = WithRuntimeConnectedServicesContext(runtimeConfig, toolContext);
         var availableTools = sources.Count == 0
             ? new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase)
-            : await DiscoverToolsAsync(sources, discoveryToolContext, diagnostics, ct).ConfigureAwait(false);
+            : await DiscoverToolsAsync(sources, toolContext, diagnostics, ct).ConfigureAwait(false);
         if (availableTools is null)
             return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
 
@@ -103,22 +101,11 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             }
         }
 
-        var connectedNames = SelectConnectedOperationNames(runtimeConfig, availableTools, toolContext)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        LogConnectedServiceSelection(
-            runtimeConfig,
-            availableTools,
-            toolContext,
-            selectorSlugs,
-            connectedNames);
-        selectedNames.UnionWith(connectedNames);
         var selectedTools = availableTools
             .Where(pair => selectedNames.Contains(pair.Key))
             .Select(pair => new AgentTurnToolSelection(
                 pair.Value,
-                connectedNames.Contains(pair.Key)
-                    ? AgentTurnToolOrigin.ConnectedService
-                    : AgentTurnToolOrigin.RouteToolSet))
+                AgentTurnToolOrigin.RouteToolSet))
             .ToArray();
         return new AgentTurnToolCatalog(
             selectedNames,
@@ -156,177 +143,6 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             new ProfileRoutingPromptProvenance(
                 $"channel-registration:{runtimeConfig.RegistrationId}@{runtimeConfig.ConfigRevision}"),
             new PromptLayerBounds(8 * 1024, 2 * 1024));
-    }
-
-    private static AgentToolExecutionContext WithRuntimeConnectedServicesContext(
-        ChannelRuntimeConfigProof runtimeConfig,
-        AgentToolExecutionContext toolContext)
-    {
-        var contextJson = runtimeConfig.NyxidServiceSelectors.Count == 0
-            ? toolContext.ConnectedServices.ContextJson
-            : AddRuntimeSelectors(
-                toolContext.ConnectedServices.ContextJson,
-                runtimeConfig.NyxidServiceSelectors);
-        if (string.Equals(
-                contextJson,
-                toolContext.ConnectedServices.ContextJson,
-                StringComparison.Ordinal))
-        {
-            return toolContext;
-        }
-
-        return toolContext with
-        {
-            ConnectedServices = new AgentToolConnectedServicesContext(contextJson),
-        };
-    }
-
-    private void LogConnectedServiceSelection(
-        ChannelRuntimeConfigProof runtimeConfig,
-        IReadOnlyDictionary<string, IAgentTool> availableTools,
-        AgentToolExecutionContext toolContext,
-        IReadOnlyList<string> selectorSlugs,
-        IReadOnlySet<string> connectedNames)
-    {
-        var connectedOperationCount = 0;
-        var visibilityRejectedCount = 0;
-        var slugRejectedCount = 0;
-        var endpointRejectedCount = 0;
-        var eligibleCandidateCount = 0;
-        var connectedOperationSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var selectedConnectedSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var endpointFilters = runtimeConfig.NyxidServiceSelectors
-            .Select(static selector => new
-            {
-                ServiceSlug = Normalize(selector.ServiceSlug),
-                Endpoints = selector.EndpointNames
-                    .Select(Normalize)
-                    .Where(static endpoint => endpoint is not null)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase),
-            })
-            .Where(static selector => selector.ServiceSlug is not null)
-            .ToArray();
-
-        foreach (var pair in availableTools)
-        {
-            if (pair.Value is not IAgentToolOperationAdmissionOwner owner)
-                continue;
-
-            connectedOperationCount++;
-            connectedOperationSlugs.Add(owner.OperationAdmission.CatalogServiceSlug);
-            connectedOperationSlugs.Add(owner.OperationAdmission.ServiceSlug);
-            if (!toolContext.ToolVisibility.Allows(pair.Key))
-            {
-                visibilityRejectedCount++;
-                continue;
-            }
-
-            var matchedSelector = endpointFilters.FirstOrDefault(selector =>
-                MatchesServiceSlug(owner.OperationAdmission, selector.ServiceSlug!));
-            if (matchedSelector is null)
-            {
-                slugRejectedCount++;
-                continue;
-            }
-
-            if (matchedSelector.Endpoints.Count > 0 &&
-                (owner.OperationAdmission.Identity is not AgentToolOperationIdentity.PublishedEndpoint published ||
-                 !matchedSelector.Endpoints.Contains(published.EndpointId)))
-            {
-                endpointRejectedCount++;
-                continue;
-            }
-
-            eligibleCandidateCount++;
-            selectedConnectedSlugs.Add(owner.OperationAdmission.CatalogServiceSlug);
-            selectedConnectedSlugs.Add(owner.OperationAdmission.ServiceSlug);
-        }
-
-        _logger.LogInformation(
-            "Channel runtime connected-service selection completed. registration={RegistrationId} configRevision={ConfigRevision} selectorCount={SelectorCount} selectorSlugs={SelectorSlugs} availableToolCount={AvailableToolCount} connectedOperationCount={ConnectedOperationCount} connectedOperationSlugs={ConnectedOperationSlugs} visibilityRejectedCount={VisibilityRejectedCount} slugRejectedCount={SlugRejectedCount} endpointRejectedCount={EndpointRejectedCount} eligibleConnectedCandidateCount={EligibleConnectedCandidateCount} selectedConnectedToolCount={SelectedConnectedToolCount} selectedConnectedSlugs={SelectedConnectedSlugs} visibilityRestricted={VisibilityRestricted} visibilityAllowedToolCount={VisibilityAllowedToolCount}",
-            runtimeConfig.RegistrationId,
-            runtimeConfig.ConfigRevision,
-            runtimeConfig.NyxidServiceSelectors.Count,
-            string.Join(',', selectorSlugs),
-            availableTools.Count,
-            connectedOperationCount,
-            string.Join(',', connectedOperationSlugs.Where(static slug => !string.IsNullOrWhiteSpace(slug)).Order(StringComparer.OrdinalIgnoreCase)),
-            visibilityRejectedCount,
-            slugRejectedCount,
-            endpointRejectedCount,
-            eligibleCandidateCount,
-            connectedNames.Count,
-            string.Join(',', selectedConnectedSlugs.Where(static slug => !string.IsNullOrWhiteSpace(slug)).Order(StringComparer.OrdinalIgnoreCase)),
-            toolContext.ToolVisibility.IsRestricted,
-            toolContext.ToolVisibility.AllowedToolNames?.Count ?? -1);
-    }
-
-    private static string AddRuntimeSelectors(
-        string? contextJson,
-        IReadOnlyList<ChannelBotRuntimeNyxIdServiceSelector> selectors)
-    {
-        using var document = TryParseObject(contextJson);
-        using var output = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(output))
-        {
-            writer.WriteStartObject();
-            if (document is not null)
-            {
-                foreach (var property in document.RootElement.EnumerateObject())
-                {
-                    if (!string.Equals(property.Name, "nyxid_service_selectors", StringComparison.Ordinal))
-                        property.WriteTo(writer);
-                }
-            }
-
-            writer.WritePropertyName("nyxid_service_selectors");
-            writer.WriteStartArray();
-            foreach (var selector in selectors)
-            {
-                var serviceSlug = Normalize(selector.ServiceSlug);
-                if (serviceSlug is null)
-                    continue;
-
-                writer.WriteStartObject();
-                writer.WriteString("service_slug", serviceSlug);
-                writer.WritePropertyName("endpoint_names");
-                writer.WriteStartArray();
-                foreach (var endpointName in selector.EndpointNames)
-                {
-                    var normalized = Normalize(endpointName);
-                    if (normalized is not null)
-                        writer.WriteStringValue(normalized);
-                }
-
-                writer.WriteEndArray();
-                writer.WriteEndObject();
-            }
-
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-        }
-
-        return Encoding.UTF8.GetString(output.ToArray());
-    }
-
-    private static JsonDocument? TryParseObject(string? contextJson)
-    {
-        if (string.IsNullOrWhiteSpace(contextJson))
-            return null;
-
-        try
-        {
-            var document = JsonDocument.Parse(contextJson);
-            if (document.RootElement.ValueKind == JsonValueKind.Object)
-                return document;
-
-            document.Dispose();
-            return null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
     }
 
     private ToolSetResolveResult? ResolveToolSet(
@@ -421,61 +237,6 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
                 name));
         }
     }
-
-    private static IEnumerable<string> SelectConnectedOperationNames(
-        ChannelRuntimeConfigProof runtimeConfig,
-        IReadOnlyDictionary<string, IAgentTool> availableTools,
-        AgentToolExecutionContext toolContext)
-    {
-        if (runtimeConfig.NyxidServiceSelectors.Count == 0)
-        {
-            if (runtimeConfig.AuthorizationMode != ChannelRegistrationAuthorizationMode.NyxidDefault)
-                yield break;
-
-            foreach (var pair in availableTools)
-            {
-                if (toolContext.ToolVisibility.Allows(pair.Key) &&
-                    pair.Value is IAgentToolOperationAdmissionOwner)
-                {
-                    yield return pair.Key;
-                }
-            }
-
-            yield break;
-        }
-
-        foreach (var selector in runtimeConfig.NyxidServiceSelectors)
-        {
-            var serviceSlug = Normalize(selector.ServiceSlug);
-            if (serviceSlug is null)
-                continue;
-            var endpoints = selector.EndpointNames
-                .Select(Normalize)
-                .Where(static endpoint => endpoint is not null)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var pair in availableTools)
-            {
-                if (!toolContext.ToolVisibility.Allows(pair.Key) ||
-                    pair.Value is not IAgentToolOperationAdmissionOwner owner ||
-                    !MatchesServiceSlug(owner.OperationAdmission, serviceSlug))
-                {
-                    continue;
-                }
-
-                if (endpoints.Count == 0 ||
-                    owner.OperationAdmission.Identity is AgentToolOperationIdentity.PublishedEndpoint published &&
-                    endpoints.Contains(published.EndpointId))
-                {
-                    yield return pair.Key;
-                }
-            }
-        }
-    }
-
-    private static bool MatchesServiceSlug(AgentToolOperationAdmission admission, string serviceSlug) =>
-        string.Equals(admission.CatalogServiceSlug, serviceSlug, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(admission.ServiceSlug, serviceSlug, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsSelectableRouteTool(
         string name,

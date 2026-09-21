@@ -1,5 +1,7 @@
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
@@ -28,17 +30,26 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         skillRef.DisplayName.Should().Be("GitHub Operator");
         skillRef.RecommendationName.Should().Be("github-service-default");
 
-        handler.Requests.Should().HaveCount(4);
+        handler.Requests.Should().HaveCount(6);
         handler.Requests.Select(request => request.Path).Should().Equal(
+            "/api/v1/catalog-specs/api-github/openapi.json",
             "/api/v1/proxy/s/ornn/api/v1/skill-format/validate",
             "/api/v1/proxy/s/ornn/api/v1/skills",
             "/api/v1/keys/us-personal",
-            "/api/v1/keys/us-personal");
+            "/api/v1/keys/us-personal",
+            "/api/v1/catalog-specs/api-github/openapi.json");
         handler.Requests.Select(request => request.Authorization?.Parameter).Should().OnlyContain(token => token == "server-token");
-        handler.Requests[1].ContentType.Should().Be("application/zip");
-        handler.Requests[3].Method.Should().Be(HttpMethod.Put);
-        handler.Requests[3].BodyText.Should().Contain("recommended_skill_refs");
-        handler.Requests[3].BodyText.Should().Contain("33333333-3333-3333-3333-333333333333");
+        handler.Requests[2].ContentType.Should().Be("application/zip");
+        var skillMarkdown = ReadZipEntry(handler.Requests[2].Body, "github-service-default/SKILL.md");
+        skillMarkdown.Should().Contain("nyxid_invoke_operation");
+        skillMarkdown.Should().Contain("list_repositories");
+        skillMarkdown.Should().Contain("GET /repos");
+        skillMarkdown.Should().Contain("query.page_size");
+        skillMarkdown.Should().NotContain("Use exact GitHub service tools.");
+        skillMarkdown.Should().NotContain("nyxop_list_repositories");
+        handler.Requests[4].Method.Should().Be(HttpMethod.Put);
+        handler.Requests[4].BodyText.Should().Contain("recommended_skill_refs");
+        handler.Requests[4].BodyText.Should().Contain("33333333-3333-3333-3333-333333333333");
     }
 
     [Fact]
@@ -52,7 +63,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
 
         refs.Should().BeEmpty();
         refsAgain.Should().BeEmpty();
-        handler.Requests.Should().HaveCount(8);
+        handler.Requests.Should().HaveCount(10);
         handler.Requests.Where(request => request.Method == HttpMethod.Put)
             .Should().HaveCount(2);
     }
@@ -99,7 +110,18 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
             options,
             new StaticTokenSource("server-token"),
             publishingService,
-            new NyxIdRecommendedSkillRefPersistenceService(nyxClient));
+            new NyxIdRecommendedSkillRefPersistenceService(nyxClient),
+            new NyxIdRecommendedSkillGenerator(nyxClient));
+    }
+
+    private static string ReadZipEntry(byte[] zipBytes, string path)
+    {
+        using var stream = new MemoryStream(zipBytes);
+        using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
+        var entry = archive.GetEntry(path) ?? throw new InvalidOperationException("missing_zip_entry");
+        using var entryStream = entry.Open();
+        using var reader = new StreamReader(entryStream, Encoding.UTF8);
+        return reader.ReadToEnd();
     }
 
     private static NyxIdServiceInstance ReadyInstance() => new()
@@ -128,6 +150,39 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
 
     private sealed class CapturingHandler : HttpMessageHandler
     {
+        private const string OpenApiSpec =
+            """
+            {
+              "openapi": "3.0.0",
+              "paths": {
+                "/repos": {
+                  "get": {
+                    "operationId": "list_repositories",
+                    "summary": "List repositories",
+                    "parameters": [
+                      {
+                        "name": "page_size",
+                        "in": "query",
+                        "required": false,
+                        "description": "Maximum repositories to return.",
+                        "schema": { "type": "integer" }
+                      }
+                    ],
+                    "responses": {
+                      "200": {
+                        "content": {
+                          "application/json": {
+                            "schema": { "type": "object" }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
         public bool FailUpdate { get; init; }
 
         public List<CapturedRequest> Requests { get; } = [];
@@ -147,6 +202,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
 
             var response = (request.Method.Method, request.RequestUri.AbsolutePath) switch
             {
+                ("GET", "/api/v1/catalog-specs/api-github/openapi.json") => new CapturingResponse(OpenApiSpec),
                 ("POST", "/api/v1/proxy/s/ornn/api/v1/skill-format/validate") => new CapturingResponse("""{"data":{"valid":true,"violations":[]}}"""),
                 ("POST", "/api/v1/proxy/s/ornn/api/v1/skills") => new CapturingResponse("""{"data":{"guid":"33333333-3333-3333-3333-333333333333","version":"3.0","skillHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"""),
                 ("GET", "/api/v1/keys/us-personal") => new CapturingResponse("""
