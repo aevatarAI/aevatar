@@ -143,6 +143,14 @@ public sealed class NyxIdServiceInstanceClientTests
         skillRef.ManifestDigest.Should().StartWith("sha256:");
         skillRef.RecommendationName.Should().Be("read-calendar-events");
         skillRef.Revision.Should().Be("rev-1");
+
+        var catalogEntry = result.RecommendedSkillCatalog.Should().ContainSingle().Subject;
+        catalogEntry.UserServiceId.Should().Be("us-personal");
+        catalogEntry.ServiceSlug.Should().Be("calendar");
+        catalogEntry.ServiceLabel.Should().Be("calendar");
+        catalogEntry.Title.Should().Be("Calendar Reader");
+        catalogEntry.TaskSummary.Should().Contain("Calendar Reader").And.Contain("calendar");
+        catalogEntry.SkillRef.SkillId.Should().Be("11111111-1111-1111-1111-111111111111");
     }
 
     [Fact]

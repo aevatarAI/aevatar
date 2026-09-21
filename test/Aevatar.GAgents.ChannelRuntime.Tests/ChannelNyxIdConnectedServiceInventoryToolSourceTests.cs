@@ -730,7 +730,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         var tool = OperationTool(tools);
 
         tools.Should().OnlyContain(candidate => !candidate.Name.Contains("calendar", StringComparison.OrdinalIgnoreCase));
-        tool.ParametersSchema.Should().Contain("operation_id").And.Contain("operation_arguments");
+        tool.ParametersSchema.Should().Contain("operation_id")
+            .And.Contain("operation_arguments")
+            .And.Contain("document_request")
+            .And.Contain("oneOf");
 
         var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
             tool,
@@ -757,6 +760,122 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         var terminalRecords = auditRecords.Where(record => record.LifecyclePhase == AuditLifecyclePhase.Terminal).ToArray();
         terminalRecords.Select(record => record.OperationName).Should().Contain("nyxid_invoke_operation");
         terminalRecords.Should().NotContain(record => record.OperationName.StartsWith("nyxop_", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task InvokeOperationAsync_WithDocumentGuidedRequest_ExecutesConstrainedProxyWithoutOpenApiRead()
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspaceRecommendedSkill(),
+            ProxyResponseBody = "{\"matches\":[\"policy-a\"]}",
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var auditRecords = new List<AuditRecord>();
+        var executionPort = CreateAdmittedExecutionPort(auditRecords);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+        var context = CreateRegistrationContext();
+        using var scope = AgentToolContextScope.Push(context);
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            """
+            {
+              "service_slug":"api-google-workspace",
+              "document_request":{
+                "method":"GET",
+                "relative_path":"/docs/policies",
+                "query":{"restaurant":"north"},
+                "headers":{"Accept":"application/json"}
+              }
+            }
+            """,
+            context,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null));
+
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success, outcome.ResultJson);
+        outcome.ResultJson.Should().Contain("policy-a");
+        handler.RawOpenApiRequests.Should().BeEmpty();
+        var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
+        proxyRequest.Method.Should().Be("GET");
+        proxyRequest.Path.Should().Contain("/docs/policies");
+        proxyRequest.Query.Should().Contain("restaurant=north");
+        proxyRequest.BearerToken.Should().Be("registration-agent-key");
+        var terminalRecords = auditRecords.Where(record => record.LifecyclePhase == AuditLifecyclePhase.Terminal).ToArray();
+        terminalRecords.Select(record => record.OperationName).Should().Contain("nyxid_invoke_operation");
+    }
+
+    [Fact]
+    public async Task InvokeOperationAsync_WithDocumentGuidedRequestWithoutRecommendedSkillRef_RejectsWithoutProxyRequest()
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspace(),
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync("""
+            {
+              "service_slug":"api-google-workspace",
+              "document_request":{
+                "method":"GET",
+                "relative_path":"/docs/policies"
+              }
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Be("document_request_not_admitted");
+        handler.RawOpenApiRequests.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("https://evil.test/docs")]
+    [InlineData("/docs/policies?restaurant=north")]
+    [InlineData("/docs/../secrets")]
+    public async Task InvokeOperationAsync_WithUnsafeDocumentGuidedPath_RejectsWithoutProxyRequest(string relativePath)
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspaceRecommendedSkill(),
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync($$"""
+            {
+              "service_slug":"api-google-workspace",
+              "document_request":{
+                "method":"GET",
+                "relative_path":"{{relativePath}}"
+              }
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Be("document_request_invalid");
+        handler.RawOpenApiRequests.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -1076,6 +1195,34 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
               "connected": true,
               "status": "active",
               "credential_source": { "type": "personal" }
+            }
+          ]
+        }
+        """;
+
+    private static string KeysWithGoogleWorkspaceRecommendedSkill() => """
+        {
+          "keys": [
+            {
+              "id": "user-service-1",
+              "slug": "api-google-workspace",
+              "catalog_service_id": "catalog-google-workspace",
+              "label": "Google Workspace",
+              "is_active": true,
+              "connected": true,
+              "status": "active",
+              "credential_source": { "type": "personal" },
+              "recommended_skill_refs": [
+                {
+                  "source": "ornn",
+                  "skill_id": "11111111-1111-1111-1111-111111111111",
+                  "literal_version": "1.2",
+                  "manifest_digest": "sha256:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+                  "display_name": "Google Workspace Document Guide",
+                  "recommendation_name": "google-workspace-document-guide",
+                  "revision": "rev-doc-1"
+                }
+              ]
             }
           ]
         }

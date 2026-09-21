@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -13,8 +14,14 @@ namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 public sealed record NyxIdConnectedServiceOperationInvocation(
     string? UserServiceId,
     string? ServiceSlug,
-    string OperationId,
-    string OperationArgumentsJson);
+    string? OperationId,
+    string OperationArgumentsJson,
+    NyxIdConnectedServiceDocumentRequest? DocumentRequest = null);
+
+public sealed record NyxIdConnectedServiceDocumentRequest(
+    string Method,
+    string RelativePath,
+    string RequestArgumentsJson);
 
 public sealed record NyxIdConnectedServiceOperationInvokeResult(
     bool IsSuccess,
@@ -96,6 +103,21 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                 .ToArray();
             if (matchedBindings.Length == 0)
                 return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_not_visible");
+
+            if (invocation.DocumentRequest is not null)
+            {
+                if (matchedBindings.Length > 1)
+                    return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_ambiguous");
+                return await InvokeDocumentGuidedRequestAsync(
+                        context,
+                        executionToken,
+                        matchedBindings[0],
+                        invocation.DocumentRequest,
+                        callId,
+                        toolName,
+                        ct)
+                    .ConfigureAwait(false);
+            }
 
             var services = await ReadOperationContractsAsync(
                     context,
@@ -218,6 +240,264 @@ public sealed class NyxIdConnectedServiceOperationInvoker
             return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_source_unavailable");
         }
     }
+
+    private async Task<NyxIdConnectedServiceOperationInvokeResult> InvokeDocumentGuidedRequestAsync(
+        AgentToolExecutionContext context,
+        string executionToken,
+        NyxIdServiceInstanceBinding binding,
+        NyxIdConnectedServiceDocumentRequest request,
+        string callId,
+        string toolName,
+        CancellationToken ct)
+    {
+        if (binding.Instance.RecommendedSkillRefs.Count == 0)
+            return NyxIdConnectedServiceOperationInvokeResult.Failure("document_request_not_admitted");
+        if (!TryBuildDocumentGuidedAdmission(binding.Instance, request, out var admission, out var runtimeArgumentsJson))
+            return NyxIdConnectedServiceOperationInvokeResult.Failure("document_request_invalid");
+        if (admission.ExecutionPolicy.Risk != AgentToolOperationRisk.ReadOnly &&
+            !_options.EnableAssistantConnectedServiceEffects)
+        {
+            return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_not_visible");
+        }
+
+        var proxy = new NyxIdProxyTool(
+            _apiClient,
+            _logger,
+            _fileArtifactIngress,
+            _options.EffectiveProxyFileArtifactMaxBytes,
+            _options.ManagedWorkflowAdmissionMode,
+            _delegationTokenLease);
+        var sourceReadableToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context.Credentials)
+                                  ?? context.Credentials.NyxIdAccessToken;
+        var operationToken = binding.Instance.AccessTokenSource == NyxIdServiceAccessTokenSource.Organization
+            ? context.Credentials.NyxIdOrgToken
+            : executionToken;
+        var credentials = context.Credentials with
+        {
+            NyxIdAccessToken = operationToken,
+            SourceReadableNyxIdAccessToken = sourceReadableToken,
+        };
+        using var scope = AgentToolContextScope.Push(context with
+        {
+            Credentials = credentials,
+            OperationAdmission = admission,
+        });
+        var outcome = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
+            ? await proxy.ExecuteAdmittedReadWithOutcomeAsync(
+                callId,
+                toolName,
+                runtimeArgumentsJson,
+                MaxReadSourceBytes,
+                ct).ConfigureAwait(false)
+            : await proxy.ExecuteAdmittedEffectWithOutcomeAsync(
+                callId,
+                toolName,
+                runtimeArgumentsJson,
+                ct).ConfigureAwait(false);
+        var receipt = outcome.Receipt ?? proxy.CreateResultReceipt(
+            callId,
+            toolName,
+            runtimeArgumentsJson,
+            outcome.ResultJson);
+        var label = FirstNonEmpty(binding.Instance.Label, binding.Instance.DisplaySlug, binding.Instance.CatalogServiceSlug);
+        var operationLabel = $"{admission.HttpMethod} {admission.PathTemplate}";
+        var terminalOutcome = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
+            ? BuildReadOutcome(
+                admission,
+                label,
+                operationLabel,
+                callId,
+                toolName,
+                outcome.ResultJson,
+                receipt)
+            : BuildEffectOutcome(
+                admission,
+                readBackPlan: null,
+                label,
+                operationLabel,
+                callId,
+                toolName,
+                receipt);
+        return NyxIdConnectedServiceOperationInvokeResult.Success(terminalOutcome);
+    }
+
+    private static bool TryBuildDocumentGuidedAdmission(
+        NyxIdServiceInstance instance,
+        NyxIdConnectedServiceDocumentRequest request,
+        out AgentToolOperationAdmission admission,
+        out string runtimeArgumentsJson)
+    {
+        admission = null!;
+        runtimeArgumentsJson = string.Empty;
+        var method = NormalizeDocumentRequestMethod(request.Method);
+        if (method is null || !TryNormalizeDocumentRequestPath(request.RelativePath, out var pathTemplate))
+            return false;
+
+        if (!TryReadDocumentRuntimeArguments(
+                request.RequestArgumentsJson,
+                out var queryParameters,
+                out var headerParameters,
+                out var hasBody))
+        {
+            return false;
+        }
+
+        if (hasBody && method is "GET" or "HEAD" or "OPTIONS")
+            return false;
+
+        var risk = method switch
+        {
+            "GET" or "HEAD" or "OPTIONS" => AgentToolOperationRisk.ReadOnly,
+            "DELETE" => AgentToolOperationRisk.Destructive,
+            _ => AgentToolOperationRisk.Write,
+        };
+        var requestBody = hasBody
+            ? new AgentToolOperationRequestBody(
+                Required: false,
+                MediaType: "application/json",
+                Schema: new AgentToolOperationValueSchema(
+                    AgentToolOperationValueKind.Object,
+                    [],
+                    new HashSet<string>(StringComparer.Ordinal),
+                    null,
+                    [],
+                    AdditionalPropertiesAllowed: true))
+            : null;
+        var parameters = queryParameters
+            .Select(static name => new AgentToolOperationParameter(
+                name,
+                AgentToolOperationParameterLocation.Query,
+                Required: false,
+                AgentToolOperationValueSchema.Text))
+            .Concat(headerParameters.Select(static name => new AgentToolOperationParameter(
+                name,
+                AgentToolOperationParameterLocation.Header,
+                Required: false,
+                AgentToolOperationValueSchema.Text)))
+            .ToArray();
+        var contractDigest = ComputeDocumentRequestDigest(
+            instance.UserServiceId,
+            method,
+            pathTemplate,
+            queryParameters,
+            headerParameters,
+            hasBody);
+        admission = new AgentToolOperationAdmission(
+            instance.UserServiceId,
+            instance.DisplaySlug,
+            new AgentToolOperationIdentity.AuthoredRequest(contractDigest),
+            AgentToolOperationAuthorizationBasis.ExplicitRequest,
+            method,
+            pathTemplate,
+            contractDigest,
+            parameters,
+            requestBody,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                risk,
+                risk == AgentToolOperationRisk.ReadOnly
+                    ? AgentToolOperationApproval.None
+                    : AgentToolOperationApproval.Required,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive]),
+            CatalogDigest: string.Empty,
+            CatalogServiceSlug: instance.CatalogServiceSlug);
+        runtimeArgumentsJson = request.RequestArgumentsJson;
+        return true;
+    }
+
+    private static bool TryReadDocumentRuntimeArguments(
+        string argumentsJson,
+        out IReadOnlyList<string> queryParameters,
+        out IReadOnlyList<string> headerParameters,
+        out bool hasBody)
+    {
+        queryParameters = [];
+        headerParameters = [];
+        hasBody = false;
+        try
+        {
+            using var document = JsonDocument.Parse(string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return false;
+            foreach (var property in root.EnumerateObject())
+            {
+                if (property.Name is not ("query" or "headers" or "body"))
+                    return false;
+            }
+            if (root.TryGetProperty("query", out var query))
+            {
+                if (query.ValueKind != JsonValueKind.Object)
+                    return false;
+                queryParameters = query.EnumerateObject()
+                    .Select(static property => property.Name)
+                    .Where(static name => !string.IsNullOrWhiteSpace(name))
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
+            }
+            if (root.TryGetProperty("headers", out var headers))
+            {
+                if (headers.ValueKind != JsonValueKind.Object)
+                    return false;
+                headerParameters = headers.EnumerateObject()
+                    .Select(static property => property.Name)
+                    .Where(static name => !string.IsNullOrWhiteSpace(name))
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+            }
+            hasBody = root.TryGetProperty("body", out var body) && body.ValueKind != JsonValueKind.Null;
+            return !hasBody || body.ValueKind == JsonValueKind.Object;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string? NormalizeDocumentRequestMethod(string method)
+    {
+        var normalized = method.Trim().ToUpperInvariant();
+        return normalized is "GET" or "HEAD" or "OPTIONS" or "POST" or "PUT" or "PATCH" or "DELETE"
+            ? normalized
+            : null;
+    }
+
+    private static bool TryNormalizeDocumentRequestPath(string relativePath, out string path)
+    {
+        path = string.Empty;
+        try
+        {
+            path = "/" + NyxIdApiClient.NormalizeExactProxyPath(relativePath);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static string ComputeDocumentRequestDigest(
+        string userServiceId,
+        string method,
+        string path,
+        IReadOnlyList<string> queryParameters,
+        IReadOnlyList<string> headerParameters,
+        bool hasBody)
+    {
+        var material = string.Join(
+            '\n',
+            userServiceId,
+            method,
+            path,
+            string.Join(',', queryParameters),
+            string.Join(',', headerParameters),
+            hasBody ? "body:json-object" : "body:none");
+        return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+    }
+
+    private static string FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
 
     private static AgentToolTerminalOutcome BuildReadOutcome(
         AgentToolOperationAdmission admission,
