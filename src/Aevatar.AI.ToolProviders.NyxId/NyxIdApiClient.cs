@@ -96,7 +96,7 @@ internal sealed record NyxIdProxyError(
 }
 
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
-public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
+public sealed partial class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 {
     internal const int DelegationRefreshMaxResponseBytes = 16 * 1024;
 

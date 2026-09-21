@@ -1758,6 +1758,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             var relayDelivery = inbound.OutboundDelivery!.Clone();
             var relayToken = ResolveRelayReplyToken(relayDelivery, runtimeContext);
+            if (runtimeContext.DeferRelayTextReply && (runtimeContext.RelayTextOnly || relayToken is null))
+            {
+                return ConversationTurnResult.RelayTextDeferred(new MessageContent
+                {
+                    Text = HasInteractiveContent(outboundIntent)
+                        ? NyxIdRelayInteractiveReplyDispatcher.BuildTextFallback(outboundIntent) : outboundIntent.Text,
+                });
+            }
             if (relayToken is null)
             {
                 return ConversationTurnResult.PermanentFailure(
@@ -1772,11 +1780,14 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     inbound,
                     relayDelivery,
                     relayToken,
+                    runtimeContext.DeferRelayTextReply,
                     ct) is { } interactiveResult)
             {
                 return interactiveResult;
             }
 
+            if (runtimeContext.DeferRelayTextReply)
+                return ConversationTurnResult.RelayTextDeferred(outboundIntent);
             var emit = await _relayOutboundPort.SendAsync(
                 ResolveRelayPlatform(inbound, conversation),
                 conversation?.Clone() ?? new ConversationReference(),
@@ -1854,6 +1865,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         InboundMessage inbound,
         OutboundDeliveryContext relayDelivery,
         string relayToken,
+        bool deferTextDelivery,
         CancellationToken ct)
     {
         var relayChannel = ResolveRelayChannel(inbound, conversation);
@@ -1877,6 +1889,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 inbound,
                 relayDelivery,
                 relayToken,
+                deferTextDelivery,
                 ct);
         }
 
@@ -1889,7 +1902,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 Conversation = conversation?.Clone() ?? new ConversationReference(),
             },
-            ct);
+            ct, deferTextDelivery);
+        if (dispatch.DeferredText is { } deferredText)
+            return ConversationTurnResult.RelayTextDeferred(new MessageContent { Text = deferredText });
         if (dispatch.Succeeded)
         {
             var delivered = dispatch.FellBackToText
@@ -1937,9 +1952,12 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         InboundMessage inbound,
         OutboundDeliveryContext relayDelivery,
         string relayToken,
+        bool deferTextDelivery,
         CancellationToken ct)
     {
         var outbound = new MessageContent { Text = NormalizeReplyText(fallbackText) };
+        if (deferTextDelivery)
+            return ConversationTurnResult.RelayTextDeferred(outbound);
         var emit = await _relayOutboundPort.SendAsync(
             ResolveRelayPlatform(inbound, conversation),
             conversation?.Clone() ?? new ConversationReference(),

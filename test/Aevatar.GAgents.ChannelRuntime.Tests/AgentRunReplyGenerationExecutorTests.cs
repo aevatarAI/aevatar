@@ -912,7 +912,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task BuildLlmStepContinuation_WhenTelegramTurnHasStreamingEnabled_ShouldWaitForFinalReply()
+    public async Task BuildLlmStepContinuation_WhenTelegramRelayHasStreamingEnabled_ShouldDispatchTextForAppend()
     {
         var provider = new RecordingProvider("telegram final text");
         var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
@@ -941,9 +941,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
-        envelopes.Should().BeEmpty();
+        envelopes.Should().Contain(envelope => envelope.Payload.Is(LlmReplyStreamChunkEvent.Descriptor));
         execution.Continuation.LlmStepResult.AccumulatedText.Should().Be("telegram final text");
-        execution.Continuation.LlmStepResult.HasStreamedTextContent.Should().BeFalse();
+        execution.Continuation.LlmStepResult.HasStreamedTextContent.Should().BeTrue();
         execution.Continuation.LlmStepResult.Content.Should().Be("telegram final text");
     }
 

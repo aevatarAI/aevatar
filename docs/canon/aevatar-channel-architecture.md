@@ -66,6 +66,88 @@ flowchart LR
 
 回归证据和外部约束记录于 [实现验证报告](../audit-scorecard/2026-09-16-channel-platform-behavior-adapter-verification.md)。
 
+## NyxID Relay Agent Key append 文本投递（2026-09-20）
+
+本节落实 [Agent Key Append Streaming 与 Progress Message 设计](../designs/2026-09-20-nyxid-relay-agent-key-append-streaming-design.md) 的 Relay 文本回复边界。原有 CardKit、edit、普通文本 fallback 的选择顺序保持不变；最终 Relay 文本叶子根据明确的 Relay profile 选择投递方式。`reply_message_multiplicity`、`supports_edit` 和 `max_message_length` 在这个窄边界内是策略事实，不能由前文历史 RFC 中的诊断 capability、通用 bag 或客户端输入代替。Append 不新增全局 `StreamingSupport` 类型，也不改变 native/direct adapter 的默认能力。
+
+### Relay capability matrix
+
+`ChannelCapabilities.reply_message_multiplicity` 使用字段 18，值为 `UNSPECIFIED / NONE / SINGLE / MULTIPLE`。全局 `UNSPECIFIED` 只表示未声明，不能推导出多次回复能力。`NyxRelayCapabilityProfiles.Resolve(platform)` 返回包含三个控制事实的完整 profile；显式平台 profile 整体覆盖普通聊天默认值，不逐字段混用默认值。调用方只在已确定是 NyxID Relay 的路径使用它，并在创建 lifecycle 时固定策略和长度上限。
+
+| 范围或平台 | 单条文本上限 | Edit | Multiplicity | 文本投递 |
+|---|---:|---:|---|---|
+| Channel 全局 | 不设置默认值 | 不推导平台能力 | `UNSPECIFIED` | adapter 自有行为 |
+| NyxID Relay 普通聊天默认 | 2,000 | false | `MULTIPLE` | Agent Key append |
+| Telegram NyxID Relay | 4,096 | false | `MULTIPLE` | 显式 Agent Key append |
+| Lark / Feishu NyxID Relay | 30,000 | true，保留既有能力 | `MULTIPLE` | 保持 CardKit / edit |
+| Aurinko NyxID Relay | 256 KiB，adapter 按字节校验 | false | `SINGLE` | 终态一次正文回复 |
+| Device NyxID Relay | 0 | false | `NONE` | fail closed，不回复 |
+
+Aurinko 的 262,144 是文本 body 的字节校验上限，不代表邮件提供方保证接受同等数量的字符。新增非聊天平台或单次回复平台时，必须先提供显式 profile。Telegram 的 native `sendMessage` / `editMessageText`、Composer 默认 edit 能力和既有格式化行为继续由原平台实现负责；Relay profile 不回写这些能力。
+
+### Actor lifecycle、progress 与分段
+
+`ConversationGAgent` 继续以 `ConversationGAgentState.active_reply_lifecycles` 为唯一回复生命周期事实源。Append 在已有 `ConversationReplyLifecycleState` 中固定 `APPEND_MESSAGES`，增加 typed append 子状态和 transition facts；不新增根集合、服务级 segment 注册表或第二套投递协调器。历史 lifecycle 未设置策略时解释为 `EDIT_LOOP`，运行中的 edit lifecycle 不迁移。`platform_message_id`、`edit_count` 和原 edit in-flight/retry 字段保持 edit-only。
+
+仅在策略已确定为 `APPEND_MESSAGES` 时，Actor 接受 `NeedsLlmReplyEvent` 就创建 lifecycle、令 progress 为 `WAITING`，并在分发 AgentRun 前安排两秒 due signal；不等待首个文本 chunk。两秒触发使用 append 局部的异步等待信号加速器，同时登记 durable self-message 用于恢复。异步等待可注入 `TimeProvider`；回调只发布预先固定的内部信号，不能读写 Actor 状态、选择正文或推进业务。它不改变共享 callback scheduler；重复或迟到信号统一回到 Actor inbox 对账。两秒表示及时安排反馈尝试，平台可见时间仍受外部 API 耗时影响。
+
+due signal 到达后，Actor 忽略已清除或非等待状态的 lifecycle。已有正文接受记录或正文 operation in-flight 时标记 `SKIPPED`；已有稳定未发正文时立即发首段，即使不足普通首段阈值，也标记 `SKIPPED`；没有可发正文时仅发送一次“正在处理，请稍候...”。Progress 使用 segment 0，正文从 segment 1 开始，共用一个 in-flight 槽和 generation fence。Progress 不更新、不删除、不重试；其 `ACCEPTED / REJECTED / DELIVERY_UNKNOWN` 不改变正文 accepted count、next index、accepted prefix、delivery disposition 或 history。Progress 明确失败或未知均允许正文继续，可能迟到的 progress 属于已接受的外部 best-effort 风险。
+
+正文只来自用户可见 assistant text，不包含 reasoning、tool arguments 或原始 tool results。Actor 每次准备新段前验证 `pending_accumulated_text.StartsWith(last_flushed_text, StringComparison.Ordinal)`，只选择未接受后缀。已接受前缀被改写时停止 append，并记录 typed terminal reason；不编辑或重发已显示正文。首段使用较短软目标以尽早反馈，后续段使用较长目标以减少消息碎片；terminal 立即 flush 所有剩余稳定正文，不受最低长度限制。
+
+分段依次优先段落空行、换行、句末标点、空白，最后按安全 Unicode 文本元素边界硬切，保护 surrogate pair 和组合字符。平台格式化留在 Composer/outbound 边界；Actor 使用无损的准备与测量契约，在实际提交文本超限时缩短原始候选并重新格式化，不能把 formatter 静默截断的结果当成整段原文已接受。长度上限以格式化后提交给 NyxID 的文本为准。
+
+候选段同时满足 outbound 的非空白正文要求：纯空白自然边界不抢占后续能容纳的可见文本，尾部空白与尚未发送的可见字素一起保留，避免形成无法单独提交的末段。没有可发送正文时 progress 继续有效；不能通过 trim、跳过字节、重发已接受正文或虚增 accepted prefix 消除空白。纯空白终态如无法提交，则以未送达事实完成并清理 lifecycle。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart TD
+    A["接受 NeedsLlmReplyEvent"] --> B["固定 Relay profile 与 APPEND_MESSAGES"]
+    B --> C["持久 lifecycle + 两秒内部信号 + durable 恢复信号"]
+    C --> D["分发 AgentRun"]
+    C --> E["Actor 对账 progress due / text chunk / terminal"]
+    D -->|"用户可见正文或终态"| E
+    E --> F{"已有 in-flight？"}
+    F -->|"是"| G["只更新 pending 正文，等待结果"]
+    F -->|"否"| H["选择正文或一次 progress；无损格式化并检查上限"]
+    H --> I["持久固定 segment + kind / index / generation"]
+    I --> J["窄 operation step；Vault 边界解析 Agent Key"]
+    J --> K["一次 HTTP dispatch；锁定 append"]
+    K --> L["typed completion / timeout 回到 Actor inbox"]
+    L --> M{"匹配当前 operation？"}
+    M -->|"否"| N["忽略重复或陈旧信号"]
+    M -->|"是"| O["分别更新 progress 或正文 disposition"]
+    O -->|"正文明确接受或 progress 终态"| E
+    O -->|"正文拒绝或未知"| P["停止正文；仅保留已接受前缀"]
+```
+
+Actor 在 dispatch 前持久化当前固定 segment，后续 chunk 只能更新 pending buffer，不能改写正在提交的 operation。只有前一段明确接受后才登记下一正文段；correlation、message kind、segment index 和单调 generation 必须共同匹配，重复 operation step、completion 与旧 timeout 不得重复 dispatch 或推进计数。Executor 只执行已决定的 I/O 并发布 typed completion，不选择下一段、不修改 Actor 状态、不重试。
+
+### Dispatch 边界、完成事实与恢复
+
+原始入站 `message_id` 从已有 pending request/activity 的 reply anchor 取得，append lifecycle 不复制一份。Agent Key 通过 registration 的既有 `SecretReference` 在 Vault/outbound 边界短暂解析，lifecycle 不复制 reference；原始 Key、Bearer 和未清理的外部响应不得进入 Actor state、event、continuation、readmodel、history、日志或异常详情。
+
+只有在首个 Agent Key HTTP request 尚未 dispatch、确认没有 append 外部副作用时，registration 缺 Key、Vault 解析失败或 readiness 失败才可保留原来的终态 reply-token fallback。任何 progress 或正文 HTTP request 一旦 dispatch，便以持久 typed fact 锁定 append；后续凭证失败也不能恢复 reply-token fallback、重跑整个 LLM turn 或重发完整答案。已 dispatch 的请求不做自动重试或传输层重放。
+
+| 正文 disposition | 完成与 history 语义 |
+|---|---|
+| `NOT_SENT` | 没有正文段被明确接受；不声称正文已送达，progress 可以已发送 |
+| `ALL_ACCEPTED` | 最终正文全部明确接受，提交完整 assistant text |
+| `PARTIAL_ACCEPTED` | 先前正文已接受，剩余部分明确失败或违反前缀不变量；只提交 `last_flushed_text` |
+| `DELIVERY_UNKNOWN` | 已 dispatch 的正文结果不确定；停止，不重试，只保留此前明确接受的前缀 |
+
+明确接受必须有可验证的响应；仅当边界能确认未发送时才映射明确拒绝。超时、连接断开、无有效响应以及可能在平台接受后发生的失败均保留 unknown，不能报告成功或确认未发送。Append 细分事实属于 lifecycle；全局 delivery/completion 继续使用现有粗粒度模型，不扩散新的全局 outcome 体系。Progress 永远不形成 assistant history，也不改变最终正文完整性。
+
+Append executor 的单次出站操作使用 10 秒总截止时间，覆盖 registration/Vault 准备、HTTP 响应头和响应体读取。这个取消信号独立于排在 Actor inbox 内的 timeout event，因此收到响应头后正文停滞也会结束当前 I/O turn；完成事件使用原始调用 token 发布，避免截止时间取消同时吞掉结果。dispatch 前取消仍是 pre-dispatch failure，dispatch 后取消为 unknown 且不重试；progress 的 unknown completion 由后续 Actor turn 对账后仍可继续正文。
+
+重启后不重放已持久化的 in-flight operation。没有可信 completion 的正文 operation 收敛为 `DELIVERY_UNKNOWN`；progress operation 单独收敛后仍可继续正文。没有 in-flight 的 lifecycle 可以从既有 pending buffer 继续；重复 durable progress due 和旧 continuation 由持久状态/fence 吸收。恢复 append 不重启已经活跃的 LLM run。
+
+`LlmRunDispatched` 只记录成功的 LLM run handoff，并独立控制 run 去重。`AnyRequestDispatched` 只记录 progress/正文 HTTP 副作用，用于禁止 reply-token replay；它不能证明 LLM run 已存在。首次 handoff 失败后，即使 progress 已接受或结果未知，既有 deferred retry 和 activation 仍可完成第一次成功 handoff。
+
+已确认选择设计第 9 节的最小 durable 正文状态方案，以保证 Actor 重启恢复和诚实投递：继续复用 `last_flushed_text`、`pending_accumulated_text`、`pending_finalize_text`、`pending_appended_history` 等既有字段，额外正文持久数据仅为当前一个 segment，不新增完整正文副本、append 正文读模型或 per-segment history。设计 §17.12 已同步这一决定。Agent Key、Bearer 不得进入持久状态、读模型或日志，正文日志严格禁止。结构化日志仅包含安全 registration 标识、correlation、platform、strategy、kind、index、generation、result、已清理 error code 和 disposition。
+
+Aevatar 只保证单 Actor 串行提交、逐段明确接受后继续；NyxID `/channel-relay/reply` 没有 idempotency key、跨请求严格展示顺序或 exactly-once 契约。平台发送后数据库或响应失败仍可能导致 unknown。NyxID conversation 重新分配 Agent Key 后，原始入站消息与当前 Key 的归属校验强化留待 NyxID 后续 contract/API 工作，本次不通过复制凭证、缓存归属或修改 NyxID 部署补救。
+
 ## 1. 背景与动机
 
 `Aevatar.GAgents.ChannelRuntime` 目前承载两个 IM 渠道：Lark（主力）和 Telegram（shim 级）。基于当前产品规划，接入更多消息渠道（候选：Slack / Discord / 以及 gateway 类的 WeChat 个人 bot）是高概率的下一阶段目标。即便具体 channel 组合有变，**任何新 IM 接入都会面临相同的 transport / 消息形态异质性压力**——本 RFC 要解的就是这个抽象层问题，而不是绑死任何特定未来 channel。
