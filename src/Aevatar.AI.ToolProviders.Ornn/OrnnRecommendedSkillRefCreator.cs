@@ -12,6 +12,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
     private readonly INyxIdClientCredentialsTokenSource _tokenSource;
     private readonly OrnnSkillPublishingService _publishingService;
     private readonly NyxIdRecommendedSkillRefPersistenceService _persistenceService;
+    private readonly NyxIdRecommendedSkillGenerator _skillGenerator;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, IReadOnlyList<NyxIdRecommendedSkillRef>> _createdRefs = new(StringComparer.Ordinal);
@@ -21,12 +22,14 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         INyxIdClientCredentialsTokenSource tokenSource,
         OrnnSkillPublishingService publishingService,
         NyxIdRecommendedSkillRefPersistenceService persistenceService,
+        NyxIdRecommendedSkillGenerator skillGenerator,
         ILogger<OrnnRecommendedSkillRefCreator>? logger = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _tokenSource = tokenSource ?? throw new ArgumentNullException(nameof(tokenSource));
         _publishingService = publishingService ?? throw new ArgumentNullException(nameof(publishingService));
         _persistenceService = persistenceService ?? throw new ArgumentNullException(nameof(persistenceService));
+        _skillGenerator = skillGenerator ?? throw new ArgumentNullException(nameof(skillGenerator));
         _logger = logger ?? NullLogger<OrnnRecommendedSkillRefCreator>.Instance;
     }
 
@@ -39,18 +42,29 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         if (template is null)
             return [];
 
-        var cacheKey = BuildCacheKey(instance, template);
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_createdRefs.TryGetValue(cacheKey, out var cachedRefs))
-                return cachedRefs;
-
             var token = await _tokenSource.GetAccessTokenAsync(ct).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(token))
                 return [];
 
-            var request = BuildPublishRequest(template);
+            var generatedSkill = await _skillGenerator
+                .GenerateAsync(token, instance, template, ct)
+                .ConfigureAwait(false);
+            if (generatedSkill is null)
+            {
+                _logger.LogWarning(
+                    "NyxID recommended skill generation found no operation contracts for catalog slug {CatalogServiceSlug}",
+                    instance.CatalogServiceSlug);
+                return [];
+            }
+
+            var cacheKey = BuildCacheKey(instance, generatedSkill);
+            if (_createdRefs.TryGetValue(cacheKey, out var cachedRefs))
+                return cachedRefs;
+
+            var request = BuildPublishRequest(generatedSkill);
             var result = await _publishingService.PublishAsync(token, request, ct).ConfigureAwait(false);
             if (!result.IsSuccess ||
                 string.IsNullOrWhiteSpace(result.Guid) ||
@@ -72,9 +86,9 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                     SkillId = result.Guid.Trim(),
                     LiteralVersion = result.Version.Trim(),
                     ManifestDigest = result.SkillHash.Trim(),
-                    DisplayName = FirstNonEmpty(template.DisplayName, request.Name),
-                    RecommendationName = FirstNonEmpty(template.RecommendationName, request.Name),
-                    Revision = template.Revision.Trim(),
+                    DisplayName = generatedSkill.DisplayName,
+                    RecommendationName = generatedSkill.RecommendationName,
+                    Revision = generatedSkill.Revision,
                 },
             };
             var persistedRefs = await _persistenceService.PersistRecommendedSkillRefsAsync(
@@ -110,28 +124,30 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         (!string.IsNullOrWhiteSpace(template.ServiceSlug) &&
          string.Equals(template.ServiceSlug.Trim(), instance.DisplaySlug, StringComparison.Ordinal));
 
-    private static OrnnSkillPublishRequest BuildPublishRequest(NyxIdRecommendedSkillCreationTemplate template) =>
+    private static OrnnSkillPublishRequest BuildPublishRequest(NyxIdGeneratedRecommendedSkill skill) =>
         new()
         {
-            Name = template.SkillName.Trim(),
-            Description = template.Description.Trim(),
-            Version = FirstNonEmpty(template.Version, "1.0"),
-            Category = FirstNonEmpty(template.Category, "tool-based"),
-            InstructionsMarkdown = template.InstructionsMarkdown.Trim(),
+            Name = skill.Name,
+            Description = skill.Description,
+            Version = skill.Version,
+            Category = skill.Category,
+            InstructionsMarkdown = skill.InstructionsMarkdown,
             Visibility = "private",
-            Tags = template.Tags.Select(static tag => tag.Trim()).Where(static tag => tag.Length > 0).ToArray(),
-            ToolList = template.ToolList.Select(static tool => tool.Trim()).Where(static tool => tool.Length > 0).ToArray(),
+            Tags = skill.Tags,
+            ToolList = skill.ToolList,
         };
 
     private static string BuildCacheKey(
         NyxIdServiceInstance instance,
-        NyxIdRecommendedSkillCreationTemplate template) =>
+        NyxIdGeneratedRecommendedSkill skill) =>
         string.Join(
             '|',
+            instance.UserServiceId,
             instance.CatalogServiceSlug,
             instance.DisplaySlug,
-            template.SkillName.Trim(),
-            template.Version.Trim());
+            skill.Name,
+            skill.Version,
+            skill.Revision);
 
     private static string FirstNonEmpty(params string?[] values) =>
         values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;

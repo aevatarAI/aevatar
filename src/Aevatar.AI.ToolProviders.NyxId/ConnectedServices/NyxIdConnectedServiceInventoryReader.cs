@@ -18,6 +18,23 @@ public sealed class NyxIdConnectedServiceInventoryReader
         var bindings = await _client
             .DiscoverAsync(userToken, organizationToken, ct)
             .ConfigureAwait(false);
+        return ToInventoryResult(bindings);
+    }
+
+    public async Task<NyxIdServiceInventoryResult> ReadAgentKeyAsync(
+        string agentKey,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentKey);
+        var bindings = await _client
+            .DiscoverAgentKeyAsync(agentKey, ct)
+            .ConfigureAwait(false);
+        return ToInventoryResult(bindings);
+    }
+
+    private static NyxIdServiceInventoryResult ToInventoryResult(
+        IReadOnlyList<NyxIdServiceInstanceBinding> bindings)
+    {
         var result = new NyxIdServiceInventoryResult();
         result.Instances.Add(bindings
             .Where(static binding => binding.Instance.IsActive && binding.Instance.CredentialAllowed)

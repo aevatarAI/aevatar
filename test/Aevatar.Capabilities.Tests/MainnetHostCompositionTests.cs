@@ -1238,7 +1238,7 @@ public sealed class MainnetHostCompositionTests
             .Subject;
         nyxIdChatToolSources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
-            typeof(NyxIdConnectedServiceToolSource),
+            typeof(NyxIdConnectedServiceInventoryToolSource),
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
@@ -1250,7 +1250,8 @@ public sealed class MainnetHostCompositionTests
             typeof(ReadWorkflowRunArtifactToolSource),
             typeof(AgentBuilderToolSource));
         nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
-        nyxIdChatToolSources.Should().NotContain(source =>
+        nyxIdChatToolSources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource);
+        nyxIdChatToolSources.Should().ContainSingle(source =>
             source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatToolSources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source => source is WebAgentToolSource);
@@ -1405,7 +1406,7 @@ public sealed class MainnetHostCompositionTests
         nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
         nyxIdChatProfile.Sources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
-            typeof(NyxIdConnectedServiceToolSource),
+            typeof(NyxIdConnectedServiceInventoryToolSource),
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
@@ -1418,9 +1419,9 @@ public sealed class MainnetHostCompositionTests
             typeof(AgentBuilderToolSource),
             typeof(WorkflowExternalCapabilityAuthoringToolSource));
         nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
-        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
-            source is NyxIdConnectedServiceToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source =>
+            source is NyxIdConnectedServiceToolSource);
+        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
             source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source =>
