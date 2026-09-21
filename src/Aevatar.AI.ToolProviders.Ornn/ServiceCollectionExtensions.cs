@@ -35,11 +35,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<OrnnSkillPublishingService>();
         services.Replace(ServiceDescriptor.Singleton<INyxIdRecommendedSkillRefCreator>(sp =>
             sp.GetService<NyxIdToolOptions>() is { } nyxIdOptions &&
-            sp.GetService<INyxIdClientCredentialsTokenSource>() is { } tokenSource
+            sp.GetService<INyxIdClientCredentialsTokenSource>() is { } tokenSource &&
+            sp.GetService<NyxIdRecommendedSkillRefPersistenceService>() is { } persistenceService
                 ? new OrnnRecommendedSkillRefCreator(
                     nyxIdOptions,
                     tokenSource,
                     sp.GetRequiredService<OrnnSkillPublishingService>(),
+                    persistenceService,
                     sp.GetService<ILogger<OrnnRecommendedSkillRefCreator>>())
                 : EmptyNyxIdRecommendedSkillRefCreator.Instance));
         services.Replace(ServiceDescriptor.Singleton<IExactOrnnSkillResolver, OrnnExactAgentProfileSkillResolver>());

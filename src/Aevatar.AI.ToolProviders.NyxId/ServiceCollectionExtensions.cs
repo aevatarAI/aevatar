@@ -233,6 +233,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<NyxIdClientCredentialsTokenSource>();
         services.TryAddSingleton<INyxIdClientCredentialsTokenSource>(provider =>
             provider.GetRequiredService<NyxIdClientCredentialsTokenSource>());
+        services.TryAddSingleton<NyxIdRecommendedSkillRefPersistenceService>();
         services.TryAddSingleton<INyxIdRecommendedSkillRefCreator>(
             EmptyNyxIdRecommendedSkillRefCreator.Instance);
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();

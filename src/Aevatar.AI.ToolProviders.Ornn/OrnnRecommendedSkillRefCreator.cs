@@ -11,6 +11,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
     private readonly NyxIdToolOptions _options;
     private readonly INyxIdClientCredentialsTokenSource _tokenSource;
     private readonly OrnnSkillPublishingService _publishingService;
+    private readonly NyxIdRecommendedSkillRefPersistenceService _persistenceService;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, IReadOnlyList<NyxIdRecommendedSkillRef>> _createdRefs = new(StringComparer.Ordinal);
@@ -19,11 +20,13 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         NyxIdToolOptions options,
         INyxIdClientCredentialsTokenSource tokenSource,
         OrnnSkillPublishingService publishingService,
+        NyxIdRecommendedSkillRefPersistenceService persistenceService,
         ILogger<OrnnRecommendedSkillRefCreator>? logger = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _tokenSource = tokenSource ?? throw new ArgumentNullException(nameof(tokenSource));
         _publishingService = publishingService ?? throw new ArgumentNullException(nameof(publishingService));
+        _persistenceService = persistenceService ?? throw new ArgumentNullException(nameof(persistenceService));
         _logger = logger ?? NullLogger<OrnnRecommendedSkillRefCreator>.Instance;
     }
 
@@ -74,8 +77,21 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                     Revision = template.Revision.Trim(),
                 },
             };
-            _createdRefs[cacheKey] = refs;
-            return refs;
+            var persistedRefs = await _persistenceService.PersistRecommendedSkillRefsAsync(
+                token,
+                instance,
+                refs,
+                ct).ConfigureAwait(false);
+            if (persistedRefs.Count == 0)
+            {
+                _logger.LogWarning(
+                    "NyxID recommended skill ref persistence failed for user service {UserServiceId}",
+                    instance.UserServiceId);
+                return [];
+            }
+
+            _createdRefs[cacheKey] = persistedRefs;
+            return persistedRefs;
         }
         finally
         {
