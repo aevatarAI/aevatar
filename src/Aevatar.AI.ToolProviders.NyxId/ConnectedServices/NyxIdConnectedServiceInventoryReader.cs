@@ -35,10 +35,35 @@ public sealed class NyxIdConnectedServiceInventoryReader
     private static NyxIdServiceInventoryResult ToInventoryResult(
         IReadOnlyList<NyxIdServiceInstanceBinding> bindings)
     {
-        var result = new NyxIdServiceInventoryResult();
-        result.Instances.Add(bindings
+        var instances = bindings
             .Where(static binding => binding.Instance.IsActive && binding.Instance.CredentialAllowed)
-            .Select(static binding => binding.Instance.Clone()));
+            .Select(static binding => binding.Instance.Clone())
+            .ToArray();
+
+        var result = new NyxIdServiceInventoryResult();
+        result.Instances.Add(instances);
+        result.RecommendedSkillCatalog.Add(instances.SelectMany(BuildRecommendedSkillCatalogEntries));
         return result;
     }
+
+    private static IEnumerable<NyxIdRecommendedSkillCatalogEntry> BuildRecommendedSkillCatalogEntries(
+        NyxIdServiceInstance instance)
+    {
+        foreach (var skillRef in instance.RecommendedSkillRefs)
+        {
+            var title = FirstNonEmpty(skillRef.DisplayName, skillRef.RecommendationName, skillRef.SkillId);
+            yield return new NyxIdRecommendedSkillCatalogEntry
+            {
+                UserServiceId = instance.UserServiceId,
+                ServiceSlug = instance.DisplaySlug,
+                ServiceLabel = FirstNonEmpty(instance.Label, instance.DisplaySlug, instance.CatalogServiceSlug),
+                SkillRef = skillRef.Clone(),
+                Title = title,
+                TaskSummary = $"Load this recommended skill for {FirstNonEmpty(instance.Label, instance.DisplaySlug, instance.CatalogServiceSlug)} connected-service tasks related to {title}.",
+            };
+        }
+    }
+
+    private static string FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
 }

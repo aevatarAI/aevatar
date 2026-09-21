@@ -101,8 +101,18 @@ message NyxIdServiceRouteRequest {
   }
 }
 
+message NyxIdRecommendedSkillCatalogEntry {
+  string user_service_id = 1;
+  string service_slug = 2;
+  string service_label = 3;
+  NyxIdRecommendedSkillRef skill_ref = 4;
+  string title = 5;
+  string task_summary = 6;
+}
+
 message NyxIdServiceInventoryResult {
   repeated NyxIdServiceInstance instances = 1;
+  repeated NyxIdRecommendedSkillCatalogEntry recommended_skill_catalog = 2;
 }
 
 message NyxIdServiceMutationResult {
