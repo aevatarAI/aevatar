@@ -91,21 +91,23 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                     Revision = generatedSkill.Revision,
                 },
             };
-            var persistedRefs = await _persistenceService.PersistRecommendedSkillRefsAsync(
+            var persistenceResult = await _persistenceService.PersistRecommendedSkillRefsAsync(
                 token,
                 instance,
                 refs,
                 ct).ConfigureAwait(false);
-            if (persistedRefs.Count == 0)
+            if (!persistenceResult.IsSuccess)
             {
                 _logger.LogWarning(
-                    "NyxID recommended skill ref persistence failed for user service {UserServiceId}",
-                    instance.UserServiceId);
+                    "NyxID recommended skill ref persistence failed for user service {UserServiceId} with status {Status} and code {FailureCode}",
+                    instance.UserServiceId,
+                    persistenceResult.Status,
+                    persistenceResult.FailureCode);
                 return [];
             }
 
-            _createdRefs[cacheKey] = persistedRefs;
-            return persistedRefs;
+            _createdRefs[cacheKey] = persistenceResult.Refs;
+            return persistenceResult.Refs;
         }
         finally
         {

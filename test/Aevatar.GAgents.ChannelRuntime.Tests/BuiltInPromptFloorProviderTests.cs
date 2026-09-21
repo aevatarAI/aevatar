@@ -71,10 +71,10 @@ public sealed class BuiltInPromptFloorProviderTests
         floor.Should().Contain("When `nyxid_service_inventory` is present");
         floor.Should().Contain("When `nyxid_service_inventory` is absent");
         floor.Should().Contain("such as `nyxid_services`");
-        floor.Should().Contain("route the read through the catalog/service-inspection path");
-        floor.Should().Contain("establishes current sender-specific service facts");
+        floor.Should().Contain("route through the catalog/service-inspection path before operation execution");
+        floor.Should().Contain("establishes current caller-specific service facts");
         floor.Should().Contain("execution tools only run supplied work and cannot establish that inventory");
-        floor.Should().Contain("typed inventory result as the authority for the current sender");
+        floor.Should().Contain("typed inventory result as the authority for the current caller");
         floor.Should().NotContain("Do not call `code_execute`");
         floor.Should().NotContain("typed-tool exception");
         floor.Should().NotContain("call `nyxid_service_inventory` directly");

@@ -2,6 +2,36 @@ using System.Text.Json;
 
 namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
+public enum NyxIdRecommendedSkillRefPersistenceStatus
+{
+    Succeeded,
+    EmptyInput,
+    ReadDenied,
+    ReadUnavailable,
+    WriteDenied,
+    WriteUnavailable,
+}
+
+public sealed record NyxIdRecommendedSkillRefPersistenceResult(
+    NyxIdRecommendedSkillRefPersistenceStatus Status,
+    IReadOnlyList<NyxIdRecommendedSkillRef> Refs,
+    string FailureCode)
+{
+    public bool IsSuccess => Status is NyxIdRecommendedSkillRefPersistenceStatus.Succeeded;
+
+    public static NyxIdRecommendedSkillRefPersistenceResult Succeeded(
+        IReadOnlyList<NyxIdRecommendedSkillRef> refs) =>
+        new(NyxIdRecommendedSkillRefPersistenceStatus.Succeeded, refs, string.Empty);
+
+    public static NyxIdRecommendedSkillRefPersistenceResult EmptyInput() =>
+        new(NyxIdRecommendedSkillRefPersistenceStatus.EmptyInput, [], string.Empty);
+
+    public static NyxIdRecommendedSkillRefPersistenceResult Failed(
+        NyxIdRecommendedSkillRefPersistenceStatus status,
+        string failureCode) =>
+        new(status, [], failureCode);
+}
+
 public sealed class NyxIdRecommendedSkillRefPersistenceService
 {
     private readonly NyxIdApiClient _client;
@@ -11,21 +41,25 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
         _client = client ?? throw new ArgumentNullException(nameof(client));
     }
 
-    public async Task<IReadOnlyList<NyxIdRecommendedSkillRef>> PersistRecommendedSkillRefsAsync(
+    public async Task<NyxIdRecommendedSkillRefPersistenceResult> PersistRecommendedSkillRefsAsync(
         string serverToken,
         NyxIdServiceInstance instance,
         IReadOnlyList<NyxIdRecommendedSkillRef> refs,
         CancellationToken ct)
     {
         if (refs.Count == 0)
-            return [];
+            return NyxIdRecommendedSkillRefPersistenceResult.EmptyInput();
 
         var currentResponse = await _client.GetServiceAsync(
             serverToken,
             instance.UserServiceId,
             ct).ConfigureAwait(false);
-        if (IsErrorResponse(currentResponse))
-            return [];
+        var readFailure = ClassifyFailure(
+            currentResponse,
+            NyxIdRecommendedSkillRefPersistenceStatus.ReadDenied,
+            NyxIdRecommendedSkillRefPersistenceStatus.ReadUnavailable);
+        if (readFailure is not null)
+            return readFailure;
 
         var currentRefs = ParseRecommendedSkillRefs(currentResponse);
         var mergedRefs = MergeRefs(currentRefs, refs);
@@ -39,7 +73,14 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
             instance.UserServiceId,
             body,
             ct).ConfigureAwait(false);
-        return IsErrorResponse(updateResponse) ? [] : mergedRefs;
+        var writeFailure = ClassifyFailure(
+            updateResponse,
+            NyxIdRecommendedSkillRefPersistenceStatus.WriteDenied,
+            NyxIdRecommendedSkillRefPersistenceStatus.WriteUnavailable);
+        if (writeFailure is not null)
+            return writeFailure;
+
+        return NyxIdRecommendedSkillRefPersistenceResult.Succeeded(mergedRefs);
     }
 
     private static IReadOnlyList<NyxIdRecommendedSkillRef> ParseRecommendedSkillRefs(string json)
@@ -138,19 +179,94 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
         revision = skillRef.Revision,
     };
 
-    private static bool IsErrorResponse(string response)
+    private static NyxIdRecommendedSkillRefPersistenceResult? ClassifyFailure(
+        string response,
+        NyxIdRecommendedSkillRefPersistenceStatus deniedStatus,
+        NyxIdRecommendedSkillRefPersistenceStatus unavailableStatus)
     {
         try
         {
             using var document = JsonDocument.Parse(response);
-            return document.RootElement.ValueKind == JsonValueKind.Object &&
-                   document.RootElement.TryGetProperty("error", out var error) &&
-                   error.ValueKind is not (JsonValueKind.False or JsonValueKind.Null);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var failureCode = ReadFailureCode(document.RootElement);
+            if (failureCode is null)
+                return null;
+
+            var status = IsAccessDenied(document.RootElement, failureCode)
+                ? deniedStatus
+                : unavailableStatus;
+            return NyxIdRecommendedSkillRefPersistenceResult.Failed(status, failureCode);
         }
         catch (JsonException)
         {
-            return false;
+            return null;
         }
+    }
+
+    private static string? ReadFailureCode(JsonElement root)
+    {
+        if (TryReadStatus(root, out var status) && status >= 400)
+            return ReadString(root, "code") ?? ReadString(root, "error") ?? $"http_{status}";
+
+        if (root.TryGetProperty("body", out var body) &&
+            body.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(body.GetString()))
+        {
+            try
+            {
+                using var bodyDocument = JsonDocument.Parse(body.GetString()!);
+                if (bodyDocument.RootElement.ValueKind == JsonValueKind.Object)
+                    return ReadFailureCode(bodyDocument.RootElement);
+            }
+            catch (JsonException)
+            {
+                return ReadString(root, "error") ?? "upstream_error";
+            }
+        }
+
+        var code = ReadString(root, "code") ?? ReadString(root, "error");
+        if (!string.IsNullOrWhiteSpace(code))
+            return code;
+
+        return root.TryGetProperty("error", out var error) &&
+               error.ValueKind is not (JsonValueKind.False or JsonValueKind.Null)
+            ? "upstream_error"
+            : null;
+    }
+
+    private static bool IsAccessDenied(JsonElement root, string failureCode)
+    {
+        if (TryReadStatus(root, out var status) && status is 401 or 403)
+            return true;
+
+        if (root.TryGetProperty("body", out var body) &&
+            body.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(body.GetString()))
+        {
+            try
+            {
+                using var bodyDocument = JsonDocument.Parse(body.GetString()!);
+                return bodyDocument.RootElement.ValueKind == JsonValueKind.Object &&
+                       IsAccessDenied(bodyDocument.RootElement, failureCode);
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        return failureCode.Contains("denied", StringComparison.OrdinalIgnoreCase) ||
+               failureCode.Contains("forbidden", StringComparison.OrdinalIgnoreCase) ||
+               failureCode.Contains("unauthorized", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryReadStatus(JsonElement root, out int status)
+    {
+        status = 0;
+        return root.TryGetProperty("status", out var statusElement) &&
+               statusElement.TryGetInt32(out status);
     }
 
     private static string SourceToJson(NyxIdRecommendedSkillSource source) => source switch
