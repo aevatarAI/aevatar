@@ -53,6 +53,24 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
     }
 
     [Fact]
+    public async Task CreateRecommendedSkillRefsAsync_WhenNyxIdReadFails_ReturnsEmptyRefListWithoutUpdating()
+    {
+        var handler = new CapturingHandler { FailRead = true };
+        var creator = CreateCreator(handler);
+
+        var refs = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var refsAgain = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+
+        refs.Should().BeEmpty();
+        refsAgain.Should().BeEmpty();
+        handler.Requests.Should().HaveCount(8);
+        handler.Requests.Where(request => request.Method == HttpMethod.Get && request.Path == "/api/v1/keys/us-personal")
+            .Should().HaveCount(2);
+        handler.Requests.Where(request => request.Method == HttpMethod.Put)
+            .Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CreateRecommendedSkillRefsAsync_WhenNyxIdUpdateFails_ReturnsEmptyRefList()
     {
         var handler = new CapturingHandler { FailUpdate = true };
@@ -183,6 +201,8 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
             }
             """;
 
+        public bool FailRead { get; init; }
+
         public bool FailUpdate { get; init; }
 
         public List<CapturedRequest> Requests { get; } = [];
@@ -205,6 +225,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
                 ("GET", "/api/v1/catalog-specs/api-github/openapi.json") => new CapturingResponse(OpenApiSpec),
                 ("POST", "/api/v1/proxy/s/ornn/api/v1/skill-format/validate") => new CapturingResponse("""{"data":{"valid":true,"violations":[]}}"""),
                 ("POST", "/api/v1/proxy/s/ornn/api/v1/skills") => new CapturingResponse("""{"data":{"guid":"33333333-3333-3333-3333-333333333333","version":"3.0","skillHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"""),
+                ("GET", "/api/v1/keys/us-personal") when FailRead => new CapturingResponse("""{"code":"permission_denied"}""", HttpStatusCode.Forbidden),
                 ("GET", "/api/v1/keys/us-personal") => new CapturingResponse("""
                     {"key":{"id":"us-personal","slug":"github","catalog_service_id":"catalog-github",
                     "catalog_service_slug":"api-github","is_active":true,"connected":true,"status":"active",
