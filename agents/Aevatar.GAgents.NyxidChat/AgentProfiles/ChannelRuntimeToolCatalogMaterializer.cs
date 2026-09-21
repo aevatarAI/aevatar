@@ -130,7 +130,7 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             selectedTools,
             hasUnresolvedConnectedServiceSelectors: false,
             requiredToolInvocation: null,
-            AgentTurnToolCatalogBudget.Ordinary);
+            AgentTurnToolCatalogBudget.ChannelReply);
     }
 
     private static ProfileRoutingPromptLayer? BuildPromptLayer(ChannelRuntimeConfigProof runtimeConfig)

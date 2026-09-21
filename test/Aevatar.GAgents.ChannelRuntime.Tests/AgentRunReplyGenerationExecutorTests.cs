@@ -548,6 +548,59 @@ public sealed class AgentRunReplyGenerationExecutorTests
         persistedToolContext.DurableNyxIdCredential.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData(81_824)]
+    [InlineData(102_400)]
+    public async Task ChannelRuntimeCatalog_WhenCombinedSchemaFits100KiB_ShouldExposeAllConnectedOperations(
+        int schemaBytes)
+    {
+        var catalog = await MaterializeConnectedCatalogWithSchemaBytesAsync(schemaBytes);
+
+        catalog.ExactTools.Should().HaveCount(300);
+        catalog.FinalAllowedToolNames.Should().HaveCount(300);
+        catalog.Proof.SchemaBytes.Should().Be(schemaBytes);
+        catalog.Proof.Budget.MaximumSchemaBytes.Should().Be(102_400);
+        AgentTurnToolCatalogProofPayloadMapper.FromPayload(catalog.Proof.ToPayload())
+            .ToPayload().Should().Be(catalog.Proof.ToPayload());
+    }
+
+    [Fact]
+    public async Task ChannelRuntimeCatalog_WhenCombinedSchemaExceeds100KiB_ShouldRejectCatalog()
+    {
+        var act = () => MaterializeConnectedCatalogWithSchemaBytesAsync(102_401);
+
+        var exception = await act.Should().ThrowAsync<AgentTurnToolCatalogException>();
+        exception.Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.CatalogOverBudget);
+        exception.Which.Failure.Detail.Should().Contain("schema_bytes=102401/102400");
+    }
+
+    private static Task<AgentTurnToolCatalog> MaterializeConnectedCatalogWithSchemaBytesAsync(int schemaBytes)
+    {
+        const int toolCount = 300;
+        const string prefix = "{\"description\":\"";
+        const string suffix = "\",\"type\":\"object\"}";
+        var schemaOverhead = Encoding.UTF8.GetByteCount(prefix + suffix);
+        var tools = Enumerable.Range(0, toolCount)
+            .Select(index => new ConnectedOperationTool($"operation_{index}", "api-calendar", $"endpoint_{index}")
+            {
+                ParametersSchema = prefix + new string('x',
+                    schemaBytes / toolCount + (index < schemaBytes % toolCount ? 1 : 0) - schemaOverhead) + suffix,
+            })
+            .ToArray();
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.default", new StaticToolSource(tools));
+
+        return new ChannelRuntimeToolCatalogMaterializer(registry).MaterializeAsync(
+            new ChannelRuntimeConfigProof
+            {
+                ToolSetRefs = { "channel.reply.default" },
+                NyxidServiceSelectors = { new ChannelBotRuntimeNyxIdServiceSelector { ServiceSlug = "api-calendar" } },
+            },
+            [],
+            AgentToolExecutionContext.Empty,
+            CancellationToken.None);
+    }
+
     [Fact]
     public async Task ChannelRuntimeCatalog_WhenToolVisibilityRestrictsNames_ShouldExposeOnlyAllowedRouteTools()
     {
@@ -3423,7 +3476,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         public string Name { get; }
         public string Description => Name;
-        public string ParametersSchema => "{}";
+        public string ParametersSchema { get; init; } = "{}";
         public AgentToolOperationAdmission OperationAdmission { get; }
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>

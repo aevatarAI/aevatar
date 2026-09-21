@@ -14,7 +14,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
     public static readonly ChannelCapabilities DefaultCapabilities = new()
     {
         SupportsEphemeral = false,
-        SupportsEdit = true,
+        SupportsEdit = false,
         SupportsDelete = false,
         SupportsThread = false,
         Streaming = StreamingSupport.EditLoopRateLimited,
