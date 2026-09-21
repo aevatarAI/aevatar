@@ -93,7 +93,10 @@ describe('layout menu collapse behavior', () => {
 
   it.each([
     '/workflows',
-    '/scopes/scope-a/workflow-activity-vnext/workflows/wf-a',
+    '/scopes/scope-a/workflows/wf-a',
+    '/scopes/scope-a/activity/run-a',
+    '/scopes/scope-a/channels/bind/bot-a',
+    '/scopes/scope-a/settings',
   ])('renders workflow route %s without the global console chrome', (pathname) => {
     window.history.replaceState({}, '', pathname);
 

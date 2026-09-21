@@ -8,8 +8,7 @@ import CallbackPage from './index';
 const replaceLocation = jest.fn();
 const handleRedirectCallback = jest.fn();
 const loginWithRedirect = jest.fn();
-const reviewReturnTo =
-  '/scopes/scope-alpha/workflow-activity-vnext/settings?section=account';
+const reviewReturnTo = '/scopes/scope-alpha/settings?section=account';
 
 jest.mock('@/shared/auth/client', () => ({
   NyxIDAuthClient: jest.fn(),
@@ -197,7 +196,7 @@ describe('NyxID callback page', () => {
       Object.assign(new Error('required_service_access_missing'), {
         flow: 'signIn',
         reason: 'requiredServiceAccessMissing',
-        returnTo: '/scopes/scope-1/workflow-activity-vnext/workflows',
+        returnTo: '/scopes/scope-1/workflows',
       }),
     );
 
@@ -211,7 +210,7 @@ describe('NyxID callback page', () => {
     expect(loginWithRedirect).toHaveBeenCalledWith({
       flow: 'signIn',
       prompt: 'consent',
-      returnTo: '/scopes/scope-1/workflow-activity-vnext/workflows',
+      returnTo: '/scopes/scope-1/workflows',
     });
   });
 

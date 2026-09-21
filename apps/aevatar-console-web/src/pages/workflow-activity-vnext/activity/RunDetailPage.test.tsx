@@ -123,8 +123,7 @@ jest.mock('@/shared/ui/ConsoleToast', () => ({
 jest.mock('../hooks/useConsoleLocation', () => ({
   useConsoleLocation: () => ({
     hash: '',
-    pathname:
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-source-alpha',
+    pathname: '/scopes/scope-alpha/activity/run-source-alpha',
     search: mockSearch,
   }),
 }));
@@ -789,7 +788,7 @@ describe('Workflow Activity vNext run detail console', () => {
     );
 
     expect(history.push).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-source-beta?definition=definition-alpha',
+      '/scopes/scope-alpha/activity/run-source-beta?definition=definition-alpha',
     );
   });
 
@@ -938,7 +937,7 @@ describe('Workflow Activity vNext run detail console', () => {
     );
 
     expect(history.push).toHaveBeenLastCalledWith(
-      '/scopes/scope-alpha/workflow-activity-vnext/activity/run-source-beta?workflowId=wf-alpha',
+      '/scopes/scope-alpha/activity/run-source-beta?workflowId=wf-alpha',
     );
   });
 });
