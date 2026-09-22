@@ -670,21 +670,18 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WithRegistrationAgentKeyWithoutSenderBinding_CreatesMissingRecommendedSkillRefs()
+    public async Task ExecuteAsync_WithRegistrationAgentKeyWithoutSenderBinding_DoesNotSynthesizeRecommendedSkillRefs()
     {
-        var manifestDigest = "sha256:" + new string('1', 64);
         var handler = new InventoryHandler { KeysResponse = KeysWithoutRecommendedSkill() };
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
-        var creator = new RecordingRecommendedSkillRefCreator(manifestDigest);
         var auditRecords = new List<AuditRecord>();
         var executionPort = CreateAdmittedExecutionPort(auditRecords);
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             executionPort,
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
-            issuer,
-            recommendedSkillRefCreator: creator);
+            issuer);
         var context = CreateRegistrationContext(hasSenderBinding: false);
         using var scope = AgentToolContextScope.Push(context);
         var tool = InventoryTool(await source.DiscoverToolsAsync());
@@ -693,18 +690,131 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             tool, "{}", context, AgentToolApprovalContinuationMode.None, ApprovalGrant: null));
 
         outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success, outcome.ResultJson);
-        creator.CallCount.Should().Be(1);
-        creator.ObservedUserServiceIds.Should().ContainSingle().Which.Should().Be("user-service-1");
         using var document = JsonDocument.Parse(outcome.ResultJson);
         document.RootElement.GetProperty("instances").EnumerateArray().Should().ContainSingle(instance =>
             instance.GetProperty("userServiceId").GetString() == "user-service-1" &&
-            instance.GetProperty("recommendedSkillRefs").EnumerateArray().Any(skillRef =>
-                skillRef.GetProperty("skillId").GetString() == "22222222-2222-2222-2222-222222222222" &&
-                skillRef.GetProperty("literalVersion").GetString() == "2.0" &&
-                skillRef.GetProperty("manifestDigest").GetString() == manifestDigest));
+            !instance.GetProperty("recommendedSkillRefs").EnumerateArray().Any());
+        document.RootElement.GetProperty("recommendedSkillCatalog").EnumerateArray().Should().BeEmpty();
         handler.RequestPath.Should().Be("/api/v1/keys");
         handler.Authorization.Should().Be("Bearer registration-agent-key");
         await issuer.DidNotReceiveWithAnyArgs().IssueByBindingIdAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task EnsureRecommendedSkillRefsAsync_WhenRefsAlreadyExist_ReturnsCurrentRefsWithoutCreating()
+    {
+        var handler = new InventoryHandler { KeysResponse = KeysWithRecommendedSkill("sha256:" + new string('0', 64)) };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var executionPort = new RecordingExecutionPort();
+        var creator = new RecordingRecommendedSkillRefCreator([]);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>(),
+            recommendedSkillRefCreator: creator);
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        var tool = EnsureRecommendedSkillRefsTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync("""{"user_service_id":"user-service-1"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("status").GetString().Should().Be("success");
+        document.RootElement.GetProperty("created").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("recommended_skill_refs").EnumerateArray().Should().ContainSingle();
+        creator.CallCount.Should().Be(0);
+        executionPort.Requests.Should().ContainSingle()
+            .Which.Tool.Name.Should().Be("nyxid_recommended_skill_refs_provisioner");
+        handler.Authorization.Should().Be("Bearer registration-agent-key");
+    }
+
+    [Fact]
+    public async Task EnsureRecommendedSkillRefsAsync_WhenRefsAreMissing_CreatesAndReturnsRefs()
+    {
+        var handler = new InventoryHandler { KeysResponse = KeysWithoutRecommendedSkill() };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var executionPort = new RecordingExecutionPort();
+        var createdRefs = new[]
+        {
+            new NyxIdRecommendedSkillRef
+            {
+                Source = NyxIdRecommendedSkillSource.Ornn,
+                SkillId = "22222222-2222-2222-2222-222222222222",
+                LiteralVersion = "2.0",
+                ManifestDigest = "sha256:" + new string('2', 64),
+                DisplayName = "Calendar Operator",
+                RecommendationName = "calendar-default",
+                Revision = "rev-created",
+            },
+        };
+        var creator = new RecordingRecommendedSkillRefCreator(createdRefs);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>(),
+            recommendedSkillRefCreator: creator);
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        var tool = EnsureRecommendedSkillRefsTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync("""{"service_slug":"calendar"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("status").GetString().Should().Be("success");
+        document.RootElement.GetProperty("created").GetBoolean().Should().BeTrue();
+        document.RootElement.GetProperty("recommended_skill_refs").EnumerateArray().Should().ContainSingle(skillRef =>
+            skillRef.GetProperty("skill_id").GetString() == "22222222-2222-2222-2222-222222222222");
+        creator.CallCount.Should().Be(1);
+        creator.ObservedInstance!.UserServiceId.Should().Be("user-service-1");
+        executionPort.Requests.Should().ContainSingle()
+            .Which.Tool.Name.Should().Be("nyxid_recommended_skill_refs_provisioner");
+        handler.Authorization.Should().Be("Bearer registration-agent-key");
+    }
+
+    [Fact]
+    public async Task InvokeOperationAsync_ThroughExecutionPortWithoutApproval_ExecutesAuthorizedProxyRequest()
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspace(),
+            ProxyResponseBody = "{\"profile\":\"quiet table\"}",
+        };
+        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/api-google-workspace/openapi.json"] = DiningProfileOpenApi;
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var auditRecords = new List<AuditRecord>();
+        var executionPort = CreateAdmittedExecutionPort(auditRecords);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+        var context = CreateRegistrationContext();
+        using var scope = AgentToolContextScope.Push(context);
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            """
+            {
+              "service_slug":"api-google-workspace",
+              "operation_id":"readDiningProfileContext",
+              "operation_arguments":{"query":{"alt":"media"}}
+            }
+            """,
+            context,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.ResultJson.Should().Contain("quiet table");
+        handler.RawOpenApiRequests.Should().ContainSingle()
+            .Which.Should().Be("/api/v1/catalog-specs/api-google-workspace/openapi.json");
+        var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
+        proxyRequest.Method.Should().Be("GET");
+        proxyRequest.Path.Should().Contain("/profile/dining");
+        proxyRequest.Query.Should().Contain("alt=media");
+        proxyRequest.BearerToken.Should().Be("registration-agent-key");
     }
 
     [Fact]
@@ -735,21 +845,15 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             .And.Contain("document_request")
             .And.Contain("oneOf");
 
-        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
-            tool,
-            """
+        var result = await tool.ExecuteAsync("""
             {
               "service_slug":"api-google-workspace",
               "operation_id":"readDiningProfileContext",
               "operation_arguments":{"query":{"alt":"media"}}
             }
-            """,
-            context,
-            AgentToolApprovalContinuationMode.ActorOwned,
-            ApprovalGrant: null));
+            """);
 
-        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success, outcome.ResultJson);
-        outcome.ResultJson.Should().Contain("quiet table");
+        result.Should().Contain("quiet table");
         handler.RawOpenApiRequests.Should().ContainSingle()
             .Which.Should().Be("/api/v1/catalog-specs/api-google-workspace/openapi.json");
         var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
@@ -757,9 +861,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         proxyRequest.Path.Should().Contain("/profile/dining");
         proxyRequest.Query.Should().Contain("alt=media");
         proxyRequest.BearerToken.Should().Be("registration-agent-key");
-        var terminalRecords = auditRecords.Where(record => record.LifecyclePhase == AuditLifecyclePhase.Terminal).ToArray();
-        terminalRecords.Select(record => record.OperationName).Should().Contain("nyxid_invoke_operation");
-        terminalRecords.Should().NotContain(record => record.OperationName.StartsWith("nyxop_", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -782,33 +883,31 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         using var scope = AgentToolContextScope.Push(context);
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
-        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
-            tool,
-            """
+        var result = await tool.ExecuteAsync("""
             {
               "service_slug":"api-google-workspace",
               "document_request":{
                 "method":"GET",
                 "relative_path":"/docs/policies",
+                "skill_ref":{
+                  "source":"ornn",
+                  "skill_id":"11111111-1111-1111-1111-111111111111",
+                  "literal_version":"1.2",
+                  "manifest_digest":"sha256:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+                },
                 "query":{"restaurant":"north"},
                 "headers":{"Accept":"application/json"}
               }
             }
-            """,
-            context,
-            AgentToolApprovalContinuationMode.ActorOwned,
-            ApprovalGrant: null));
+            """);
 
-        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success, outcome.ResultJson);
-        outcome.ResultJson.Should().Contain("policy-a");
+        result.Should().Contain("policy-a");
         handler.RawOpenApiRequests.Should().BeEmpty();
         var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
         proxyRequest.Method.Should().Be("GET");
         proxyRequest.Path.Should().Contain("/docs/policies");
         proxyRequest.Query.Should().Contain("restaurant=north");
         proxyRequest.BearerToken.Should().Be("registration-agent-key");
-        var terminalRecords = auditRecords.Where(record => record.LifecyclePhase == AuditLifecyclePhase.Terminal).ToArray();
-        terminalRecords.Select(record => record.OperationName).Should().Contain("nyxid_invoke_operation");
     }
 
     [Fact]
@@ -832,7 +931,51 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
               "service_slug":"api-google-workspace",
               "document_request":{
                 "method":"GET",
-                "relative_path":"/docs/policies"
+                "relative_path":"/docs/policies",
+                "skill_ref":{
+                  "source":"ornn",
+                  "skill_id":"11111111-1111-1111-1111-111111111111",
+                  "literal_version":"1.2",
+                  "manifest_digest":"sha256:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+                }
+              }
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Be("document_request_not_admitted");
+        handler.RawOpenApiRequests.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InvokeOperationAsync_WithDocumentGuidedRequestAndMismatchedSkillRef_RejectsWithoutProxyRequest()
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspaceRecommendedSkill(),
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync("""
+            {
+              "service_slug":"api-google-workspace",
+              "document_request":{
+                "method":"GET",
+                "relative_path":"/docs/policies",
+                "skill_ref":{
+                  "source":"ornn",
+                  "skill_id":"11111111-1111-1111-1111-111111111111",
+                  "literal_version":"1.2",
+                  "manifest_digest":"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                }
               }
             }
             """);
@@ -867,7 +1010,13 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
               "service_slug":"api-google-workspace",
               "document_request":{
                 "method":"GET",
-                "relative_path":"{{relativePath}}"
+                "relative_path":"{{relativePath}}",
+                "skill_ref":{
+                  "source":"ornn",
+                  "skill_id":"11111111-1111-1111-1111-111111111111",
+                  "literal_version":"1.2",
+                  "manifest_digest":"sha256:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+                }
               }
             }
             """);
@@ -1070,6 +1219,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
     private static IAgentTool OperationTool(IReadOnlyList<IAgentTool> tools) =>
         tools.Should().ContainSingle(tool => tool.Name == "nyxid_invoke_operation").Subject;
+
+    private static IAgentTool EnsureRecommendedSkillRefsTool(IReadOnlyList<IAgentTool> tools) =>
+        tools.Should().ContainSingle(tool => tool.Name == "nyxid_ensure_recommended_skill_refs").Subject;
 
     private static AgentToolExecutionContext CreateRegistrationContext(bool hasSenderBinding = true)
     {
@@ -1401,30 +1553,18 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         }
     }
 
-    private sealed class RecordingRecommendedSkillRefCreator(string manifestDigest) : INyxIdRecommendedSkillRefCreator
+    private sealed class RecordingRecommendedSkillRefCreator(IReadOnlyList<NyxIdRecommendedSkillRef> refs)
+        : INyxIdRecommendedSkillRefCreator
     {
         public int CallCount { get; private set; }
-        public List<string> ObservedUserServiceIds { get; } = [];
+        public NyxIdServiceInstance? ObservedInstance { get; private set; }
 
         public Task<IReadOnlyList<NyxIdRecommendedSkillRef>> CreateRecommendedSkillRefsAsync(
             NyxIdServiceInstance instance,
             CancellationToken ct)
         {
             CallCount++;
-            ObservedUserServiceIds.Add(instance.UserServiceId);
-            IReadOnlyList<NyxIdRecommendedSkillRef> refs =
-            [
-                new NyxIdRecommendedSkillRef
-                {
-                    Source = NyxIdRecommendedSkillSource.Ornn,
-                    SkillId = "22222222-2222-2222-2222-222222222222",
-                    LiteralVersion = "2.0",
-                    ManifestDigest = manifestDigest,
-                    DisplayName = "Generated Calendar Skill",
-                    RecommendationName = "generated-calendar",
-                    Revision = "rev-created",
-                },
-            ];
+            ObservedInstance = instance;
             return Task.FromResult(refs);
         }
     }

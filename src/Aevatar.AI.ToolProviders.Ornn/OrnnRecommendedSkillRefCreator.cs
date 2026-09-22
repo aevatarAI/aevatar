@@ -62,7 +62,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
 
             var cacheKey = BuildCacheKey(instance, generatedSkill);
             if (_createdRefs.TryGetValue(cacheKey, out var cachedRefs))
-                return cachedRefs;
+                return await PersistCreatedRefsAsync(token, instance, cachedRefs, ct).ConfigureAwait(false);
 
             var request = BuildPublishRequest(generatedSkill);
             var result = await _publishingService.PublishAsync(token, request, ct).ConfigureAwait(false);
@@ -91,28 +91,39 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                     Revision = generatedSkill.Revision,
                 },
             };
-            var persistenceResult = await _persistenceService.PersistRecommendedSkillRefsAsync(
-                token,
-                instance,
-                refs,
-                ct).ConfigureAwait(false);
-            if (!persistenceResult.IsSuccess)
-            {
-                _logger.LogWarning(
-                    "NyxID recommended skill ref persistence failed for user service {UserServiceId} with status {Status} and code {FailureCode}",
-                    instance.UserServiceId,
-                    persistenceResult.Status,
-                    persistenceResult.FailureCode);
+            var persistedRefs = await PersistCreatedRefsAsync(token, instance, refs, ct).ConfigureAwait(false);
+            if (persistedRefs.Count == 0)
                 return [];
-            }
 
-            _createdRefs[cacheKey] = persistenceResult.Refs;
-            return persistenceResult.Refs;
+            _createdRefs[cacheKey] = refs;
+            return persistedRefs;
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    private async Task<IReadOnlyList<NyxIdRecommendedSkillRef>> PersistCreatedRefsAsync(
+        string token,
+        NyxIdServiceInstance instance,
+        IReadOnlyList<NyxIdRecommendedSkillRef> refs,
+        CancellationToken ct)
+    {
+        var persistenceResult = await _persistenceService.PersistRecommendedSkillRefsAsync(
+            token,
+            instance,
+            refs,
+            ct).ConfigureAwait(false);
+        if (persistenceResult.IsSuccess)
+            return persistenceResult.Refs;
+
+        _logger.LogWarning(
+            "NyxID recommended skill ref persistence failed for user service {UserServiceId} with status {Status} and code {FailureCode}",
+            instance.UserServiceId,
+            persistenceResult.Status,
+            persistenceResult.FailureCode);
+        return [];
     }
 
     private NyxIdRecommendedSkillCreationTemplate? ResolveTemplate(NyxIdServiceInstance instance) =>

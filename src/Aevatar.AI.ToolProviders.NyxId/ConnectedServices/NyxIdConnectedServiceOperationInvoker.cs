@@ -21,7 +21,8 @@ public sealed record NyxIdConnectedServiceOperationInvocation(
 public sealed record NyxIdConnectedServiceDocumentRequest(
     string Method,
     string RelativePath,
-    string RequestArgumentsJson);
+    string RequestArgumentsJson,
+    NyxIdRecommendedSkillRef SkillRef);
 
 public sealed record NyxIdConnectedServiceOperationInvokeResult(
     bool IsSuccess,
@@ -250,7 +251,7 @@ public sealed class NyxIdConnectedServiceOperationInvoker
         string toolName,
         CancellationToken ct)
     {
-        if (binding.Instance.RecommendedSkillRefs.Count == 0)
+        if (!HasExactRecommendedSkillRef(binding.Instance, request.SkillRef))
             return NyxIdConnectedServiceOperationInvokeResult.Failure("document_request_not_admitted");
         if (!TryBuildDocumentGuidedAdmission(binding.Instance, request, out var admission, out var runtimeArgumentsJson))
             return NyxIdConnectedServiceOperationInvokeResult.Failure("document_request_invalid");
@@ -320,6 +321,15 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                 receipt);
         return NyxIdConnectedServiceOperationInvokeResult.Success(terminalOutcome);
     }
+
+    private static bool HasExactRecommendedSkillRef(
+        NyxIdServiceInstance instance,
+        NyxIdRecommendedSkillRef requestedRef) =>
+        instance.RecommendedSkillRefs.Any(skillRef =>
+            skillRef.Source == requestedRef.Source &&
+            string.Equals(skillRef.SkillId, requestedRef.SkillId, StringComparison.Ordinal) &&
+            string.Equals(skillRef.LiteralVersion, requestedRef.LiteralVersion, StringComparison.Ordinal) &&
+            string.Equals(skillRef.ManifestDigest, requestedRef.ManifestDigest, StringComparison.Ordinal));
 
     private static bool TryBuildDocumentGuidedAdmission(
         NyxIdServiceInstance instance,
@@ -796,9 +806,10 @@ public sealed class NyxIdConnectedServiceOperationInvoker
         CancellationToken ct)
     {
         var services = new List<NyxIdMcpService>();
+        var catalogServiceIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var binding in bindings)
         {
-            foreach (var catalogSpecSlug in EnumerateCatalogSpecSlugs(binding.Instance.DisplaySlug))
+            foreach (var catalogSpecSlug in EnumerateCatalogSpecSlugs(binding.Instance))
             {
                 try
                 {
@@ -809,7 +820,7 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                     var parsed = NyxIdMcpOperationCatalog.ParseCustomOpenApi(
                         response,
                         binding.Instance,
-                        $"agent-key:{binding.Instance.DisplaySlug}",
+                        $"agent-key-catalog:{catalogSpecSlug}",
                         DateTimeOffset.UtcNow,
                         CatalogFreshnessWindow);
                     foreach (var diagnostic in parsed.Discovery.Diagnostics)
@@ -822,6 +833,7 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                     if (parsed.Services.Count > 0)
                     {
                         services.AddRange(parsed.Services);
+                        catalogServiceIds.Add(binding.Instance.UserServiceId);
                         break;
                     }
                 }
@@ -839,6 +851,7 @@ public sealed class NyxIdConnectedServiceOperationInvoker
             }
         }
 
+        services.AddRange(await ReadCustomOpenApiServicesAsync(bindings, catalogServiceIds, ct).ConfigureAwait(false));
         return services;
     }
 
@@ -965,14 +978,30 @@ public sealed class NyxIdConnectedServiceOperationInvoker
             service.ServiceSlug,
             StringComparison.Ordinal);
 
-    private static IEnumerable<string> EnumerateCatalogSpecSlugs(string serviceSlug)
+    private static IEnumerable<string> EnumerateCatalogSpecSlugs(NyxIdServiceInstance instance)
     {
-        yield return serviceSlug;
-        const string apiPrefix = "api-";
-        if (serviceSlug.StartsWith(apiPrefix, StringComparison.OrdinalIgnoreCase) &&
-            serviceSlug.Length > apiPrefix.Length)
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var serviceSlug in new[] { instance.CatalogServiceSlug, instance.DisplaySlug })
         {
-            yield return serviceSlug[apiPrefix.Length..];
+            foreach (var candidate in EnumerateCatalogSpecSlugCandidates(serviceSlug))
+            {
+                if (seen.Add(candidate))
+                    yield return candidate;
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateCatalogSpecSlugCandidates(string serviceSlug)
+    {
+        if (string.IsNullOrWhiteSpace(serviceSlug))
+            yield break;
+        var normalized = serviceSlug.Trim();
+        yield return normalized;
+        const string apiPrefix = "api-";
+        if (normalized.StartsWith(apiPrefix, StringComparison.OrdinalIgnoreCase) &&
+            normalized.Length > apiPrefix.Length)
+        {
+            yield return normalized[apiPrefix.Length..];
         }
     }
 

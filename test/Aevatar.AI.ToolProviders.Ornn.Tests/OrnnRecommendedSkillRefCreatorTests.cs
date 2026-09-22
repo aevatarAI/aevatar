@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
@@ -21,7 +22,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var refs = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
         var refsAgain = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
 
-        refsAgain.Should().BeSameAs(refs);
+        refsAgain.Should().BeEquivalentTo(refs);
         var skillRef = refs.Should().ContainSingle().Subject;
         skillRef.Source.Should().Be(NyxIdRecommendedSkillSource.Ornn);
         skillRef.SkillId.Should().Be("33333333-3333-3333-3333-333333333333");
@@ -30,14 +31,21 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         skillRef.DisplayName.Should().Be("GitHub Operator");
         skillRef.RecommendationName.Should().Be("github-service-default");
 
-        handler.Requests.Should().HaveCount(6);
+        handler.Requests.Should().HaveCount(7);
         handler.Requests.Select(request => request.Path).Should().Equal(
             "/api/v1/catalog-specs/api-github/openapi.json",
             "/api/v1/proxy/s/ornn/api/v1/skill-format/validate",
             "/api/v1/proxy/s/ornn/api/v1/skills",
             "/api/v1/keys/us-personal",
             "/api/v1/keys/us-personal",
-            "/api/v1/catalog-specs/api-github/openapi.json");
+            "/api/v1/catalog-specs/api-github/openapi.json",
+            "/api/v1/keys/us-personal");
+        handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")
+            .Should().ContainSingle();
+        handler.Requests.Where(request => request.Method == HttpMethod.Get && request.Path == "/api/v1/keys/us-personal")
+            .Should().HaveCount(2);
+        handler.Requests.Where(request => request.Method == HttpMethod.Put && request.Path == "/api/v1/keys/us-personal")
+            .Should().ContainSingle();
         handler.Requests.Select(request => request.Authorization?.Parameter).Should().OnlyContain(token => token == "server-token");
         handler.Requests[2].ContentType.Should().Be("application/zip");
         var skillMarkdown = ReadZipEntry(handler.Requests[2].Body, "github-service-default/SKILL.md");
@@ -54,6 +62,28 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         handler.Requests[4].Method.Should().Be(HttpMethod.Put);
         handler.Requests[4].BodyText.Should().Contain("recommended_skill_refs");
         handler.Requests[4].BodyText.Should().Contain("33333333-3333-3333-3333-333333333333");
+    }
+
+    [Fact]
+    public async Task CreateRecommendedSkillRefsAsync_CacheHitWithNyxIdUpdateFailure_ReturnsEmptyWithoutRepublishing()
+    {
+        var handler = new CapturingHandler();
+        var creator = CreateCreator(handler);
+        var instance = ReadyInstance();
+        var refs = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        handler.ClearRecommendedSkillRefs();
+        handler.FailUpdate = true;
+
+        var refsAgain = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+
+        refs.Should().ContainSingle();
+        refsAgain.Should().BeEmpty();
+        handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")
+            .Should().ContainSingle();
+        handler.Requests.Where(request => request.Method == HttpMethod.Get && request.Path == "/api/v1/keys/us-personal")
+            .Should().HaveCount(2);
+        handler.Requests.Where(request => request.Method == HttpMethod.Put && request.Path == "/api/v1/keys/us-personal")
+            .Should().HaveCount(2);
     }
 
     [Fact]
@@ -205,11 +235,15 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
             }
             """;
 
-        public bool FailRead { get; init; }
+        public bool FailRead { get; set; }
 
-        public bool FailUpdate { get; init; }
+        public bool FailUpdate { get; set; }
+
+        private string _recommendedSkillRefsJson = "[]";
 
         public List<CapturedRequest> Requests { get; } = [];
+
+        public void ClearRecommendedSkillRefs() => _recommendedSkillRefsJson = "[]";
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -224,17 +258,28 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
                 body,
                 System.Text.Encoding.UTF8.GetString(body)));
 
+            if (request.Method == HttpMethod.Put &&
+                request.RequestUri.AbsolutePath == "/api/v1/keys/us-personal" &&
+                !FailUpdate)
+            {
+                using var updateDocument = JsonDocument.Parse(body);
+                _recommendedSkillRefsJson = updateDocument.RootElement
+                    .GetProperty("recommended_skill_refs")
+                    .GetRawText();
+            }
+
             var response = (request.Method.Method, request.RequestUri.AbsolutePath) switch
             {
                 ("GET", "/api/v1/catalog-specs/api-github/openapi.json") => new CapturingResponse(OpenApiSpec),
                 ("POST", "/api/v1/proxy/s/ornn/api/v1/skill-format/validate") => new CapturingResponse("""{"data":{"valid":true,"violations":[]}}"""),
                 ("POST", "/api/v1/proxy/s/ornn/api/v1/skills") => new CapturingResponse("""{"data":{"guid":"33333333-3333-3333-3333-333333333333","version":"3.0","skillHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"""),
                 ("GET", "/api/v1/keys/us-personal") when FailRead => new CapturingResponse("""{"code":"permission_denied"}""", HttpStatusCode.Forbidden),
-                ("GET", "/api/v1/keys/us-personal") => new CapturingResponse("""
+                ("GET", "/api/v1/keys/us-personal") => new CapturingResponse(
+                    """
                     {"key":{"id":"us-personal","slug":"github","catalog_service_id":"catalog-github",
                     "catalog_service_slug":"api-github","is_active":true,"connected":true,"status":"active",
-                    "credential_source":{"type":"personal"},"recommended_skill_refs":[]}}
-                    """),
+                    "credential_source":{"type":"personal"},"recommended_skill_refs":
+                    """ + _recommendedSkillRefsJson + "}}"),
                 ("PUT", "/api/v1/keys/us-personal") when FailUpdate => new CapturingResponse("""{"code":"permission_denied"}""", HttpStatusCode.Forbidden),
                 ("PUT", "/api/v1/keys/us-personal") => new CapturingResponse("""{"key":{"id":"us-personal"}}"""),
                 _ => throw new InvalidOperationException("unexpected_route"),
