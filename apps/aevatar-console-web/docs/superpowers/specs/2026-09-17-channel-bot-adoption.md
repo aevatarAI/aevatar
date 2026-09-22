@@ -41,6 +41,25 @@ Telegram token creation flow.
 
 ## API Contract
 
+### Default Skill In Bind Links
+
+`/scopes/:scopeId/channels/bind/:botId?skill=booking-capacity` opens the bind
+form with that Skill name selected. `skill` is the exact name accepted by
+`skill_name`, not an Ornn GUID. Link producers should encode the name with
+`URLSearchParams` so spaces, `+`, `&` and non-ASCII names survive the URL.
+The first `skill` parameter is URL-decoded once and trimmed; missing, blank
+or over-128-character values leave the optional selector empty.
+
+The URL supplies initial user input only. It does not assert that a skill is
+available or authorized, add a catalogue record, grant services or submit a
+binding. A name can be prefilled before the paginated skill catalogue loads.
+Users can replace or clear it; query refreshes and same-bot query changes do
+not overwrite their edits. Entering another bot's bind form starts fresh.
+Existing registration edit pages ignore this parameter and keep their saved
+skill. Login continues preserving the safe return URL and its query.
+
+### Endpoints
+
 [Backend issue #3652](https://github.com/aevatarAI/aevatar/issues/3652)
 defines the required deployment contract:
 

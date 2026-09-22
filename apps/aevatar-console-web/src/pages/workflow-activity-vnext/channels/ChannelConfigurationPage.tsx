@@ -44,8 +44,16 @@ import {
 import { channelsCss } from './styles';
 
 type Target =
-  | { readonly botId: string; readonly registrationId?: never }
-  | { readonly registrationId: string; readonly botId?: never };
+  | {
+      readonly botId: string;
+      readonly registrationId?: never;
+      readonly defaultSkillName?: string;
+    }
+  | {
+      readonly registrationId: string;
+      readonly botId?: never;
+      readonly defaultSkillName?: never;
+    };
 
 const requiredServiceSlugs = ['ornn-api', 'chrono-llm-public'] as const;
 
@@ -141,6 +149,7 @@ export default function ChannelConfigurationPage({
           scopeId={scopeId}
           initial={initial}
           editing={editing}
+          defaultSkillName={target.defaultSkillName}
           setNavigate={setNavigate}
         />
       ) : error && !query.isFetching ? (
@@ -167,17 +176,21 @@ function ConfigurationForm({
   scopeId,
   initial,
   editing,
+  defaultSkillName,
   setNavigate,
 }: {
   readonly scopeId: string;
   readonly initial: ChannelRegistration;
   readonly editing: boolean;
+  readonly defaultSkillName?: string;
   readonly setNavigate: React.Dispatch<
     React.SetStateAction<(target: string) => void>
   >;
 }) {
   const baseline = channelConfiguration(initial);
-  const [skillName, setSkillName] = React.useState(initial.skill?.name ?? '');
+  const [skillName, setSkillName] = React.useState(
+    () => (editing ? undefined : defaultSkillName) ?? initial.skill?.name ?? '',
+  );
   const [chosenServiceIds, setServiceIds] = React.useState<readonly string[]>(
     baseline?.serviceIds ?? [],
   );

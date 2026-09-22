@@ -119,6 +119,13 @@ describe('auth session storage', () => {
     expect(
       sanitizeReturnTo('/scopes/scope-b/workflows/wf-b?run=1#output'),
     ).toBe('/scopes/scope-b/workflows/wf-b?run=1#output');
+    expect(
+      sanitizeReturnTo(
+        '/scopes/scope-b/channels/bind/bot-b?skill=booking%2Bcapacity%26help',
+      ),
+    ).toBe(
+      '/scopes/scope-b/channels/bind/bot-b?skill=booking%2Bcapacity%26help',
+    );
     expect(sanitizeReturnTo('/runs?tab=active')).toBe(
       '/runtime/runs?tab=active',
     );
