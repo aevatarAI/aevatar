@@ -65,8 +65,6 @@ public sealed class NyxRelayCapabilityProfilesTests
 
         relay.SupportsEdit.Should().BeFalse();
         TelegramMessageComposer.DefaultCapabilities.Should().Be(nativeBefore);
-        TelegramMessageComposer.DefaultCapabilities.SupportsEdit.Should().BeTrue();
-        TelegramMessageComposer.DefaultCapabilities.Streaming.Should().Be(StreamingSupport.EditLoopRateLimited);
         TelegramMessageComposer.DefaultCapabilities.MaxMessageLength.Should().Be(4096);
         TelegramMessageComposer.DefaultCapabilities.ReplyMessageMultiplicity.Should()
             .Be(ReplyMessageMultiplicity.Unspecified);

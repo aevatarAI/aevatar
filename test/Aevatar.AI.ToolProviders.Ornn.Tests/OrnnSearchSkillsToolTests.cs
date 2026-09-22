@@ -209,6 +209,47 @@ public sealed class OrnnSearchSkillsToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ReturnsStableSkillIdForEachMatch()
+    {
+        const string skillId = "31b32927-165c-44cf-97c3-ab4ce0a9fb1b";
+        var handler = OrnnTestHttpMessageHandler.ReturningJson($$"""
+            {
+              "data": {
+                "total": 1,
+                "items": [
+                  {
+                    "guid": "{{skillId}}",
+                    "name": "smoke-test-hello-20260922-a",
+                    "description": "Smoke-test skill",
+                    "isPrivate": true
+                  }
+                ]
+              }
+            }
+            """);
+        var previous = AgentToolRequestContext.Current;
+        try
+        {
+            AgentToolRequestContext.Current = global::TestAgentToolContexts.FromMetadata(new Dictionary<string, string>
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "access-token",
+            });
+            var tool = CreateTool(handler);
+
+            var result = await tool.ExecuteAsync("""{ "query": "smoke-test-hello-20260922-a" }""");
+
+            using var document = JsonDocument.Parse(result);
+            var match = document.RootElement.GetProperty("matches").EnumerateArray().Should().ContainSingle().Subject;
+            match.GetProperty("skill_id").GetString().Should().Be(skillId);
+            match.GetProperty("skill_name").GetString().Should().Be("smoke-test-hello-20260922-a");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WithRemoteAccessResolver_UsesResolvedCallerAuthority()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "data": { "items": [] } }""");

@@ -17,7 +17,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         SupportsEdit = false,
         SupportsDelete = false,
         SupportsThread = false,
-        Streaming = StreamingSupport.EditLoopRateLimited,
+        Streaming = StreamingSupport.None,
         SupportsFiles = false,
         MaxMessageLength = TelegramTextLimit,
         SupportsActionButtons = true,
@@ -26,7 +26,7 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
         SupportsMention = false,
         SupportsTyping = false,
         SupportsReactions = false,
-        RecommendedStreamDebounceMs = 3000,
+        RecommendedStreamDebounceMs = 0,
         Transport = TransportMode.Webhook,
     };
 

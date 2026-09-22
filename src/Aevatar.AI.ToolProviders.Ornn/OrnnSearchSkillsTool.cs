@@ -41,7 +41,7 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         "unavailable service, unknown API contract, or repeated tool failure. " +
         "Prefer this over nyxid_proxy path-guessing; proxy discovery lists service APIs, " +
         "this discovers ready-made instruction packages. " +
-        "Returns matching skill names + descriptions (the header states how many matched versus shown); " +
+        "Returns matching stable skill IDs, names, and descriptions (the header states how many matched versus shown); " +
         "follow up with use_skill to load and activate one. " +
         "To browse available skills, call this with an empty or omitted query.";
 
@@ -208,6 +208,7 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
         lines.Add("Use use_skill with the skill name to load and activate a skill.");
         var matches = result.Items.Select(skill => new
         {
+            skill_id = skill.Guid ?? string.Empty,
             skill_name = skill.Name ?? string.Empty,
             description = skill.Description,
             is_private = skill.IsPrivate,

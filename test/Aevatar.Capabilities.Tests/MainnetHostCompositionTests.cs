@@ -1143,7 +1143,7 @@ public sealed class MainnetHostCompositionTests
             "web_fetch:274," +
             "web_search:231" +
             "|total:13:11744" +
-            "|digest:sha256:9109bc325b6c4eea8693c8a0f6bf023ec74a7bdef4e0c521fb2a930797b71fd7");
+            "|digest:sha256:60e9e319c6ff53722458d9bb5da3a9de37ed92f43b1b417308e0f89d4f138efc");
         app.Services.GetServices<IAgentToolSource>()
             .Select(static source => source.GetType())
             .Should()

@@ -30,6 +30,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.Platform.Lark;
 using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf;
@@ -2360,7 +2361,7 @@ public partial class NyxIdChatEndpointsCoverageTests
               "agent":{"api_key_id":"nyx-key-1"},
               "conversation":{"platform_id":"ou_user_1","type":"private"},
               "sender":{"platform_id":"ou_user_1"},
-              "content":{"text":"hello"}
+              "content":{"type":"text","text":"hello"}
             }
             """;
         var context = new DefaultHttpContext
@@ -3265,7 +3266,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             NullLogger<NyxIdRelayAuthValidator>.Instance);
 
         return new RelayInvocationDependencies(
-            new NyxIdRelayTransport(),
+            new NyxIdRelayTransport([new LarkRelayMessageAdapter()], [new LarkRelayMessageAdapter()], [new LarkRelayMessageAdapter()], [new LarkRelayMessageAdapter()]),
             validator,
             options,
             key,

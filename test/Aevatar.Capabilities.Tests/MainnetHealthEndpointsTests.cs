@@ -60,6 +60,13 @@ public sealed class MainnetHealthEndpointsTests
             options.EnableConnectorBootstrap = false;
             options.EnableCors = false;
         });
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Audit:ActorIdentityHasher:ActiveKeyId"] = "key-1",
+            ["Audit:ActorIdentityHasher:Keys:0:KeyId"] = "key-1",
+            ["Audit:ActorIdentityHasher:Keys:0:Key"] = string.Empty,
+            ["Audit:ActorIdentityHasher:Keys:0:KeyBase64"] = AuditIdentityTestKeyBase64,
+        });
         builder.AddMainnetDistributedOrleansHost();
         builder.AddAevatarPlatform(options =>
         {
