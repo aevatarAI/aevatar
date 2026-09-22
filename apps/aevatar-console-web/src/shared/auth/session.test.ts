@@ -119,6 +119,13 @@ describe('auth session storage', () => {
     expect(
       sanitizeReturnTo('/scopes/scope-b/workflows/wf-b?run=1#output'),
     ).toBe('/scopes/scope-b/workflows/wf-b?run=1#output');
+    expect(
+      sanitizeReturnTo(
+        '/scopes/scope-b/channels/bind/bot-b?skillId=76ca33e8-0807-43f7-919d-de67e7428217',
+      ),
+    ).toBe(
+      '/scopes/scope-b/channels/bind/bot-b?skillId=76ca33e8-0807-43f7-919d-de67e7428217',
+    );
     expect(sanitizeReturnTo('/runs?tab=active')).toBe(
       '/runtime/runs?tab=active',
     );

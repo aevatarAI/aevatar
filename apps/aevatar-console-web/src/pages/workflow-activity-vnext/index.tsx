@@ -60,11 +60,13 @@ const WorkflowActivityVNextPage: React.FC = () => {
 
   const channelBindMatch = /\/channels\/bind\/([^/]+)$/.exec(pathname);
   if (channelBindMatch) {
+    const skillId = new URLSearchParams(location.search).get('skillId')?.trim();
     return (
       <ChannelConfigurationPage
         key={`${scopeId}:bind:${channelBindMatch[1]}`}
         scopeId={scopeId}
         botId={decodeURIComponent(channelBindMatch[1])}
+        defaultSkillId={skillId || undefined}
       />
     );
   }

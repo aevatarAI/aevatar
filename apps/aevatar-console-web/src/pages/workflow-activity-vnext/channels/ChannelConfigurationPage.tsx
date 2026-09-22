@@ -6,6 +6,7 @@ import {
   isValidChannelBotLabel,
   updateChannelBotLabel,
 } from '@/shared/api/channelBotsApi';
+import { getChannelSkillById } from '@/shared/api/channelSkillsApi';
 import {
   ChannelApiError,
   type ChannelConfiguration,
@@ -44,8 +45,16 @@ import {
 import { channelsCss } from './styles';
 
 type Target =
-  | { readonly botId: string; readonly registrationId?: never }
-  | { readonly registrationId: string; readonly botId?: never };
+  | {
+      readonly botId: string;
+      readonly registrationId?: never;
+      readonly defaultSkillId?: string;
+    }
+  | {
+      readonly registrationId: string;
+      readonly botId?: never;
+      readonly defaultSkillId?: never;
+    };
 
 const requiredServiceSlugs = ['ornn-api', 'chrono-llm-public'] as const;
 
@@ -141,6 +150,7 @@ export default function ChannelConfigurationPage({
           scopeId={scopeId}
           initial={initial}
           editing={editing}
+          defaultSkillId={target.defaultSkillId}
           setNavigate={setNavigate}
         />
       ) : error && !query.isFetching ? (
@@ -167,17 +177,48 @@ function ConfigurationForm({
   scopeId,
   initial,
   editing,
+  defaultSkillId,
   setNavigate,
 }: {
   readonly scopeId: string;
   readonly initial: ChannelRegistration;
   readonly editing: boolean;
+  readonly defaultSkillId?: string;
   readonly setNavigate: React.Dispatch<
     React.SetStateAction<(target: string) => void>
   >;
 }) {
   const baseline = channelConfiguration(initial);
-  const [skillName, setSkillName] = React.useState(initial.skill?.name ?? '');
+  const [initialSkillId] = React.useState(editing ? undefined : defaultSkillId);
+  // Undefined means the link's default has not been resolved or overridden yet.
+  const [skillName, setSkillName] = React.useState<string | undefined>(() =>
+    initialSkillId ? undefined : (initial.skill?.name ?? ''),
+  );
+  const skillReady = skillName !== undefined;
+  const defaultSkill = useQuery({
+    queryKey: channelKeys.skill(scopeId, initialSkillId ?? ''),
+    queryFn: ({ signal }) => getChannelSkillById(initialSkillId ?? '', signal),
+    enabled: Boolean(initialSkillId) && !skillReady,
+    retry: false,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  React.useEffect(() => {
+    if (
+      !skillReady &&
+      defaultSkill.isFetchedAfterMount &&
+      defaultSkill.isSuccess &&
+      !defaultSkill.isFetching
+    )
+      setSkillName(defaultSkill.data.name);
+  }, [
+    skillReady,
+    defaultSkill.isFetchedAfterMount,
+    defaultSkill.isSuccess,
+    defaultSkill.isFetching,
+    defaultSkill.data,
+  ]);
   const [chosenServiceIds, setServiceIds] = React.useState<readonly string[]>(
     baseline?.serviceIds ?? [],
   );
@@ -220,7 +261,7 @@ function ConfigurationForm({
       ? buildChannelDetailsHref(scopeId, initial.id)
       : listHref;
   const config: ChannelConfiguration = {
-    skillName,
+    skillName: skillName ?? '',
     serviceIds,
     authorizationMode: 'explicit_service_allowlist',
   };
@@ -338,6 +379,7 @@ function ConfigurationForm({
       busy ||
       completed.current ||
       !servicesReady ||
+      !skillReady ||
       (editing && !dirty)
     )
       return;
@@ -476,10 +518,40 @@ function ConfigurationForm({
         ) : null}
         <ChannelSkillField
           scopeId={scopeId}
-          value={skillName}
+          value={skillName ?? ''}
           onChange={setSkillName}
           disabled={busy}
+          error={
+            !skillReady && defaultSkill.isError
+              ? t(
+                  'channels.skills.defaultFailed',
+                  'Could not load the linked skill. Retry, choose another skill, or continue without one.',
+                )
+              : undefined
+          }
         />
+        {!skillReady ? (
+          <div className="channels__field">
+            {!defaultSkill.isError ? (
+              <p role="status">
+                <AevatarLoadingDots decorative />{' '}
+                {t('channels.skills.defaultLoading', 'Loading linked skill...')}
+              </p>
+            ) : (
+              <Button
+                type="text"
+                disabled={defaultSkill.isFetching}
+                loading={defaultSkill.isFetching}
+                onClick={() => void defaultSkill.refetch()}
+              >
+                {t('channels.skills.defaultRetry', 'Retry linked skill')}
+              </Button>
+            )}
+            <Button type="text" onClick={() => setSkillName('')}>
+              {t('channels.skills.defaultSkip', 'Continue without a skill')}
+            </Button>
+          </div>
+        ) : null}
         <ChannelServicePicker
           services={options}
           selectedIds={serviceIds}
@@ -534,7 +606,9 @@ function ConfigurationForm({
               submitting ||
               (Boolean(receipt) && !delayed && !observation.isError)
             }
-            disabled={busy || (editing && !dirty) || !servicesReady}
+            disabled={
+              busy || (editing && !dirty) || !servicesReady || !skillReady
+            }
           >
             {editing
               ? t('channels.edit.save', 'Save changes')
