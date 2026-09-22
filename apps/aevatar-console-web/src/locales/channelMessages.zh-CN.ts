@@ -22,6 +22,11 @@ export default {
   'channels.skills.available': 'Ornn 中可用的 Skill',
   'channels.skills.loading': '正在加载 Skill',
   'channels.skills.failed': '无法加载 Skill，请点击刷新重试。',
+  'channels.skills.defaultLoading': '正在加载链接指定的 Skill…',
+  'channels.skills.defaultFailed':
+    '无法加载链接指定的 Skill。请重试、选择其他 Skill，或不选择 Skill 继续。',
+  'channels.skills.defaultRetry': '重试加载指定 Skill',
+  'channels.skills.defaultSkip': '不选择 Skill 继续',
   'channels.skills.empty': '未找到 Skill',
   'channels.skills.more': '加载更多 Skill',
   'channels.skills.create': '创建新 Skill',

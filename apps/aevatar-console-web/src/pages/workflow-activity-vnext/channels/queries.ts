@@ -9,6 +9,8 @@ export const channelKeys = {
     ['channels', scopeId, 'service-choices'] as const,
   skills: (scopeId: string, search: string) =>
     ['channels', scopeId, 'skills', search] as const,
+  skill: (scopeId: string, id: string) =>
+    ['channels', scopeId, 'skill', id] as const,
   list: (scopeId: string) => ['channels', scopeId, 'registrations'] as const,
 };
 

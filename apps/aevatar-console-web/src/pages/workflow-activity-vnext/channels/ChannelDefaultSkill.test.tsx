@@ -47,6 +47,20 @@ const skills = {
   },
   error: null,
 };
+const skillId = '76ca33e8-0807-43f7-919d-de67e7428217';
+const secondSkillId = '29018a73-0fa5-475a-a05a-d158f7b0f392';
+const linkedSkill = (id = skillId) => ({
+  data: {
+    guid: id,
+    name: id === skillId ? 'booking-capacity-renamed' : 'beta-skill',
+    description: '',
+  },
+  error: null,
+});
+const detailReads = () =>
+  fetchMock.mock.calls.filter(([input]) =>
+    String(input).includes('/api/v1/skills/'),
+  );
 const writes = () =>
   fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST');
 
@@ -71,6 +85,10 @@ beforeEach(() => {
     if (init?.method === 'POST')
       return response({ error: 'insecure_webhook_base_url' }, 400);
     if (String(input).includes('/skill-search')) return response(skills);
+    if (String(input).endsWith(`/skills/${skillId}`))
+      return response(linkedSkill());
+    if (String(input).endsWith(`/skills/${secondSkillId}`))
+      return response(linkedSkill(secondSkillId));
     if (String(input).endsWith('/user-services'))
       return response({
         services: [
@@ -91,42 +109,53 @@ beforeEach(() => {
   });
 });
 
-it('prefills an encoded skill before the catalogue loads and submits only on explicit bind', async () => {
-  const skillName = '预约+容量 & 100%20';
+function deferDefaultSkill() {
   const normalFetch = fetchMock.getMockImplementation();
   if (!normalFetch) throw new Error('Missing request fixture');
-  let completeSkills!: (value: Response) => void;
-  const pendingSkills = new Promise<Response>((resolve) => {
-    completeSkills = resolve;
+  let complete!: (value: Response) => void;
+  const pending = new Promise<Response>((resolve) => {
+    complete = resolve;
   });
   fetchMock.mockImplementation((input, init) =>
-    String(input).includes('/skill-search')
-      ? pendingSkills
+    String(input).endsWith(`/skills/${skillId}`)
+      ? pending
       : normalFetch(input, init),
   );
-  openBind(`?skill=${encodeURIComponent(`  ${skillName}  `)}`);
+  return complete;
+}
+
+it('resolves the exact ID outside the search results, then explicitly binds its current name', async () => {
+  const complete = deferDefaultSkill();
+  openBind(`?skillId=${encodeURIComponent(`  ${skillId}  `)}`);
   renderWithQueryClient(<WorkflowActivityVNextPage />);
   await screen.findByRole('combobox');
-  expect(selectedSkill()).toHaveTextContent(skillName);
+  const bind = screen.getByRole('button', { name: 'Bind bot' });
+  expect(bind).toBeDisabled();
+  expect(selectedSkill()).toHaveTextContent('Select a skill');
+  expect(selectedSkill()).not.toHaveTextContent(skillId);
+  await screen.findByText('Loading linked skill...');
   expect(writes()).toHaveLength(0);
 
-  await act(async () => completeSkills(response(skills)));
-  expect(selectedSkill()).toHaveTextContent(skillName);
-  const bind = screen.getByRole('button', { name: 'Bind bot' });
+  await act(async () => complete(response(linkedSkill())));
+  await waitFor(() =>
+    expect(selectedSkill()).toHaveTextContent('booking-capacity-renamed'),
+  );
   await waitFor(() => expect(bind).toBeEnabled());
+  expect(writes()).toHaveLength(0);
   fireEvent.click(bind);
   await screen.findByRole('alert');
   expect(writes()).toHaveLength(1);
   expect(JSON.parse(String(writes()[0][1]?.body))).toEqual({
     nyx_channel_bot_id: 'bot-alpha',
-    skill_name: skillName,
+    skill_name: 'booking-capacity-renamed',
     authorization_mode: 'explicit_service_allowlist',
     service_ids: ['service-llm', 'service-ornn'],
   });
 });
 
-it('keeps manual replacement and clearing through catalogue refresh and same-bot query changes', async () => {
-  openBind('?skill=booking-capacity');
+it('preserves manual selection and clearing when a default arrives late or the URL and catalogue refresh', async () => {
+  const complete = deferDefaultSkill();
+  openBind(`?skillId=${skillId}`);
   const { queryClient } = renderWithQueryClient(<WorkflowActivityVNextPage />);
   fireEvent.mouseDown(await screen.findByRole('combobox'));
   fireEvent.click(
@@ -135,16 +164,11 @@ it('keeps manual replacement and clearing through catalogue refresh and same-bot
     }),
   );
   expect(selectedSkill()).toHaveTextContent('support');
-  await act(async () => {
-    openBind('?skill=another-default');
-    window.dispatchEvent(new PopStateEvent('popstate'));
-    await queryClient.invalidateQueries({
-      queryKey: channelKeys.skills('scope-alpha', ''),
-    });
-  });
-  expect(selectedSkill()).toHaveTextContent('support');
   fireEvent.mouseDown(screen.getByRole('img', { name: 'close-circle' }));
   await act(async () => {
+    complete(response(linkedSkill()));
+    openBind(`?skillId=${secondSkillId}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
     await queryClient.invalidateQueries({
       queryKey: channelKeys.skills('scope-alpha', ''),
     });
@@ -155,16 +179,17 @@ it('keeps manual replacement and clearing through catalogue refresh and same-bot
   expect(JSON.parse(String(writes()[0][1]?.body)).skill_name).toBe('');
 });
 
-it('starts another bot binding with its own URL default', async () => {
-  openBind('?skill=alpha-skill');
+it('isolates a new bot default from a previous bot lookup that finishes late', async () => {
+  const complete = deferDefaultSkill();
+  openBind(`?skillId=${skillId}`);
   renderWithQueryClient(<WorkflowActivityVNextPage />);
-  await screen.findByRole('combobox');
-  expect(selectedSkill()).toHaveTextContent('alpha-skill');
+  await screen.findByText('Loading linked skill...');
   await act(async () => {
-    openBind('?skill=beta-skill', 'bot-beta');
+    openBind(`?skillId=${secondSkillId}`, 'bot-beta');
     window.dispatchEvent(new PopStateEvent('popstate'));
   });
-  await screen.findByRole('combobox');
+  await waitFor(() => expect(selectedSkill()).toHaveTextContent('beta-skill'));
+  await act(async () => complete(response(linkedSkill())));
   expect(selectedSkill()).toHaveTextContent('beta-skill');
   expect(writes()).toHaveLength(0);
 });
@@ -182,26 +207,80 @@ it('ignores the URL default when editing a saved registration', async () => {
   window.history.replaceState(
     {},
     '',
-    '/scopes/scope-alpha/channels/reg-alpha/edit?skill=booking-capacity',
+    `/scopes/scope-alpha/channels/reg-alpha/edit?skillId=${skillId}`,
   );
   renderWithQueryClient(<WorkflowActivityVNextPage />);
   await screen.findByRole('combobox');
   expect(selectedSkill()).toHaveTextContent('saved-support');
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  expect(detailReads()).toHaveLength(0);
   expect(writes()).toHaveLength(0);
 });
 
-it.each([
-  '',
-  '?skill=%20%20',
-  `?skill=${'x'.repeat(129)}`,
-])('leaves the skill optional for absent, blank or oversized defaults: %s', async (search) => {
-  openBind(search);
+it('blocks binding an unavailable default and lets the user retry the exact ID', async () => {
+  const complete = deferDefaultSkill();
+  openBind(`?skillId=${skillId}`);
+  renderWithQueryClient(<WorkflowActivityVNextPage />);
+  await act(async () =>
+    complete(response({ error: { message: 'PRIVATE_SERVER_DETAIL' } }, 404)),
+  );
+  await screen.findByRole('alert');
+  expect(document.body).not.toHaveTextContent('PRIVATE_SERVER_DETAIL');
+  expect(screen.getByRole('button', { name: 'Bind bot' })).toBeDisabled();
+  expect(writes()).toHaveLength(0);
+  const normalFetch = fetchMock.getMockImplementation();
+  if (!normalFetch) throw new Error('Missing request fixture');
+  fetchMock.mockImplementation((input, init) =>
+    String(input).endsWith(`/skills/${skillId}`)
+      ? Promise.resolve(response(linkedSkill()))
+      : normalFetch(input, init),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Retry linked skill' }));
+  await waitFor(() =>
+    expect(selectedSkill()).toHaveTextContent('booking-capacity-renamed'),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Bind bot' })).toBeEnabled(),
+  );
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(writes()).toHaveLength(0);
+});
+
+it('allows an explicit opt-out of a failed default without silently binding an empty skill', async () => {
+  const complete = deferDefaultSkill();
+  openBind(`?skillId=${skillId}`);
+  renderWithQueryClient(<WorkflowActivityVNextPage />);
+  await act(async () =>
+    complete(
+      response({
+        error: null,
+        data: { guid: secondSkillId, name: 'wrong-skill' },
+      }),
+    ),
+  );
+  await screen.findByRole('alert');
+  expect(selectedSkill()).not.toHaveTextContent('wrong-skill');
+  expect(screen.getByRole('button', { name: 'Bind bot' })).toBeDisabled();
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Continue without a skill' }),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Bind bot' })).toBeEnabled(),
+  );
+  expect(writes()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Bind bot' }));
+  await screen.findByRole('alert');
+  expect(JSON.parse(String(writes()[0][1]?.body)).skill_name).toBe('');
+});
+
+it('keeps a blank default optional and does not interpret the old name parameter', async () => {
+  openBind('?skillId=%20%20&skill=booking-capacity');
   renderWithQueryClient(<WorkflowActivityVNextPage />);
   await screen.findByRole('combobox');
   expect(selectedSkill()).toHaveTextContent('Select a skill');
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Bind bot' })).toBeEnabled(),
   );
+  expect(detailReads()).toHaveLength(0);
   expect(writes()).toHaveLength(0);
 });

@@ -43,18 +43,32 @@ Telegram token creation flow.
 
 ### Default Skill In Bind Links
 
-`/scopes/:scopeId/channels/bind/:botId?skill=booking-capacity` opens the bind
-form with that Skill name selected. `skill` is the exact name accepted by
-`skill_name`, not an Ornn GUID. Link producers should encode the name with
-`URLSearchParams` so spaces, `+`, `&` and non-ASCII names survive the URL.
-The first `skill` parameter is URL-decoded once and trimmed; missing, blank
-or over-128-character values leave the optional selector empty.
+`/scopes/:scopeId/channels/bind/:botId?skillId=<Ornn GUID>` opens the bind
+form and resolves the linked Skill using the active user's NyxID session:
+`GET /api/v1/proxy/s/ornn-api/api/v1/skills/{encodedSkillId}`. Link producers
+should use `URLSearchParams`. The first `skillId` value is decoded once and
+trimmed; missing or blank values leave Skill optional. The name-based `skill`
+parameter is not supported.
 
-The URL supplies initial user input only. It does not assert that a skill is
-available or authorized, add a catalogue record, grant services or submit a
-binding. A name can be prefilled before the paginated skill catalogue loads.
-Users can replace or clear it; query refreshes and same-bot query changes do
-not overwrite their edits. Entering another bot's bind form starts fresh.
+The response must contain the exact requested `data.guid` and a non-empty
+`data.name` that fits the binding contract. Ornn's detail endpoint also accepts
+names, so a successful HTTP response alone does not prove ID identity. Only
+the matching real record can populate the selection, independently of search
+pagination. Names are displayed in the UI and submitted as `skill_name` under
+the existing registration contract; the URL ID is never submitted as a name.
+This is a link identity improvement, not a change to stored binding identity
+or a version-pinning contract.
+
+While lookup is pending or fails, Bind remains disabled until the user retries
+successfully, selects another skill, or explicitly continues without a skill.
+Malformed IDs, inaccessible skills and mismatched responses follow the same
+recoverable error path. IDs are treated as opaque strings; empty, over-256-
+character and dot-segment values are rejected before the detail request.
+
+The URL supplies an initial choice only. It does not grant services or submit a
+binding. Users can replace or clear the selection; late responses, catalogue
+refreshes and same-bot query changes do not overwrite their edits. Entering
+another bot's bind form starts fresh and requires a fresh successful lookup.
 Existing registration edit pages ignore this parameter and keep their saved
 skill. Login continues preserving the safe return URL and its query.
 

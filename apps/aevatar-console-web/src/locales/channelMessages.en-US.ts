@@ -24,6 +24,11 @@ export default {
   'channels.skills.available': 'Available in Ornn',
   'channels.skills.loading': 'Loading skills',
   'channels.skills.failed': 'Could not load skills. Use Refresh to try again.',
+  'channels.skills.defaultLoading': 'Loading linked skill...',
+  'channels.skills.defaultFailed':
+    'Could not load the linked skill. Retry, choose another skill, or continue without one.',
+  'channels.skills.defaultRetry': 'Retry linked skill',
+  'channels.skills.defaultSkip': 'Continue without a skill',
   'channels.skills.empty': 'No skills found',
   'channels.skills.more': 'Load more skills',
   'channels.skills.create': 'Create new skill',
