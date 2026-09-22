@@ -27,7 +27,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
     private readonly INyxIdApiClientFactory? _apiClientFactory;
     private readonly INyxIdConnectedServiceCapabilityIssuer? _capabilityIssuer;
     private readonly IExactRemoteSkillFetcher? _exactSkillFetcher;
-    private readonly INyxIdRecommendedSkillRefCreator _recommendedSkillRefCreator;
+    private readonly INyxIdRecommendedSkillRefCreator? _recommendedSkillRefCreator;
     private readonly ILogger _logger;
 
     public ChannelNyxIdConnectedServiceInventoryToolSource(
@@ -44,7 +44,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         _apiClientFactory = apiClientFactory;
         _capabilityIssuer = capabilityIssuer;
         _exactSkillFetcher = exactSkillFetcher;
-        _recommendedSkillRefCreator = recommendedSkillRefCreator ?? EmptyNyxIdRecommendedSkillRefCreator.Instance;
+        _recommendedSkillRefCreator = recommendedSkillRefCreator;
         _logger = logger ?? NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance;
     }
 
@@ -61,6 +61,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         {
             tools.Add(new SenderInventoryTool(this));
             tools.Add(new SenderRecommendedSkillTool(this));
+            if (_recommendedSkillRefCreator is not null && _options is not null && _apiClientFactory is not null)
+                tools.Add(new SenderEnsureRecommendedSkillRefsTool(this));
         }
 
         if (CanInvokeConnectedOperation(context, bindingId))
@@ -187,7 +189,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         try
         {
             var reader = new NyxIdConnectedServiceInventoryReader(
-                new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient(), _recommendedSkillRefCreator));
+                new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
             var senderContext = context with
             {
                 // This read is authorized by the bound sender, independently of
@@ -247,7 +249,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         try
         {
             var reader = new NyxIdConnectedServiceInventoryReader(
-                new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient(), _recommendedSkillRefCreator));
+                new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
             var registrationContext = context with
             {
                 Request = context.Request with
@@ -355,7 +357,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             return RecommendedSkillFailure("inventory_source_unavailable");
 
         var reader = new NyxIdConnectedServiceInventoryReader(
-            new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient(), _recommendedSkillRefCreator));
+            new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
         var senderContext = context with
         {
             CredentialSource = AgentToolCredentialSource.BearerToken,
@@ -398,7 +400,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             return RecommendedSkillFailure("inventory_source_unavailable");
 
         var reader = new NyxIdConnectedServiceInventoryReader(
-            new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient(), _recommendedSkillRefCreator));
+            new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
         var registrationContext = context with
         {
             Request = context.Request with
@@ -492,6 +494,201 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         });
     }
 
+    private async Task<string> ExecuteEnsureRecommendedSkillRefsAsync(string argumentsJson, CancellationToken ct)
+    {
+        var arguments = ParseEnsureRecommendedSkillRefsArguments(argumentsJson);
+        if (arguments is null)
+            return JsonSerializer.Serialize(new { error = "invalid_arguments" });
+
+        var context = AgentToolRequestContext.Current;
+        if (context is null)
+            return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
+        if (_recommendedSkillRefCreator is null)
+            return EnsureRecommendedSkillRefsFailure("recommended_skill_ref_creator_unavailable");
+
+        if (IsRegistrationAgentKeyContext(context))
+        {
+            return await ExecuteEnsureRecommendedSkillRefsWithRegistrationAgentKeyAsync(
+                    context,
+                    context.Credentials.NyxIdAccessToken!,
+                    arguments,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
+        var bindingId = Normalize(context.SenderBinding.BindingId);
+        if (bindingId is null || _capabilityIssuer is null || !TryBuildSubject(context, out var subject))
+            return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
+
+        try
+        {
+            var capability = await _capabilityIssuer
+                .IssueByBindingIdAsync(subject, bindingId, ct)
+                .ConfigureAwait(false);
+            var token = Normalize(capability.AccessToken);
+            if (token is null)
+                return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
+
+            return await ExecuteEnsureRecommendedSkillRefsWithSenderTokenAsync(context, token, arguments, ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (BindingRevokedException)
+        {
+            return EnsureRecommendedSkillRefsFailure("inventory_binding_revoked");
+        }
+        catch (BindingScopeMismatchException)
+        {
+            return EnsureRecommendedSkillRefsFailure("inventory_scope_unavailable");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "NyxID recommended skill ref ensure capability issue failed");
+            return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
+        }
+    }
+
+    private async Task<string> ExecuteEnsureRecommendedSkillRefsWithSenderTokenAsync(
+        AgentToolExecutionContext context,
+        string token,
+        EnsureRecommendedSkillRefsArguments arguments,
+        CancellationToken ct)
+    {
+        if (_options is null || _apiClientFactory is null || _recommendedSkillRefCreator is null)
+            return EnsureRecommendedSkillRefsFailure("inventory_source_unavailable");
+
+        var reader = new NyxIdConnectedServiceInventoryReader(
+            new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
+        var senderContext = context with
+        {
+            CredentialSource = AgentToolCredentialSource.BearerToken,
+            DurableNyxIdCredential = null,
+            Credentials = new AgentToolCredentials(
+                token,
+                token,
+                SenderNyxIdAccessToken: token,
+                NyxIdCredentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                NyxIdCredentialAuthority: AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
+            Request = context.Request with
+            {
+                CallId = CreateRecommendedSkillRefsEnsureCallId(context.Request.CallId),
+            },
+        };
+        var outcome = await _toolExecutionPort.ExecuteAsync(
+            new AgentToolExecutionRequest(
+                new SenderEnsureRecommendedSkillRefsProvisionerTool(
+                    this,
+                    reader,
+                    _recommendedSkillRefCreator,
+                    token,
+                    InventoryReadAuthority.Caller,
+                    arguments),
+                "{}",
+                senderContext,
+                AgentToolApprovalContinuationMode.None,
+                ApprovalGrant: null),
+            ct).ConfigureAwait(false);
+        return outcome.ResultJson;
+    }
+
+    private async Task<string> ExecuteEnsureRecommendedSkillRefsWithRegistrationAgentKeyAsync(
+        AgentToolExecutionContext context,
+        string agentKey,
+        EnsureRecommendedSkillRefsArguments arguments,
+        CancellationToken ct)
+    {
+        if (_options is null || _apiClientFactory is null || _recommendedSkillRefCreator is null)
+            return EnsureRecommendedSkillRefsFailure("inventory_source_unavailable");
+
+        var reader = new NyxIdConnectedServiceInventoryReader(
+            new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
+        var registrationContext = context with
+        {
+            Request = context.Request with
+            {
+                CallId = CreateRecommendedSkillRefsEnsureCallId(context.Request.CallId),
+            },
+        };
+        var outcome = await _toolExecutionPort.ExecuteAsync(
+            new AgentToolExecutionRequest(
+                new SenderEnsureRecommendedSkillRefsProvisionerTool(
+                    this,
+                    reader,
+                    _recommendedSkillRefCreator,
+                    agentKey,
+                    InventoryReadAuthority.AgentKey,
+                    arguments),
+                "{}",
+                registrationContext,
+                AgentToolApprovalContinuationMode.None,
+                ApprovalGrant: null),
+            ct).ConfigureAwait(false);
+        return outcome.ResultJson;
+    }
+
+    private async Task<string> EnsureRecommendedSkillRefsAsync(
+        NyxIdConnectedServiceInventoryReader reader,
+        INyxIdRecommendedSkillRefCreator recommendedSkillRefCreator,
+        string token,
+        InventoryReadAuthority inventoryReadAuthority,
+        EnsureRecommendedSkillRefsArguments arguments,
+        CancellationToken ct)
+    {
+        try
+        {
+            var inventory = await ReadInventoryResultAsync(reader, token, inventoryReadAuthority, ct)
+                .ConfigureAwait(false);
+            var service = ResolveServiceInstance(inventory.Instances, arguments.UserServiceId, arguments.ServiceSlug);
+            if (service is null)
+                return EnsureRecommendedSkillRefsFailure("service_instance_not_visible");
+            if (service.RecommendedSkillRefs.Count > 0)
+            {
+                return RecommendedSkillRefsEnsured(
+                    service,
+                    service.RecommendedSkillRefs,
+                    created: false);
+            }
+
+            var refs = await recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, ct)
+                .ConfigureAwait(false);
+            if (refs.Count == 0)
+                return EnsureRecommendedSkillRefsFailure("recommended_skill_ref_creation_failed");
+
+            return RecommendedSkillRefsEnsured(service, refs, created: true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (NyxIdServiceInventoryContractException)
+        {
+            _logger.LogWarning("NyxID connected-service ensure refs inventory contract is invalid");
+            return EnsureRecommendedSkillRefsFailure(NyxIdServiceInventoryContractException.ErrorCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "NyxID recommended skill ref ensure failed");
+            return EnsureRecommendedSkillRefsFailure("recommended_skill_ref_creation_failed");
+        }
+    }
+
+    private static NyxIdServiceInstance? ResolveServiceInstance(
+        IReadOnlyList<NyxIdServiceInstance> instances,
+        string? userServiceId,
+        string? serviceSlug)
+    {
+        var matches = instances.Where(instance =>
+            (userServiceId is null || string.Equals(instance.UserServiceId, userServiceId, StringComparison.Ordinal)) &&
+            (serviceSlug is null || string.Equals(instance.DisplaySlug, serviceSlug, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(instance.CatalogServiceSlug, serviceSlug, StringComparison.OrdinalIgnoreCase)))
+            .Take(2)
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
     private async Task<AgentToolTerminalOutcome> ExecuteOperationAsync(
         string callId,
         string argumentsJson,
@@ -568,7 +765,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             var invoker = new NyxIdConnectedServiceOperationInvoker(
                 _options,
                 apiClient,
-                new NyxIdServiceInstanceClient(apiClient, _recommendedSkillRefCreator));
+                new NyxIdServiceInstanceClient(apiClient));
             var innerContext = context with
             {
                 Request = context.Request with
@@ -648,8 +845,38 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
     private static string CreateRecommendedSkillLoadCallId(string? outerCallId) =>
         $"{Normalize(outerCallId) ?? "missing"}:recommended-skill-load";
 
+    private static string CreateRecommendedSkillRefsEnsureCallId(string? outerCallId) =>
+        $"{Normalize(outerCallId) ?? "missing"}:recommended-skill-refs-ensure";
+
     private static string CreateOperationInvokeCallId(string? outerCallId) =>
         $"{Normalize(outerCallId) ?? "missing"}:connected-operation";
+
+    private static EnsureRecommendedSkillRefsArguments? ParseEnsureRecommendedSkillRefsArguments(string argumentsJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return null;
+            foreach (var property in root.EnumerateObject())
+            {
+                if (property.Name is not ("user_service_id" or "service_slug"))
+                    return null;
+            }
+
+            var userServiceId = ReadOptionalString(root, "user_service_id");
+            var serviceSlug = ReadOptionalString(root, "service_slug");
+            return userServiceId is null && serviceSlug is null
+                ? null
+                : new EnsureRecommendedSkillRefsArguments(userServiceId, serviceSlug);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     private static RecommendedSkillArguments? ParseRecommendedSkillArguments(string argumentsJson)
     {
@@ -755,14 +982,18 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             return null;
         foreach (var property in documentRequest.EnumerateObject())
         {
-            if (property.Name is not ("method" or "relative_path" or "query" or "headers" or "body"))
+            if (property.Name is not ("method" or "relative_path" or "skill_ref" or "query" or "headers" or "body"))
                 return null;
         }
 
         var method = ReadRequiredString(documentRequest, "method");
         var relativePath = ReadRequiredString(documentRequest, "relative_path");
-        if (method is null || relativePath is null)
+        if (method is null || relativePath is null ||
+            !documentRequest.TryGetProperty("skill_ref", out var skillRefElement) ||
+            !TryReadDocumentSkillRef(skillRefElement, out var skillRef))
+        {
             return null;
+        }
 
         var runtimeArguments = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         if (documentRequest.TryGetProperty("query", out var query))
@@ -787,7 +1018,41 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         return new NyxIdConnectedServiceDocumentRequest(
             method,
             relativePath,
-            JsonSerializer.Serialize(runtimeArguments));
+            JsonSerializer.Serialize(runtimeArguments),
+            skillRef);
+    }
+
+    private static bool TryReadDocumentSkillRef(JsonElement root, out NyxIdRecommendedSkillRef skillRef)
+    {
+        skillRef = new NyxIdRecommendedSkillRef();
+        if (root.ValueKind != JsonValueKind.Object)
+            return false;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.Name is not ("source" or "skill_id" or "literal_version" or "manifest_digest"))
+                return false;
+        }
+
+        var source = ReadRequiredString(root, "source");
+        var skillId = ReadRequiredString(root, "skill_id");
+        var literalVersion = ReadRequiredString(root, "literal_version");
+        var manifestDigest = ReadRequiredString(root, "manifest_digest");
+        if (!string.Equals(source, "ornn", StringComparison.Ordinal) ||
+            skillId is null ||
+            literalVersion is null ||
+            manifestDigest is null)
+        {
+            return false;
+        }
+
+        skillRef = new NyxIdRecommendedSkillRef
+        {
+            Source = NyxIdRecommendedSkillSource.Ornn,
+            SkillId = skillId,
+            LiteralVersion = literalVersion,
+            ManifestDigest = manifestDigest,
+        };
+        return true;
     }
 
     private static string? ReadRequiredString(JsonElement root, string name)
@@ -874,6 +1139,42 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             error = errorCode,
         });
 
+    private static string EnsureRecommendedSkillRefsFailure(string errorCode) =>
+        JsonSerializer.Serialize(new
+        {
+            result_type = "nyxid_recommended_skill_refs_ensure",
+            status = "failed",
+            ensured = false,
+            error = errorCode,
+        });
+
+    private static string RecommendedSkillRefsEnsured(
+        NyxIdServiceInstance service,
+        IReadOnlyList<NyxIdRecommendedSkillRef> refs,
+        bool created) =>
+        JsonSerializer.Serialize(new
+        {
+            result_type = "nyxid_recommended_skill_refs_ensure",
+            status = "success",
+            ensured = true,
+            created,
+            service_instance_id = service.UserServiceId,
+            service_slug = service.DisplaySlug,
+            catalog_service_slug = service.CatalogServiceSlug,
+            recommended_skill_refs = refs.Select(ToRecommendedSkillRefResult).ToArray(),
+        });
+
+    private static object ToRecommendedSkillRefResult(NyxIdRecommendedSkillRef skillRef) => new
+    {
+        source = skillRef.Source == NyxIdRecommendedSkillSource.Ornn ? "ornn" : string.Empty,
+        skill_id = skillRef.SkillId,
+        literal_version = skillRef.LiteralVersion,
+        manifest_digest = skillRef.ManifestDigest,
+        display_name = skillRef.DisplayName,
+        recommendation_name = skillRef.RecommendationName,
+        revision = skillRef.Revision,
+    };
+
     private static AgentToolReceipt? CreateRecommendedSkillReceipt(
         string callId,
         string toolName,
@@ -929,6 +1230,51 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         }
     }
 
+    private static AgentToolReceipt? CreateEnsureRecommendedSkillRefsReceipt(
+        string callId,
+        string toolName,
+        string resultJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !string.Equals(ReadOptionalString(root, "result_type"), "nyxid_recommended_skill_refs_ensure", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            if (string.Equals(ReadOptionalString(root, "status"), "success", StringComparison.Ordinal))
+            {
+                return new AgentToolReceipt
+                {
+                    CallId = callId ?? string.Empty,
+                    ToolName = toolName ?? string.Empty,
+                    Status = AgentToolReceiptStatus.Success,
+                    ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                    ResultJson = resultJson ?? string.Empty,
+                };
+            }
+
+            var errorCode = ReadOptionalString(root, "error") ?? "nyxid_recommended_skill_refs_ensure_failed";
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = toolName ?? string.Empty,
+                Status = AgentToolReceiptStatus.Error,
+                ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                ErrorCode = errorCode,
+                ErrorMessage = "The recommended skill refs could not be ensured.",
+                ResultJson = resultJson ?? string.Empty,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private static string? ReadOptionalString(JsonElement root, string name)
     {
         if (!root.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String)
@@ -955,6 +1301,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         string LiteralVersion,
         string ManifestDigest);
 
+    private sealed record EnsureRecommendedSkillRefsArguments(
+        string? UserServiceId,
+        string? ServiceSlug);
+
     private sealed class SenderConnectedServiceOperationTool(ChannelNyxIdConnectedServiceInventoryToolSource source) : IAgentTool
     {
         private const string Schema =
@@ -972,11 +1322,23 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                   "properties":{
                     "method":{"type":"string","enum":["GET","HEAD","OPTIONS","POST","PUT","PATCH","DELETE"]},
                     "relative_path":{"type":"string","description":"Safe relative service path from the loaded skill documentation. Absolute URLs, query strings, fragments, and traversal are rejected."},
+                    "skill_ref":{
+                      "type":"object",
+                      "description":"Exact recommended_skill_refs entry that authorized this document-guided request.",
+                      "properties":{
+                        "source":{"type":"string","enum":["ornn"]},
+                        "skill_id":{"type":"string"},
+                        "literal_version":{"type":"string"},
+                        "manifest_digest":{"type":"string"}
+                      },
+                      "required":["source","skill_id","literal_version","manifest_digest"],
+                      "additionalProperties":false
+                    },
                     "query":{"type":"object","additionalProperties":{"type":"string"}},
                     "headers":{"type":"object","additionalProperties":{"type":"string"}},
                     "body":{"type":"object","additionalProperties":true}
                   },
-                  "required":["method","relative_path"],
+                  "required":["method","relative_path","skill_ref"],
                   "additionalProperties":false
                 }
               },
@@ -1094,6 +1456,44 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             source.ExecuteRecommendedSkillLoadAsync(argumentsJson, ct);
     }
 
+    private sealed class SenderEnsureRecommendedSkillRefsTool(ChannelNyxIdConnectedServiceInventoryToolSource source) : IAgentTool
+    {
+        private const string Schema =
+            """
+            {
+              "type":"object",
+              "properties":{
+                "user_service_id":{"type":"string","description":"Exact user_service_id from nyxid_service_inventory when available."},
+                "service_slug":{"type":"string","description":"Exact connected-service slug from inventory or channel runtime selectors."}
+              },
+              "anyOf":[{"required":["user_service_id"]},{"required":["service_slug"]}],
+              "additionalProperties":false
+            }
+            """;
+
+        public string Name => "nyxid_ensure_recommended_skill_refs";
+        public string Description =>
+            "Explicitly create and persist missing NyxID recommended Ornn skill refs for one visible connected-service instance.";
+        public string ParametersSchema => Schema;
+        public bool IsReadOnly => false;
+        public bool IsDestructive => false;
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+        public string SideEffectKind => "connected_service_recommended_skill_refs";
+
+        public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson) =>
+            AgentToolReplayPolicy.NonReplayable;
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            CreateEnsureRecommendedSkillRefsReceipt(callId, toolName, resultJson);
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            source.ExecuteEnsureRecommendedSkillRefsAsync(argumentsJson, ct);
+    }
+
     private sealed class SenderRecommendedSkillReaderTool(
         ChannelNyxIdConnectedServiceInventoryToolSource source,
         NyxIdConnectedServiceInventoryReader reader,
@@ -1118,6 +1518,43 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             source.ReadRecommendedSkillAsync(reader, exactSkillFetcher, token, inventoryReadAuthority, arguments, ct);
+    }
+
+    private sealed class SenderEnsureRecommendedSkillRefsProvisionerTool(
+        ChannelNyxIdConnectedServiceInventoryToolSource source,
+        NyxIdConnectedServiceInventoryReader reader,
+        INyxIdRecommendedSkillRefCreator recommendedSkillRefCreator,
+        string token,
+        InventoryReadAuthority inventoryReadAuthority,
+        EnsureRecommendedSkillRefsArguments arguments) : IAgentTool
+    {
+        public string Name => "nyxid_recommended_skill_refs_provisioner";
+        public string Description => "Read one visible connected service and create missing recommended skill refs.";
+        public string ParametersSchema =>
+            """{"type":"object","properties":{},"required":[],"additionalProperties":false}""";
+        public bool IsReadOnly => false;
+        public bool IsDestructive => false;
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+        public string SideEffectKind => "connected_service_recommended_skill_refs";
+
+        public AgentToolReplayPolicy ResolveReplayPolicy(string argumentsJson) =>
+            AgentToolReplayPolicy.NonReplayable;
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            CreateEnsureRecommendedSkillRefsReceipt(callId, toolName, resultJson);
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            source.EnsureRecommendedSkillRefsAsync(
+                reader,
+                recommendedSkillRefCreator,
+                token,
+                inventoryReadAuthority,
+                arguments,
+                ct);
     }
 
     private sealed class SenderInventoryReaderTool(

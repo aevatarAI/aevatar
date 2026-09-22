@@ -128,7 +128,7 @@ public sealed class NyxIdRecommendedSkillGenerator
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(
+                _logger.LogWarning(
                     ex,
                     "NyxID recommended skill catalog OpenAPI read failed for slug {CatalogSpecSlug}",
                     catalogSpecSlug);
@@ -167,7 +167,7 @@ public sealed class NyxIdRecommendedSkillGenerator
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(
+            _logger.LogWarning(
                 ex,
                 "NyxID recommended skill custom OpenAPI read failed for user service {UserServiceId}",
                 instance.UserServiceId);

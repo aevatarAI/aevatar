@@ -154,35 +154,16 @@ public sealed class NyxIdServiceInstanceClientTests
     }
 
     [Fact]
-    public async Task ReadAsync_MissingRecommendedSkillRefs_CreatesRefsByServiceType()
+    public async Task ReadAsync_MissingRecommendedSkillRefs_DoesNotSynthesizeRefs()
     {
         var handler = new InventoryHandler();
         handler.KeysByToken["user-token"] = Keys(ReadyKey);
-        var creator = new RecordingRecommendedSkillRefCreator([
-            new NyxIdRecommendedSkillRef
-            {
-                Source = NyxIdRecommendedSkillSource.Ornn,
-                SkillId = "22222222-2222-2222-2222-222222222222",
-                LiteralVersion = "2.0",
-                ManifestDigest = "sha256:" + new string('2', 64),
-                DisplayName = "GitHub Operator",
-                RecommendationName = "github-service-default",
-                Revision = "created-rev-1",
-            },
-        ]);
 
-        var result = await CreateReader(handler, recommendedSkillRefCreator: creator)
+        var result = await CreateReader(handler)
             .ReadAsync("user-token", organizationToken: null);
 
-        creator.RequestedServiceIds.Should().Equal("us-personal");
-        var skillRef = result.Instances.Should().ContainSingle().Subject.RecommendedSkillRefs
-            .Should().ContainSingle().Subject;
-        skillRef.Source.Should().Be(NyxIdRecommendedSkillSource.Ornn);
-        skillRef.SkillId.Should().Be("22222222-2222-2222-2222-222222222222");
-        skillRef.LiteralVersion.Should().Be("2.0");
-        skillRef.ManifestDigest.Should().Be("sha256:" + new string('2', 64));
-        skillRef.RecommendationName.Should().Be("github-service-default");
-        skillRef.Revision.Should().Be("created-rev-1");
+        result.Instances.Should().ContainSingle().Subject.RecommendedSkillRefs.Should().BeEmpty();
+        result.RecommendedSkillCatalog.Should().BeEmpty();
     }
 
     [Fact]
@@ -200,12 +181,9 @@ public sealed class NyxIdServiceInstanceClientTests
                "manifest_digest":"sha256:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
              }]}
             """);
-        var creator = new RecordingRecommendedSkillRefCreator([]);
-
-        var result = await CreateReader(handler, recommendedSkillRefCreator: creator)
+        var result = await CreateReader(handler)
             .ReadAsync("user-token", organizationToken: null);
 
-        creator.RequestedServiceIds.Should().BeEmpty();
         result.Instances.Should().ContainSingle().Subject.RecommendedSkillRefs
             .Should().ContainSingle().Subject.SkillId.Should().Be("11111111-1111-1111-1111-111111111111");
     }
@@ -264,30 +242,14 @@ public sealed class NyxIdServiceInstanceClientTests
 
     private static NyxIdConnectedServiceInventoryReader CreateReader(
         InventoryHandler handler,
-        NyxIdToolOptions? options = null,
-        INyxIdRecommendedSkillRefCreator? recommendedSkillRefCreator = null)
+        NyxIdToolOptions? options = null)
     {
         options ??= new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         return new NyxIdConnectedServiceInventoryReader(new NyxIdServiceInstanceClient(
-            new NyxIdApiClient(options, new HttpClient(handler)),
-            recommendedSkillRefCreator));
+            new NyxIdApiClient(options, new HttpClient(handler))));
     }
 
     private static string Keys(params string[] keys) => $$"""{"keys":[{{string.Join(',', keys)}}]}""";
-
-    private sealed class RecordingRecommendedSkillRefCreator(
-        IReadOnlyList<NyxIdRecommendedSkillRef> refs) : INyxIdRecommendedSkillRefCreator
-    {
-        public List<string> RequestedServiceIds { get; } = [];
-
-        public Task<IReadOnlyList<NyxIdRecommendedSkillRef>> CreateRecommendedSkillRefsAsync(
-            NyxIdServiceInstance instance,
-            CancellationToken ct)
-        {
-            RequestedServiceIds.Add(instance.UserServiceId);
-            return Task.FromResult(refs);
-        }
-    }
 
     private sealed class InventoryHandler : HttpMessageHandler
     {

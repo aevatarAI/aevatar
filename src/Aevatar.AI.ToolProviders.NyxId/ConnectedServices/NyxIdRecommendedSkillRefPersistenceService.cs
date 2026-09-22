@@ -63,6 +63,9 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
 
         var currentRefs = ParseRecommendedSkillRefs(currentResponse);
         var mergedRefs = MergeRefs(currentRefs, refs);
+        if (mergedRefs.Count == currentRefs.Count)
+            return NyxIdRecommendedSkillRefPersistenceResult.Succeeded(currentRefs);
+
         var body = JsonSerializer.Serialize(new
         {
             recommended_skill_refs = mergedRefs.Select(ToJsonContract).ToArray(),
