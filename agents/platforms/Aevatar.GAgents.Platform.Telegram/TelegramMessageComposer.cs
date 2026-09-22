@@ -5,7 +5,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 
 namespace Aevatar.GAgents.Platform.Telegram;
 
-public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundMessage>
+public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundMessage>, ILosslessPlainTextFormatter
 {
     private const int TelegramTextLimit = 4096;
     private const int TelegramCaptionLimit = 1024;
@@ -31,6 +31,13 @@ public sealed class TelegramMessageComposer : IMessageComposer<TelegramOutboundM
     };
 
     public ChannelId Channel { get; } = ChannelId.From("telegram");
+
+    public string PreparePlainText(string text, ConversationReference conversation)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(conversation);
+        return EscapeLegacyMarkdown(text);
+    }
 
     public TelegramOutboundMessage Compose(MessageContent intent, ComposeContext context)
     {

@@ -134,7 +134,11 @@ public sealed record ConversationTurnRuntimeContext(
     // ConversationGAgent (the owner of the bot-sent message ledger) and consumed by the channel
     // runner's group-chat admission gate so a thread reply counts as addressing the bot without a
     // re-@-mention. One-way: the runner never writes it back.
-    bool IsReplyToBot = false)
+    bool IsReplyToBot = false,
+    // Only the final Relay text leaf is deferred back to its actor-owned lifecycle.
+    bool DeferRelayTextReply = false,
+    // Once an Agent Key request is dispatched, a token-backed interactive attempt is forbidden.
+    bool RelayTextOnly = false)
 {
     public static ConversationTurnRuntimeContext Empty { get; } = new(NyxRelayReplyToken: null);
 }
@@ -160,8 +164,14 @@ public sealed record ConversationTurnResult(
     // Typed business outcome of a /clear turn: the conversation actor (the sole
     // owner of retained history) persists ConversationRetainedHistoryClearedEvent
     // and resets its transcript window when this is set.
-    bool RetainedHistoryClearRequested = false)
+    bool RetainedHistoryClearRequested = false,
+    MessageContent? DeferredRelayText = null)
 {
+    /// <summary>Returns the selected final text leaf to the conversation actor without claiming delivery.</summary>
+    public static ConversationTurnResult RelayTextDeferred(MessageContent text) =>
+        new(false, string.Empty, new MessageContent(), "bot", null, string.Empty, string.Empty,
+            FailureKind.Unspecified, null, null, null, DeferredRelayText: text.Clone());
+
     /// <summary>
     /// Success factory.
     /// </summary>
