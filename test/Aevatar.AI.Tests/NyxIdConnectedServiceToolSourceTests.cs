@@ -274,19 +274,22 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
-    public async Task DiscoverToolsAsync_AgentKeyCredential_ShouldMaterializeOpenApiOperationsFromRuntimeSelectors()
+    public async Task DiscoverToolsAsync_AgentKeyCredential_ShouldUseExactCatalogAndSameCredentialForExecution()
     {
         var handler = new FakeNyxIdHandler();
-        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/google-workspace/openapi.json"] = CustomOpenApi;
+        handler.KeysByToken["agent-key-token"] = Keys(
+            InstanceWithOpenApiUrl("usvc-alpha", "api-shop", "svc-shop", "http://internal/api/openapi.json"));
+        handler.McpConfigByToken["agent-key-token"] = ExactMcpCatalog;
         var source = CreateSource(handler);
 
         using var scope = PushContext(
             "agent-key-token",
+            sourceReadableToken: "broader-user-token",
             credentialKind: AgentToolNyxIdCredentialKind.AgentKey,
             connectedServicesContextJson: """
                 {
                   "nyxid_service_selectors": [
-                    { "service_slug": "api-google-workspace", "endpoint_names": ["readDiningProfileContext"] }
+                    { "service_slug": "api-shop" }
                   ]
                 }
                 """);
@@ -294,43 +297,53 @@ public class NyxIdConnectedServiceToolSourceTests
 
         var tool = tools.Should().ContainSingle().Subject;
         var owner = tool.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
-        owner.OperationAdmission.ServiceInstanceId.Should().Be("agent-key:api-google-workspace");
-        owner.OperationAdmission.ServiceSlug.Should().Be("api-google-workspace");
+        owner.OperationAdmission.ServiceInstanceId.Should().Be("usvc-alpha");
+        owner.OperationAdmission.ServiceSlug.Should().Be("api-shop");
         owner.OperationAdmission.Identity.Should().Be(
-            new AgentToolOperationIdentity.PublishedEndpoint("readDiningProfileContext"));
-        owner.OperationAdmission.QueryParameters.Single().Description.Should()
-            .Be("Set to media to download the file content instead of metadata.");
-        using (var schema = JsonDocument.Parse(tool.ParametersSchema))
-        {
-            var alt = schema.RootElement
-                .GetProperty("properties")
-                .GetProperty("query")
-                .GetProperty("properties")
-                .GetProperty("alt");
-            alt.GetProperty("description").GetString().Should()
-                .Be("Set to media to download the file content instead of metadata.");
-            alt.GetProperty("enum").EnumerateArray()
-                .Select(static item => item.GetString())
-                .Should().Equal("media");
-        }
-        handler.DiscoveryRequests.Should().Be(0);
-        handler.McpConfigRequests.Should().Be(0);
-        handler.RawOpenApiRequests.Should().Equal(
-            "/api/v1/catalog-specs/api-google-workspace/openapi.json",
-            "/api/v1/catalog-specs/google-workspace/openapi.json");
+            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-alpha"));
+        handler.DiscoveryTokens.Should().Equal("agent-key-token");
+        handler.McpConfigTokens.Should().Equal("agent-key-token");
+        handler.RawOpenApiRequests.Should().BeEmpty();
 
         var outcome = await tool.ExecuteWithOutcomeAsync(
             "call-agent-key",
             tool.Name,
-            "{}");
+            """{"path_params":{"orderId":"order-1"}}""");
 
         outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
-        handler.McpConfigRequests.Should().Be(0);
+        handler.McpConfigTokens.Should().Equal("agent-key-token", "agent-key-token");
         var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
-        proxyRequest.Path.Should().Be("/api/v1/proxy/s/api-google-workspace/profile/dining");
-        proxyRequest.Query.Should().NotContain("_nyxid_via");
+        proxyRequest.Path.Should().Be("/api/v1/proxy/s/api-shop/orders/order-1");
+        proxyRequest.Query.Should().Contain("_nyxid_via=usvc-alpha");
         proxyRequest.Authorization.Should().Be("agent-key-token");
         proxyRequest.ApiKey.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(true, "{}")]
+    [InlineData(false, "{}")]
+    [InlineData(false, "{\"error\":true,\"status\":403}")]
+    public async Task DiscoverToolsAsync_AgentKeyCredential_UnavailableCatalogDoesNotFallBackToRawSpecs(
+        bool requestFails, string catalogResponse)
+    {
+        var handler = new FakeNyxIdHandler { FailMcpConfig = requestFails };
+        handler.KeysByToken["agent-key-token"] = Keys(
+            InstanceWithOpenApiUrl("usvc-alpha", "api-google-workspace", "api-google-workspace", "http://internal/api/openapi.json"));
+        handler.McpConfigByToken["agent-key-token"] = catalogResponse;
+        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/google-workspace/openapi.json"] = CustomOpenApi;
+        var source = CreateSource(handler);
+        using var scope = PushContext(
+            "agent-key-token",
+            credentialKind: AgentToolNyxIdCredentialKind.AgentKey,
+            connectedServicesContextJson: """{"nyxid_service_selectors":[{"service_slug":"api-google-workspace"}]}""");
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+        handler.DiscoveryTokens.Should().Equal("agent-key-token");
+        handler.McpConfigRequests.Should().Be(1);
+        handler.RawOpenApiRequests.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
     }
 
     [Theory]
@@ -689,8 +702,11 @@ public class NyxIdConnectedServiceToolSourceTests
         allowedOrganization.GetProperty("credentialAllowed").GetBoolean().Should().BeTrue();
     }
 
-    [Fact]
-    public async Task DiscoverToolsAsync_SameSlugDifferentExactServices_ProducesDistinctAdmissions()
+    [Theory]
+    [InlineData(AgentToolNyxIdCredentialKind.Unspecified)]
+    [InlineData(AgentToolNyxIdCredentialKind.AgentKey)]
+    public async Task DiscoverToolsAsync_SameSlugDifferentExactServices_ProducesDistinctAdmissions(
+        AgentToolNyxIdCredentialKind credentialKind)
     {
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["user-token"] = Keys(
@@ -702,7 +718,7 @@ public class NyxIdConnectedServiceToolSourceTests
             McpService("usvc-beta", "api-shop", ReadEndpoint("endpoint-shared")));
         var source = CreateSource(handler);
 
-        using var scope = PushContext("user-token");
+        using var scope = PushContext("user-token", credentialKind: credentialKind);
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().HaveCount(2);
@@ -857,8 +873,11 @@ public class NyxIdConnectedServiceToolSourceTests
             .Should().NotContain(contractDigest);
     }
 
-    [Fact]
-    public async Task DiscoverToolsAsync_SameExactServiceWithDifferentRouteSlug_FailsClosed()
+    [Theory]
+    [InlineData(AgentToolNyxIdCredentialKind.Unspecified)]
+    [InlineData(AgentToolNyxIdCredentialKind.AgentKey)]
+    public async Task DiscoverToolsAsync_SameExactServiceWithDifferentRouteSlug_FailsClosed(
+        AgentToolNyxIdCredentialKind credentialKind)
     {
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["user-token"] = Keys(
@@ -868,7 +887,7 @@ public class NyxIdConnectedServiceToolSourceTests
             McpService("usvc-alpha", "api-attacker", ReadEndpoint("endpoint-alpha")));
         var source = CreateSource(handler);
 
-        using var scope = PushContext("user-token");
+        using var scope = PushContext("user-token", credentialKind: credentialKind);
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().BeEmpty();

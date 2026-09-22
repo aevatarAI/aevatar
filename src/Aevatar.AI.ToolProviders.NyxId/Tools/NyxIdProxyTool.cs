@@ -475,10 +475,12 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 AccessTokenMissingErrorMessage);
         }
 
-        // Admission reads the catalog through the source-readable caller authority. Revalidate
-        // against that same view while retaining the delegation token for the exact proxy request.
-        var authorityToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
-                                 AgentToolRequestContext.Current?.Credentials) ?? token;
+        // Agent Keys revalidate through the dispatch key. Other credential paths retain
+        // their source-readable authority view and delegation token for the exact proxy request.
+        var authorityToken = useApiKeyCredential
+            ? token
+            : AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(
+                  AgentToolRequestContext.Current?.Credentials) ?? token;
         var authorityLease = useApiKeyCredential
             ? NyxIdDelegationTokenLeaseResult.Success(authorityToken)
             : await _delegationTokenLease.ResolveAsync(authorityToken, ct);
@@ -748,11 +750,11 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             return null;
         }
 
-        if (useApiKeyCredential)
+        if (useApiKeyCredential &&
+            NyxIdConnectedServiceToolSource.IsAgentKeySyntheticServiceId(admission.ServiceInstanceId))
         {
-            // Agent Keys are proxy-capable integration identities, but the NyxID MCP catalog is
-            // not part of their supported runtime authority surface. The turn admission freezes
-            // the OpenAPI-derived contract; the exact proxy route enforces live service authority.
+            // Existing frozen synthetic proofs retain their original authority protocol.
+            // New Agent Key catalogs only admit exact UserService/endpoint identities.
             return null;
         }
 
@@ -786,7 +788,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
             // to be denied access to NyxID's management catalog. Read-only proofs may let
             // NyxID's exact route make the final live authority decision; writes and actual
             // catalog outages remain fail-closed here.
-            if (!catalog.SourceUnavailable &&
+            if (!useApiKeyCredential && !catalog.SourceUnavailable &&
                 CanUseExactReadOnlyAuthority(admission))
                 return null;
 

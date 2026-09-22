@@ -1100,6 +1100,76 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_AgentKey_LegacySyntheticProof_ShouldKeepFrozenSlugRoute()
+    {
+        var admission = ListMessagesAdmission() with { ServiceInstanceId = "agent-key:api-lark-bot-2" };
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(
+            admission,
+            userToken: "agent-key-token",
+            credentialKind: AgentToolNyxIdCredentialKind.AgentKey);
+
+        var result = await tool.ExecuteAsync("""{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().Be("{}");
+        handler.McpConfigRequests.Should().BeEmpty();
+        handler.AuthorizationBearers.Should().Equal("agent-key-token");
+        var request = handler.ProxyRequests.Should().ContainSingle().Subject;
+        request.Path.Should().Be("/api/v1/proxy/s/api-lark-bot-2/open-apis/im/v1/messages");
+        request.Query.Should().NotContain("_nyxid_via");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AgentKey_ShouldRevalidateWithTheExecutionKey()
+    {
+        var admission = ListMessagesAdmission();
+        var handler = new RecordingHandler();
+        handler.McpConfigJsonByBearer["broader-user-token"] = McpConfig(admission);
+        handler.McpConfigJsonByBearer["agent-key-token"] = McpConfig(
+            admission with { ServiceSlug = "api-lark-other" });
+        var tool = CreateTool(handler);
+        using var scope = PushContext(
+            admission,
+            userToken: "agent-key-token",
+            credentialKind: AgentToolNyxIdCredentialKind.AgentKey,
+            sourceReadableToken: "broader-user-token");
+
+        var result = await tool.ExecuteAsync("""{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.AuthorizationBearers.Should().Equal("agent-key-token");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("{\"error\":true,\"status\":403}")]
+    [InlineData("{\"error\":true,\"status\":503}")]
+    [InlineData("missing-service")]
+    public async Task ExecuteAsync_AgentKey_ShouldRejectUnavailableOrMissingAuthority(string catalogResponse)
+    {
+        var admission = ListMessagesAdmission();
+        var handler = new RecordingHandler
+        {
+            McpConfigJson = catalogResponse == "missing-service"
+                ? McpConfig(admission with { ServiceInstanceId = "another-instance" })
+                : catalogResponse,
+        };
+        var tool = CreateTool(handler);
+        using var scope = PushContext(
+            admission,
+            userToken: "agent-key-token",
+            credentialKind: AgentToolNyxIdCredentialKind.AgentKey);
+
+        var result = await tool.ExecuteAsync("""{"query":{"container_id":"oc_1"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_AUTHORITY_DRIFT");
+        handler.McpConfigRequests.Should().ContainSingle();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldUseSourceReadableCredentialForPublishedAuthorityRevalidation()
     {
         var admission = ListMessagesAdmission();
