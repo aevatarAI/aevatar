@@ -24,6 +24,7 @@ namespace Aevatar.AI.Tests;
 
 public class NyxIdConnectedServiceToolSourceTests
 {
+    private const int ConnectedServiceReadBudgetBytes = 256 * 1024;
     private const string PersonalCredentialSource = """{ "type": "personal" }""";
 
     private const string ExactMcpCatalog = """
@@ -972,6 +973,34 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task DynamicRead_ResponseAboveLegacyLimit_ReturnsBoundedTypedProjection()
+    {
+        var handler = ExactOperationHandler();
+        handler.ProxyResponseBody = JsonSerializer.Serialize(new
+        {
+            payload = new string('x', 25 * 1024),
+        });
+        Encoding.UTF8.GetByteCount(handler.ProxyResponseBody).Should().BeGreaterThan(16 * 1024);
+        Encoding.UTF8.GetByteCount(handler.ProxyResponseBody).Should().BeLessThan(ConnectedServiceReadBudgetBytes);
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-alpha",
+            tool.Name,
+            """{"path_params":{"orderId":"order-alpha"}}""");
+
+        using var result = JsonDocument.Parse(outcome.ResultJson);
+        result.RootElement.GetProperty("status").GetString().Should().Be("succeeded");
+        result.RootElement.GetProperty("data").GetProperty("payload").GetString()
+            .Should().HaveLength(25 * 1024);
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task DynamicRead_CalendarListSchema_ShouldDescribeBoundedQueryParameters()
     {
         var handler = new FakeNyxIdHandler();
@@ -1071,7 +1100,7 @@ public class NyxIdConnectedServiceToolSourceTests
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             McpService("usvc-calendar", "api-google-workspace", CalendarListEndpoint("calendar-list")));
         handler.ProxyResponseContentFactory = () => new StreamingContent(
-            Encoding.UTF8.GetBytes(new string('x', 16 * 1024 + 1)));
+            Encoding.UTF8.GetBytes(new string('x', ConnectedServiceReadBudgetBytes + 1)));
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -1092,7 +1121,7 @@ public class NyxIdConnectedServiceToolSourceTests
             .Select(parameter => parameter.GetProperty("name").GetString())
             .Should().Contain(["timeMin", "timeMax", "singleEvents", "orderBy"]);
         outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
-        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
+        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(ConnectedServiceReadBudgetBytes);
     }
 
     [Fact]
@@ -1105,7 +1134,7 @@ public class NyxIdConnectedServiceToolSourceTests
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             McpService("usvc-calendar", "api-google-workspace", LongDescriptionCalendarListEndpoint("calendar-list")));
         handler.ProxyResponseContentFactory = () => new StreamingContent(
-            Encoding.UTF8.GetBytes(new string('x', 16 * 1024 + 1)));
+            Encoding.UTF8.GetBytes(new string('x', ConnectedServiceReadBudgetBytes + 1)));
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -1122,7 +1151,7 @@ public class NyxIdConnectedServiceToolSourceTests
         result.RootElement.GetProperty("retry_hints")
             .TryGetProperty("query_parameters", out _)
             .Should().BeFalse();
-        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
+        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(ConnectedServiceReadBudgetBytes);
         outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
     }
 
@@ -1132,7 +1161,7 @@ public class NyxIdConnectedServiceToolSourceTests
         const string marker = "provider-secret-must-not-propagate";
         var handler = ExactOperationHandler();
         handler.ProxyResponseContentFactory = () => new StreamingContent(
-            Encoding.UTF8.GetBytes(new string('x', 16 * 1024) + marker));
+            Encoding.UTF8.GetBytes(new string('x', ConnectedServiceReadBudgetBytes) + marker));
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -1146,7 +1175,7 @@ public class NyxIdConnectedServiceToolSourceTests
         result.RootElement.GetProperty("status").GetString().Should().Be("retry_required");
         result.RootElement.GetProperty("error_code").GetString()
             .Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
-        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
+        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(ConnectedServiceReadBudgetBytes);
         outcome.ResultJson.Should().NotContain(marker);
         outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         outcome.Receipt.ErrorCode.Should().BeEmpty();
@@ -1159,8 +1188,8 @@ public class NyxIdConnectedServiceToolSourceTests
     public async Task DynamicRead_SourceWithinLimitButCompleteProjectionOverLimit_ReturnsBoundedTypedRejection()
     {
         var handler = ExactOperationHandler();
-        handler.ProxyResponseBody = JsonSerializer.Serialize(new string('x', 16_200));
-        Encoding.UTF8.GetByteCount(handler.ProxyResponseBody).Should().BeLessThan(16 * 1024);
+        handler.ProxyResponseBody = JsonSerializer.Serialize(new string('x', ConnectedServiceReadBudgetBytes - 128));
+        Encoding.UTF8.GetByteCount(handler.ProxyResponseBody).Should().BeLessThan(ConnectedServiceReadBudgetBytes);
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -1174,7 +1203,7 @@ public class NyxIdConnectedServiceToolSourceTests
         result.RootElement.GetProperty("status").GetString().Should().Be("retry_required");
         result.RootElement.GetProperty("error_code").GetString()
             .Should().Be("NYXID_CONNECTED_SERVICE_READ_TOO_LARGE");
-        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(16 * 1024);
+        Encoding.UTF8.GetByteCount(outcome.ResultJson).Should().BeLessThanOrEqualTo(ConnectedServiceReadBudgetBytes);
         outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         outcome.Receipt.ErrorCode.Should().BeEmpty();
         outcome.Receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
@@ -2256,7 +2285,7 @@ public class NyxIdConnectedServiceToolSourceTests
 
     private static string LongDescriptionCalendarListEndpoint(string endpointId)
     {
-        var description = new string('d', 20 * 1024);
+        var description = new string('d', ConnectedServiceReadBudgetBytes);
         return $$"""
         {
           "endpoint_id": "{{endpointId}}",
