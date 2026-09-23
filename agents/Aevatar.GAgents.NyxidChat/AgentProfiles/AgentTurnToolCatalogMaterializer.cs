@@ -1378,13 +1378,16 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             ApplyMaximumPolicy(maximumEligible, maximum.Names, routeTools.Tools, diagnostics);
         }
 
-        var eligible = maximumEligible
-            .Where(name => routeTools.Tools.TryGetValue(name, out var tool) &&
-                           MatchesVerifiedUserService(
-                               tool,
-                               verifiedUserServiceId,
-                               verifiedServiceSlug))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var useSourceReadableCredential = HasSourceReadableNyxIdCredential(toolContext);
+        var eligible = useSourceReadableCredential
+            ? new HashSet<string>(maximumEligible, StringComparer.OrdinalIgnoreCase)
+            : maximumEligible
+                .Where(name => routeTools.Tools.TryGetValue(name, out var tool) &&
+                               MatchesVerifiedUserService(
+                                   tool,
+                                   verifiedUserServiceId,
+                                   verifiedServiceSlug))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var selectionContext = new ConnectedOperationSelectionContext(
             userMessage ?? string.Empty,
             profile?.ClassifierTimeoutMs ?? DefaultConnectedOperationSelectorTimeoutMs,
@@ -1574,6 +1577,10 @@ public sealed class AgentTurnToolCatalogMaterializer : IAgentProfileTurnToolCata
             return AgentTurnToolCatalogFactory.RestrictedEmpty(diagnostics: diagnostics);
         }
     }
+
+    internal static bool HasSourceReadableNyxIdCredential(AgentToolExecutionContext toolContext) =>
+        !string.IsNullOrWhiteSpace(
+            AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(toolContext.Credentials));
 
     private static bool MatchesVerifiedUserService(
         IAgentTool tool,

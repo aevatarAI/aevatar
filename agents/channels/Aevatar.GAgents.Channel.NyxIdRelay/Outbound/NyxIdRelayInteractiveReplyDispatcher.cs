@@ -36,7 +36,8 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
         string relayToken,
         MessageContent intent,
         ComposeContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool deferTextDelivery = false)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(intent);
@@ -53,7 +54,7 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
                 messageId,
                 BuildTextFallback(intent),
                 ComposeCapability.Unspecified,
-                cancellationToken);
+                cancellationToken, deferTextDelivery);
         }
 
         var capability = producer.Evaluate(intent, context);
@@ -62,10 +63,12 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
             _logger.LogWarning(
                 "Composer rejected interactive intent for channel {Channel}; degrading to text.",
                 channel.Value);
-            return await SendTextFallbackAsync(relayToken, messageId, BuildTextFallback(intent), capability, cancellationToken);
+            return await SendTextFallbackAsync(relayToken, messageId, BuildTextFallback(intent), capability, cancellationToken, deferTextDelivery);
         }
 
         var native = producer.Produce(intent, context);
+        if (deferTextDelivery && !native.IsInteractive)
+            return DeferredText(BuildTextFallback(intent), capability);
         var body = new ChannelRelayReplyBody(
             Text: native.Text,
             Metadata: native.CardPayload is null ? null : new ChannelRelayReplyMetadata(native.CardPayload));
@@ -80,16 +83,22 @@ public sealed class NyxIdRelayInteractiveReplyDispatcher : IInteractiveReplyDisp
             Detail: delivery.Detail);
     }
 
+    private static InteractiveReplyDispatchResult DeferredText(string text, ComposeCapability capability) =>
+        new(false, null, null, capability, true, null, text);
+
     private async Task<InteractiveReplyDispatchResult> SendTextFallbackAsync(
         string relayToken,
         string messageId,
         string? text,
         ComposeCapability capability,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool deferTextDelivery)
     {
         var effectiveText = string.IsNullOrWhiteSpace(text)
             ? "(no content)"
             : text;
+        if (deferTextDelivery)
+            return DeferredText(effectiveText, capability);
         var delivery = await _nyxClient.SendChannelRelayReplyAsync(
             relayToken,
             messageId,

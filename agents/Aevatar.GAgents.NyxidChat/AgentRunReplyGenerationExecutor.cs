@@ -1393,7 +1393,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
     private bool ShouldUseStreamingReplies(ChatActivity? activity) =>
         ShouldUseCardKitStreaming(activity) ||
-        !string.Equals(activity?.TransportExtras?.NyxPlatform?.Trim(), "telegram", StringComparison.OrdinalIgnoreCase);
+        NyxRelayCapabilityProfiles.Resolve(
+            NormalizeOptional(activity?.TransportExtras?.NyxPlatform) ?? activity?.ChannelId?.Value ?? string.Empty)
+            .ReplyMessageMultiplicity == ReplyMessageMultiplicity.Multiple;
 
     private bool ShouldUseCardKitStreaming(ChatActivity? activity) =>
         _relayOptions?.StreamingCardKitEnabled == true &&

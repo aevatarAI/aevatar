@@ -277,6 +277,7 @@ public sealed partial class ConversationGAgent
             PreviousPhase = ToLifecyclePhase(current.Phase),
             Phase = ToLifecyclePhase(updated.Phase),
             ChangedAtUnixMs = changedAtUnixMs,
+            NyxRelayTextDeliveryStrategy = NyxRelayTextDeliveryStrategy.EditLoop,
         };
 
         if (!string.Equals(current.PlatformMessageId, updated.PlatformMessageId, StringComparison.Ordinal))

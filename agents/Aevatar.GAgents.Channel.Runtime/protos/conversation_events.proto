@@ -316,6 +316,23 @@ message ConversationReplyLifecycleChangedEvent {
   optional LlmReplyTerminalState nyx_relay_terminal_state = 42;
   repeated ConversationHistoryEntry appended_history = 43;
   optional int32 nyx_relay_retry_attempt = 44;
+  optional NyxRelayTextDeliveryStrategy nyx_relay_text_delivery_strategy = 45;
+  optional int32 append_next_segment_index = 46;
+  optional int32 append_accepted_segment_count_delta = 47;
+  optional string append_last_accepted_platform_message_id = 48;
+  oneof append_in_flight_change {
+    NyxRelayAppendOperation append_in_flight_operation = 49;
+    google.protobuf.Empty append_in_flight_operation_cleared = 50;
+  }
+  optional int64 append_operation_generation = 51;
+  optional int32 append_max_segment_length = 52;
+  optional NyxRelayAppendDeliveryDisposition append_delivery_disposition = 53;
+  optional NyxRelayAppendProgressState append_progress_state = 54;
+  optional NyxRelayAppendTerminalReason append_terminal_reason = 55;
+  optional bool append_any_request_dispatched = 56;
+  optional bool append_operation_step_started = 57;
+  optional bool append_llm_run_dispatched = 58;
+  optional int64 append_progress_due_at_unix_ms = 59;
 }
 
 // Refactor (iter20/cluster-004):
@@ -484,6 +501,7 @@ message ReplyOperationStepEvent {
   oneof payload {
     NyxRelayTextOperationStepPayload nyx_relay_text = 5;
     LarkCardOperationStepPayload lark_card = 6;
+    NyxRelayAppendOperationStepPayload nyx_relay_append = 7;
   }
 }
 
@@ -685,4 +703,99 @@ message LlmReplyDeliveryFailedEvent {
   int64 failed_at_unix_ms = 3;
   string error_code = 4;
   string error_message = 5;
+}
+
+// Relay-local delivery strategy. Absent historical values retain the edit loop.
+enum NyxRelayTextDeliveryStrategy {
+  NYX_RELAY_TEXT_DELIVERY_STRATEGY_UNSPECIFIED = 0;
+  NYX_RELAY_TEXT_DELIVERY_STRATEGY_EDIT_LOOP = 1;
+  NYX_RELAY_TEXT_DELIVERY_STRATEGY_APPEND_MESSAGES = 2;
+}
+
+enum NyxRelayAppendMessageKind {
+  NYX_RELAY_APPEND_MESSAGE_KIND_UNSPECIFIED = 0;
+  NYX_RELAY_APPEND_MESSAGE_KIND_CONTENT = 1;
+  NYX_RELAY_APPEND_MESSAGE_KIND_PROGRESS = 2;
+}
+
+enum NyxRelayAppendProgressState {
+  NYX_RELAY_APPEND_PROGRESS_STATE_UNSPECIFIED = 0;
+  NYX_RELAY_APPEND_PROGRESS_STATE_WAITING = 1;
+  NYX_RELAY_APPEND_PROGRESS_STATE_SKIPPED = 2;
+  NYX_RELAY_APPEND_PROGRESS_STATE_ACCEPTED = 3;
+  NYX_RELAY_APPEND_PROGRESS_STATE_REJECTED = 4;
+  NYX_RELAY_APPEND_PROGRESS_STATE_DELIVERY_UNKNOWN = 5;
+}
+
+enum NyxRelayAppendDeliveryDisposition {
+  NYX_RELAY_APPEND_DELIVERY_DISPOSITION_UNSPECIFIED = 0;
+  NYX_RELAY_APPEND_DELIVERY_DISPOSITION_NOT_SENT = 1;
+  NYX_RELAY_APPEND_DELIVERY_DISPOSITION_ALL_ACCEPTED = 2;
+  NYX_RELAY_APPEND_DELIVERY_DISPOSITION_PARTIAL_ACCEPTED = 3;
+  NYX_RELAY_APPEND_DELIVERY_DISPOSITION_DELIVERY_UNKNOWN = 4;
+}
+
+enum NyxRelayAppendTerminalReason {
+  NYX_RELAY_APPEND_TERMINAL_REASON_UNSPECIFIED = 0;
+  NYX_RELAY_APPEND_TERMINAL_REASON_PREFIX_REWRITTEN = 1;
+  NYX_RELAY_APPEND_TERMINAL_REASON_PRE_DISPATCH_FAILURE = 2;
+  NYX_RELAY_APPEND_TERMINAL_REASON_REJECTED = 3;
+  NYX_RELAY_APPEND_TERMINAL_REASON_DELIVERY_UNKNOWN = 4;
+  NYX_RELAY_APPEND_TERMINAL_REASON_FORMATTING_FAILED = 5;
+}
+
+message NyxRelayAppendOperation {
+  NyxRelayAppendMessageKind kind = 1;
+  int32 segment_index = 2;
+  string text = 3;
+  bool is_final = 4;
+  int64 operation_generation = 5;
+}
+
+message NyxRelayAppendStreamingState {
+  int32 next_segment_index = 1;
+  int32 accepted_segment_count = 2;
+  string last_accepted_platform_message_id = 3;
+  NyxRelayAppendOperation in_flight_operation = 4;
+  int64 operation_generation = 5;
+  int32 max_segment_length = 6;
+  NyxRelayAppendDeliveryDisposition delivery_disposition = 7;
+  NyxRelayAppendProgressState progress_state = 8;
+  NyxRelayAppendTerminalReason terminal_reason = 9;
+  // Persists the no-token-fallback boundary, including progress dispatch.
+  bool any_request_dispatched = 10;
+  // Claims the self-message once before outbound preflight; never replays on activation.
+  bool operation_step_started = 11;
+  bool llm_run_dispatched = 12;
+  int64 progress_due_at_unix_ms = 13;
+}
+
+message NyxRelayAppendProgressDueEvent {
+  string correlation_id = 1;
+  int64 fired_at_unix_ms = 2;
+}
+
+message NyxRelayAppendOperationCompletedEvent {
+  string correlation_id = 1;
+  NyxRelayAppendMessageKind kind = 2;
+  int32 segment_index = 3;
+  int64 operation_generation = 4;
+  NyxRelayTextOperationResultState state = 5;
+  NyxRelayTextOperationRawResult raw_result = 6;
+  bool request_dispatched = 7;
+}
+
+message NyxRelayAppendOperationTimeoutFiredEvent {
+  string correlation_id = 1;
+  NyxRelayAppendMessageKind kind = 2;
+  int32 segment_index = 3;
+  int64 operation_generation = 4;
+  int64 fired_at_unix_ms = 5;
+}
+
+// Reconciliation keys only: no text, activity, anchor or credentials.
+message NyxRelayAppendOperationStepPayload {
+  NyxRelayAppendMessageKind kind = 1;
+  int32 segment_index = 2;
+  int64 operation_generation = 3;
 }

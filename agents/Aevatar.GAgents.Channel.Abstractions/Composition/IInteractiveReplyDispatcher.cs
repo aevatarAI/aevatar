@@ -17,7 +17,8 @@ public interface IInteractiveReplyDispatcher
         string relayToken,
         MessageContent intent,
         ComposeContext context,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool deferTextDelivery = false);
 }
 
 /// <summary>Outcome of one <see cref="IInteractiveReplyDispatcher.DispatchAsync"/> call.</summary>
@@ -27,10 +28,12 @@ public interface IInteractiveReplyDispatcher
 /// <param name="Capability">Composer capability used to render the reply.</param>
 /// <param name="FellBackToText">Whether the dispatcher downgraded to plain text.</param>
 /// <param name="Detail">Transport-reported error detail when unsuccessful.</param>
+/// <param name="DeferredText">Selected plain text awaiting actor-owned delivery, without a transport attempt.</param>
 public sealed record InteractiveReplyDispatchResult(
     bool Succeeded,
     string? MessageId,
     string? PlatformMessageId,
     ComposeCapability Capability,
     bool FellBackToText,
-    string? Detail);
+    string? Detail,
+    string? DeferredText = null);

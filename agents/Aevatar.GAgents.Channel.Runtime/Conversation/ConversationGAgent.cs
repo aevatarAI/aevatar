@@ -91,6 +91,7 @@ public sealed partial class ConversationGAgent :
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
+        await RecoverAppendRepliesAsync();
         await SchedulePendingLlmReplyDispatchesAsync(ct);
         await DispatchPendingWorkflowDraftRunsAsync(ct);
         await SchedulePendingInboundTurnRetriesAsync(ct);
@@ -813,6 +814,12 @@ public sealed partial class ConversationGAgent :
 
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
+        // Progress delivery fences reply-token replay; only a successful run handoff
+        // proves that the LLM run exists and must not be dispatched again.
+        if (FindAppendLifecycle(request.CorrelationId)?.NyxRelayAppendStreaming is { LlmRunDispatched: true })
+            return;
+        // Recovery may begin with only the committed request; restore admission before handoff.
+        await InitializeAppendReplyAsync(request);
         var dispatcher = Services.GetService<IChannelLlmReplyRunDispatcher>();
         if (dispatcher is null)
         {
@@ -865,6 +872,8 @@ public sealed partial class ConversationGAgent :
             //   Conversation observes only dispatch handoff success/failure here.
             //   Run duplicate/stale decisions are committed by AgentRunGAgent events.
             await dispatcher.DispatchAsync(dispatchRequest, ct);
+            if (FindAppendLifecycle(request.CorrelationId) is { } appendLifecycle)
+                await ChangeAppendAsync(appendLifecycle, change => change.AppendLlmRunDispatched = true);
             Logger.LogInformation(
                 "Dispatched LLM reply run request: runId={RunId} correlation={CorrelationId} conversation={Key}",
                 dispatchRequest.RunId,
@@ -1076,6 +1085,24 @@ public sealed partial class ConversationGAgent :
         var referenceActivity = evt.UseSourceActivityDeliveryContext
             ? evt.Activity
             : pendingRequest?.Activity ?? pendingWorkflowRequest?.Activity ?? evt.Activity;
+        if (IsRelayActivity(referenceActivity) &&
+            NyxRelayCapabilityProfiles.Resolve(AppendPlatform(referenceActivity)).ReplyMessageMultiplicity == ReplyMessageMultiplicity.None)
+        {
+            await PersistDomainEventsAsync([
+                new LlmReplyDeliveryFailedEvent
+                {
+                    CorrelationId = evt.CorrelationId, RunId = evt.RunId, FailedAtUnixMs = AppendNow,
+                    ErrorCode = "relay_reply_not_supported", ErrorMessage = "The Relay platform has no reply surface.",
+                },
+                new ConversationContinueFailedEvent
+                {
+                    CommandId = commandId, CorrelationId = evt.CorrelationId,
+                    Kind = FailureKind.PermanentAdapterError, ErrorCode = "relay_reply_not_supported",
+                    ErrorSummary = "The Relay platform has no reply surface.", NotRetryable = new Empty(), FailedAtUnixMs = AppendNow,
+                },
+            ]);
+            return;
+        }
         var runtimeContext = await BuildNyxRelayRuntimeContextForReplyAsync(
             evt,
             referenceActivity,
@@ -1086,6 +1113,15 @@ public sealed partial class ConversationGAgent :
             evt.TerminalState,
             DescribeReplyTokenSource(evt, runtimeContext));
 
+        if (FindAppendLifecycle(evt.CorrelationId)?.NyxRelayAppendStreaming is { } appendDelivery &&
+            !(appendDelivery.TerminalReason == NyxRelayAppendTerminalReason.PreDispatchFailure && !appendDelivery.AnyRequestDispatched))
+        {
+            runtimeContext = runtimeContext with
+            {
+                DeferRelayTextReply = true,
+                RelayTextOnly = appendDelivery.AnyRequestDispatched || appendDelivery.InFlightOperation is not null,
+            };
+        }
         if (await TryCompleteStreamedReplyAsync(evt, commandId, referenceActivity, runtimeContext))
             return;
 
@@ -1095,6 +1131,13 @@ public sealed partial class ConversationGAgent :
             runtimeContext,
             CancellationToken.None);
 
+        if (result.DeferredRelayText is { } selectedText)
+        {
+            var selectedReply = evt.Clone();
+            selectedReply.Outbound = selectedText.Clone();
+            await TryCompleteAppendReplyAsync(selectedReply, commandId);
+            return;
+        }
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (result.Success)
         {
@@ -1485,6 +1528,17 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
+        if (FindAppendLifecycle(correlationId) is not null)
+        {
+            await HandleAppendChunkAsync(evt);
+            return;
+        }
+        if (FindReplyLifecycle(correlationId, ConversationReplyLifecycleMode.NyxRelayText) is null && IsRelayActivity(evt.Activity))
+        {
+            var profile = NyxRelayCapabilityProfiles.Resolve(AppendPlatform(evt.Activity));
+            if (!profile.SupportsEdit || profile.ReplyMessageMultiplicity != ReplyMessageMultiplicity.Multiple)
+                return;
+        }
         var state = GetOrInitNyxRelayStreamingState(correlationId);
         if (ShouldSkipNyxRelayStreamingForUnavailable(state, NyxRelayStreamingGuardSource.AcceptInterimChunk))
             return;
@@ -1564,6 +1618,8 @@ public sealed partial class ConversationGAgent :
         if (correlationId is null)
             return false;
 
+        if (FindAppendLifecycle(correlationId) is not null)
+            return !runtimeContext.DeferRelayTextReply && await TryCompleteAppendReplyAsync(evt, commandId);
         var state = GetOrInitNyxRelayStreamingState(correlationId);
         if (state.InFlight is not null)
         {
@@ -1846,7 +1902,8 @@ public sealed partial class ConversationGAgent :
     public async Task HandleReplyOperationStepAsync(ReplyOperationStepEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        if (evt.PayloadCase != ReplyOperationStepEvent.PayloadOneofCase.NyxRelayText)
+        if (evt.PayloadCase != ReplyOperationStepEvent.PayloadOneofCase.NyxRelayText &&
+            evt.PayloadCase != ReplyOperationStepEvent.PayloadOneofCase.NyxRelayAppend)
             return;
         if (!string.Equals(NormalizeOptional(evt.CorrelationId), evt.CorrelationId, StringComparison.Ordinal))
             return;
@@ -2447,11 +2504,13 @@ public sealed partial class ConversationGAgent :
 
     private IReadOnlyList<IReplyOperationStepRenderer> ResolveReplyOperationStepRenderers()
     {
-        var renderers = Services.GetServices<IReplyOperationStepRenderer>().ToArray();
-        if (renderers.Length > 0)
-            return renderers.Where(renderer => renderer is INyxRelayTextReplyStreamRenderer).ToArray();
-
-        return [ResolveNyxRelayTextReplyStreamRenderer()];
+        var renderers = Services.GetServices<IReplyOperationStepRenderer>()
+            .Where(renderer => renderer is INyxRelayTextReplyStreamRenderer).ToList();
+        if (renderers.Count == 0)
+            renderers.Add(ResolveNyxRelayTextReplyStreamRenderer());
+        if (Services.GetService<INyxRelayAppendOutboundPort>() is { } appendOutbound)
+            renderers.Add(new NyxRelayAppendReplyStreamRenderer(appendOutbound, AppendTimeProvider, StreamingFailureUpdateTimeout));
+        return renderers;
     }
 
     private Task PublishReplyOperationStepAsync(ReplyOperationStepEvent step, CancellationToken ct) =>
@@ -3518,6 +3577,7 @@ public sealed partial class ConversationGAgent :
             lifecycle.PendingAppendedHistory.AddRange(evt.AppendedHistory.Select(entry => entry.Clone()));
         }
 
+        ApplyAppendTransitionFacts(lifecycle, evt);
         if (evt.ChangedAtUnixMs > 0)
             lifecycle.UpdatedAtUnixMs = evt.ChangedAtUnixMs;
     }

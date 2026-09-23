@@ -343,6 +343,14 @@ public sealed class TelegramMessageComposerTests : MessageComposerUnitTests<Tele
     }
 
     [Fact]
+    public void DefaultCapabilities_do_not_advertise_streaming_when_editing_is_disabled()
+    {
+        TelegramMessageComposer.DefaultCapabilities.SupportsEdit.ShouldBeFalse();
+        TelegramMessageComposer.DefaultCapabilities.Streaming.ShouldBe(StreamingSupport.None);
+        TelegramMessageComposer.DefaultCapabilities.RecommendedStreamDebounceMs.ShouldBe(0);
+    }
+
+    [Fact]
     public void Forged_file_descriptor_does_not_enable_unimplemented_attachments()
     {
         var capabilities = TelegramMessageComposer.DefaultCapabilities.Clone();

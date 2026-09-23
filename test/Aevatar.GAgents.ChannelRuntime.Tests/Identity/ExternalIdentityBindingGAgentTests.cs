@@ -94,7 +94,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleCommitBinding_IsIdempotentUnderConcurrentInit()
+    public async Task HandleCommitBinding_IsIdempotentWhenBindingAlreadyCurrent()
     {
         var subject = SampleSubject();
 
@@ -106,10 +106,31 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
         });
         var afterFirstVersion = _agent.EventSourcing!.CurrentVersion;
 
-        // Second concurrent /init lands after the first one already
-        // committed. The actor MUST keep the existing binding_id and discard
-        // the second one (ADR-0018 §Implementation Notes #2) without
-        // persisting projection-only events.
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
+        });
+
+        _agent.State.BindingId.Should().Be("bnd_first");
+        _agent.EventSourcing!.CurrentVersion.Should().Be(
+            afterFirstVersion,
+            "the idempotent branch must not append a projection-only no-op event");
+    }
+
+    [Fact]
+    public async Task HandleCommitBinding_ReplacesExistingBindingWhenReadModelMissedIt()
+    {
+        var subject = SampleSubject();
+
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
+        });
+
         await _agent.HandleCommitBinding(new CommitBindingCommand
         {
             ExternalSubject = subject,
@@ -117,10 +138,36 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
             OwnerScopeId = "owner-user-1",
         });
 
+        _agent.State.BindingId.Should().Be("bnd_second");
+        _agent.State.OwnerScopeId.Should().Be("owner-user-1");
+        _agent.State.RevokedAt.Should().BeNull();
+        _agent.State.PendingRetirementBindingIds.Should().BeEmpty();
+        _retirementPort.RetiredBindingIds.Should().Equal("bnd_first");
+    }
+
+    [Fact]
+    public async Task HandleCommitBinding_RejectsOwnerSwitchAndRetiresIncomingBinding()
+    {
+        var subject = SampleSubject();
+
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_first",
+            OwnerScopeId = "owner-user-1",
+        });
+
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_second",
+            OwnerScopeId = "owner-user-2",
+        });
+
         _agent.State.BindingId.Should().Be("bnd_first");
-        _agent.EventSourcing!.CurrentVersion.Should().Be(
-            afterFirstVersion,
-            "the discard branch must not append a projection-only no-op event");
+        _agent.State.OwnerScopeId.Should().Be("owner-user-1");
+        _agent.State.PendingRetirementBindingIds.Should().BeEmpty();
+        _retirementPort.RetiredBindingIds.Should().Equal("bnd_second");
     }
 
     [Fact]

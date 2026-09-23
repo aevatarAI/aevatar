@@ -716,7 +716,8 @@ public sealed class WorkflowRunDeliveryGAgentTests
             string relayToken,
             MessageContent intent,
             ComposeContext context,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            bool deferTextDelivery = false)
         {
             Requests.Add((channel, messageId, relayToken, intent.Clone()));
             return Task.FromResult(Results.Count > 0

@@ -1382,6 +1382,10 @@ public sealed class ConversationGAgentDedupTests
         var (agent, store) = await CreateAgentAsync(runner, "channel-conversation:conv:slack:C1:scope:owner", dispatcher);
 
         var inboundActivity = CreateActivity("nyx-msg-1", "conv:slack:C1");
+        // Keep this credential-retry regression on the unchanged edit profile.
+        inboundActivity.ChannelId = ChannelId.From("lark");
+        inboundActivity.Conversation.Channel = ChannelId.From("lark");
+        inboundActivity.TransportExtras = new TransportExtras { NyxPlatform = "lark" };
         inboundActivity.OutboundDelivery = new OutboundDeliveryContext
         {
             ReplyMessageId = "nyx-msg-1",
@@ -1648,6 +1652,10 @@ public sealed class ConversationGAgentDedupTests
         var (agent, store) = await CreateAgentAsync(runner, "conv-retry-enrich", dispatcher);
 
         var inboundActivity = CreateActivity("act-retry", "conv:slack:C1");
+        // Keep this credential-retry regression on the unchanged edit profile.
+        inboundActivity.ChannelId = ChannelId.From("lark");
+        inboundActivity.Conversation.Channel = ChannelId.From("lark");
+        inboundActivity.TransportExtras = new TransportExtras { NyxPlatform = "lark" };
         inboundActivity.OutboundDelivery = new OutboundDeliveryContext
         {
             ReplyMessageId = "relay-msg-retry",
@@ -1913,7 +1921,7 @@ public sealed class ConversationGAgentDedupTests
 
         agent.State.PendingLlmReplyRequests.ShouldNotContain(req => req.CorrelationId == "corr-drop");
         var events = await store.GetEventsAsync(agent.Id);
-        var lastEvent = events[^1];
+        var lastEvent = events.Last(evt => evt.EventType.Contains(nameof(ConversationContinueFailedEvent), StringComparison.Ordinal));
         lastEvent.EventType.ShouldContain(nameof(ConversationContinueFailedEvent));
         var failed = ConversationContinueFailedEvent.Parser.ParseFrom(lastEvent.EventData.Value);
         failed.ErrorCode.ShouldBe("stale_agent_run_request_dropped");

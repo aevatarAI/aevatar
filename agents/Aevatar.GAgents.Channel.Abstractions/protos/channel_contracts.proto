@@ -31,6 +31,18 @@ enum StreamingSupport {
   STREAMING_SUPPORT_NATIVE = 3;
 }
 
+// Declares how many replies a platform permits for one inbound message.
+enum ReplyMessageMultiplicity {
+  // The capability source has not declared reply multiplicity.
+  REPLY_MESSAGE_MULTIPLICITY_UNSPECIFIED = 0;
+  // The platform has no reply surface.
+  REPLY_MESSAGE_MULTIPLICITY_NONE = 1;
+  // The platform permits one body reply.
+  REPLY_MESSAGE_MULTIPLICITY_SINGLE = 2;
+  // The platform permits multiple independent replies.
+  REPLY_MESSAGE_MULTIPLICITY_MULTIPLE = 3;
+}
+
 // Identifies which principal an outbound operation should use.
 enum PrincipalKind {
   // Default zero value.
@@ -151,6 +163,8 @@ message ChannelCapabilities {
   int32 typing_ttl_ms = 16;
   // The transport mode used to receive inbound traffic.
   TransportMode transport = 17;
+  // The reply multiplicity declared by the capability source; no global default is inferred.
+  ReplyMessageMultiplicity reply_message_multiplicity = 18;
 }
 
 // Platform-level identity reference for an external chat-platform user.
