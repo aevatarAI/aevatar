@@ -520,7 +520,8 @@ internal static class NyxIdConnectedServiceOperationSchema
             if (requestBody.Required)
                 required.Add("body");
         }
-        if (admission.ResponsePolicy.FileArtifactAllowed)
+        if (admission.ResponsePolicy.FileArtifactAllowed &&
+            AgentToolRequestContext.Current?.WorkflowRuntime.HasManagedParent == true)
         {
             properties["response_mode"] = new JsonObject
             {

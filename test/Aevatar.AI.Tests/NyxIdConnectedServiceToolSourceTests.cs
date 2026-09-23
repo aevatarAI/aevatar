@@ -1001,6 +1001,67 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task DynamicRead_BinaryArtifactSchemaWithoutManagedWorkflow_ShouldNotRequireFileArtifactMode()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-drive", "api-google-workspace", "api-google-workspace"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-drive", "api-google-workspace", DriveFileEndpoint("drive-file")));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        schema.RootElement.GetProperty("properties")
+            .TryGetProperty("response_mode", out _)
+            .Should().BeFalse();
+        schema.RootElement.TryGetProperty("required", out var required)
+            .Should().BeTrue();
+        required.EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().NotContain("response_mode");
+    }
+
+    [Fact]
+    public async Task DynamicRead_BinaryArtifactSchemaWithManagedWorkflow_ShouldRequireFileArtifactMode()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("usvc-drive", "api-google-workspace", "api-google-workspace"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-drive", "api-google-workspace", DriveFileEndpoint("drive-file")));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext(
+            "user-token",
+            workflowRuntime: new AgentWorkflowRuntimeContext(
+                "workflow-alpha",
+                "run-alpha",
+                "step-alpha",
+                "run-alpha",
+                1));
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        var responseMode = schema.RootElement
+            .GetProperty("properties")
+            .GetProperty("response_mode");
+        responseMode.GetProperty("type").GetString().Should().Be("string");
+        responseMode.GetProperty("enum")
+            .EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().Equal("file_artifact");
+        schema.RootElement.GetProperty("required")
+            .EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().Contain("response_mode");
+    }
+
+    [Fact]
     public async Task DynamicRead_ResponseOverLimit_ShouldReturnRetryHintsFromAdmissionQueryParameters()
     {
         var handler = new FakeNyxIdHandler();
@@ -1872,7 +1933,8 @@ public class NyxIdConnectedServiceToolSourceTests
         string? organizationToken = null,
         string? sourceReadableToken = null,
         AgentToolNyxIdCredentialKind credentialKind = AgentToolNyxIdCredentialKind.Unspecified,
-        string? connectedServicesContextJson = null) =>
+        string? connectedServicesContextJson = null,
+        AgentWorkflowRuntimeContext? workflowRuntime = null) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials(
@@ -1882,6 +1944,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 credentialKind,
                 sourceReadableToken),
             ConnectedServices = new AgentToolConnectedServicesContext(connectedServicesContextJson),
+            WorkflowRuntime = workflowRuntime ?? AgentWorkflowRuntimeContext.Empty,
             Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
         });
 
@@ -2155,6 +2218,23 @@ public class NyxIdConnectedServiceToolSourceTests
           "request_content_type": null,
           "request_body_required": false,
           "response": { "content_types": ["application/json"], "binary_artifact": false }
+        }
+        """;
+
+    private static string DriveFileEndpoint(string endpointId) => $$"""
+        {
+          "endpoint_id": "{{endpointId}}",
+          "name": "drive_get_file",
+          "method": "GET",
+          "path": "/drive/v3/files/{fileId}",
+          "parameters": [
+            { "name": "fileId", "in": "path", "required": true, "schema": { "type": "string" } },
+            { "name": "alt", "in": "query", "required": false, "schema": { "type": "string", "enum": ["media"] } }
+          ],
+          "request_body_schema": null,
+          "request_content_type": null,
+          "request_body_required": false,
+          "response": { "content_types": ["application/octet-stream"], "binary_artifact": true }
         }
         """;
 
