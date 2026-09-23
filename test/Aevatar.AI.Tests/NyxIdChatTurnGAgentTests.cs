@@ -4088,6 +4088,129 @@ public sealed partial class NyxIdChatTurnGAgentTests
     }
 
     [Fact]
+    public async Task OperationExecutor_VerifiedAuthorizationContinuation_WithSourceReadableCredential_ShouldNotNarrowToVerifiedService()
+    {
+        IAgentTool[] tools =
+        [
+            new NamedProfileTool("operation-source"),
+            new AdmittedProfileTool(
+                "operation-alpha-read",
+                CreateReadAdmission("service-alpha", "service-alpha", "endpoint-alpha")),
+            new AdmittedProfileTool(
+                "operation-beta-read",
+                CreateReadAdmission("service-beta", "service-beta", "endpoint-beta")),
+        ];
+        var provider = new SequentialToolCallProvider(
+            ("operation-source", "{\"value\":1}"),
+            ("operation-beta-read", "{}"));
+        var generationExecutor = new AgentRunReplyGenerationExecutor(
+            new RecordingDispatchPort(),
+            new NyxIdConversationReplyGenerator(
+                provider,
+                new BuiltInPromptFloorProvider(),
+                toolExecutionPort: TestAgentToolExecutionPort.Instance),
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+        var postconditionPort = new RecordingActionPostconditionPort
+        {
+            Result = new NyxIdChatActionPostconditionResult
+            {
+                ActionRequestId = "action-alpha",
+                Disposition = NyxIdChatActionDisposition.Completed,
+                Verified = true,
+                Resource = new NyxIdChatSafeResourceRef
+                {
+                    UserService = new NyxIdChatUserServiceRef
+                    {
+                        UserServiceId = "service-alpha",
+                    },
+                },
+            },
+        };
+        var executor = new NyxIdChatTurnOperationExecutor(
+            generationExecutor,
+            postconditionPort,
+            new AgentTurnToolCatalogMaterializer(
+                new BuiltInIntentToolSetRegistry(tools),
+                new NoMatchProfileClassifier()));
+        var (profile, authority) = ContinuationProfile(tools);
+        var session = new NyxIdChatTransientExecutionSession();
+
+        var initial = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey(),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    AgentProfile = profile,
+                    AgentProfileTurnAuthority = authority,
+                    Request = new ChatRequestEvent
+                    {
+                        Prompt = "connect a service, then retrieve one assigned item",
+                        SessionId = "turn-alpha",
+                        ToolContext = Credentials("old-tool-token"),
+                    },
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        var initialCall = initial.Result.Llm.ToolCalls.Should().ContainSingle().Which;
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey("step-tool-alpha", "operation-tool-alpha", 1),
+                Tool = new NyxIdChatToolOperationInput
+                {
+                    CallId = initialCall.CallId,
+                    ToolName = initialCall.ToolName,
+                    ArgumentsJson = initialCall.ArgumentsJson,
+                    MayChangeExternalState = false,
+                    Idempotent = true,
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        var postcondition = PostconditionCommand(NyxIdChatActionDisposition.Completed);
+        postcondition.ActionPostcondition.ToolContext = Credentials("fresh-tool-token");
+        await executor.ExecuteAsync(
+            postcondition,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        var resumed = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey("step-action-continuation", "operation-action-continuation", 1),
+                Llm = new NyxIdChatLLMOperationInput
+                {
+                    ContinueSession = true,
+                    RematerializeTurnCatalog = true,
+                    AgentProfile = profile,
+                    AgentProfileTurnAuthority = authority,
+                    VerifiedAuthorizationContinuation = VerifiedAuthorization(
+                        "service-alpha",
+                        "service-alpha"),
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        resumed.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Llm,
+            $"failure code was {resumed.Result.Failure?.FailureCode}");
+        resumed.Result.Llm.ToolCalls.Should().ContainSingle()
+            .Which.ToolName.Should().Be("operation-beta-read");
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Tools!.Select(static tool => tool.Name).Should().Contain("operation-beta-read");
+    }
+
+    [Fact]
     public async Task OperationExecutor_ActionPostcondition_ShouldPreserveRefreshedSourceReadableCredentialAcrossDelegationResolution()
     {
         var registry = new DelegatedCredentialAwareProfileToolSetRegistry();
