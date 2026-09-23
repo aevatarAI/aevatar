@@ -1657,6 +1657,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     [Fact]
     public async Task BuildLlmStepContinuation_WithPersistedStructuredSearch_ShouldLoadMatchedSkillWithoutProvider()
     {
+        const string skillId = "31b32927-165c-44cf-97c3-ab4ce0a9fb1b";
         var useSkill = new UseSkillTool(new LocalSkillCatalog());
         var provider = new RecordingProvider();
         var recovery = new AgentSkillRecoveryContext(
@@ -1685,8 +1686,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var result = AgentRunReplyStepMappers.ToProto(ToolCallLoop.BuildToolResultMessage(
             call.Id,
             call.Name,
-            """
-            {"result_type":"skill_search","status":"success","matches":[{"skill_name":"project-summary","description":"Summarize projects","is_private":false,"category":"productivity","tags":["summary"]}],"http_status":200,"text":"one match"}
+            $$"""
+            {"result_type":"skill_search","status":"success","query":"project","scope":"mixed","matches":[{"skill_id":"{{skillId}}","skill_name":"project-summary","description":"Summarize projects","is_private":false,"category":"productivity","tags":["summary"]}],"http_status":200,"text":"one match"}
             """));
         workItem.StepState.Messages.Add(assistant);
         workItem.StepState.Messages.Add(result);
@@ -1698,6 +1699,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
         search.Status.Should().Be(ToolResultViewStatus.Success);
         search.HttpStatus.Should().Be(200);
         search.Matches.Should().ContainSingle().Which.SkillName.Should().Be("project-summary");
+        roundTripped.Content.Should().Contain(skillId);
+        search.Matches[0].SkillId.Should().Be(skillId);
+        search.Query.Should().Be("project");
+        search.Scope.Should().Be("mixed");
 
         var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 

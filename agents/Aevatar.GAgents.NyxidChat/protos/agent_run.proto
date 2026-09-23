@@ -276,6 +276,7 @@ message AgentRunSkillSearchMatchView {
   bool is_private = 3;
   string category = 4;
   repeated string tags = 5;
+  string skill_id = 6;
 }
 
 message AgentRunSkillSearchToolResultView {
@@ -285,6 +286,8 @@ message AgentRunSkillSearchToolResultView {
   string error = 4;
   optional int32 http_status = 5;
   string display_text = 6;
+  string query = 7;
+  string scope = 8;
 }
 
 message AgentRunSkillLoadToolResultView {

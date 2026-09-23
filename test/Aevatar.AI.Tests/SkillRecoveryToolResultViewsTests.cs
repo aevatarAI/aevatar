@@ -30,10 +30,12 @@ public sealed class SkillRecoveryToolResultViewsTests
         {
           "result_type": "skill_search",
           "status": "success",
+          "query": "alpha",
+          "scope": "mixed",
           "http_status": 200,
           "text": "rendered display",
           "matches": [
-            { "skill_name": "alpha", "description": "first", "is_private": true, "category": "ops", "tags": ["a", "b"] }
+            { "skill_id": "31b32927-165c-44cf-97c3-ab4ce0a9fb1b", "skill_name": "alpha", "description": "first", "is_private": true, "category": "ops", "tags": ["a", "b"] }
           ]
         }
         """;
@@ -55,6 +57,9 @@ public sealed class SkillRecoveryToolResultViewsTests
         match.IsPrivate.Should().BeTrue();
         match.Category.Should().Be("ops");
         match.Tags.Should().Equal("a", "b");
+        match.SkillId.Should().Be("31b32927-165c-44cf-97c3-ab4ce0a9fb1b");
+        search.Query.Should().Be("alpha");
+        search.Scope.Should().Be("mixed");
     }
 
     [Fact]
