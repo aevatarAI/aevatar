@@ -745,8 +745,10 @@ public sealed class NyxIdChatTurnOperationExecutor
                         catalogToolContext,
                         materializedCatalog,
                         verifiedAuthorization);
-                    session.TurnCatalog = AgentTurnToolCatalogMaterializer
-                        .NarrowToVerifiedUserService(
+                    session.TurnCatalog = AgentTurnToolCatalogMaterializer.HasSourceReadableNyxIdCredential(
+                        catalogToolContext)
+                        ? materializedCatalog
+                        : AgentTurnToolCatalogMaterializer.NarrowToVerifiedUserService(
                             materializedCatalog,
                             verifiedAuthorization);
                     if (session.TurnCatalog.FinalAllowedToolNames.Count == 0)

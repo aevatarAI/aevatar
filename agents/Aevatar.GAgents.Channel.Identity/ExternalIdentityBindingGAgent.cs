@@ -54,10 +54,11 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
     // ─── Commands ───
 
     /// <summary>
-    /// Commits a binding from NyxID's authorization-code exchange. Idempotent:
-    /// when state already holds an active binding_id, the command is discarded
-    /// (concurrent /init protection — see ADR-0018 §Implementation Notes #2).
-    /// The orphan binding on the NyxID side is left for NyxID's own reaper.
+    /// Commits a binding from NyxID's authorization-code exchange. Empty state
+    /// adopts the binding; an already-current binding is idempotent. If the
+    /// readmodel missed an existing binding and the callback reaches this command
+    /// instead of ReplaceBindingCommand, the actor still owns the authoritative
+    /// CAS boundary and replaces only when the owner scope is unchanged.
     /// </summary>
     /// <remarks>
     /// Single-actor turn ordering plus the event store's optimistic concurrency
@@ -103,20 +104,59 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
 
         if (!string.IsNullOrEmpty(State.BindingId))
         {
+            if (string.Equals(State.BindingId, cmd.BindingId, StringComparison.Ordinal))
+            {
+                Logger.LogInformation(
+                    "CommitBinding skipped: binding already current for {Platform}:{Tenant}:{User} (binding_id={BindingId})",
+                    cmd.ExternalSubject.Platform,
+                    cmd.ExternalSubject.Tenant,
+                    cmd.ExternalSubject.ExternalUserId,
+                    cmd.BindingId);
+                // Self-heal: the identity fact is unchanged (no event appended), but a
+                // projection-store reset can leave the current-state readmodel wiped while
+                // this actor still holds the binding. Re-emitting the current committed
+                // state rebuilds that row, so a re-auth (/init callback or Studio re-login)
+                // recovers a wiped readmodel. See GAgentBase.RepublishCommittedStateAsync.
+                await RepublishCurrentBindingStateAsync();
+                return;
+            }
+
+            if (!string.Equals(State.OwnerScopeId, ownerScopeId, StringComparison.Ordinal))
+            {
+                Logger.LogWarning(
+                    "CommitBinding rejected silent owner switch for {Platform}:{Tenant}:{User} (existing_owner={ExistingOwnerScopeId}, incoming_owner={IncomingOwnerScopeId}); incoming binding will be retired",
+                    cmd.ExternalSubject.Platform,
+                    cmd.ExternalSubject.Tenant,
+                    cmd.ExternalSubject.ExternalUserId,
+                    State.OwnerScopeId,
+                    ownerScopeId);
+                await QueueBindingRetirementAsync(
+                    cmd.ExternalSubject,
+                    cmd.BindingId,
+                    "commit_owner_scope_mismatch");
+                await RetirePendingBindingsAsync();
+                return;
+            }
+
+            var previousBindingId = State.BindingId;
+            await PersistDomainEventAsync(new ExternalIdentityBindingReplacedEvent
+            {
+                ExternalSubject = cmd.ExternalSubject.Clone(),
+                PreviousBindingId = previousBindingId,
+                BindingId = cmd.BindingId,
+                ReplacedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Reason = "commit_found_existing_binding",
+                OwnerScopeId = ownerScopeId,
+            });
+
             Logger.LogInformation(
-                "CommitBinding discarded: already bound for {Platform}:{Tenant}:{User} (existing={ExistingBindingId}, incoming={IncomingBindingId}); no identity fact changed",
+                "CommitBinding replaced existing binding for {Platform}:{Tenant}:{User} after readmodel miss (previous={PreviousBindingId}, current={BindingId})",
                 cmd.ExternalSubject.Platform,
                 cmd.ExternalSubject.Tenant,
                 cmd.ExternalSubject.ExternalUserId,
-                State.BindingId,
+                previousBindingId,
                 cmd.BindingId);
-            // Self-heal: the identity fact is unchanged (no event appended), but a
-            // projection-store reset can leave the current-state readmodel wiped while
-            // this actor still holds the binding. Re-emitting the current committed
-            // state rebuilds that row, so a re-auth (/init callback or Studio re-login)
-            // recovers a wiped readmodel instead of dead-locking on the idempotent
-            // discard. See GAgentBase.RepublishCommittedStateAsync.
-            await RepublishCurrentBindingStateAsync();
+            await RetirePendingBindingsAsync();
             return;
         }
 
