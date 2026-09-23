@@ -444,20 +444,15 @@ public static class ChannelCallbackEndpoints
         string registrationId,
         HttpContext http,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
-        [FromServices] IChannelRegistrationOwnerResolver ownerResolver,
         CancellationToken ct)
     {
         var snapshot = await queryPort.GetSnapshotAsync(registrationId, ct);
         if (snapshot is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        var accessToken = ResolveBearerAccessToken(http);
-        var managementOwner = await ResolveRegistrationManagementOwnerAsync(
+        var managementOwner = ResolveRegistrationManagementOwner(
             http,
-            ownerResolver,
-            accessToken,
-            snapshot.Registration,
-            ct);
+            snapshot.Registration);
         if (managementOwner is null)
             return Results.NotFound(new { error = "Registration not found" });
 
@@ -508,12 +503,9 @@ public static class ChannelCallbackEndpoints
             return Results.NotFound(new { error = "Registration not found" });
 
         var accessToken = ResolveBearerAccessToken(http);
-        var managementOwner = await ResolveRegistrationManagementOwnerAsync(
+        var managementOwner = ResolveRegistrationManagementOwner(
             http,
-            ownerResolver,
-            accessToken,
-            registration,
-            ct);
+            registration);
         if (managementOwner is null)
             return Results.NotFound(new { error = "Registration not found" });
 
@@ -683,7 +675,6 @@ public static class ChannelCallbackEndpoints
         HttpContext http,
         [FromServices] IChannelWorkflowResultDeliveryRepairService repairService,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
-        [FromServices] IChannelRegistrationOwnerResolver ownerResolver,
         CancellationToken ct)
     {
         var accessToken = ResolveBearerAccessToken(http);
@@ -702,12 +693,9 @@ public static class ChannelCallbackEndpoints
         if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        var managementOwner = await ResolveRegistrationManagementOwnerAsync(
+        var managementOwner = ResolveRegistrationManagementOwner(
             http,
-            ownerResolver,
-            accessToken,
-            registration,
-            ct);
+            registration);
         if (managementOwner is null)
             return Results.NotFound(new { error = "Registration not found" });
 
@@ -782,7 +770,6 @@ public static class ChannelCallbackEndpoints
         HttpContext http,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] NyxIdApiClient nyxClient,
-        [FromServices] IChannelRegistrationOwnerResolver ownerResolver,
         [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -804,12 +791,9 @@ public static class ChannelCallbackEndpoints
             : null;
 
         var accessToken = ResolveBearerAccessToken(http);
-        var managementOwner = await ResolveRegistrationManagementOwnerAsync(
+        var managementOwner = ResolveRegistrationManagementOwner(
             http,
-            ownerResolver,
-            accessToken,
-            registration,
-            ct);
+            registration);
         if (managementOwner is null)
         {
             // L1: only aevatar admin access may see a foreign registration's status.
@@ -949,7 +933,6 @@ public static class ChannelCallbackEndpoints
         [FromServices] ChannelRegistrationCommandFacade commandFacade,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] INyxChannelBotDeprovisioningService deprovision,
-        [FromServices] IChannelRegistrationOwnerResolver ownerResolver,
         CancellationToken ct)
     {
         // Refactor (iter36/cluster-041-nyx-relay-command-skeleton):
@@ -971,12 +954,9 @@ public static class ChannelCallbackEndpoints
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
 
-        var managementOwner = await ResolveRegistrationManagementOwnerAsync(
+        var managementOwner = ResolveRegistrationManagementOwner(
             http,
-            ownerResolver,
-            accessToken,
-            registration,
-            ct);
+            registration);
         if (managementOwner is null)
             return Results.NotFound(new { error = "Registration not found" });
 
@@ -1065,6 +1045,7 @@ public static class ChannelCallbackEndpoints
                 callback_url = string.Empty,
                 webhook_url = bot.WebhookUrl,
                 nyx_channel_bot_id = bot.Id,
+                nyx_channel_bot_owner_scope_id = bot.OwnerScopeId,
                 nyx_agent_api_key_id = string.Empty,
                 nyx_conversation_route_id = string.Empty,
                 skill_name = string.Empty,
@@ -1100,6 +1081,7 @@ public static class ChannelCallbackEndpoints
             callback_url = string.Empty,
             webhook_url = string.IsNullOrWhiteSpace(e.WebhookUrl) ? bot.WebhookUrl : e.WebhookUrl,
             nyx_channel_bot_id = e.NyxChannelBotId,
+            nyx_channel_bot_owner_scope_id = e.NyxChannelBotOwnerScopeId,
             nyx_agent_api_key_id = e.NyxAgentApiKeyId,
             nyx_conversation_route_id = e.NyxConversationRouteId,
             skill_name = ResolveSkillName(e.RuntimeConfig, e.DefaultSkillName),
@@ -1124,25 +1106,15 @@ public static class ChannelCallbackEndpoints
     private static string MapNyxChannelBotAvailability(NyxChannelBotRecord bot) =>
         bot.Active ? "available" : "unavailable";
 
-    private static async Task<RegistrationManagementOwner?> ResolveRegistrationManagementOwnerAsync(
+    private static RegistrationManagementOwner? ResolveRegistrationManagementOwner(
         HttpContext http,
-        IChannelRegistrationOwnerResolver ownerResolver,
-        string? accessToken,
-        ChannelBotRegistrationEntry registration,
-        CancellationToken ct)
+        ChannelBotRegistrationEntry registration)
     {
         var callerScopeId = ResolveScopeId(http, null, required: false).ScopeId;
-        if (!string.IsNullOrWhiteSpace(callerScopeId) &&
-            string.Equals(registration.ScopeId, callerScopeId, StringComparison.Ordinal))
-        {
-            return new RegistrationManagementOwner(registration.ScopeId);
-        }
-
-        if (string.IsNullOrWhiteSpace(accessToken) || string.IsNullOrWhiteSpace(registration.ScopeId))
-            return null;
-
-        var owner = await ownerResolver.ResolveAsync(accessToken, registration.ScopeId, ct);
-        return owner.Succeeded ? new RegistrationManagementOwner(registration.ScopeId) : null;
+        return !string.IsNullOrWhiteSpace(callerScopeId) &&
+            string.Equals(registration.ScopeId, callerScopeId, StringComparison.Ordinal)
+                ? new RegistrationManagementOwner(registration.ScopeId)
+                : null;
     }
 
     private sealed record RegistrationManagementOwner(string ScopeId);
@@ -1168,6 +1140,7 @@ public static class ChannelCallbackEndpoints
             nyx_provider_slug = entry.NyxProviderSlug,
             webhook_url = entry.WebhookUrl,
             nyx_channel_bot_id = entry.NyxChannelBotId,
+            nyx_channel_bot_owner_scope_id = entry.NyxChannelBotOwnerScopeId,
             nyx_agent_api_key_id = entry.NyxAgentApiKeyId,
             nyx_conversation_route_id = entry.NyxConversationRouteId,
             agent_key = MapAgentKeyStatus(entry),
@@ -1662,7 +1635,8 @@ public static class ChannelCallbackEndpoints
             label,
             status,
             ReadBoolean(element, "active") ?? !string.Equals(status, "disabled", StringComparison.OrdinalIgnoreCase),
-            ReadNonEmptyString(element, "webhook_url") ?? ReadNonEmptyString(element, "callback_url") ?? string.Empty);
+            ReadNonEmptyString(element, "webhook_url") ?? ReadNonEmptyString(element, "callback_url") ?? string.Empty,
+            ReadNonEmptyString(element, "user_id") ?? string.Empty);
     }
 
     private static bool TryGetArray(JsonElement root, IReadOnlyList<string> propertyNames, out JsonElement array)
@@ -1738,7 +1712,8 @@ public static class ChannelCallbackEndpoints
         string Label,
         string Status,
         bool Active,
-        string WebhookUrl);
+        string WebhookUrl,
+        string OwnerScopeId);
 
     private sealed record VerifiedRegistrationServices(
         bool Succeeded,

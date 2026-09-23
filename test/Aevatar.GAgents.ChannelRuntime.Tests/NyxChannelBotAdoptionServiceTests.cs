@@ -237,18 +237,21 @@ public sealed class NyxChannelBotAdoptionServiceTests
     }
 
     [Fact]
-    public async Task RegisterAsync_OrganizationCarriesVerifiedOwnerToKeyAndRoutes()
+    public async Task RegisterAsync_OrganizationCarriesVerifiedOwnerToRouteAndLocalScopeToKey()
     {
         var fixture = new Fixture(organization: true);
         var result = await fixture.RegisterAsync(fixture.Request);
         result.Succeeded.Should().BeTrue(result.Error);
+        fixture.Command!.ScopeId.Should().Be("owner-1");
+        fixture.Command.NyxChannelBotOwnerScopeId.Should().Be("org-1");
         fixture.Handler.Requests.Single(x => x.Path.StartsWith("/api/v1/channel-conversations?", StringComparison.Ordinal))
             .Path.Should().Contain("org_id=org-1");
-        foreach (var write in fixture.Handler.Requests.Where(x => x.Method == "POST"))
-        {
-            using var body = JsonDocument.Parse(write.Body);
-            body.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-1");
-        }
+
+        using var key = JsonDocument.Parse(fixture.Handler.Requests.Single(x => x.Path == "/api/v1/api-keys").Body);
+        key.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
+
+        using var route = JsonDocument.Parse(fixture.Handler.Requests.Single(x => x.Method == "POST" && x.Path == "/api/v1/channel-conversations").Body);
+        route.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-1");
     }
 
     [Fact]
@@ -556,6 +559,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
         {
             ActorUnavailable = actorUnavailable;
             var ownerId = organization ? "org-1" : "owner-1";
+            var localScopeId = "owner-1";
             Handler = new AdoptionHandler(platform, ownerId);
             if (explicitGrant)
                 Handler.KeyResponse = """{"id":"key-owned","full_key":"private-key","purpose":"general","scheduled_write_enabled":false,"scopes":"read write proxy","allow_all_services":false,"allow_all_nodes":false,"allowed_service_ids":["svc-selected"],"allowed_node_ids":[]}""";
@@ -582,10 +586,22 @@ public sealed class NyxChannelBotAdoptionServiceTests
                     ChannelAgentKeyWriteMode.NyxIdDefault), Deprovisioning, NullLogger<NyxChannelBotAdoptionService>.Instance,
                 ChannelExplicitAuthorizationTestSupport.Create());
             var owners = Substitute.For<IChannelRegistrationOwnerResolver>();
-            owners.ResolveAsync("caller-token", ownerId, Arg.Any<CancellationToken>())
-                .Returns(new ChannelRegistrationOwnerResolution(new(organization ? "actor-1" : ownerId, new(
-                    organization ? ChannelRegistrationKeyOwnerKind.Organization : ChannelRegistrationKeyOwnerKind.Personal,
-                    ownerId), organization ? ownerId : null), ""));
+            owners.ResolveAsync("caller-token", Arg.Any<string>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    var requestedOwnerId = call.ArgAt<string>(1);
+                    if (string.Equals(requestedOwnerId, ownerId, StringComparison.Ordinal))
+                    {
+                        return new ChannelRegistrationOwnerResolution(new(organization ? "actor-1" : ownerId, new(
+                            organization ? ChannelRegistrationKeyOwnerKind.Organization : ChannelRegistrationKeyOwnerKind.Personal,
+                            ownerId), organization ? ownerId : null), "");
+                    }
+
+                    return string.Equals(requestedOwnerId, localScopeId, StringComparison.Ordinal)
+                        ? new ChannelRegistrationOwnerResolution(new(localScopeId,
+                            new ChannelRegistrationKeyOwner(ChannelRegistrationKeyOwnerKind.Personal, localScopeId), null), "")
+                        : new ChannelRegistrationOwnerResolution(null, "channel_bot_not_found_or_forbidden");
+                });
             var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
             queryPort.QueryAllSnapshotsAsync(Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult<IReadOnlyList<ChannelBotRegistrationSnapshot>>([]));
@@ -593,7 +609,7 @@ public sealed class NyxChannelBotAdoptionServiceTests
                 .Returns(Task.FromResult<ChannelBotRegistrationSnapshot?>(null));
             _facade = new(queryPort, owners, new VerifiedNyxChannelBotDetail.Reader(client), service,
                 ChannelAgentKeyWriteMode.NyxIdDefault);
-            Request = new(platform, "caller-token", "https://aevatar.example.com", ownerId, "label", "opaque-requested-slug", "bot-owned",
+            Request = new(platform, "caller-token", "https://aevatar.example.com", localScopeId, "label", "opaque-requested-slug", "bot-owned", ownerId,
                 RequestedServiceSelection: explicitGrant ? ChannelRegistrationServiceSelection.Explicit(["svc-selected"]) : null);
         }
     }

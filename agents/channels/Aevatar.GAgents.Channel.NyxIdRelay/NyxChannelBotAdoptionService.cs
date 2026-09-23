@@ -143,7 +143,8 @@ public sealed class VerifiedNyxChannelBotDetail
 
 public sealed record NyxChannelBotAdoptionRequest(
     VerifiedNyxChannelBotDetail Bot,
-    ChannelRelayRegistrationRequest Registration);
+    ChannelRelayRegistrationRequest Registration,
+    VerifiedChannelRegistrationOwner RegistrationKeyOwner);
 
 public sealed record NyxChannelBotAdoptionResult(
     bool Succeeded,
@@ -185,14 +186,17 @@ public sealed class NyxChannelBotAdoptionService(
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Bot);
+        ArgumentNullException.ThrowIfNull(request.RegistrationKeyOwner);
         var bot = request.Bot;
         var registration = request.Registration;
+        var registrationKeyOwner = request.RegistrationKeyOwner;
         var platform = bot.Platform.Value;
         if (!NyxChannelBotIdentity.IsValid(registration.NyxChannelBotId) ||
             !string.Equals(registration.NyxChannelBotId, bot.Id, StringComparison.Ordinal))
             return Failure("missing_nyx_channel_bot_id");
         if (!string.Equals(registration.Platform, platform, StringComparison.Ordinal) ||
-            !string.Equals(registration.ScopeId, bot.Owner.KeyOwner.Id, StringComparison.Ordinal))
+            !string.Equals(registration.NyxChannelBotOwnerScopeId, bot.Owner.KeyOwner.Id, StringComparison.Ordinal) ||
+            !string.Equals(registration.ScopeId, registrationKeyOwner.KeyOwner.Id, StringComparison.Ordinal))
             return Failure("invalid_channel_bot_detail");
         var registrationId = registration.RequestedRegistrationId ?? Guid.NewGuid().ToString("N");
         var relayCallbackUrl = NyxRelayCallbackUrl.Build(registration.WebhookBaseUrl);
@@ -212,7 +216,7 @@ public sealed class NyxChannelBotAdoptionService(
             {
                 if (authorizationPlanner is null)
                     return Failure("nyxid_scope_plan_unavailable");
-                var prepared = await authorizationPlanner.PlanAsync(registration, bot.Owner, ct);
+                var prepared = await authorizationPlanner.PlanAsync(registration, registrationKeyOwner, ct);
                 if (!prepared.Succeeded)
                     return Failure(prepared.ErrorCode);
                 authorization = prepared.Authorization;
@@ -224,7 +228,7 @@ public sealed class NyxChannelBotAdoptionService(
                 return Failure("invalid_runtime_config");
             key = authorization is null
                 ? await keys.ProvisionAsync(platform, registration.AccessToken, relayCallbackUrl,
-                    registration.ScopeId, registrationId, bot.Owner, ct)
+                    registration.ScopeId, registrationId, registrationKeyOwner, ct)
                 : await keys.ProvisionAsync(platform, registration.AccessToken, relayCallbackUrl,
                     registration.ScopeId, registrationId, authorization, ct);
             uncertainRouteAcquisition = new(bot.Id, bot.Owner.TargetOrganizationId);
@@ -250,6 +254,7 @@ public sealed class NyxChannelBotAdoptionService(
                 NyxAgentApiKeyId = key.ApiKeyId,
                 NyxChannelBotId = bot.Id,
                 NyxConversationRouteId = routeId,
+                NyxChannelBotOwnerScopeId = bot.Owner.KeyOwner.Id,
                 WorkflowResultDeliveryCredential = key.SecretReference.Clone(),
                 ChannelAgentKey = key.Clone(),
                 AuthorizationMode = registration.ServiceSelection.AuthorizationMode,

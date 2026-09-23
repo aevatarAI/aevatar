@@ -55,6 +55,7 @@ public sealed class ChannelBotRegistrationProjector
             ChannelAgentKey = entry.ChannelAgentKey?.Clone(),
             AuthorizationMode = entry.AuthorizationMode,
             RuntimeConfig = entry.RuntimeConfig?.Clone(),
+            NyxChannelBotOwnerScopeId = entry.NyxChannelBotOwnerScopeId ?? string.Empty,
             LastInboundAtUtc = entry.LastInboundAtUtc,
             DefaultSkillName = entry.DefaultSkillName ?? string.Empty,
             WorkflowResultDeliveryRepair = entry.WorkflowResultDeliveryRepair?.Clone(),

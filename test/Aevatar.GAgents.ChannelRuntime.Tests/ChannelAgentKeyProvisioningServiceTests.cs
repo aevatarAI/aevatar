@@ -350,7 +350,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_DefaultOrganizationOwner_SendsTargetOrganizationId()
+    public async Task ProvisionAsync_DefaultOrganizationOwner_DoesNotSendTargetOrganizationId()
     {
         var handler = new RecordingHandler();
         handler.Enqueue(HttpMethod.Post, "/api/v1/api-keys", ValidCreateResponse());
@@ -372,7 +372,7 @@ public sealed class ChannelAgentKeyProvisioningServiceTests
             CancellationToken.None);
 
         using var request = JsonDocument.Parse(handler.Requests.Single().Body);
-        request.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-alpha");
+        request.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
     }
 
     [Theory]

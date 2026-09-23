@@ -52,6 +52,7 @@ message ChannelBotRegistrationEntry {
   ChannelAgentKeyCredential channel_agent_key = 19;
   ChannelRegistrationAuthorizationMode authorization_mode = 20;
   ChannelBotRuntimeConfig runtime_config = 21;
+  string nyx_channel_bot_owner_scope_id = 22;
 }
 
 message ChannelBotRegistrationStoreState {
@@ -154,6 +155,7 @@ message ChannelBotRegisterCommand {
   ChannelAgentKeyCredential channel_agent_key = 14;
   ChannelRegistrationAuthorizationMode authorization_mode = 15;
   ChannelBotRuntimeConfig runtime_config = 16;
+  string nyx_channel_bot_owner_scope_id = 17;
 }
 
 message ChannelBotUnregisterCommand {
@@ -389,6 +391,7 @@ message ChannelBotRegistrationDocument {
   ChannelAgentKeyCredential channel_agent_key = 20;
   ChannelRegistrationAuthorizationMode authorization_mode = 21;
   ChannelBotRuntimeConfig runtime_config = 22;
+  string nyx_channel_bot_owner_scope_id = 23;
 }
 
 // ─── Relay / conversation normalization ───

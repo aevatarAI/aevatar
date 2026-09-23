@@ -54,6 +54,10 @@ internal sealed class ChannelRegistrationAdoptionFacade(
         if (existing is not null)
             return Failure("channel_bot_already_bound") with { ExistingRegistrationId = existing.Id };
 
+        var registrationKeyOwner = await ownerResolver.ResolveAsync(accessToken, scopeId, ct);
+        if (!registrationKeyOwner.Succeeded)
+            return Failure(registrationKeyOwner.ErrorCode);
+
         var registrationId = string.IsNullOrWhiteSpace(request.RegistrationId)
             ? Guid.NewGuid().ToString("N")
             : request.RegistrationId.Trim();
@@ -70,17 +74,18 @@ internal sealed class ChannelRegistrationAdoptionFacade(
             bot.Platform.Value,
             accessToken,
             webhookBaseUrl,
-            bot.Owner.KeyOwner.Id,
+            scopeId,
             string.Empty,
             string.IsNullOrWhiteSpace(request.NyxProviderSlug)
                 ? $"api-{bot.Platform.Value}-bot"
                 : request.NyxProviderSlug.Trim(),
             bot.Id,
+            bot.Owner.KeyOwner.Id,
             (request.RuntimeConfig?.DefaultSkill?.Name ?? string.Empty).Trim().TrimStart('/').ToLowerInvariant(),
             request.RuntimeConfig,
             serviceSelection,
             registrationId);
-        var result = await adoptionService.AdoptAsync(new(bot, registration), ct);
+        var result = await adoptionService.AdoptAsync(new(bot, registration, registrationKeyOwner.Owner!), ct);
         return result with
         {
             NyxProviderSlug = registration.NyxProviderSlug,

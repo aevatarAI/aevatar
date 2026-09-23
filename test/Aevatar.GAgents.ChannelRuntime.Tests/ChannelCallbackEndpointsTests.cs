@@ -331,21 +331,10 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleRepairWorkflowResultDeliveryAsync_UsesOrgScope_WhenCallerManagesOrgRegistration()
+    public async Task HandleRepairWorkflowResultDeliveryAsync_ReturnsNotFound_WhenCallerDoesNotOwnOrgRegistration()
     {
         var queryPort = QueryPortWith(NewModelRegistration("reg-org", "org-1", "key-org"));
         var repairService = Substitute.For<IChannelWorkflowResultDeliveryRepairService>();
-        repairService.RepairAsync(
-                "reg-org",
-                "org-1",
-                "user-alpha",
-                "test-token",
-                Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new ChannelWorkflowResultDeliveryRepairResult(
-                ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled,
-                string.Empty,
-                "reg-org",
-                "key-org")));
         var http = CreateAuthenticatedHttpContext(
             "scope-1",
             new Claim("sub", "user-alpha"));
@@ -357,17 +346,11 @@ public sealed class ChannelCallbackEndpointsTests
             http,
             repairService,
             queryPort,
-            OwnerResolver("org-1"),
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        await repairService.Received(1).RepairAsync(
-            "reg-org",
-            "org-1",
-            "user-alpha",
-            "test-token",
-            Arg.Any<CancellationToken>());
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        await repairService.DidNotReceiveWithAnyArgs().RepairAsync(default!, default!, default!, default!, default);
     }
 
     [Theory]
@@ -809,7 +792,23 @@ public sealed class ChannelCallbackEndpointsTests
     {
         EventEnvelope? capturedEnvelope = null;
         var actorRuntime = AcceptedRegistrationRuntime(envelope => capturedEnvelope = envelope);
-        var ownerResolver = OwnerResolver("org-1");
+        var ownerResolver = Substitute.For<IChannelRegistrationOwnerResolver>();
+        ownerResolver.ResolveAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelRegistrationOwnerResolution(null, "service_owner_forbidden")));
+        ownerResolver.ResolveAsync(Arg.Any<string>(), "org-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelRegistrationOwnerResolution(
+                new VerifiedChannelRegistrationOwner(
+                    "user-alpha",
+                    new ChannelRegistrationKeyOwner(ChannelRegistrationKeyOwnerKind.Organization, "org-1"),
+                    "org-1"),
+                string.Empty)));
+        ownerResolver.ResolveAsync(Arg.Any<string>(), "scope-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelRegistrationOwnerResolution(
+                new VerifiedChannelRegistrationOwner(
+                    "scope-1",
+                    new ChannelRegistrationKeyOwner(ChannelRegistrationKeyOwnerKind.Personal, "scope-1"),
+                    null),
+                string.Empty)));
         var nyxHandler = new RecordingNyxHttpMessageHandler(request =>
         {
             if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath == "/api/v1/channel-bots/bot-org")
@@ -890,14 +889,15 @@ public sealed class ChannelCallbackEndpointsTests
         response.StatusCode.Should().Be(StatusCodes.Status202Accepted, response.Body);
         capturedEnvelope.Should().NotBeNull();
         var command = capturedEnvelope!.Payload.Unpack<ChannelBotRegisterCommand>();
-        command.ScopeId.Should().Be("org-1");
+        command.ScopeId.Should().Be("scope-1");
+        command.NyxChannelBotOwnerScopeId.Should().Be("org-1");
         command.NyxChannelBotId.Should().Be("bot-org");
         command.NyxAgentApiKeyId.Should().Be("key-org");
         command.NyxConversationRouteId.Should().Be("route-org");
         var keyRequest = nyxHandler.Requests.Single(request =>
             request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/api/v1/api-keys");
         using var keyRequestJson = JsonDocument.Parse(await keyRequest.Content!.ReadAsStringAsync());
-        keyRequestJson.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-1");
+        keyRequestJson.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
         var routeRequest = nyxHandler.Requests.Single(request =>
             request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/api/v1/channel-conversations");
         using var routeRequestJson = JsonDocument.Parse(await routeRequest.Content!.ReadAsStringAsync());
@@ -1292,7 +1292,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleGetRegistrationAsync_AllowsVerifiedOrgOwner()
+    public async Task HandleGetRegistrationAsync_ReturnsNotFound_WhenCallerDoesNotOwnOrgRegistration()
     {
         var queryPort = QueryPortWithSnapshots(new ChannelBotRegistrationSnapshot(
             NewModelRegistration("reg-org-runtime", "org-1", "key-org"),
@@ -1305,13 +1305,11 @@ public sealed class ChannelCallbackEndpointsTests
             "reg-org-runtime",
             http,
             queryPort,
-            OwnerResolver("org-1"),
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        response.Body.Should().Contain("\"id\":\"reg-org-runtime\"");
-        response.Body.Should().Contain("\"agent_key\":");
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        response.Body.Should().NotContain("key-org");
     }
 
     [Fact]
@@ -1370,7 +1368,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleUpdateRegistrationAsync_AllowsVerifiedOrgOwner()
+    public async Task HandleUpdateRegistrationAsync_ReturnsNotFound_WhenCallerDoesNotOwnOrgRegistration()
     {
         var queryPort = QueryPortWith(NewModelRegistration("reg-org-update", "org-1", "key-org-update"));
         EventEnvelope? capturedEnvelope = null;
@@ -1404,10 +1402,8 @@ public sealed class ChannelCallbackEndpointsTests
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
-        response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        capturedEnvelope.Should().NotBeNull();
-        capturedEnvelope!.Payload.Unpack<ChannelBotUpdateRuntimeConfigCommand>()
-            .RegistrationId.Should().Be("reg-org-update");
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        capturedEnvelope.Should().BeNull();
     }
 
     [Fact]
@@ -2239,7 +2235,7 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
-    public async Task HandleDeleteRegistrationAsync_AllowsVerifiedOrgOwner()
+    public async Task HandleDeleteRegistrationAsync_ReturnsNotFound_WhenCallerDoesNotOwnOrgRegistration()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
         var registration = NewModelRegistration("reg-org-delete", "org-1", "key-org-delete");
@@ -2266,14 +2262,12 @@ public sealed class ChannelCallbackEndpointsTests
             ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
             queryPort,
             deprovision,
-            OwnerResolver("org-1"),
             CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
-        response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        capturedEnvelope.Should().NotBeNull();
-        capturedEnvelope!.Payload.Unpack<ChannelBotUnregisterCommand>()
-            .RegistrationId.Should().Be("reg-org-delete");
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        capturedEnvelope.Should().BeNull();
+        await deprovision.DidNotReceiveWithAnyArgs().DeprovisionAsync(default!, default!, default);
     }
 
     [Fact]
@@ -2831,10 +2825,7 @@ public sealed class ChannelCallbackEndpointsTests
         var adaptedArgs = methodName switch
         {
             "HandleRegisterAsync" when args.Length == 10 => AdaptRegisterInvocationArgs(args),
-            "HandleGetRegistrationAsync" when args.Length == 4 => AdaptGetRegistrationInvocationArgs(args),
             "HandleRepairWorkflowResultDeliveryAsync" when args.Length == 4 => AdaptRepairInvocationArgs(args),
-            "HandleGetStatusAsync" when args.Length == 7 => AdaptStatusInvocationArgs(args),
-            "HandleDeleteRegistrationAsync" when args.Length == 6 => AdaptDeleteInvocationArgs(args),
             _ => args,
         };
         var invocationResult = method.Invoke(null, adaptedArgs);
@@ -2843,15 +2834,6 @@ public sealed class ChannelCallbackEndpointsTests
 
         throw new InvalidOperationException($"Method '{methodName}' did not return Task<IResult>.");
     }
-
-    private static object?[] AdaptGetRegistrationInvocationArgs(object?[] args) =>
-    [
-        args[0],
-        args[1],
-        args[2],
-        OwnerResolver("scope-1"),
-        args[3],
-    ];
 
     private static object?[] AdaptRepairInvocationArgs(object?[] args)
     {
@@ -2864,33 +2846,9 @@ public sealed class ChannelCallbackEndpointsTests
             args[1],
             args[2],
             queryPort,
-            OwnerResolver(scopeId),
             args[3],
         ];
     }
-
-    private static object?[] AdaptStatusInvocationArgs(object?[] args) =>
-    [
-        args[0],
-        args[1],
-        args[2],
-        args[3],
-        OwnerResolver("scope-1"),
-        args[4],
-        args[5],
-        args[6],
-    ];
-
-    private static object?[] AdaptDeleteInvocationArgs(object?[] args) =>
-    [
-        args[0],
-        args[1],
-        args[2],
-        args[3],
-        args[4],
-        OwnerResolver("scope-1"),
-        args[5],
-    ];
 
     private static string? ResolveTestScopeId(HttpContext http) =>
         http.User.FindFirst("scope_id")?.Value;

@@ -25,7 +25,10 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             return null;
 
         var document = await _documentReader.GetAsync(registrationId, ct);
-        return document == null
+        if (document is null)
+            document = await QueryDocumentByRegistrationIdAsync(registrationId, ct);
+
+        return document is null
             ? null
             : new ChannelBotRegistrationSnapshot(ToEntry(document), document.StateVersion);
     }
@@ -36,6 +39,9 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             return null;
 
         var document = await _documentReader.GetAsync(registrationId, ct);
+        if (document is null)
+            document = await QueryDocumentByRegistrationIdAsync(registrationId, ct);
+
         return document?.StateVersion;
     }
 
@@ -153,6 +159,29 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
         return result.Items;
     }
 
+    private async Task<ChannelBotRegistrationDocument?> QueryDocumentByRegistrationIdAsync(
+        string registrationId,
+        CancellationToken ct)
+    {
+        var result = await _documentReader.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = 1,
+                Filters =
+                [
+                    new ProjectionDocumentFilter
+                    {
+                        FieldPath = nameof(ChannelBotRegistrationDocument.Id),
+                        Operator = ProjectionDocumentFilterOperator.Eq,
+                        Value = ProjectionDocumentValue.FromString(registrationId),
+                    },
+                ],
+            },
+            ct);
+
+        return result.Items.FirstOrDefault();
+    }
+
     private static ChannelBotRegistrationEntry ToEntry(ChannelBotRegistrationDocument document) =>
         new()
         {
@@ -169,6 +198,7 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
             ChannelAgentKey = document.ChannelAgentKey?.Clone(),
             AuthorizationMode = document.AuthorizationMode,
             RuntimeConfig = document.RuntimeConfig?.Clone(),
+            NyxChannelBotOwnerScopeId = document.NyxChannelBotOwnerScopeId ?? string.Empty,
             LastInboundAtUtc = document.LastInboundAtUtc,
             DefaultSkillName = document.DefaultSkillName ?? string.Empty,
             WorkflowResultDeliveryRepair = document.WorkflowResultDeliveryRepair?.Clone(),
