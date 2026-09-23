@@ -19,10 +19,10 @@ namespace Aevatar.GAgents.Channel.Protocol.Tests;
 public sealed class NyxRelayAppendLifecycleTests
 {
     [Theory]
-    [InlineData("telegram", 501, true)]
-    [InlineData("telegram", 401, false)]
-    [InlineData("unknown-chat", 501, true)]
-    [InlineData("unknown-chat", 401, false)]
+    [InlineData("telegram", 901, true)]
+    [InlineData("telegram", 801, false)]
+    [InlineData("unknown-chat", 901, true)]
+    [InlineData("unknown-chat", 801, false)]
     [InlineData("telegram", 4096, true)]
     [InlineData("telegram", 4096, false)]
     [InlineData("unknown-chat", 2000, true)]
@@ -455,10 +455,10 @@ public sealed class NyxRelayAppendLifecycleTests
     {
         await using var fixture = await Fixture.CreateAsync();
         await fixture.AdmitAsync();
-        var initial = new string('a', 401);
+        var initial = new string('a', 801);
         await fixture.ChunkAsync(initial);
         var fixedOperation = fixture.Append.InFlightOperation.Clone();
-        fixedOperation.Text.ShouldBe(new string('a', 400));
+        fixedOperation.Text.ShouldBe(new string('a', 800));
 
         await fixture.ChunkAsync(initial + new string('b', 1000));
         fixture.Append.InFlightOperation.ShouldBe(fixedOperation);
@@ -495,7 +495,7 @@ public sealed class NyxRelayAppendLifecycleTests
     {
         await using var fixture = await Fixture.CreateAsync();
         await fixture.AdmitAsync();
-        await fixture.ChunkAsync(new string('a', 401));
+        await fixture.ChunkAsync(new string('a', 801));
         await fixture.ExecuteAndCompleteNextAsync();
         var acceptedPrefix = fixture.Lifecycle.LastFlushedText;
 
@@ -570,7 +570,7 @@ public sealed class NyxRelayAppendLifecycleTests
         fixture.Outbound.Results.Enqueue(new NyxRelayAppendSendResult(NyxRelayAppendSendState.PreDispatchFailure,
             ErrorCode: "agent_key_unavailable"));
         await fixture.AdmitAsync();
-        await fixture.ChunkAsync(new string('a', 401));
+        await fixture.ChunkAsync(new string('a', 801));
         await fixture.ExecuteAndCompleteNextAsync();
 
         fixture.Append.AnyRequestDispatched.ShouldBeFalse();
@@ -596,7 +596,7 @@ public sealed class NyxRelayAppendLifecycleTests
         fixture.Outbound.Results.Enqueue(new NyxRelayAppendSendResult(NyxRelayAppendSendState.Accepted, "platform-first"));
         fixture.Outbound.Results.Enqueue(new NyxRelayAppendSendResult(failure, ErrorCode: "body_failed"));
         await fixture.AdmitAsync();
-        var firstChunk = new string('a', 401);
+        var firstChunk = new string('a', 801);
         await fixture.ChunkAsync(firstChunk);
         await fixture.ExecuteAndCompleteNextAsync();
         var prefix = fixture.Lifecycle.LastFlushedText;
@@ -620,7 +620,7 @@ public sealed class NyxRelayAppendLifecycleTests
     {
         await using var fixture = await Fixture.CreateAsync();
         await fixture.AdmitAsync();
-        await fixture.ChunkAsync(new string('a', 401));
+        await fixture.ChunkAsync(new string('a', 801));
         var operation = fixture.Append.InFlightOperation.Clone();
         var completion = await fixture.ExecuteNextAsync();
 
@@ -630,7 +630,7 @@ public sealed class NyxRelayAppendLifecycleTests
         fixture.Append.DeliveryDisposition.ShouldBe(NyxRelayAppendDeliveryDisposition.DeliveryUnknown);
         fixture.Append.AcceptedSegmentCount.ShouldBe(0);
         fixture.Lifecycle.LastFlushedText.ShouldBeEmpty();
-        await fixture.ReadyAsync(new string('a', 401));
+        await fixture.ReadyAsync(new string('a', 801));
         fixture.Outbound.Attempts.Count.ShouldBe(1);
         fixture.Publisher.Steps.ShouldBeEmpty();
         fixture.Agent.State.RetainedHistory.ShouldNotContain(entry => entry.Role == "assistant");
@@ -644,7 +644,7 @@ public sealed class NyxRelayAppendLifecycleTests
         await using (var first = await Fixture.CreateAsync(store))
         {
             await first.AdmitAsync();
-            await first.ChunkAsync(new string('a', 401));
+            await first.ChunkAsync(new string('a', 801));
             first.Append.InFlightOperation.ShouldNotBeNull();
             first.Append.LlmRunDispatched.ShouldBeTrue();
             first.Outbound.Attempts.ShouldBeEmpty();
@@ -659,7 +659,7 @@ public sealed class NyxRelayAppendLifecycleTests
         recovered.Dispatcher.Requests.ShouldBeEmpty();
         recovered.Publisher.Steps.ShouldBeEmpty();
         await recovered.ProgressDueAsync();
-        await recovered.ReadyAsync(new string('a', 401));
+        await recovered.ReadyAsync(new string('a', 801));
         recovered.Outbound.Attempts.ShouldBeEmpty();
         recovered.Runner.FallbackReplies.ShouldBe(0);
     }
@@ -716,11 +716,11 @@ public sealed class NyxRelayAppendLifecycleTests
         recovered.Append.AcceptedSegmentCount.ShouldBe(0);
         recovered.Lifecycle.LastFlushedText.ShouldBeEmpty();
 
-        var answer = new string('a', 401) + " recovered body.";
+        var answer = new string('a', 801) + " recovered body.";
         await recovered.ChunkAsync(answer);
         recovered.Append.InFlightOperation.Kind.ShouldBe(NyxRelayAppendMessageKind.Content);
         await recovered.ExecuteAndCompleteNextAsync();
-        recovered.Lifecycle.LastFlushedText.ShouldBe(new string('a', 400));
+        recovered.Lifecycle.LastFlushedText.ShouldBe(new string('a', 800));
         await recovered.ReadyAsync(answer);
         await recovered.ExecuteAndCompleteNextAsync();
 
@@ -772,7 +772,7 @@ public sealed class NyxRelayAppendLifecycleTests
         fixture.Outbound.Results.Enqueue(new NyxRelayAppendSendResult(NyxRelayAppendSendState.Accepted, "first-message"));
         fixture.Outbound.Results.Enqueue(new NyxRelayAppendSendResult(finalResult));
         await fixture.AdmitAsync();
-        var text = new string('a', 401);
+        var text = new string('a', 801);
         await fixture.ChunkAsync(text);
         await fixture.ExecuteAndCompleteNextAsync();
         var prefix = fixture.Lifecycle.LastFlushedText;
