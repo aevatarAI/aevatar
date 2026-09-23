@@ -386,8 +386,8 @@ public static class ChannelCallbackEndpoints
     }
 
     /// <summary>
-    /// Lists channel-bot registrations scoped to the caller's own account. NyxID channel-bot
-    /// visibility is owner-scoped, so this endpoint does not expose a cross-account admin view.
+    /// Lists channel-bot registrations scoped to the caller's account, or to the NyxID
+    /// all-view when the caller requests <c>scope=all</c>.
     /// </summary>
     private static async Task<IResult> HandleListRegistrationsAsync(
         HttpContext http,
@@ -400,12 +400,18 @@ public static class ChannelCallbackEndpoints
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
 
-        var scopeResolution = ResolveScopeId(http, scope, required: false);
+        var allScopes = IsAllScope(scope);
+        var scopeResolution = allScopes
+            ? ResolveScopeId(http, null, required: false)
+            : ResolveScopeId(http, scope, required: false);
         if (scopeResolution.Error is not null)
             return Results.BadRequest(new { error = scopeResolution.Error });
         var callerScope = scopeResolution.ScopeId;
 
-        var botResponse = await nyxClient.ListChannelBotsAsync(accessToken, ct);
+        var botResponse = await nyxClient.ListChannelBotsAsync(
+            accessToken,
+            allScopes ? "all" : null,
+            ct);
         if (NyxApiResponseHelper.LooksLikeErrorEnvelope(botResponse))
         {
             return Results.Json(
@@ -417,7 +423,7 @@ public static class ChannelCallbackEndpoints
         var bots = ParseNyxChannelBots(botResponse);
         var snapshots = await queryPort.QueryAllSnapshotsAsync(ct);
         var localByBotId = snapshots
-            .Where(snapshot => string.Equals(
+            .Where(snapshot => allScopes || string.Equals(
                 snapshot.Registration.ScopeId,
                 callerScope,
                 StringComparison.Ordinal))
@@ -1363,6 +1369,9 @@ public static class ChannelCallbackEndpoints
             ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified => "unspecified",
             _ => "unspecified",
         };
+
+    private static bool IsAllScope(string? scope) =>
+        string.Equals(NormalizeOptional(scope), "all", StringComparison.OrdinalIgnoreCase);
 
     private static ScopeIdResolution ResolveScopeId(HttpContext http, string? explicitScopeId, bool required)
     {

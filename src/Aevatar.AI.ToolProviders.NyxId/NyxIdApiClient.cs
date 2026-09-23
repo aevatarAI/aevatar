@@ -1732,8 +1732,16 @@ public sealed partial class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     // ─── Channel Bot Relay ───
 
+    public Task<string> ListChannelBotsAsync(string token, string? scope, CancellationToken ct)
+    {
+        var path = "/api/v1/channel-bots";
+        if (!string.IsNullOrWhiteSpace(scope))
+            path += "?scope=" + Uri.EscapeDataString(scope.Trim());
+        return GetAsync(token, path, ct);
+    }
+
     public Task<string> ListChannelBotsAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/channel-bots", ct);
+        ListChannelBotsAsync(token, scope: null, ct);
 
     public Task<string> GetChannelBotAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/channel-bots/{Uri.EscapeDataString(id)}", ct);

@@ -41,12 +41,9 @@ internal sealed class ChannelRegistrationAdoptionFacade(
         if (ChannelBotRuntimeConfigValidation.ValidateStructure(request.RuntimeConfig).Count > 0)
             return Failure("invalid_runtime_config");
 
-        var owner = await ownerResolver.ResolveAsync(accessToken, scopeId, ct);
-        if (!owner.Succeeded)
-            return Failure(owner.ErrorCode);
-        // Platform comes only from the caller-authorized Bot detail. Inventory DTOs cannot
-        // mint this handoff, and inaccessible Bots never reveal another registration's ID.
-        var detail = await botReader.ReadAsync(accessToken, request.NyxChannelBotId, null, owner.Owner!, ct);
+        // Platform and owner come only from the caller-authorized Bot detail. Inventory DTOs
+        // cannot mint this handoff, and inaccessible Bots never reveal another registration's ID.
+        var detail = await botReader.ReadAsync(accessToken, request.NyxChannelBotId, null, ownerResolver, ct);
         if (!detail.Succeeded)
             return Failure(detail.ErrorCode);
         var bot = detail.Bot!;
@@ -73,7 +70,7 @@ internal sealed class ChannelRegistrationAdoptionFacade(
             bot.Platform.Value,
             accessToken,
             webhookBaseUrl,
-            scopeId,
+            bot.Owner.KeyOwner.Id,
             string.Empty,
             string.IsNullOrWhiteSpace(request.NyxProviderSlug)
                 ? $"api-{bot.Platform.Value}-bot"
