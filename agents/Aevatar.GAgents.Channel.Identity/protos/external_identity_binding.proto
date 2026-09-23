@@ -33,9 +33,10 @@ message ExternalIdentityBindingState {
 }
 
 // Issued by the OAuth callback handler after exchanging the authorization code
-// for a binding_id. Idempotent at the actor: discarded when state already
-// holds an active binding_id (concurrent /init protection,
-// ADR-0018 §Implementation Notes #2).
+// for a binding_id. Empty actor state adopts the binding. If the current-state
+// readmodel missed an existing binding and the endpoint could not issue
+// ReplaceBindingCommand, the actor may replace the active binding when the owner
+// scope is unchanged; an already-current binding remains idempotent.
 message CommitBindingCommand {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
   string binding_id = 2;
