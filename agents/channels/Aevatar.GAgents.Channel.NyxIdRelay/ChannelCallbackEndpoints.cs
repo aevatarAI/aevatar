@@ -421,6 +421,7 @@ public static class ChannelCallbackEndpoints
         }
 
         var bots = ParseNyxChannelBots(botResponse);
+        var organizationNames = await ReadOrganizationNamesAsync(nyxClient, accessToken, ct);
         var snapshots = await queryPort.QueryAllSnapshotsAsync(ct);
         var localByBotId = snapshots
             .Where(snapshot => allScopes || string.Equals(
@@ -434,7 +435,7 @@ public static class ChannelCallbackEndpoints
         var result = bots.Select(bot =>
         {
             localByBotId.TryGetValue(bot.Id, out var snapshot);
-            return MapRegistrationListRow(bot, snapshot, callerScope);
+            return MapRegistrationListRow(bot, snapshot, callerScope, organizationNames);
         }).ToArray();
 
         return Results.Json(result, RegistrationJsonOptions);
@@ -1025,10 +1026,12 @@ public static class ChannelCallbackEndpoints
     private static object MapRegistrationListRow(
         NyxChannelBotRecord bot,
         ChannelBotRegistrationSnapshot? snapshot,
-        string? callerScope)
+        string? callerScope,
+        IReadOnlyDictionary<string, string> organizationNames)
     {
         if (snapshot is null)
         {
+            var unboundOwnerScopeName = ResolveOwnerScopeName(bot.OwnerScopeId, callerScope, organizationNames);
             return new
             {
                 id = (string?)null,
@@ -1046,6 +1049,7 @@ public static class ChannelCallbackEndpoints
                 webhook_url = bot.WebhookUrl,
                 nyx_channel_bot_id = bot.Id,
                 nyx_channel_bot_owner_scope_id = bot.OwnerScopeId,
+                nyx_channel_bot_owner_scope_name = unboundOwnerScopeName,
                 nyx_agent_api_key_id = string.Empty,
                 nyx_conversation_route_id = string.Empty,
                 skill_name = string.Empty,
@@ -1062,6 +1066,10 @@ public static class ChannelCallbackEndpoints
         }
 
         var e = snapshot.Registration;
+        var ownerScopeId = string.IsNullOrWhiteSpace(e.NyxChannelBotOwnerScopeId)
+            ? bot.OwnerScopeId
+            : e.NyxChannelBotOwnerScopeId;
+        var ownerScopeName = ResolveOwnerScopeName(ownerScopeId, callerScope, organizationNames);
         var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(e);
         var repairFailed = capabilityStatus ==
             ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
@@ -1081,7 +1089,8 @@ public static class ChannelCallbackEndpoints
             callback_url = string.Empty,
             webhook_url = string.IsNullOrWhiteSpace(e.WebhookUrl) ? bot.WebhookUrl : e.WebhookUrl,
             nyx_channel_bot_id = e.NyxChannelBotId,
-            nyx_channel_bot_owner_scope_id = e.NyxChannelBotOwnerScopeId,
+            nyx_channel_bot_owner_scope_id = ownerScopeId,
+            nyx_channel_bot_owner_scope_name = ownerScopeName,
             nyx_agent_api_key_id = e.NyxAgentApiKeyId,
             nyx_conversation_route_id = e.NyxConversationRouteId,
             skill_name = ResolveSkillName(e.RuntimeConfig, e.DefaultSkillName),
@@ -1611,6 +1620,73 @@ public static class ChannelCallbackEndpoints
         return TryGetArray(document.RootElement, ["data", "channel_bots", "channelBots", "items", "bots"], out var array)
             ? array.EnumerateArray().Select(ParseNyxChannelBotElement).Where(static bot => bot is not null).Select(static bot => bot!).ToArray()
             : [];
+    }
+
+    private static async Task<IReadOnlyDictionary<string, string>> ReadOrganizationNamesAsync(
+        NyxIdApiClient nyxClient,
+        string accessToken,
+        CancellationToken ct)
+    {
+        try
+        {
+            var response = await nyxClient.ListOrganizationsAsync(accessToken, ct);
+            if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+                return new Dictionary<string, string>(StringComparer.Ordinal);
+
+            return ParseOrganizationNames(response);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> ParseOrganizationNames(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        if (!TryGetArray(document.RootElement, ["data", "organizations", "orgs", "items"], out var array))
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var element in array.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var id = ReadNonEmptyString(element, "id") ??
+                ReadNonEmptyString(element, "org_id") ??
+                ReadNonEmptyString(element, "organization_id");
+            var name = ReadNonEmptyString(element, "display_name") ??
+                ReadNonEmptyString(element, "name") ??
+                ReadNonEmptyString(element, "label");
+            if (id is null || name is null)
+                continue;
+
+            names[id] = name;
+        }
+
+        return names;
+    }
+
+    private static string? ResolveOwnerScopeName(
+        string? ownerScopeId,
+        string? personalScopeId,
+        IReadOnlyDictionary<string, string> organizationNames)
+    {
+        if (string.IsNullOrWhiteSpace(ownerScopeId))
+            return null;
+
+        if (string.Equals(ownerScopeId, personalScopeId, StringComparison.Ordinal))
+            return "personal";
+
+        return organizationNames.TryGetValue(ownerScopeId, out var name) &&
+            !string.IsNullOrWhiteSpace(name)
+                ? name
+                : null;
     }
 
     private static NyxChannelBotRecord? ParseNyxChannelBotElement(JsonElement element)

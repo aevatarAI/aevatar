@@ -251,6 +251,9 @@ public sealed partial class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetCurrentUserAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/users/me", ct);
 
+    public Task<string> ListOrganizationsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/orgs", ct);
+
     // Admin-gated user search (email -> user id).
     // Existing NyxID route; case-insensitive regex match on email. Returns {"users":[{id,email,role,...}],...}.
     public Task<string> SearchAdminUsersAsync(string token, string email, CancellationToken ct) =>

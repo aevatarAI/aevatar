@@ -2048,6 +2048,11 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("bot-mine");
         response.Body.Should().Contain("bot-theirs");
         response.Body.Should().NotContain("\"id\":\"theirs\"");
+        using var document = JsonDocument.Parse(response.Body);
+        var mineRow = document.RootElement.EnumerateArray()
+            .Single(row => row.GetProperty("nyx_channel_bot_id").GetString() == "bot-mine");
+        mineRow.GetProperty("nyx_channel_bot_owner_scope_id").GetString().Should().Be("scope-1");
+        mineRow.GetProperty("nyx_channel_bot_owner_scope_name").GetString().Should().Be("personal");
     }
 
     [Fact]
@@ -2060,13 +2065,22 @@ public sealed class ChannelCallbackEndpointsTests
                 Platform = "lark",
                 ScopeId = "scope-2",
                 NyxChannelBotId = "bot-theirs",
+                NyxChannelBotOwnerScopeId = "org-1",
             });
         var nyxHandler = new RecordingNyxHttpMessageHandler(request =>
-            request.Method == HttpMethod.Get &&
-            request.RequestUri!.AbsolutePath == "/api/v1/channel-bots" &&
-            request.RequestUri.Query == "?scope=all"
-                ? JsonResponse("""{"items":[{"id":"bot-theirs","platform":"lark","name":"Org Bot","status":"active","active":true,"is_active":true}]}""")
-                : NotFoundResponse(request));
+        {
+            if (request.Method == HttpMethod.Get &&
+                request.RequestUri!.AbsolutePath == "/api/v1/channel-bots" &&
+                request.RequestUri.Query == "?scope=all")
+            {
+                return JsonResponse("""{"items":[{"id":"bot-theirs","platform":"lark","name":"Org Bot","status":"active","active":true,"is_active":true,"user_id":"org-1"}]}""");
+            }
+
+            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath == "/api/v1/orgs")
+                return JsonResponse("""{"items":[{"id":"org-1","display_name":"Test Org"}]}""");
+
+            return NotFoundResponse(request);
+        });
         var http = CreateHttpContext("scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
@@ -2084,10 +2098,14 @@ public sealed class ChannelCallbackEndpointsTests
         var row = document.RootElement.EnumerateArray().Should().ContainSingle().Which;
         row.GetProperty("id").GetString().Should().Be("theirs");
         row.GetProperty("nyx_channel_bot_id").GetString().Should().Be("bot-theirs");
+        row.GetProperty("nyx_channel_bot_owner_scope_id").GetString().Should().Be("org-1");
+        row.GetProperty("nyx_channel_bot_owner_scope_name").GetString().Should().Be("Test Org");
         row.GetProperty("owned").GetBoolean().Should().BeFalse();
         nyxHandler.Requests.Should().ContainSingle(request =>
             request.RequestUri!.AbsolutePath == "/api/v1/channel-bots" &&
             request.RequestUri.Query == "?scope=all");
+        nyxHandler.Requests.Should().ContainSingle(request =>
+            request.RequestUri!.AbsolutePath == "/api/v1/orgs");
     }
 
     [Fact]
