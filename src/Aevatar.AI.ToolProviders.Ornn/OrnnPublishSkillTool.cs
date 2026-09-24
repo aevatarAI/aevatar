@@ -59,6 +59,49 @@ public sealed class OrnnPublishSkillTool : IAgentTool
         };
     }
 
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var success = CreateSuccessReceipt(callId, toolName, resultJson);
+        if (success is not null)
+            return success;
+
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !TryGetNonEmptyString(root, out var resultType, "result_type") ||
+                !string.Equals(resultType, "ornn_publish_skill", StringComparison.Ordinal) ||
+                !TryGetNonEmptyString(root, out var status, "status"))
+            {
+                return null;
+            }
+
+            return status switch
+            {
+                "validation_error" => CreateValidationErrorReceipt(callId, toolName, resultJson, root),
+                "format_validation_error" => CreateFormatValidationErrorReceipt(
+                    callId,
+                    toolName,
+                    resultJson,
+                    root),
+                "error" => CreatePublishErrorReceipt(callId, toolName, resultJson, root),
+                _ => null,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     public string ParametersSchema => """
         {
           "type": "object",
@@ -195,6 +238,109 @@ public sealed class OrnnPublishSkillTool : IAgentTool
             error,
         });
 
+    private AgentToolReceipt? CreateValidationErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        JsonElement root)
+    {
+        if (!root.TryGetProperty("diagnostics", out var diagnostics) ||
+            diagnostics.ValueKind != JsonValueKind.Array ||
+            diagnostics.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        var diagnostic = diagnostics[0];
+        if (diagnostic.ValueKind != JsonValueKind.Object ||
+            !TryGetNonEmptyString(diagnostic, out var code, "code", "Code") ||
+            !TryGetNonEmptyString(diagnostic, out var message, "message", "Message"))
+        {
+            return null;
+        }
+
+        var safeMessage = $"{code}: {message}";
+        if (TryGetNonEmptyString(diagnostic, out var path, "path", "Path"))
+            safeMessage += $" (path: {path})";
+
+        return CreateErrorReceipt(callId, toolName, resultJson, code, safeMessage);
+    }
+
+    private AgentToolReceipt? CreateFormatValidationErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        JsonElement root)
+    {
+        const string errorCode = "ornn_format_validation_error";
+        var details = new List<string>();
+        if (TryGetNonEmptyString(root, out var error, "error"))
+            details.Add(error);
+
+        if (root.TryGetProperty("violations", out var violations) &&
+            violations.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var violation in violations.EnumerateArray())
+            {
+                if (violation.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var hasRule = TryGetNonEmptyString(violation, out var rule, "rule", "Rule");
+                var hasMessage = TryGetNonEmptyString(violation, out var message, "message", "Message");
+                if (!hasRule && !hasMessage)
+                    continue;
+
+                details.Add(hasRule && hasMessage ? $"{rule}: {message}" : hasRule ? rule : message);
+            }
+        }
+
+        return details.Count == 0
+            ? null
+            : CreateErrorReceipt(
+                callId,
+                toolName,
+                resultJson,
+                errorCode,
+                $"{errorCode}: {string.Join("; ", details)}");
+    }
+
+    private AgentToolReceipt? CreatePublishErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        JsonElement root)
+    {
+        const string errorCode = "ornn_publish_error";
+        return TryGetNonEmptyString(root, out var error, "error")
+            ? CreateErrorReceipt(
+                callId,
+                toolName,
+                resultJson,
+                errorCode,
+                $"{errorCode}: {error}")
+            : null;
+    }
+
+    private AgentToolReceipt CreateErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        string errorCode,
+        string errorMessage) =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Error,
+            ApprovalMode = AgentToolReceiptApprovalMode.Auto,
+            IsDestructive = false,
+            SideEffectKind = SideEffectKind,
+            ErrorCode = errorCode,
+            ErrorMessage = errorMessage,
+            ResultJson = resultJson ?? string.Empty,
+            FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed,
+        };
+
     private static PublishedSkillSubject ExtractPublishedSkill(string? rawResponse)
     {
         if (string.IsNullOrWhiteSpace(rawResponse))
@@ -259,6 +405,26 @@ public sealed class OrnnPublishSkillTool : IAgentTool
         }
 
         return null;
+    }
+
+    private static bool TryGetNonEmptyString(
+        JsonElement element,
+        out string value,
+        params string[] keys)
+    {
+        value = string.Empty;
+        foreach (var key in keys)
+        {
+            if (!element.TryGetProperty(key, out var property) || property.ValueKind != JsonValueKind.String)
+                continue;
+
+            value = property.GetString()?.Trim() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(value))
+                return true;
+        }
+
+        value = string.Empty;
+        return false;
     }
 
     private sealed record PublishedSkillSubject(string? Guid, string? Version, string? SkillHash)

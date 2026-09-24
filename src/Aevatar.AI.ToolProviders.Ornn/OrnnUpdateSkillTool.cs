@@ -64,6 +64,40 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
         };
     }
 
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var success = CreateSuccessReceipt(callId, toolName, resultJson);
+        if (success is not null)
+            return success;
+
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !TryGetNonEmptyString(root, out var resultType, "result_type") ||
+                !string.Equals(resultType, "ornn_update_skill", StringComparison.Ordinal) ||
+                !TryGetNonEmptyString(root, out var status, "status") ||
+                !string.Equals(status, "validation_error", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return CreateValidationErrorReceipt(callId, toolName, resultJson, root);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     public string ParametersSchema => """
         {
           "type": "object",
@@ -281,6 +315,46 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
             error,
         });
 
+    private AgentToolReceipt? CreateValidationErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        JsonElement root)
+    {
+        if (!root.TryGetProperty("diagnostics", out var diagnostics) ||
+            diagnostics.ValueKind != JsonValueKind.Array ||
+            diagnostics.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        var diagnostic = diagnostics[0];
+        if (diagnostic.ValueKind != JsonValueKind.Object ||
+            !TryGetNonEmptyString(diagnostic, out var code, "code", "Code") ||
+            !TryGetNonEmptyString(diagnostic, out var message, "message", "Message"))
+        {
+            return null;
+        }
+
+        var safeMessage = $"{code}: {message}";
+        if (TryGetNonEmptyString(diagnostic, out var path, "path", "Path"))
+            safeMessage += $" (path: {path})";
+
+        return new AgentToolReceipt
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Error,
+            ApprovalMode = AgentToolReceiptApprovalMode.Auto,
+            IsDestructive = false,
+            SideEffectKind = SideEffectKind,
+            ErrorCode = code,
+            ErrorMessage = safeMessage,
+            ResultJson = resultJson ?? string.Empty,
+            FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed,
+        };
+    }
+
     private static UpdatedSkillSubject ExtractUpdatedSkill(string? rawResponse)
     {
         if (string.IsNullOrWhiteSpace(rawResponse))
@@ -345,6 +419,26 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
         }
 
         return null;
+    }
+
+    private static bool TryGetNonEmptyString(
+        JsonElement element,
+        out string value,
+        params string[] keys)
+    {
+        value = string.Empty;
+        foreach (var key in keys)
+        {
+            if (!element.TryGetProperty(key, out var property) || property.ValueKind != JsonValueKind.String)
+                continue;
+
+            value = property.GetString()?.Trim() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(value))
+                return true;
+        }
+
+        value = string.Empty;
+        return false;
     }
 
     private sealed record UpdatedSkillSubject(string? Guid, string? Version, string? SkillHash)

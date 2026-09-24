@@ -240,6 +240,47 @@ public sealed class OrnnUpdateSkillToolTests
         receipt.SubjectHash.Should().Be("hash-3");
     }
 
+    [Fact]
+    public void CreateResultReceipt_WithValidationError_ShouldReturnTypedFailure()
+    {
+        var tool = CreateTool(new CapturingHandler("""{ "data": { "valid": true } }"""));
+        const string arguments = $$"""{"skill_id":"{{SkillId}}"}""";
+        const string resultJson =
+            """
+            {
+              "result_type": "ornn_update_skill",
+              "status": "validation_error",
+              "diagnostics": [
+                {
+                  "Code": "invalid_skill_id",
+                  "Message": "skill_id must be a GUID.",
+                  "Path": "$.skill_id"
+                }
+              ]
+            }
+            """;
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-validation",
+            tool.Name,
+            arguments,
+            resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.Auto);
+        receipt.IsDestructive.Should().BeFalse();
+        receipt.SideEffectKind.Should().Be("ornn.update.skill");
+        receipt.ErrorCode.Should().Be("invalid_skill_id");
+        receipt.ErrorMessage.Should().Contain("invalid_skill_id");
+        receipt.ErrorMessage.Should().Contain("skill_id must be a GUID");
+        receipt.ErrorMessage.Should().Contain("$.skill_id");
+        receipt.ResultJson.Should().Be(resultJson);
+        receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.CalleeConfirmed);
+        receipt.SubjectKind.Should().BeEmpty();
+        receipt.SubjectId.Should().BeEmpty();
+    }
+
     private static string ValidArguments(string skillId = SkillId, string? extraFields = null)
     {
         var commaExtra = string.IsNullOrWhiteSpace(extraFields) ? string.Empty : "," + extraFields;

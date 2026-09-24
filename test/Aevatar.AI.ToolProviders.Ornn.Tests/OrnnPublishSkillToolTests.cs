@@ -331,6 +331,160 @@ public sealed class OrnnPublishSkillToolTests
         receipt.SubjectHash.Should().Be("hash-3");
     }
 
+    [Fact]
+    public void CreateResultReceipt_WithValidationError_ShouldReturnTypedFailure()
+    {
+        var tool = CreateTool(new CapturingHandler("""{ "data": { "valid": true } }"""));
+        const string arguments = """{"name":"merchant-assistant"}""";
+        const string resultJson =
+            """
+            {
+              "result_type": "ornn_publish_skill",
+              "status": "validation_error",
+              "diagnostics": [
+                {
+                  "Code": "invalid_instructions",
+                  "Message": "instructions_markdown must not include SKILL.md frontmatter delimiters.",
+                  "Path": "$.instructions_markdown"
+                }
+              ]
+            }
+            """;
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            arguments,
+            resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.Auto);
+        receipt.SideEffectKind.Should().Be("ornn.publish.skill");
+        receipt.ErrorCode.Should().Be("invalid_instructions");
+        receipt.ErrorMessage.Should().Contain("invalid_instructions");
+        receipt.ErrorMessage.Should().Contain("frontmatter delimiters");
+        receipt.ErrorMessage.Should().Contain("$.instructions_markdown");
+        receipt.ResultJson.Should().Be(resultJson);
+        receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.CalleeConfirmed);
+        receipt.SubjectKind.Should().BeEmpty();
+        receipt.SubjectId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithFormatValidationError_ShouldReturnTypedFailure()
+    {
+        var tool = CreateTool(new CapturingHandler("""{ "data": { "valid": true } }"""));
+        const string resultJson =
+            """
+            {
+              "result_type": "ornn_publish_skill",
+              "status": "format_validation_error",
+              "error": "validator rejected package",
+              "violations": [
+                { "rule": "skill-md", "message": "SKILL.md body is invalid" }
+              ]
+            }
+            """;
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-2",
+            tool.Name,
+            """{"name":"merchant-assistant"}""",
+            resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.Auto);
+        receipt.SideEffectKind.Should().Be("ornn.publish.skill");
+        receipt.ErrorCode.Should().Be("ornn_format_validation_error");
+        receipt.ErrorMessage.Should().Contain("ornn_format_validation_error");
+        receipt.ErrorMessage.Should().Contain("validator rejected package");
+        receipt.ErrorMessage.Should().Contain("skill-md");
+        receipt.ErrorMessage.Should().Contain("SKILL.md body is invalid");
+        receipt.ResultJson.Should().Be(resultJson);
+        receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.CalleeConfirmed);
+        receipt.SubjectId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithPublishError_ShouldReturnTypedFailure()
+    {
+        var tool = CreateTool(new CapturingHandler("""{ "data": { "valid": true } }"""));
+        const string resultJson =
+            """
+            {
+              "result_type": "ornn_publish_skill",
+              "status": "error",
+              "error": "Missing ornn:skill:create permission"
+            }
+            """;
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-3",
+            tool.Name,
+            """{"name":"merchant-assistant"}""",
+            resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.Auto);
+        receipt.SideEffectKind.Should().Be("ornn.publish.skill");
+        receipt.ErrorCode.Should().Be("ornn_publish_error");
+        receipt.ErrorMessage.Should().Contain("ornn_publish_error");
+        receipt.ErrorMessage.Should().Contain("Missing ornn:skill:create permission");
+        receipt.ResultJson.Should().Be(resultJson);
+        receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.CalleeConfirmed);
+        receipt.SubjectId.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("not-json")]
+    [InlineData("{\"result_type\":\"other\",\"status\":\"error\",\"error\":\"failed\"}")]
+    [InlineData("{\"result_type\":\"ornn_publish_skill\",\"status\":\"validation_error\",\"diagnostics\":[]}")]
+    [InlineData("{\"result_type\":\"ornn_publish_skill\",\"status\":\"format_validation_error\",\"violations\":[]}")]
+    [InlineData("{\"result_type\":\"ornn_publish_skill\",\"status\":\"error\"}")]
+    public void CreateResultReceipt_WithUnverifiedPayload_ShouldReturnNull(string resultJson)
+    {
+        var tool = CreateTool(new CapturingHandler("""{ "data": { "valid": true } }"""));
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-4",
+            tool.Name,
+            """{"name":"merchant-assistant"}""",
+            resultJson);
+
+        receipt.Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithPublishedIdentity_ShouldPreserveSuccessReceiptBehavior()
+    {
+        var tool = CreateTool(new CapturingHandler("""{ "data": { "valid": true } }"""));
+        const string resultJson =
+            """
+            {
+              "result_type": "ornn_publish_skill",
+              "status": "success",
+              "guid": "skill-4",
+              "version": "1.2",
+              "skillHash": "hash-4"
+            }
+            """;
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-5",
+            tool.Name,
+            """{"name":"merchant-assistant"}""",
+            resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SubjectId.Should().Be("skill-4");
+        receipt.SubjectVersion.Should().Be("1.2");
+        receipt.SubjectHash.Should().Be("hash-4");
+    }
+
     private static string ValidArguments(string? extraFields = null)
     {
         var commaExtra = string.IsNullOrWhiteSpace(extraFields) ? string.Empty : "," + extraFields;
