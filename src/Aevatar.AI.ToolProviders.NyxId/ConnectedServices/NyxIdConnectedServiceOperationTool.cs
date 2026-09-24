@@ -585,10 +585,12 @@ internal static class NyxIdConnectedServiceOperationSchema
         var description = string.IsNullOrWhiteSpace(parameter.Description)
             ? null
             : parameter.Description.Trim();
-        if (!string.Equals(slot, "query", StringComparison.Ordinal))
-            return description;
-
-        var guidance = BuildQueryParameterGuidance(parameter.Name);
+        var guidance = slot switch
+        {
+            "path_params" => BuildPathParameterGuidance(parameter.Name),
+            "query" => BuildQueryParameterGuidance(parameter.Name),
+            _ => null,
+        };
         if (string.IsNullOrWhiteSpace(guidance))
             return description;
         if (string.IsNullOrWhiteSpace(description))
@@ -597,6 +599,9 @@ internal static class NyxIdConnectedServiceOperationSchema
             return description;
         return description + " " + guidance;
     }
+
+    private static string BuildPathParameterGuidance(string name) =>
+        $"Supply this value as path_params.{name}; never place this path parameter at the top level.";
 
     private static string? BuildQueryParameterGuidance(string name) => name switch
     {

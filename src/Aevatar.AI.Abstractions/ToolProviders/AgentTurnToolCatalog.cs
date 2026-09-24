@@ -96,7 +96,7 @@ public sealed record AgentTurnToolCatalogBudget(
     public static AgentTurnToolCatalogBudget Ordinary { get; } = new(8, 48 * 1024);
 
     public static AgentTurnToolCatalogBudget ChannelReply { get; } =
-        new(8, 100 * 1024);
+        new(8, 200 * 1024);
 
     public static AgentTurnToolCatalogBudget ConnectedOperations { get; } =
         new(8, 48 * 1024, MaximumConnectedReadToolCount: 3, MaximumConnectedWriteToolCount: 1);

@@ -250,6 +250,28 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task DynamicOperation_PathParameterDescription_ShouldIncludeExactNestedLocation()
+    {
+        var handler = ExactOperationHandler();
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        var description = schema.RootElement
+            .GetProperty("properties")
+            .GetProperty("path_params")
+            .GetProperty("properties")
+            .GetProperty("orderId")
+            .GetProperty("description")
+            .GetString();
+
+        description.Should().Contain("path_params.orderId")
+            .And.Contain("top level");
+    }
+
+    [Fact]
     public async Task DiscoverToolsAsync_DelegatedBrowserCredentials_ShouldSplitInventoryAndExecutionAuthority()
     {
         var handler = new FakeNyxIdHandler();
