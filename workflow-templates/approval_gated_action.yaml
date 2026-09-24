@@ -1,0 +1,52 @@
+name: approval_gated_action
+description: >-
+  Turn a requested action and policy context into a reviewable execution plan, then release or reject that plan through explicit human approval. Use this starter before a consequential operation when the run input describes the requested action, target, expected effect, rollback plan, evidence, and approval policy. The starter itself performs no external action.
+roles:
+  - id: action_planner
+    name: Action Planner
+    system_prompt: >-
+      Prepare a bounded action plan from the supplied request and policy. Identify the exact target, intended change, preconditions, authorization evidence, risk, blast radius, validation, rollback, and any ambiguity that must block approval. Do not execute tools or claim the action occurred. Return concise Markdown suitable for an approver.
+    temperature: 0.1
+    max_tokens: 1400
+    allowed_tools: []
+steps:
+  - id: prepare_action_plan
+    type: llm_call
+    target_role: action_planner
+    parameters:
+      prompt_prefix: >-
+        Prepare an approval packet for this requested action and policy context:
+    next: approve_action_plan
+
+  - id: approve_action_plan
+    type: human_approval
+    parameters:
+      prompt: Approve this plan for a separately configured execution step?
+      on_reject: skip
+      timeout_seconds: "3600"
+      timeout_default_decision: reject
+    branches:
+      "true": record_released_plan
+      "false": record_rejected_plan
+
+  - id: record_released_plan
+    type: assign
+    parameters:
+      target: approval_gated_action_result
+      value: >-
+        PLAN APPROVED FOR A SEPARATELY CONFIGURED EXECUTION STEP. No external action was performed. Original plan: ${steps.prepare_action_plan.output} Approval response: ${input}
+    next: finish_approval_gated_action
+
+  - id: record_rejected_plan
+    type: assign
+    parameters:
+      target: approval_gated_action_result
+      value: >-
+        PLAN NOT APPROVED. No external action was performed. ${input}
+    next: finish_approval_gated_action
+
+  - id: finish_approval_gated_action
+    type: assign
+    parameters:
+      target: approval_gated_action_result
+      value: "$input"
