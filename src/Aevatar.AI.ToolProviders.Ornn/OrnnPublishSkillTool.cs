@@ -92,7 +92,7 @@ public sealed class OrnnPublishSkillTool : IAgentTool
                     toolName,
                     resultJson,
                     root),
-                "error" => CreatePublishErrorReceipt(callId, toolName, resultJson, root),
+                "error" => CreateMutationErrorReceipt(callId, toolName, resultJson, root),
                 _ => null,
             };
         }
@@ -176,7 +176,16 @@ public sealed class OrnnPublishSkillTool : IAgentTool
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
-            return BuildResult("error", "No NyxID access token available. User must be authenticated.");
+        {
+            return OrnnSkillMutationFailureProtocol.Serialize(
+                "ornn_publish_skill",
+                new OrnnSkillMutationFailure(
+                    OrnnSkillMutationFailureKind.Rejected,
+                    "nyxid_access_token_missing",
+                    "No NyxID access token available. User must be authenticated.",
+                    null,
+                    AgentToolFailureOutcome.CalleeConfirmed));
+        }
 
         var (request, parseDiagnostics) = OrnnSkillPublishRequestParser.Parse(argumentsJson);
         if (request == null)
@@ -204,7 +213,7 @@ public sealed class OrnnPublishSkillTool : IAgentTool
 
         var publish = await _client.PublishSkillAsync(token, package.ZipBytes, ct);
         if (!publish.Succeeded)
-            return BuildResult("error", publish.Error ?? "Ornn publish failed.");
+            return OrnnSkillMutationFailureProtocol.Serialize("ornn_publish_skill", publish.Failure!);
 
         var published = ExtractPublishedSkill(publish.RawResponse);
         return JsonSerializer.Serialize(new
@@ -228,14 +237,6 @@ public sealed class OrnnPublishSkillTool : IAgentTool
             result_type = "ornn_publish_skill",
             status,
             diagnostics,
-        });
-
-    private static string BuildResult(string status, string error) =>
-        JsonSerializer.Serialize(new
-        {
-            result_type = "ornn_publish_skill",
-            status,
-            error,
         });
 
     private AgentToolReceipt? CreateValidationErrorReceipt(
@@ -304,21 +305,22 @@ public sealed class OrnnPublishSkillTool : IAgentTool
                 $"{errorCode}: {string.Join("; ", details)}");
     }
 
-    private AgentToolReceipt? CreatePublishErrorReceipt(
+    private AgentToolReceipt? CreateMutationErrorReceipt(
         string callId,
         string toolName,
         string resultJson,
         JsonElement root)
     {
-        const string errorCode = "ornn_publish_error";
-        return TryGetNonEmptyString(root, out var error, "error")
-            ? CreateErrorReceipt(
-                callId,
-                toolName,
-                resultJson,
-                errorCode,
-                $"{errorCode}: {error}")
-            : null;
+        if (!OrnnSkillMutationFailureProtocol.TryParse(root, out var failure))
+            return null;
+
+        return CreateErrorReceipt(
+            callId,
+            toolName,
+            resultJson,
+            failure.Code,
+            $"{failure.Code}: {failure.Message}",
+            failure.Outcome);
     }
 
     private AgentToolReceipt CreateErrorReceipt(
@@ -326,7 +328,8 @@ public sealed class OrnnPublishSkillTool : IAgentTool
         string toolName,
         string resultJson,
         string errorCode,
-        string errorMessage) =>
+        string errorMessage,
+        AgentToolFailureOutcome failureOutcome = AgentToolFailureOutcome.CalleeConfirmed) =>
         new()
         {
             CallId = callId ?? string.Empty,
@@ -338,7 +341,7 @@ public sealed class OrnnPublishSkillTool : IAgentTool
             ErrorCode = errorCode,
             ErrorMessage = errorMessage,
             ResultJson = resultJson ?? string.Empty,
-            FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed,
+            FailureOutcome = failureOutcome,
         };
 
     private static PublishedSkillSubject ExtractPublishedSkill(string? rawResponse)

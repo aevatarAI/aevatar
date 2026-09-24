@@ -84,13 +84,22 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
             if (root.ValueKind != JsonValueKind.Object ||
                 !TryGetNonEmptyString(root, out var resultType, "result_type") ||
                 !string.Equals(resultType, "ornn_update_skill", StringComparison.Ordinal) ||
-                !TryGetNonEmptyString(root, out var status, "status") ||
-                !string.Equals(status, "validation_error", StringComparison.Ordinal))
+                !TryGetNonEmptyString(root, out var status, "status"))
             {
                 return null;
             }
 
-            return CreateValidationErrorReceipt(callId, toolName, resultJson, root);
+            return status switch
+            {
+                "validation_error" => CreateValidationErrorReceipt(callId, toolName, resultJson, root),
+                "format_validation_error" => CreateFormatValidationErrorReceipt(
+                    callId,
+                    toolName,
+                    resultJson,
+                    root),
+                "error" => CreateMutationErrorReceipt(callId, toolName, resultJson, root),
+                _ => null,
+            };
         }
         catch (JsonException)
         {
@@ -173,7 +182,16 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
-            return BuildResult("error", "No NyxID access token available. User must be authenticated.");
+        {
+            return OrnnSkillMutationFailureProtocol.Serialize(
+                "ornn_update_skill",
+                new OrnnSkillMutationFailure(
+                    OrnnSkillMutationFailureKind.Rejected,
+                    "nyxid_access_token_missing",
+                    "No NyxID access token available. User must be authenticated.",
+                    null,
+                    AgentToolFailureOutcome.CalleeConfirmed));
+        }
 
         var (skillId, packageArgumentsJson, skillIdDiagnostics) = ExtractSkillIdAndPackageArguments(argumentsJson);
         if (skillId == null || packageArgumentsJson == null)
@@ -205,7 +223,7 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
 
         var update = await _client.UpdateSkillAsync(token, skillId, package.ZipBytes, ct);
         if (!update.Succeeded)
-            return BuildResult("error", update.Error ?? "Ornn update failed.");
+            return OrnnSkillMutationFailureProtocol.Serialize("ornn_update_skill", update.Failure!);
 
         var updated = ExtractUpdatedSkill(update.RawResponse);
         return JsonSerializer.Serialize(new
@@ -307,14 +325,6 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
             diagnostics,
         });
 
-    private static string BuildResult(string status, string error) =>
-        JsonSerializer.Serialize(new
-        {
-            result_type = "ornn_update_skill",
-            status,
-            error,
-        });
-
     private AgentToolReceipt? CreateValidationErrorReceipt(
         string callId,
         string toolName,
@@ -340,7 +350,78 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
         if (TryGetNonEmptyString(diagnostic, out var path, "path", "Path"))
             safeMessage += $" (path: {path})";
 
-        return new AgentToolReceipt
+        return CreateErrorReceipt(
+            callId,
+            toolName,
+            resultJson,
+            code,
+            safeMessage);
+    }
+
+    private AgentToolReceipt? CreateFormatValidationErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        JsonElement root)
+    {
+        const string errorCode = "ornn_format_validation_error";
+        var details = new List<string>();
+        if (TryGetNonEmptyString(root, out var error, "error"))
+            details.Add(error);
+
+        if (root.TryGetProperty("violations", out var violations) &&
+            violations.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var violation in violations.EnumerateArray())
+            {
+                if (violation.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var hasRule = TryGetNonEmptyString(violation, out var rule, "rule", "Rule");
+                var hasMessage = TryGetNonEmptyString(violation, out var message, "message", "Message");
+                if (!hasRule && !hasMessage)
+                    continue;
+
+                details.Add(hasRule && hasMessage ? $"{rule}: {message}" : hasRule ? rule : message);
+            }
+        }
+
+        return details.Count == 0
+            ? null
+            : CreateErrorReceipt(
+                callId,
+                toolName,
+                resultJson,
+                errorCode,
+                $"{errorCode}: {string.Join("; ", details)}");
+    }
+
+    private AgentToolReceipt? CreateMutationErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        JsonElement root)
+    {
+        if (!OrnnSkillMutationFailureProtocol.TryParse(root, out var failure))
+            return null;
+
+        return CreateErrorReceipt(
+            callId,
+            toolName,
+            resultJson,
+            failure.Code,
+            $"{failure.Code}: {failure.Message}",
+            failure.Outcome);
+    }
+
+    private AgentToolReceipt CreateErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        string errorCode,
+        string errorMessage,
+        AgentToolFailureOutcome failureOutcome = AgentToolFailureOutcome.CalleeConfirmed) =>
+        new()
         {
             CallId = callId ?? string.Empty,
             ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
@@ -348,12 +429,11 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
             ApprovalMode = AgentToolReceiptApprovalMode.Auto,
             IsDestructive = false,
             SideEffectKind = SideEffectKind,
-            ErrorCode = code,
-            ErrorMessage = safeMessage,
+            ErrorCode = errorCode,
+            ErrorMessage = errorMessage,
             ResultJson = resultJson ?? string.Empty,
-            FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed,
+            FailureOutcome = failureOutcome,
         };
-    }
 
     private static UpdatedSkillSubject ExtractUpdatedSkill(string? rawResponse)
     {

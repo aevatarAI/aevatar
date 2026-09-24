@@ -164,8 +164,19 @@ public sealed class OrnnUpdateSkillToolTests
 
         using var _ = BeginTokenScope();
         var result = await tool.ExecuteAsync(ValidArguments());
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-format-validation",
+            tool.Name,
+            ValidArguments(),
+            result);
 
         result.Should().Contain("format_validation_error");
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("ornn_format_validation_error");
+        receipt.ErrorMessage.Should().Contain("skill-md");
+        receipt.ErrorMessage.Should().Contain("bad");
+        receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.CalleeConfirmed);
         handler.Requests.Should().ContainSingle();
         handler.Requests[0].RequestUri!.AbsolutePath.Should().Be(
             "/api/v1/proxy/s/ornn/api/v1/skill-format/validate");
@@ -200,7 +211,7 @@ public sealed class OrnnUpdateSkillToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenUpdateReturnsPermissionError_ShouldSurfaceUpstreamReason()
+    public async Task ExecuteAsync_WhenUpdateReturnsPermissionError_ShouldReturnConfirmedTypedFailure()
     {
         var handler = new CapturingHandler(
             new CapturingResponse("""{ "data": { "valid": true, "violations": [] } }"""),
@@ -211,10 +222,89 @@ public sealed class OrnnUpdateSkillToolTests
 
         using var _ = BeginTokenScope();
         var result = await tool.ExecuteAsync(ValidArguments());
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-forbidden",
+            tool.Name,
+            ValidArguments(),
+            result);
 
-        result.Should().Contain("\"status\":\"error\"");
-        result.Should().Contain("Missing ornn:skill:update permission");
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("status").GetString().Should().Be("error");
+        root.GetProperty("error_code").GetString().Should().Be("ornn_update_forbidden");
+        root.GetProperty("error").GetString().Should().Contain("Missing ornn:skill:update permission");
+        root.GetProperty("failure_kind").GetString().Should().Be("rejected");
+        root.GetProperty("http_status").GetInt32().Should().Be(403);
+        root.GetProperty("failure_outcome").GetString().Should().Be("callee_confirmed");
         result.Should().NotContain("missing proxy scope");
+
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be("ornn_update_forbidden");
+        receipt.ErrorMessage.Should().Contain("Missing ornn:skill:update permission");
+        receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.CalleeConfirmed);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenUpdateReturnsServerError_ShouldReturnUncertainTypedFailure()
+    {
+        var handler = new CapturingHandler(
+            new CapturingResponse("""{ "data": { "valid": true, "violations": [] } }"""),
+            new CapturingResponse(
+                """{ "message": "temporary upstream failure" }""",
+                HttpStatusCode.InternalServerError));
+        var tool = CreateTool(handler);
+
+        using var _ = BeginTokenScope();
+        var result = await tool.ExecuteAsync(ValidArguments());
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-server-error",
+            tool.Name,
+            ValidArguments(),
+            result);
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("status").GetString().Should().Be("error");
+        root.GetProperty("error_code").GetString().Should().Be("ornn_update_http_error");
+        root.GetProperty("failure_kind").GetString().Should().Be("rejected");
+        root.GetProperty("http_status").GetInt32().Should().Be(500);
+        root.GetProperty("failure_outcome").GetString().Should().Be("outcome_uncertain");
+
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be("ornn_update_http_error");
+        receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenUpdateTimesOut_ShouldReturnUncertainTypedFailure()
+    {
+        var handler = new FormatValidationThenHangingHandler();
+        var tool = CreateTool(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
+
+        using var _ = BeginTokenScope();
+        var startedAt = System.Diagnostics.Stopwatch.StartNew();
+        var result = await tool.ExecuteAsync(ValidArguments());
+        startedAt.Stop();
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-timeout",
+            tool.Name,
+            ValidArguments(),
+            result);
+
+        using var document = JsonDocument.Parse(result);
+        var root = document.RootElement;
+        root.GetProperty("status").GetString().Should().Be("error");
+        root.GetProperty("error_code").GetString().Should().Be("ornn_update_timeout");
+        root.GetProperty("failure_kind").GetString().Should().Be("timeout");
+        root.TryGetProperty("http_status", out var httpStatus).Should().BeFalse();
+        httpStatus.ValueKind.Should().Be(JsonValueKind.Undefined);
+        root.GetProperty("failure_outcome").GetString().Should().Be("outcome_uncertain");
+
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be("ornn_update_timeout");
+        receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
+        startedAt.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
+        handler.Requests.Should().HaveCount(2);
     }
 
     [Fact]
@@ -281,6 +371,22 @@ public sealed class OrnnUpdateSkillToolTests
         receipt.SubjectId.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("{\"result_type\":\"ornn_update_skill\",\"status\":\"error\",\"error\":\"failed\"}")]
+    [InlineData("{\"result_type\":\"ornn_update_skill\",\"status\":\"error\",\"error_code\":\"ornn_update_timeout\",\"error\":\"failed\",\"failure_kind\":\"timeout\"}")]
+    public void CreateResultReceipt_WithUntypedMutationFailure_ShouldReturnNull(string resultJson)
+    {
+        var tool = CreateTool(new CapturingHandler("""{ "data": { "valid": true } }"""));
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-untyped",
+            tool.Name,
+            ValidArguments(),
+            resultJson);
+
+        receipt.Should().BeNull();
+    }
+
     private static string ValidArguments(string skillId = SkillId, string? extraFields = null)
     {
         var commaExtra = string.IsNullOrWhiteSpace(extraFields) ? string.Empty : "," + extraFields;
@@ -298,8 +404,9 @@ public sealed class OrnnUpdateSkillToolTests
     }
 
     private static OrnnUpdateSkillTool CreateTool(
-        CapturingHandler handler,
-        IReadOnlyList<IOrnnSkillPublishAssetValidator>? validators = null)
+        HttpMessageHandler handler,
+        IReadOnlyList<IOrnnSkillPublishAssetValidator>? validators = null,
+        TimeSpan? perCallTimeout = null)
     {
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
@@ -307,7 +414,9 @@ public sealed class OrnnUpdateSkillToolTests
         var options = new OrnnOptions { NyxIdSlug = "ornn" };
         var pipeline = new OrnnSkillPublishValidationPipeline(validators);
         var formatValidator = new OrnnSkillPackageFormatValidator(options, nyxClient);
-        var client = new OrnnSkillClient(options, nyxClient);
+        var client = perCallTimeout is { } timeout
+            ? new OrnnSkillClient(options, nyxClient, timeout)
+            : new OrnnSkillClient(options, nyxClient);
         return new OrnnUpdateSkillTool(
             pipeline,
             new OrnnSkillPackageBuilder(),
@@ -361,6 +470,36 @@ public sealed class OrnnUpdateSkillToolTests
             {
                 Content = new StringContent(response.Body),
             });
+        }
+    }
+
+    private sealed class FormatValidationThenHangingHandler : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            if (Requests.Count == 1)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{ "data": { "valid": true, "violations": [] } }"""),
+                };
+            }
+
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (cancellationToken.Register(
+                       static state => ((TaskCompletionSource)state!).TrySetCanceled(),
+                       completion))
+            {
+                await completion.Task;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            return new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 

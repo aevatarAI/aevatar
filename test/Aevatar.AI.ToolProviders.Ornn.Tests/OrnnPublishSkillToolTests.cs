@@ -416,7 +416,11 @@ public sealed class OrnnPublishSkillToolTests
             {
               "result_type": "ornn_publish_skill",
               "status": "error",
-              "error": "Missing ornn:skill:create permission"
+              "error_code": "ornn_publish_forbidden",
+              "error": "Missing ornn:skill:create permission",
+              "failure_kind": "rejected",
+              "http_status": 403,
+              "failure_outcome": "callee_confirmed"
             }
             """;
 
@@ -430,8 +434,8 @@ public sealed class OrnnPublishSkillToolTests
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
         receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.Auto);
         receipt.SideEffectKind.Should().Be("ornn.publish.skill");
-        receipt.ErrorCode.Should().Be("ornn_publish_error");
-        receipt.ErrorMessage.Should().Contain("ornn_publish_error");
+        receipt.ErrorCode.Should().Be("ornn_publish_forbidden");
+        receipt.ErrorMessage.Should().Contain("ornn_publish_forbidden");
         receipt.ErrorMessage.Should().Contain("Missing ornn:skill:create permission");
         receipt.ResultJson.Should().Be(resultJson);
         receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.CalleeConfirmed);
@@ -444,6 +448,7 @@ public sealed class OrnnPublishSkillToolTests
     [InlineData("{\"result_type\":\"ornn_publish_skill\",\"status\":\"validation_error\",\"diagnostics\":[]}")]
     [InlineData("{\"result_type\":\"ornn_publish_skill\",\"status\":\"format_validation_error\",\"violations\":[]}")]
     [InlineData("{\"result_type\":\"ornn_publish_skill\",\"status\":\"error\"}")]
+    [InlineData("{\"result_type\":\"ornn_publish_skill\",\"status\":\"error\",\"error\":\"failed\"}")]
     public void CreateResultReceipt_WithUnverifiedPayload_ShouldReturnNull(string resultJson)
     {
         var tool = CreateTool(new CapturingHandler("""{ "data": { "valid": true } }"""));

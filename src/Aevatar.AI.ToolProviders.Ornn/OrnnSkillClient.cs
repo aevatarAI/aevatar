@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Skills;
@@ -403,7 +404,7 @@ public sealed class OrnnSkillClient
         }
     }
 
-    public async Task<OrnnSkillPublishResponse> PublishSkillAsync(
+    public async Task<OrnnSkillMutationResponse> PublishSkillAsync(
         string accessToken,
         byte[] zipBytes,
         CancellationToken ct = default)
@@ -424,9 +425,9 @@ public sealed class OrnnSkillClient
                 ct: linkedCts.Token);
 
             if (TryUnwrapNyxIdProxyError(response, out var proxyError))
-                return new OrnnSkillPublishResponse(false, response, proxyError.Detail);
+                return CreateHttpMutationFailure("publish", response, proxyError);
 
-            return new OrnnSkillPublishResponse(true, response);
+            return OrnnSkillMutationResponse.Success(response);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -437,19 +438,16 @@ public sealed class OrnnSkillClient
             _logger.LogWarning(
                 "Ornn skill publish exceeded {TimeoutSeconds}s per-call budget",
                 (int)_perCallTimeout.TotalSeconds);
-            return new OrnnSkillPublishResponse(
-                false,
-                string.Empty,
-                $"Ornn skill publish exceeded {(int)_perCallTimeout.TotalSeconds}s budget.");
+            return CreateTimeoutMutationFailure("publish");
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ornn skill publish failed");
-            return new OrnnSkillPublishResponse(false, string.Empty, ex.Message);
+            return CreateTransportMutationFailure("publish", ex);
         }
     }
 
-    public async Task<OrnnSkillPublishResponse> UpdateSkillAsync(
+    public async Task<OrnnSkillMutationResponse> UpdateSkillAsync(
         string accessToken,
         string skillId,
         byte[] zipBytes,
@@ -472,9 +470,9 @@ public sealed class OrnnSkillClient
                 ct: linkedCts.Token);
 
             if (TryUnwrapNyxIdProxyError(response, out var proxyError))
-                return new OrnnSkillPublishResponse(false, response, proxyError.Detail);
+                return CreateHttpMutationFailure("update", response, proxyError);
 
-            return new OrnnSkillPublishResponse(true, response);
+            return OrnnSkillMutationResponse.Success(response);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -486,16 +484,74 @@ public sealed class OrnnSkillClient
                 "Ornn skill update exceeded {TimeoutSeconds}s per-call budget for '{SkillId}'",
                 (int)_perCallTimeout.TotalSeconds,
                 skillId);
-            return new OrnnSkillPublishResponse(
-                false,
-                string.Empty,
-                $"Ornn skill update exceeded {(int)_perCallTimeout.TotalSeconds}s budget.");
+            return CreateTimeoutMutationFailure("update");
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ornn skill update failed for '{SkillId}'", skillId);
-            return new OrnnSkillPublishResponse(false, string.Empty, ex.Message);
+            return CreateTransportMutationFailure("update", ex);
         }
+    }
+
+    private OrnnSkillMutationResponse CreateTimeoutMutationFailure(string operation) =>
+        OrnnSkillMutationResponse.Failed(
+            string.Empty,
+            new OrnnSkillMutationFailure(
+                OrnnSkillMutationFailureKind.Timeout,
+                $"ornn_{operation}_timeout",
+                $"Ornn skill {operation} exceeded {(int)_perCallTimeout.TotalSeconds}s budget.",
+                null,
+                AgentToolFailureOutcome.OutcomeUncertain));
+
+    private static OrnnSkillMutationResponse CreateTransportMutationFailure(
+        string operation,
+        Exception exception) =>
+        OrnnSkillMutationResponse.Failed(
+            string.Empty,
+            new OrnnSkillMutationFailure(
+                OrnnSkillMutationFailureKind.Transport,
+                $"ornn_{operation}_transport_error",
+                exception.Message,
+                null,
+                AgentToolFailureOutcome.OutcomeUncertain));
+
+    private static OrnnSkillMutationResponse CreateHttpMutationFailure(
+        string operation,
+        string rawResponse,
+        NyxIdProxyError proxyError)
+    {
+        if (proxyError.Status <= 0)
+        {
+            return OrnnSkillMutationResponse.Failed(
+                rawResponse,
+                new OrnnSkillMutationFailure(
+                    OrnnSkillMutationFailureKind.Transport,
+                    $"ornn_{operation}_transport_error",
+                    "NyxID proxy transport failed before an HTTP status was available.",
+                    null,
+                    AgentToolFailureOutcome.OutcomeUncertain));
+        }
+
+        var code = proxyError.Status switch
+        {
+            401 => $"ornn_{operation}_unauthorized",
+            403 => $"ornn_{operation}_forbidden",
+            404 => $"ornn_{operation}_not_found",
+            >= 400 and < 500 => $"ornn_{operation}_rejected",
+            _ => $"ornn_{operation}_http_error",
+        };
+        var outcome = proxyError.Status is >= 400 and < 500
+            ? AgentToolFailureOutcome.CalleeConfirmed
+            : AgentToolFailureOutcome.OutcomeUncertain;
+
+        return OrnnSkillMutationResponse.Failed(
+            rawResponse,
+            new OrnnSkillMutationFailure(
+                OrnnSkillMutationFailureKind.Rejected,
+                code,
+                proxyError.Detail,
+                proxyError.Status > 0 ? proxyError.Status : null,
+                outcome));
     }
 
     /// <summary>
