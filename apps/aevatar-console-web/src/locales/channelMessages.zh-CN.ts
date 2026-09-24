@@ -1,4 +1,6 @@
 export default {
+  'channels.owner.label': '归属：{owner}',
+  'channels.owner.unavailable': '未知',
   'channels.error.contract': 'Bot 绑定功能暂未开放，请稍后重试。',
   'channels.guide.title': '如何连接 Bot',
   'channels.guide.add': '前往 NyxID 添加 Bot',

@@ -93,11 +93,13 @@ export function ChannelIdentity({
   label,
   pending,
   secondary = 'identifier',
+  showOwner = false,
 }: {
   readonly registration: ChannelRegistration;
   readonly label: string | null;
   readonly pending: boolean;
   readonly secondary?: 'identifier' | 'platform';
+  readonly showOwner?: boolean;
 }) {
   const identifier = registration.botId ?? registration.id;
   return (
@@ -125,6 +127,16 @@ export function ChannelIdentity({
             </button>
           </AevatarTooltip>
         )}
+        {showOwner ? (
+          <span className="channels__muted">
+            {t('channels.owner.label', 'Owner: {owner}', {
+              owner:
+                registration.botOwnerScopeName ??
+                registration.botOwnerScopeId ??
+                t('channels.owner.unavailable', 'Unknown'),
+            })}
+          </span>
+        ) : null}
       </div>
     </div>
   );

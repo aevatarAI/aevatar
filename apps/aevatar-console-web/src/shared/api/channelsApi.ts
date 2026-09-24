@@ -15,6 +15,8 @@ export type ChannelServiceAuthorization =
 export interface ChannelRegistration {
   readonly id: string | null;
   readonly botId: string;
+  readonly botOwnerScopeId: string | null;
+  readonly botOwnerScopeName: string | null;
   readonly label: string | null;
   readonly platform: string;
   readonly bindingStatus: 'bound' | 'unbound';
@@ -107,6 +109,18 @@ function decodeRegistration(value: unknown): ChannelRegistration {
   return {
     id,
     botId,
+    botOwnerScopeId:
+      readOptionalString(
+        row,
+        'nyx_channel_bot_owner_scope_id',
+        'Bot owner scope ID',
+      )?.trim() || null,
+    botOwnerScopeName:
+      readOptionalString(
+        row,
+        'nyx_channel_bot_owner_scope_name',
+        'Bot owner scope name',
+      )?.trim() || null,
     platform: readString(row, 'platform', 'Channel platform'),
     label: readOptionalString(row, 'label', 'Channel label')?.trim() || null,
     bindingStatus: bindingStatus === 'bound' ? 'bound' : 'unbound',
@@ -293,13 +307,13 @@ export const channelsApi = {
   },
   list(signal?: AbortSignal): Promise<ChannelRegistration[]> {
     return request(
-      '/api/channels/registrations',
+      '/api/channels/registrations?scope=all',
       (value) => {
         const rows = expectArray(
           value,
           'Channel registrations',
           decodeRegistration,
-        ).filter((row) => row.owned);
+        );
         if (new Set(rows.map((row) => row.botId)).size !== rows.length)
           throw new Error('Ambiguous channel bot inventory.');
         return rows;

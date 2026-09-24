@@ -8,6 +8,8 @@ it('reveals the complete NyxID bot identity even before a local registration exi
   const registration: ChannelRegistration = {
     id: null,
     botId: fullId,
+    botOwnerScopeId: null,
+    botOwnerScopeName: null,
     label: 'Support',
     platform: 'discord',
     bindingStatus: 'unbound',

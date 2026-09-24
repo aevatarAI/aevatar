@@ -1,4 +1,6 @@
 export default {
+  'channels.owner.label': 'Owner: {owner}',
+  'channels.owner.unavailable': 'Unknown',
   'channels.error.contract':
     'Bot binding is not available yet. Please try again later.',
   'channels.guide.title': 'How to connect a bot',

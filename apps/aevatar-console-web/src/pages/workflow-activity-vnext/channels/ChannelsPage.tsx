@@ -213,6 +213,7 @@ export default function ChannelsPage({
                           registration={row}
                           label={row.label}
                           pending={false}
+                          showOwner
                         />
                       </td>
                       <td>{platformName(row.platform)}</td>
@@ -246,7 +247,8 @@ export default function ChannelsPage({
                             <CheckOutlined aria-hidden="true" />
                             {t('channels.binding.bound', 'Bound')}
                           </span>
-                        ) : row.availabilityStatus === 'available' ? (
+                        ) : row.owned &&
+                          row.availabilityStatus === 'available' ? (
                           <ChannelLink
                             className="channels__bind"
                             href={buildChannelBindHref(scopeId, row.botId)}
@@ -255,12 +257,19 @@ export default function ChannelsPage({
                           </ChannelLink>
                         ) : (
                           <ChannelBadge>
-                            {t('channels.binding.unavailable', 'Unavailable')}
+                            {row.availabilityStatus === 'available'
+                              ? t('channels.binding.unbound', 'Not bound')
+                              : t(
+                                  'channels.binding.unavailable',
+                                  'Unavailable',
+                                )}
                           </ChannelBadge>
                         )}
                       </td>
                       <td className="channels__row-action">
-                        {row.bindingStatus === 'bound' && row.id ? (
+                        {row.owned &&
+                        row.bindingStatus === 'bound' &&
+                        row.id ? (
                           <ChannelLink
                             className="channels__manage"
                             href={buildChannelDetailsHref(scopeId, row.id)}

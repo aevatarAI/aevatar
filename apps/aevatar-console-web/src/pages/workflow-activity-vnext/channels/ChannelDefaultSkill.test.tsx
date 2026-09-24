@@ -100,7 +100,7 @@ beforeEach(() => {
           credential_source: { type: 'personal' },
         })),
       });
-    if (input === '/api/channels/registrations')
+    if (input === '/api/channels/registrations?scope=all')
       return response([
         unbound,
         { ...unbound, nyx_channel_bot_id: 'bot-beta' },
@@ -198,7 +198,7 @@ it('ignores the URL default when editing a saved registration', async () => {
   const normalFetch = fetchMock.getMockImplementation();
   if (!normalFetch) throw new Error('Missing request fixture');
   fetchMock.mockImplementation((input, init) => {
-    if (input === '/api/channels/registrations')
+    if (input === '/api/channels/registrations?scope=all')
       return Promise.resolve(response([bound]));
     if (input === '/api/channels/registrations/reg-alpha')
       return Promise.resolve(response(bound));

@@ -25,11 +25,13 @@ const bound = {
 };
 afterEach(() => fetchMock.mockReset());
 
-it('reads bound and unbound inventory without scope IDs and projects only safe fields', async () => {
+it('reads all visible bound and unbound bots with backend owner labels and only safe fields', async () => {
   fetchMock.mockResolvedValue(
     response([
       {
         ...bound,
+        nyx_channel_bot_owner_scope_id: 'scope-personal',
+        nyx_channel_bot_owner_scope_name: 'personal',
         access_token: 'TEST_SECRET',
         webhook_url: 'TEST_SECRET',
         runtime_config: { secret: 'TEST_SECRET' },
@@ -38,30 +40,55 @@ it('reads bound and unbound inventory without scope IDs and projects only safe f
         ...bound,
         id: null,
         nyx_channel_bot_id: 'bot-two',
+        nyx_channel_bot_owner_scope_id: 'scope-org',
+        nyx_channel_bot_owner_scope_name: ' Aevatar Team ',
         binding_status: 'unbound',
         authorization_mode: null,
         skill_name: '',
       },
-      { ...bound, owned: false },
+      {
+        ...bound,
+        id: 'reg-other',
+        nyx_channel_bot_id: 'bot-other',
+        nyx_channel_bot_owner_scope_id: 'scope-unresolved',
+        nyx_channel_bot_owner_scope_name: null,
+        owned: false,
+      },
     ]),
   );
   const rows = await channelsApi.list();
-  expect(rows).toHaveLength(2);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(fetchMock).toHaveBeenCalledWith(
+    '/api/channels/registrations?scope=all',
+    expect.objectContaining({ signal: undefined }),
+  );
+  expect(rows).toHaveLength(3);
   expect(rows[0]).toMatchObject({
     id: 'reg:one/a',
     botId: 'bot-one',
+    botOwnerScopeId: 'scope-personal',
+    botOwnerScopeName: 'personal',
     label: 'Support',
     skill: { name: 'support', version: null },
     stateVersion: 12,
   });
   expect(rows[1]).toMatchObject({
     id: null,
+    botOwnerScopeId: 'scope-org',
+    botOwnerScopeName: 'Aevatar Team',
+    owned: true,
     bindingStatus: 'unbound',
     skill: null,
     serviceAuthorization: { kind: 'unavailable' },
   });
+  expect(rows[2]).toMatchObject({
+    botId: 'bot-other',
+    botOwnerScopeId: 'scope-unresolved',
+    botOwnerScopeName: null,
+    owned: false,
+  });
   expect(JSON.stringify(rows)).not.toMatch(
-    /TEST_SECRET|webhook|runtime_config|scope/,
+    /TEST_SECRET|webhook|runtime_config/,
   );
   fetchMock.mockResolvedValue(response([{ ...bound, id: null }]));
   await expect(channelsApi.list()).rejects.toThrow();
