@@ -16,8 +16,8 @@ jest.mock('@/shared/auth/config', () => ({
   }),
 }));
 const fetchMock = jest.mocked(authFetch);
-const listPath = '/api/channels/registrations';
-const detailPath = `${listPath}/reg-selected`;
+const listPath = '/api/channels/registrations?scope=all';
+const detailPath = '/api/channels/registrations/reg-selected';
 const inventoryPath = 'https://nyx.example.test/api/v1/user-services';
 const registration = {
   state_version: 12,

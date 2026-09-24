@@ -260,7 +260,8 @@ it('preserves Label editing and requires a newer matching configuration before r
           label: 'Renamed bot',
         });
       if (init?.method === 'POST') return response(receipt, 202);
-      if (input === '/api/channels/registrations') return response([row]);
+      if (input === '/api/channels/registrations?scope=all')
+        return response([row]);
       return (
         catalogue(input) ??
         response({
@@ -513,7 +514,8 @@ it('explains replacing legacy NyxID defaults and saves the required explicit all
     };
     fetchMock.mockImplementation(async (input, init) => {
       if (init?.method === 'POST') return response(receipt, 202);
-      if (input === '/api/channels/registrations') return response([defaults]);
+      if (input === '/api/channels/registrations?scope=all')
+        return response([defaults]);
       return catalogue(input) ?? response(defaults);
     });
     renderWithQueryClient(
@@ -539,4 +541,23 @@ it('explains replacing legacy NyxID defaults and saves the required explicit all
     cleanup();
     jest.useRealTimers();
   }
+});
+
+it('does not open configuration for a visible unowned bot through a direct bind URL', async () => {
+  fetchMock.mockResolvedValue(response([{ ...unbound, owned: false }]));
+  renderWithQueryClient(
+    <ChannelConfigurationPage scopeId="scope-alpha" botId="bot-alpha" />,
+  );
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'This channel is unavailable or you do not have access.',
+  );
+  expect(
+    screen.queryByRole('button', { name: 'Bind bot' }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('textbox', { name: 'Label' }),
+  ).not.toBeInTheDocument();
+  expect(
+    fetchMock.mock.calls.map(([input, init]) => [input, init?.method ?? 'GET']),
+  ).toEqual([['/api/channels/registrations?scope=all', 'GET']]);
 });

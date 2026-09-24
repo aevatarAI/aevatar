@@ -42,11 +42,23 @@ The Figma `/keys/xxx` placeholder refers to NyxID service details, so it is not
 used for Agent keys. Each complete source ID is encoded as one URL segment;
 missing IDs remain unlinked placeholders.
 
-The compact identifier in each connected-channel row opens the shared Tooltip
-with the exact full bot ID (or registration ID when no bot ID exists). Mouse
-hover, keyboard focus and click/tap reveal the full value, which wraps within
-the Tooltip instead of being shortened again. The control has a visible focus
-ring.
+The Owner column follows Channel name so personal and organization ownership
+can be compared across rows. An information button beside each name opens an
+identifier popover on hover, click, tap, or keyboard activation, including for
+unbound and non-owned bots. It exposes the complete Bot ID and, when available, Owner
+ID as selectable values with separate copy buttons. Copy success is reported
+only after the clipboard write resolves; failures retain manual selection.
+Hover previews keep keyboard focus unchanged, and the popover stays open while
+the pointer moves from the information button into its content for copying.
+Click or keyboard activation moves focus into the popover. Escape dismisses
+hover previews without moving focus; dismissing from inside the popover returns
+focus to the trigger. Narrow screens keep horizontal scrolling inside the table
+and the popover within the viewport.
+
+This placement applies [Carbon's data-table guidance](https://carbondesignsystem.com/components/data-table/usage/)
+for scannable columns and [NN/g's progressive disclosure principle](https://www.nngroup.com/articles/progressive-disclosure/):
+ownership is useful for comparing inventory, while exact technical identifiers
+are available on demand without adding a permanent second line to every row.
 
 ## Routes and existing setup
 
@@ -229,13 +241,28 @@ No automatic refresh or registration change is introduced by this display.
 
 ## API and ownership
 
-Contracts were checked against `origin/feature/integrate` and the backend
-API comment in [issue #3617](https://github.com/aevatarAI/aevatar/issues/3617).
+The inventory and owner display contract was rechecked against
+`origin/feature/integrate` at `67924074a` after
+[PR #3673](https://github.com/aevatarAI/aevatar/pull/3673), following
+[issue #3674](https://github.com/aevatarAI/aevatar/issues/3674).
 
-- `GET /api/channels/registrations` supplies the current owner's summaries.
-  The frontend never requests the administrative `scope=all` view and excludes
-  records explicitly marked as foreign. The route scope partitions query
-  state and navigation; authentication remains the server's owner authority.
+- `GET /api/channels/registrations?scope=all` supplies all bound and unbound
+  NyxID bots visible to the caller, including organization-owned bots and rows
+  with `owned: false`. NyxID visibility is delegated through the backend;
+  the frontend does not enumerate organizations or perform organization-name
+  lookups. The route scope partitions query state and navigation.
+- Every inventory row displays ownership in a separate Owner column.
+  `nyx_channel_bot_owner_scope_name` supplies `personal` or the organization
+  display name. Missing or blank names show Organization when
+  `nyx_channel_bot_owner_scope_id` is available, with the exact owner ID in the
+  identifier popover; if both fields are unavailable, the label is Unknown.
+  Column headings, identifier actions, and fallback copy use the existing
+  locale system. Backend-provided display names remain unchanged.
+- `owned` controls management independently of the displayed bot owner.
+  Bind requires an owned, available, unbound bot; Manage requires an owned,
+  bound registration. Direct bind URLs enforce the same ownership check.
+  Detail and edit continue to require exact owned registrations, keeping
+  update and removal actions inaccessible for non-owned rows.
 - Each visible connection reads
   `GET /api/channels/registrations/{registrationId}/status` independently.
   Pending, active, error, and unknown states remain distinct. A status failure
@@ -286,7 +313,8 @@ production records and statuses come from real APIs; no mock fallback exists.
 Focused coverage exercises API field selection and encoding, deployed/new
 skill contracts, unknown status, loading/error/empty recovery, query isolation,
 first-level navigation, detail ownership, confirmation cancellation, delayed
-removal, failure retry, and safe cleanup warnings. Mobile table rows retain
-labels and Manage; long IDs wrap or shorten for display while full identifiers
-remain in detail. Full frontend tests, typecheck, and production build belong
+removal, failure retry, safe cleanup warnings, owner-name fallback, identifier
+disclosure, exact-value copying, and clipboard failures. Mobile table rows
+retain labels and Manage; full identifiers wrap in their popover. Full frontend
+tests, typecheck, and production build belong
 to GitHub CI under the personal incremental validation policy.

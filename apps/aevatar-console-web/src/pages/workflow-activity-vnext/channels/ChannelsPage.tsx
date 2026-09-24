@@ -192,6 +192,7 @@ export default function ChannelsPage({
                   <tr>
                     {[
                       ['name', 'Channel name'],
+                      ['owner', 'Owner'],
                       ['channel', 'Channel'],
                       ['skill', 'Skill'],
                       ['inbound', 'Inbound'],
@@ -214,6 +215,12 @@ export default function ChannelsPage({
                           label={row.label}
                           pending={false}
                         />
+                      </td>
+                      <td className="channels__owner">
+                        {row.botOwnerScopeName ??
+                          (row.botOwnerScopeId
+                            ? t('channels.owner.organization', 'Organization')
+                            : t('channels.owner.unavailable', 'Unknown'))}
                       </td>
                       <td>{platformName(row.platform)}</td>
                       <td>
@@ -246,7 +253,8 @@ export default function ChannelsPage({
                             <CheckOutlined aria-hidden="true" />
                             {t('channels.binding.bound', 'Bound')}
                           </span>
-                        ) : row.availabilityStatus === 'available' ? (
+                        ) : row.owned &&
+                          row.availabilityStatus === 'available' ? (
                           <ChannelLink
                             className="channels__bind"
                             href={buildChannelBindHref(scopeId, row.botId)}
@@ -255,12 +263,19 @@ export default function ChannelsPage({
                           </ChannelLink>
                         ) : (
                           <ChannelBadge>
-                            {t('channels.binding.unavailable', 'Unavailable')}
+                            {row.availabilityStatus === 'available'
+                              ? t('channels.binding.unbound', 'Not bound')
+                              : t(
+                                  'channels.binding.unavailable',
+                                  'Unavailable',
+                                )}
                           </ChannelBadge>
                         )}
                       </td>
                       <td className="channels__row-action">
-                        {row.bindingStatus === 'bound' && row.id ? (
+                        {row.owned &&
+                        row.bindingStatus === 'bound' &&
+                        row.id ? (
                           <ChannelLink
                             className="channels__manage"
                             href={buildChannelDetailsHref(scopeId, row.id)}

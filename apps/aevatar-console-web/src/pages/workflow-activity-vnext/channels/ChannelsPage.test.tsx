@@ -205,3 +205,125 @@ it('identifies an older server response without showing an empty inventory or al
     ),
   ).toBe(true);
 });
+
+it('shows personal and organization owners with safe fallbacks from the registrations response', async () => {
+  fetchMock.mockResolvedValue(
+    response([
+      {
+        ...row,
+        nyx_channel_bot_owner_scope_id: 'scope-alpha',
+        nyx_channel_bot_owner_scope_name: 'personal',
+      },
+      {
+        ...row,
+        id: 'reg-org',
+        nyx_channel_bot_id: 'bot-org',
+        label: 'Shared support',
+        nyx_channel_bot_owner_scope_id: 'scope-org',
+        nyx_channel_bot_owner_scope_name: 'Customer Operations',
+        owned: false,
+      },
+      {
+        ...row,
+        id: null,
+        nyx_channel_bot_id: 'bot-unnamed-org',
+        label: 'Unnamed organization',
+        binding_status: 'unbound',
+        nyx_channel_bot_owner_scope_id: 'scope-unresolved',
+        nyx_channel_bot_owner_scope_name: null,
+      },
+      {
+        ...row,
+        id: 'reg-unknown',
+        nyx_channel_bot_id: 'bot-unknown',
+        label: 'Unknown owner',
+      },
+    ]),
+  );
+  renderWithQueryClient(<ChannelsPage scopeId="scope-alpha" />);
+  const table = await screen.findByRole('table');
+  expect(within(table).getAllByRole('row')).toHaveLength(5);
+  expect(
+    within(table).getByRole('columnheader', { name: 'Owner' }),
+  ).toBeInTheDocument();
+  expect(
+    within(table).getByRole('row', { name: /Support.*personal/ }),
+  ).toBeInTheDocument();
+  expect(
+    within(table).getByRole('row', {
+      name: /Shared support.*Customer Operations/,
+    }),
+  ).toBeInTheDocument();
+  expect(
+    within(table).getByRole('row', {
+      name: /Unnamed organization.*Organization/,
+    }),
+  ).toBeInTheDocument();
+  expect(
+    within(table).getByRole('row', { name: /Unknown owner.*Unknown/ }),
+  ).toBeInTheDocument();
+  expect(within(table).queryByText('scope-unresolved')).not.toBeInTheDocument();
+  expect(within(table).queryByText('bot-org')).not.toBeInTheDocument();
+  expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+    '/api/channels/registrations?scope=all',
+  ]);
+});
+
+it('uses backend ownership for bind and manage actions regardless of the owner label', async () => {
+  fetchMock.mockResolvedValue(
+    response([
+      {
+        ...row,
+        label: 'Managed organization bot',
+        nyx_channel_bot_owner_scope_name: 'Customer Operations',
+      },
+      {
+        ...row,
+        id: 'reg-readonly',
+        nyx_channel_bot_id: 'bot-readonly',
+        label: 'Read-only bound bot',
+        nyx_channel_bot_owner_scope_name: 'personal',
+        owned: false,
+      },
+      {
+        ...row,
+        id: null,
+        nyx_channel_bot_id: 'bot-bindable',
+        label: 'Bindable organization bot',
+        nyx_channel_bot_owner_scope_name: 'Customer Operations',
+        binding_status: 'unbound',
+      },
+      {
+        ...row,
+        id: null,
+        nyx_channel_bot_id: 'bot-unowned',
+        label: 'Read-only unbound bot',
+        nyx_channel_bot_owner_scope_name: 'personal',
+        binding_status: 'unbound',
+        owned: false,
+      },
+    ]),
+  );
+  renderWithQueryClient(<ChannelsPage scopeId="scope-alpha" />);
+  const table = await screen.findByRole('table');
+  expect(within(table).getByRole('link', { name: 'Manage' })).toHaveAttribute(
+    'href',
+    '/scopes/scope-alpha/channels/reg-alpha',
+  );
+  expect(within(table).getByRole('link', { name: 'Bind' })).toHaveAttribute(
+    'href',
+    '/scopes/scope-alpha/channels/bind/bot-bindable',
+  );
+  const bound = within(table).getByRole('row', { name: /Read-only bound bot/ });
+  expect(within(bound).getByText('Bound')).toBeInTheDocument();
+  expect(
+    within(bound).queryByRole('link', { name: 'Manage' }),
+  ).not.toBeInTheDocument();
+  const unbound = within(table).getByRole('row', {
+    name: /Read-only unbound bot/,
+  });
+  expect(within(unbound).getByText('Not bound')).toBeInTheDocument();
+  expect(
+    within(unbound).queryByRole('link', { name: 'Bind' }),
+  ).not.toBeInTheDocument();
+});

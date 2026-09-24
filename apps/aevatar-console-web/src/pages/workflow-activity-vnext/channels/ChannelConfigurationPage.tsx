@@ -76,7 +76,7 @@ export default function ChannelConfigurationPage({
     () => history.push,
   );
   const valid =
-    row &&
+    row?.owned &&
     (editing
       ? row.bindingStatus === 'bound' && channelConfiguration(row)
       : row.bindingStatus === 'unbound' &&
