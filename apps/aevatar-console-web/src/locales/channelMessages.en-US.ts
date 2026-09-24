@@ -1,5 +1,14 @@
 export default {
-  'channels.owner.label': 'Owner: {owner}',
+  'channels.column.owner': 'Owner',
+  'channels.owner.organization': 'Organization',
+  'channels.owner.id': 'Owner ID',
+  'channels.identifier.title': 'Bot identifiers',
+  'channels.identifier.show': 'View IDs for {name}',
+  'channels.identifier.close': 'Close identifiers',
+  'channels.identifier.copy': 'Copy {label}',
+  'channels.identifier.copied': '{label} copied.',
+  'channels.identifier.copyFailed':
+    'Could not copy. Select the ID and copy it manually.',
   'channels.owner.unavailable': 'Unknown',
   'channels.error.contract':
     'Bot binding is not available yet. Please try again later.',
@@ -112,7 +121,6 @@ export default {
   'channels.skill.notSet': 'Not set',
   'channels.skill.version': 'Version {version}',
   'channels.skill.open': 'Open {name} in Ornn',
-  'channels.identifier.showFull': 'Show full ID',
   'channels.column.channel': 'Channel',
   'channels.column.skill': 'Skill',
   'channels.column.inbound': 'Inbound',

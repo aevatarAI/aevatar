@@ -15,7 +15,7 @@ import {
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { getOrnnRuntimeConfig } from '@/shared/studio/ornnConfig';
-import AevatarTooltip from '@/shared/ui/AevatarTooltip';
+import ChannelIdentifiers from './ChannelIdentifiers';
 
 export function ChannelLink({
   href,
@@ -84,57 +84,35 @@ export function ChannelIcon({ platform }: { readonly platform: string }) {
   );
 }
 
-export function compactChannelIdentifier(value: string): string {
-  return value.length > 24 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
-}
-
 export function ChannelIdentity({
   registration,
   label,
   pending,
   secondary = 'identifier',
-  showOwner = false,
 }: {
   readonly registration: ChannelRegistration;
   readonly label: string | null;
   readonly pending: boolean;
   readonly secondary?: 'identifier' | 'platform';
-  readonly showOwner?: boolean;
 }) {
-  const identifier = registration.botId ?? registration.id;
+  const name =
+    label ??
+    (pending
+      ? t('channels.name.loading', 'Loading name…')
+      : t('channels.name.unavailable', 'Name unavailable'));
   return (
     <div className="channels__identity">
       <ChannelIcon platform={registration.platform} />
       <div className="channels__identity-copy">
-        <strong>
-          {label ??
-            (pending
-              ? t('channels.name.loading', 'Loading name…')
-              : t('channels.name.unavailable', 'Name unavailable'))}
-        </strong>
+        <div className="channels__identity-heading">
+          <strong>{name}</strong>
+          {secondary === 'identifier' ? (
+            <ChannelIdentifiers registration={registration} name={name} />
+          ) : null}
+        </div>
         {secondary === 'platform' ? (
           <span className="channels__muted">
             {platformName(registration.platform)}
-          </span>
-        ) : (
-          <AevatarTooltip title={identifier}>
-            <button
-              type="button"
-              className="channels__identifier channels__identifier-trigger"
-              aria-label={t('channels.identifier.showFull', 'Show full ID')}
-            >
-              {compactChannelIdentifier(identifier)}
-            </button>
-          </AevatarTooltip>
-        )}
-        {showOwner ? (
-          <span className="channels__muted">
-            {t('channels.owner.label', 'Owner: {owner}', {
-              owner:
-                registration.botOwnerScopeName ??
-                registration.botOwnerScopeId ??
-                t('channels.owner.unavailable', 'Unknown'),
-            })}
           </span>
         ) : null}
       </div>

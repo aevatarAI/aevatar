@@ -244,21 +244,26 @@ it('shows personal and organization owners with safe fallbacks from the registra
   const table = await screen.findByRole('table');
   expect(within(table).getAllByRole('row')).toHaveLength(5);
   expect(
-    within(table).getByRole('row', { name: /Support.*Owner: personal/ }),
+    within(table).getByRole('columnheader', { name: 'Owner' }),
+  ).toBeInTheDocument();
+  expect(
+    within(table).getByRole('row', { name: /Support.*personal/ }),
   ).toBeInTheDocument();
   expect(
     within(table).getByRole('row', {
-      name: /Shared support.*Owner: Customer Operations/,
+      name: /Shared support.*Customer Operations/,
     }),
   ).toBeInTheDocument();
   expect(
     within(table).getByRole('row', {
-      name: /Unnamed organization.*Owner: scope-unresolved/,
+      name: /Unnamed organization.*Organization/,
     }),
   ).toBeInTheDocument();
   expect(
-    within(table).getByRole('row', { name: /Unknown owner.*Owner: Unknown/ }),
+    within(table).getByRole('row', { name: /Unknown owner.*Unknown/ }),
   ).toBeInTheDocument();
+  expect(within(table).queryByText('scope-unresolved')).not.toBeInTheDocument();
+  expect(within(table).queryByText('bot-org')).not.toBeInTheDocument();
   expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
     '/api/channels/registrations?scope=all',
   ]);

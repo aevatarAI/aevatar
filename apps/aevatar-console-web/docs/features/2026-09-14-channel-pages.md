@@ -42,11 +42,20 @@ The Figma `/keys/xxx` placeholder refers to NyxID service details, so it is not
 used for Agent keys. Each complete source ID is encoded as one URL segment;
 missing IDs remain unlinked placeholders.
 
-The compact identifier in each connected-channel row opens the shared Tooltip
-with the exact full bot ID (or registration ID when no bot ID exists). Mouse
-hover, keyboard focus and click/tap reveal the full value, which wraps within
-the Tooltip instead of being shortened again. The control has a visible focus
-ring.
+The Owner column follows Channel name so personal and organization ownership
+can be compared across rows. An information button beside each name opens an
+identifier popover on click, tap, or keyboard activation, including for unbound
+and non-owned bots. It exposes the complete Bot ID and, when available, Owner
+ID as selectable values with separate copy buttons. Copy success is reported
+only after the clipboard write resolves; failures retain manual selection.
+Opening moves focus into the popover; Escape and its close button dismiss it
+and return focus to the trigger. Narrow screens keep horizontal scrolling
+inside the table and the popover within the viewport.
+
+This placement applies [Carbon's data-table guidance](https://carbondesignsystem.com/components/data-table/usage/)
+for scannable columns and [NN/g's progressive disclosure principle](https://www.nngroup.com/articles/progressive-disclosure/):
+ownership is useful for comparing inventory, while exact technical identifiers
+are available on demand without adding a permanent second line to every row.
 
 ## Routes and existing setup
 
@@ -239,11 +248,13 @@ The inventory and owner display contract was rechecked against
   with `owned: false`. NyxID visibility is delegated through the backend;
   the frontend does not enumerate organizations or perform organization-name
   lookups. The route scope partitions query state and navigation.
-- Every inventory row displays an owner indicator below its bot identity.
+- Every inventory row displays ownership in a separate Owner column.
   `nyx_channel_bot_owner_scope_name` supplies `personal` or the organization
-  display name. Missing or blank names fall back to
-  `nyx_channel_bot_owner_scope_id`; if both fields are unavailable, the label
-  is Unknown. Owner labels and fallback copy use the existing locale system.
+  display name. Missing or blank names show Organization when
+  `nyx_channel_bot_owner_scope_id` is available, with the exact owner ID in the
+  identifier popover; if both fields are unavailable, the label is Unknown.
+  Column headings, identifier actions, and fallback copy use the existing
+  locale system. Backend-provided display names remain unchanged.
 - `owned` controls management independently of the displayed bot owner.
   Bind requires an owned, available, unbound bot; Manage requires an owned,
   bound registration. Direct bind URLs enforce the same ownership check.
@@ -299,7 +310,8 @@ production records and statuses come from real APIs; no mock fallback exists.
 Focused coverage exercises API field selection and encoding, deployed/new
 skill contracts, unknown status, loading/error/empty recovery, query isolation,
 first-level navigation, detail ownership, confirmation cancellation, delayed
-removal, failure retry, and safe cleanup warnings. Mobile table rows retain
-labels and Manage; long IDs wrap or shorten for display while full identifiers
-remain in detail. Full frontend tests, typecheck, and production build belong
+removal, failure retry, safe cleanup warnings, owner-name fallback, identifier
+disclosure, exact-value copying, and clipboard failures. Mobile table rows
+retain labels and Manage; full identifiers wrap in their popover. Full frontend
+tests, typecheck, and production build belong
 to GitHub CI under the personal incremental validation policy.

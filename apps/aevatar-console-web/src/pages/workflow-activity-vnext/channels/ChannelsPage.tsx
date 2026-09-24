@@ -192,6 +192,7 @@ export default function ChannelsPage({
                   <tr>
                     {[
                       ['name', 'Channel name'],
+                      ['owner', 'Owner'],
                       ['channel', 'Channel'],
                       ['skill', 'Skill'],
                       ['inbound', 'Inbound'],
@@ -213,8 +214,13 @@ export default function ChannelsPage({
                           registration={row}
                           label={row.label}
                           pending={false}
-                          showOwner
                         />
+                      </td>
+                      <td className="channels__owner">
+                        {row.botOwnerScopeName ??
+                          (row.botOwnerScopeId
+                            ? t('channels.owner.organization', 'Organization')
+                            : t('channels.owner.unavailable', 'Unknown'))}
                       </td>
                       <td>{platformName(row.platform)}</td>
                       <td>
