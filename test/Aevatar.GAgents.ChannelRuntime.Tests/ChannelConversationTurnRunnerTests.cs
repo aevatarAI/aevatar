@@ -2655,6 +2655,8 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest!.Activity.Content.Text.Should().Contain("bound to the `whatsapp-reply-draft` skill");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("use_skill");
         result.LlmReplyRequest.Activity.Content.Text.Should().Contain("do not call `ornn_search_skills`");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("create and publish an Ornn skill with that exact name");
+        result.LlmReplyRequest.Activity.Content.Text.Should().Contain("update the channel registration `default_skill_name`");
         var recovery = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeFalse();
         recovery.RequireOrnnSearchOnBlocker.Should().BeFalse();

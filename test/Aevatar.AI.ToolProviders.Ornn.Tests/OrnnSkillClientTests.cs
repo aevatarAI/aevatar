@@ -443,7 +443,7 @@ public sealed class OrnnSkillClientTests
     }
 
     [Fact]
-    public async Task UseSkillTool_WhenNyxIdProxyReportsNotFound_ProducesNotFoundReceipt()
+    public async Task UseSkillTool_WhenNyxIdProxyReportsNotFound_ProducesLoadFailedReceipt()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson(
             """{ "error": "missing" }""",
@@ -454,8 +454,10 @@ public sealed class OrnnSkillClientTests
         var result = await tool.ExecuteAsync(arguments);
         var receipt = tool.CreateResultReceipt("call-missing", tool.Name, arguments, result);
 
+        result.Should().Contain("Ornn skill API not reachable");
+        result.Should().Contain("nyxid_services action=create");
         receipt.Should().NotBeNull();
-        receipt!.ErrorCode.Should().Be("USE_SKILL_NOT_FOUND");
+        receipt!.ErrorCode.Should().Be("USE_SKILL_LOAD_FAILED");
     }
 
     [Fact]
