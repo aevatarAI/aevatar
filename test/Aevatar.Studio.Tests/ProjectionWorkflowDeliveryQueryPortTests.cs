@@ -42,6 +42,8 @@ public sealed class ProjectionWorkflowDeliveryQueryPortTests
                 -2));
         snapshot.Package.AcceptancePolicy.Input.Bindings[1].Source.Should().BeOfType<
             DeliveryApplication.WorkflowDeliveryAuthenticatedOwnerExternalUserIdInput>();
+        snapshot.Package.ConnectionSlots.Should().ContainSingle().Which.YamlPointer
+            .Should().Be("/steps/0/capability/nyxid_request/user_service_id");
         snapshot.LifecycleStatus.Should().Be(DeliveryApplication.WorkflowDeliveryLifecycleStatus.Active);
         snapshot.Installation!.Status.Should().Be(DeliveryApplication.WorkflowInstallationStatus.Ready);
         snapshot.Installation.AcceptanceInput.Should().NotBeNull();
@@ -300,6 +302,17 @@ public sealed class ProjectionWorkflowDeliveryQueryPortTests
                 },
                 CreatedBy = "admin-alpha",
                 CreatedAtUtc = At(0),
+                ConnectionSlots =
+                {
+                    new WorkflowDeliveryConnectionSlotDefinition
+                    {
+                        Key = "calendar",
+                        Label = "Calendar",
+                        ServiceSlug = "service-calendar",
+                        Required = true,
+                        YamlPointer = "/steps/0/capability/nyxid_request/user_service_id",
+                    },
+                },
             },
             TargetScopeId = "scope-alpha",
             ExpiresAtUtc = At(8),
