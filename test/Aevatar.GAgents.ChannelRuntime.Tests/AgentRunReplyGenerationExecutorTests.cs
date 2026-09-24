@@ -625,7 +625,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task ChannelRuntimeCatalog_WhenToolSetContainsConnectedOperations_ShouldExposeOnlySelectorMatches()
+    public async Task ChannelRuntimeCatalog_WhenToolSetContainsConnectedOperations_ShouldNotExposeSelectorMatches()
     {
         var routeTool = new CountingTool("route_tool");
         var selectedOperation = new ConnectedOperationTool(
@@ -653,16 +653,15 @@ public sealed class AgentRunReplyGenerationExecutorTests
             AgentToolExecutionContext.Empty,
             CancellationToken.None);
 
-        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool", "calendar_create_event");
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool");
         catalog.Proof.ToolDescriptors.Select(static descriptor => descriptor.Name)
-            .Should().BeEquivalentTo("route_tool", "calendar_create_event");
-        catalog.Proof.ToolDescriptors.Single(static descriptor => descriptor.Name == "calendar_create_event")
-            .Origin.Should().Be(AgentTurnToolOrigin.ConnectedService);
-        catalog.Proof.ToolDescriptors.Should().NotContain(static descriptor => descriptor.Name == "mail_send");
+            .Should().BeEquivalentTo("route_tool");
+        catalog.Proof.ToolDescriptors.Should().NotContain(static descriptor =>
+            descriptor.Name == "calendar_create_event" || descriptor.Name == "mail_send");
     }
 
     [Fact]
-    public async Task ChannelRuntimeCatalog_WhenNoRuntimeSelectors_ShouldExposeVisibleConnectedOperations()
+    public async Task ChannelRuntimeCatalog_WhenNoRuntimeSelectors_ShouldNotExposeVisibleConnectedOperations()
     {
         var routeTool = new CountingTool("route_tool");
         var connectedOperation = new ConnectedOperationTool(
@@ -683,9 +682,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             AgentToolExecutionContext.Empty,
             CancellationToken.None);
 
-        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool", "calendar_create_event");
-        catalog.Proof.ToolDescriptors.Single(static descriptor => descriptor.Name == "calendar_create_event")
-            .Origin.Should().Be(AgentTurnToolOrigin.ConnectedService);
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool");
+        catalog.Proof.ToolDescriptors.Select(static descriptor => descriptor.Name)
+            .Should().BeEquivalentTo("route_tool");
     }
 
     [Fact]
@@ -716,7 +715,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task ChannelRuntimeCatalog_WhenRuntimeSelectorsPresent_ShouldPassSelectorsToDiscoveryContext()
+    public async Task ChannelRuntimeCatalog_WhenRuntimeSelectorsPresent_ShouldNotPassSelectorsToDiscoveryContext()
     {
         var registry = new RecordingToolSetRegistry();
         registry.Add("channel.reply.default", new StaticToolSource([new CountingTool("route_tool")]));
@@ -741,11 +740,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var contextJson = discoveryService.Contexts.Should().ContainSingle().Subject.ConnectedServices.ContextJson;
         using var document = JsonDocument.Parse(contextJson!);
         document.RootElement.GetProperty("existing").GetString().Should().Be("value");
-        var selector = document.RootElement.GetProperty("nyxid_service_selectors").EnumerateArray()
-            .Should().ContainSingle().Subject;
-        selector.GetProperty("service_slug").GetString().Should().Be("api-google-workspace");
-        selector.GetProperty("endpoint_names").EnumerateArray().Select(static element => element.GetString())
-            .Should().BeEquivalentTo("calendar_create_event");
+        document.RootElement.TryGetProperty("nyxid_service_selectors", out _).Should().BeFalse();
     }
 
     [Fact]

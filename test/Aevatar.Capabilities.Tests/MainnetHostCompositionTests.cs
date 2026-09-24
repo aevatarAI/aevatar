@@ -1182,7 +1182,6 @@ public sealed class MainnetHostCompositionTests
             workspace.Sources.Select(static source => source.GetType()).Concat(
             [
                 typeof(OrnnAuthoringAgentToolSource),
-                typeof(NyxIdConnectedServiceToolSource),
                 typeof(ChannelNyxIdConnectedServiceInventoryToolSource),
             ]));
         channelReply.Sources.Select(static source => source.GetType()).Should()
@@ -1206,7 +1205,7 @@ public sealed class MainnetHostCompositionTests
             .Subject;
         nyxIdChatToolSources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
-            typeof(NyxIdConnectedServiceToolSource),
+            typeof(NyxIdConnectedServiceInventoryToolSource),
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
@@ -1218,7 +1217,8 @@ public sealed class MainnetHostCompositionTests
             typeof(ReadWorkflowRunArtifactToolSource),
             typeof(AgentBuilderToolSource));
         nyxIdChatToolSources.Should().NotContain(source => source is NyxIdAgentToolSource);
-        nyxIdChatToolSources.Should().NotContain(source =>
+        nyxIdChatToolSources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource);
+        nyxIdChatToolSources.Should().ContainSingle(source =>
             source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatToolSources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatToolSources.Should().NotContain(source => source is WebAgentToolSource);
@@ -1352,8 +1352,11 @@ public sealed class MainnetHostCompositionTests
             nyxIdChatDefault.Sources,
             AgentToolExecutionContext.Empty);
         nyxIdChatDefaultDiscovery.IsSuccess.Should().BeTrue(nyxIdChatDefaultDiscovery.Failure?.Detail);
-        nyxIdChatDefaultDiscovery.Tools.Select(static tool => tool.Name).Should()
-            .ContainSingle(name => name == "scheduled_agent_creator");
+        var nyxIdChatDefaultToolNames = nyxIdChatDefaultDiscovery.Tools
+            .Select(static tool => tool.Name)
+            .ToArray();
+        nyxIdChatDefaultToolNames.Should().ContainSingle(name => name == "scheduled_agent_creator");
+        nyxIdChatDefaultToolNames.Should().NotContain("nyxid_proxy");
 
         var nyxIdConnectedServices = registry.Resolve(ToolSetNames.NyxIdConnectedServices);
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
@@ -1370,7 +1373,7 @@ public sealed class MainnetHostCompositionTests
         nyxIdChatProfile.IsSuccess.Should().BeTrue(nyxIdChatProfile.Error?.Message);
         nyxIdChatProfile.Sources.Select(static source => source.GetType()).Should().Equal(
             typeof(NyxIdAssistantToolSource),
-            typeof(NyxIdConnectedServiceToolSource),
+            typeof(NyxIdConnectedServiceInventoryToolSource),
             typeof(WebSearchAgentToolSource),
             typeof(AskUserAgentToolSource),
             typeof(ConditionEvaluateAgentToolSource),
@@ -1383,9 +1386,9 @@ public sealed class MainnetHostCompositionTests
             typeof(AgentBuilderToolSource),
             typeof(WorkflowExternalCapabilityAuthoringToolSource));
         nyxIdChatProfile.Sources.Should().NotContain(source => source is NyxIdAgentToolSource);
-        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
-            source is NyxIdConnectedServiceToolSource);
         nyxIdChatProfile.Sources.Should().NotContain(source =>
+            source is NyxIdConnectedServiceToolSource);
+        nyxIdChatProfile.Sources.Should().ContainSingle(source =>
             source is NyxIdConnectedServiceInventoryToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source => source is WebSearchAgentToolSource);
         nyxIdChatProfile.Sources.Should().ContainSingle(source =>

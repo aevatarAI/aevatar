@@ -369,11 +369,13 @@ public sealed class OrnnPublishSkillToolTests
         var pipeline = new OrnnSkillPublishValidationPipeline(validators);
         var formatValidator = new OrnnSkillPackageFormatValidator(options, nyxClient);
         var client = new OrnnSkillClient(options, nyxClient);
-        return new OrnnPublishSkillTool(
+        var packageBuilder = new OrnnSkillPackageBuilder();
+        var publishingService = new OrnnSkillPublishingService(
             pipeline,
-            new OrnnSkillPackageBuilder(),
+            packageBuilder,
             formatValidator,
             client);
+        return new OrnnPublishSkillTool(publishingService);
     }
 
     private static AgentToolContextScope BeginTokenScope() =>

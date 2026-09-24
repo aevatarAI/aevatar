@@ -2,8 +2,8 @@
   "schema_version": 1,
   "aevatar": {
     "repository": "https://github.com/AevatarAI/aevatar.git",
-    "revision": "78e2490bc1ad548ed72f75061d8927f8cf599ac1",
-    "contract_files_sha256": "8ddfc263edf7bf71f25f23edcc9248a6afdfd4cdbf98a2717fadadd8c740c119",
+    "revision": "f57b627a5d278c387950b1e9dffad312b7d262a2",
+    "contract_files_sha256": "74f1e22da7de3e4d7a6e5a153fb6259aed67751964460b02e9c6ea801294bf2b",
     "files": {
       "agents/Aevatar.GAgents.NyxidChat/NyxIdActionPostconditionPort.cs": "7791de469b567dcde70a0f8e2a88cc818972ca557617a2538294e8ccabd5bda0",
       "agents/Aevatar.GAgents.NyxidChat/NyxIdAssistantActionRegistry.cs": "60e6f67c94ae11b1bf0dac036ad8ac0c35901e31787b1f0c8173964f6a12d263",
@@ -14,10 +14,10 @@
       "docs/adr/0048-nyxid-assistant-operation-class-boundary.md": "884aca09774e773e68154c923fec8078610b2cf8e97f581fedc36e10451ccec3",
       "src/Aevatar.AI.Abstractions/ai_messages.proto": "0aa58a1b4ed15cde264cc948aaac473f7b77f8853a583e22328f59230b5d187e",
       "src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiAccessContracts.cs": "a2e526a0a227f868304f122e9a65796164089fa69b0c27926f4c27c78b3ab0de",
-      "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "e99f2de69d0eb9e0b9dc235e2d568fc66d9dfb79cb0bb1364e01cc210a8c626f",
+      "src/Aevatar.AI.ToolProviders.NyxId/NyxIdAssistantToolSource.cs": "16b25f5bdd5004bc0c5402ae0adf2d294c270ae83135c95f0f342089ea80da05",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyCreateTool.cs": "2c4f2cda99154f2e667c6cfd291497e697ef11df17f081f96ec70070a8af8b8c",
       "src/Aevatar.AI.ToolProviders.NyxId/Tools/NyxIdRequestKeyRotateTool.cs": "18212bb64644cfbca401065bccce439ea5fa00316deff57d730a0d9ac2650e53",
-      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "a6faf5a532b43dd1e1cf56cfdf5a05f473d755073e84d86ea459e4acec7828bd"
+      "src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs": "8e7ba77991ada9a9f38cad629e7da1535147fa9d04757e5e37aef1cc419eef3b"
     }
   },
   "nyxid": {

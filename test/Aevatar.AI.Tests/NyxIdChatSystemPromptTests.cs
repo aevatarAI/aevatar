@@ -40,7 +40,7 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("scheduled_agent_creator");
         prompt.Should().Contain("agent_delivery_targets");
         prompt.Should().Contain("loaded skill metadata and instructions");
-        prompt.Should().Contain("fetch live data through `nyxid_proxy`");
+        prompt.Should().Contain("fetch live data through exact admitted connected-service operations");
         prompt.Should().Contain("required_nyx_services");
         prompt.Should().Contain("derive the digest from current facts");
         prompt.Should().Contain("post the digest to the negotiated chat target");
@@ -228,7 +228,7 @@ public class NyxIdChatSystemPromptTests
 
         prompt.Should().Contain("final request's tool schemas are the only capability authority");
         prompt.Should().Contain("nyxid_service_inventory");
-        prompt.Should().Contain("nyxop_*");
+        prompt.Should().Contain("nyxid_invoke_operation");
         prompt.Should().NotContain("nyxid_service_update")
             .And.NotContain("nyxid_service_route")
             .And.NotContain("nyxid_service_delete");
@@ -253,10 +253,12 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("When `nyxid_service_inventory` is present");
         prompt.Should().Contain("When `nyxid_service_inventory` is absent");
         prompt.Should().Contain("such as `nyxid_services`");
-        prompt.Should().Contain("route the read through the catalog/service-inspection path");
-        prompt.Should().Contain("establishes current sender-specific service facts");
+        prompt.Should().Contain("For any connected-service read or write");
+        prompt.Should().Contain("route through the catalog/service-inspection path before operation execution");
+        prompt.Should().Contain("establishes current caller-specific service facts");
+        prompt.Should().Contain("may materialize missing service recommended skill refs");
         prompt.Should().Contain("execution tools only run supplied work and cannot establish that inventory");
-        prompt.Should().Contain("typed inventory result as the authority for the current sender");
+        prompt.Should().Contain("typed inventory result as the authority for the current caller");
         prompt.Should().Contain("temporary read failure");
         prompt.Should().Contain("binding is explicitly missing or revoked");
         prompt.Should().NotContain("Do not call `code_execute`");

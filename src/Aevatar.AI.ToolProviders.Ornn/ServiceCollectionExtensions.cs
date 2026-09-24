@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
 using Aevatar.AI.ToolProviders.Skills;
@@ -31,6 +32,20 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<OrnnSkillPublishValidationPipeline>();
         services.TryAddSingleton<OrnnSkillPackageBuilder>();
         services.TryAddSingleton<OrnnSkillPackageFormatValidator>();
+        services.TryAddSingleton<OrnnSkillPublishingService>();
+        services.TryAddSingleton<NyxIdRecommendedSkillGenerator>();
+        services.Replace(ServiceDescriptor.Singleton<INyxIdRecommendedSkillRefCreator>(sp =>
+            sp.GetService<NyxIdToolOptions>() is { } nyxIdOptions &&
+            sp.GetService<INyxIdClientCredentialsTokenSource>() is { } tokenSource &&
+            sp.GetService<NyxIdRecommendedSkillRefPersistenceService>() is { } persistenceService
+                ? new OrnnRecommendedSkillRefCreator(
+                    nyxIdOptions,
+                    tokenSource,
+                    sp.GetRequiredService<OrnnSkillPublishingService>(),
+                    persistenceService,
+                    sp.GetRequiredService<NyxIdRecommendedSkillGenerator>(),
+                    sp.GetService<ILogger<OrnnRecommendedSkillRefCreator>>())
+                : EmptyNyxIdRecommendedSkillRefCreator.Instance));
         services.Replace(ServiceDescriptor.Singleton<IExactOrnnSkillResolver, OrnnExactAgentProfileSkillResolver>());
         services.TryAddSingleton<OrnnPublishSkillTool>();
         services.TryAddSingleton<OrnnUpdateSkillTool>();

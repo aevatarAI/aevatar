@@ -7,21 +7,11 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 
 public sealed class OrnnPublishSkillTool : IAgentTool
 {
-    private readonly OrnnSkillPublishValidationPipeline _validationPipeline;
-    private readonly OrnnSkillPackageBuilder _packageBuilder;
-    private readonly OrnnSkillPackageFormatValidator _formatValidator;
-    private readonly OrnnSkillClient _client;
+    private readonly OrnnSkillPublishingService _publishingService;
 
-    public OrnnPublishSkillTool(
-        OrnnSkillPublishValidationPipeline validationPipeline,
-        OrnnSkillPackageBuilder packageBuilder,
-        OrnnSkillPackageFormatValidator formatValidator,
-        OrnnSkillClient client)
+    public OrnnPublishSkillTool(OrnnSkillPublishingService publishingService)
     {
-        _validationPipeline = validationPipeline;
-        _packageBuilder = packageBuilder;
-        _formatValidator = formatValidator;
-        _client = client;
+        _publishingService = publishingService;
     }
 
     public string Name => "ornn_publish_skill";
@@ -39,7 +29,7 @@ public sealed class OrnnPublishSkillTool : IAgentTool
 
     public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson)
     {
-        var published = ExtractPublishedSkill(resultJson);
+        var published = OrnnSkillPublishingService.ExtractPublishedSkill(resultJson);
         if (!published.HasAny)
             return null;
 
@@ -139,41 +129,41 @@ public sealed class OrnnPublishSkillTool : IAgentTool
         if (request == null)
             return BuildDiagnosticsResult("validation_error", parseDiagnostics);
 
-        var localValidation = await _validationPipeline.ValidateAsync(request, ct);
-        if (!localValidation.IsValid)
-            return BuildDiagnosticsResult("validation_error", localValidation.Diagnostics);
+        var result = await _publishingService.PublishAsync(token, request, ct);
+        return FormatResult(request, result);
+    }
 
-        var (package, buildValidation) = _packageBuilder.Build(request);
-        if (package == null)
-            return BuildDiagnosticsResult("validation_error", buildValidation.Diagnostics);
+    private static string FormatResult(
+        OrnnSkillPublishRequest request,
+        OrnnSkillPublishingResult result)
+    {
+        if (result.Diagnostics.Count > 0)
+            return BuildDiagnosticsResult(result.Status, result.Diagnostics);
 
-        var formatValidation = await _formatValidator.ValidateAsync(token, package.ZipBytes, ct);
-        if (!formatValidation.IsValid)
+        if (result.FormatViolations.Count > 0 || string.Equals(result.Status, "format_validation_error", StringComparison.Ordinal))
         {
             return JsonSerializer.Serialize(new
             {
                 result_type = "ornn_publish_skill",
-                status = "format_validation_error",
-                error = formatValidation.Error,
-                violations = formatValidation.Violations,
+                status = result.Status,
+                error = result.Error,
+                violations = result.FormatViolations,
             });
         }
 
-        var publish = await _client.PublishSkillAsync(token, package.ZipBytes, ct);
-        if (!publish.Succeeded)
-            return BuildResult("error", publish.Error ?? "Ornn publish failed.");
+        if (!result.IsSuccess)
+            return BuildResult(result.Status, result.Error ?? "Ornn publish failed.");
 
-        var published = ExtractPublishedSkill(publish.RawResponse);
         return JsonSerializer.Serialize(new
         {
             result_type = "ornn_publish_skill",
-            status = "success",
+            status = result.Status,
             skill_name = request.Name,
-            guid = published.Guid,
-            version = published.Version ?? request.Version,
-            skillHash = published.SkillHash,
-            package_bytes = package.ZipBytes.Length,
-            response = publish.RawResponse,
+            guid = result.Guid,
+            version = result.Version ?? request.Version,
+            skillHash = result.SkillHash,
+            package_bytes = result.PackageBytes,
+            response = result.RawResponse,
         });
     }
 
@@ -194,78 +184,4 @@ public sealed class OrnnPublishSkillTool : IAgentTool
             status,
             error,
         });
-
-    private static PublishedSkillSubject ExtractPublishedSkill(string? rawResponse)
-    {
-        if (string.IsNullOrWhiteSpace(rawResponse))
-            return new PublishedSkillSubject(null, null, null);
-
-        try
-        {
-            using var doc = JsonDocument.Parse(rawResponse);
-            return ExtractPublishedSkill(doc.RootElement);
-        }
-        catch (JsonException)
-        {
-            return new PublishedSkillSubject(null, null, null);
-        }
-    }
-
-    private static PublishedSkillSubject ExtractPublishedSkill(JsonElement root)
-    {
-        var subject = ExtractPublishedSkillFromObject(root);
-        if (subject.HasAny)
-            return subject;
-
-        if (root.ValueKind != JsonValueKind.Object)
-            return subject;
-
-        foreach (var propertyName in new[] { "data", "result", "skill" })
-        {
-            if (!root.TryGetProperty(propertyName, out var nested) || nested.ValueKind != JsonValueKind.Object)
-                continue;
-
-            subject = ExtractPublishedSkillFromObject(nested);
-            if (subject.HasAny)
-                return subject;
-        }
-
-        return subject;
-    }
-
-    private static PublishedSkillSubject ExtractPublishedSkillFromObject(JsonElement element)
-    {
-        if (element.ValueKind != JsonValueKind.Object)
-            return new PublishedSkillSubject(null, null, null);
-
-        return new PublishedSkillSubject(
-            TryGetString(element, "guid", "id", "skill_id", "skillId"),
-            TryGetString(element, "version", "subject_version", "subjectVersion"),
-            TryGetString(element, "skillHash", "skill_hash", "hash", "subject_hash"));
-    }
-
-    private static string? TryGetString(JsonElement element, params string[] keys)
-    {
-        foreach (var key in keys)
-        {
-            if (!element.TryGetProperty(key, out var value))
-                continue;
-
-            if (value.ValueKind == JsonValueKind.String)
-                return value.GetString();
-
-            if (value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
-                return value.ToString();
-        }
-
-        return null;
-    }
-
-    private sealed record PublishedSkillSubject(string? Guid, string? Version, string? SkillHash)
-    {
-        public bool HasAny =>
-            !string.IsNullOrWhiteSpace(Guid) ||
-            !string.IsNullOrWhiteSpace(Version) ||
-            !string.IsNullOrWhiteSpace(SkillHash);
-    }
 }

@@ -620,7 +620,6 @@ public static class MainnetHostBuilderExtensions
                 [
                     ToolSetNames.WorkspaceDefault,
                     ToolSetNames.SkillAuthoring,
-                    ToolSetNames.NyxIdConnectedServices,
                 ],
                 [
                     static sp => sp.GetRequiredService<
@@ -676,7 +675,7 @@ public static class MainnetHostBuilderExtensions
                 ToolSetNames.NyxIdChatDefault,
                 [
                     CreateToolSource<NyxIdAssistantToolSource>,
-                    CreateToolSource<NyxIdConnectedServiceToolSource>,
+                    CreateToolSource<NyxIdConnectedServiceInventoryToolSource>,
                     CreateToolSource<WebSearchAgentToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<ConditionEvaluateAgentToolSource>,
