@@ -11,11 +11,11 @@ import {
   Empty,
   Skeleton,
   Space,
-  Tooltip,
   Typography,
   theme,
 } from "antd";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { loadRestorableAuthSession } from "@/shared/auth/session";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
@@ -441,7 +441,7 @@ const TeamFact: React.FC<{
       }}
     >
       {typeof value === "string" && (tooltip || value) ? (
-        <Tooltip title={tooltip || value}>{renderedValue}</Tooltip>
+        <AevatarTooltip title={tooltip || value}>{renderedValue}</AevatarTooltip>
       ) : (
         renderedValue
       )}
@@ -987,17 +987,19 @@ const TeamRosterCard: React.FC<{
           <div style={{ fontSize: 22 }}>
             <TeamTitle level={3} title={preview.title} />
           </div>
-          <Typography.Paragraph
-            ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
-            style={{
-              color: token.colorTextSecondary,
-              fontSize: 14,
-              marginBottom: 0,
-              marginTop: 6,
-            }}
-          >
-            {preview.attentionDetail}
-          </Typography.Paragraph>
+          <AevatarTooltip title={preview.attentionDetail}>
+            <Typography.Paragraph
+              ellipsis={{ rows: 1 }}
+              style={{
+                color: token.colorTextSecondary,
+                fontSize: 14,
+                marginBottom: 0,
+                marginTop: 6,
+              }}
+            >
+              {preview.attentionDetail}
+            </Typography.Paragraph>
+          </AevatarTooltip>
         </div>
         <span
           style={{
@@ -1112,17 +1114,19 @@ const TeamRosterRow: React.FC<{
               {formatAttentionLabel(preview.attention)}
             </span>
           </Space>
-          <Typography.Paragraph
-            ellipsis={{ rows: 1, tooltip: preview.attentionDetail }}
-            style={{
-              color: token.colorTextSecondary,
-              fontSize: 13,
-              marginBottom: 0,
-              marginTop: 0,
-            }}
-          >
-            {preview.attentionDetail}
-          </Typography.Paragraph>
+          <AevatarTooltip title={preview.attentionDetail}>
+            <Typography.Paragraph
+              ellipsis={{ rows: 1 }}
+              style={{
+                color: token.colorTextSecondary,
+                fontSize: 13,
+                marginBottom: 0,
+                marginTop: 0,
+              }}
+            >
+              {preview.attentionDetail}
+            </Typography.Paragraph>
+          </AevatarTooltip>
         </div>
 
         <div className="teams-home-roster-row-actions">
@@ -1540,7 +1544,7 @@ const TeamsHomePage: React.FC = () => {
                   </div>
                   {visibleTeamCount > 1 ? (
                     <Space.Compact>
-                      <Tooltip title={t("pages.teams.home.copy.56", "Card view")}>
+                      <AevatarTooltip title={t("pages.teams.home.copy.56", "Card view")}>
                         <Button
                           aria-label={t("pages.teams.home.copy.57", "Switch to card view")}
                           icon={<AppstoreOutlined />}
@@ -1548,8 +1552,8 @@ const TeamsHomePage: React.FC = () => {
                           style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "cards" ? "primary" : "default"}
                         />
-                      </Tooltip>
-                      <Tooltip title={t("pages.teams.home.copy.58", "List view")}>
+                      </AevatarTooltip>
+                      <AevatarTooltip title={t("pages.teams.home.copy.58", "List view")}>
                         <Button
                           aria-label={t("pages.teams.home.copy.59", "Switch to list view")}
                           icon={<BarsOutlined />}
@@ -1557,7 +1561,7 @@ const TeamsHomePage: React.FC = () => {
                           style={{ height: 44, width: 44 }}
                           type={resolvedRosterView === "list" ? "primary" : "default"}
                         />
-                      </Tooltip>
+                      </AevatarTooltip>
                     </Space.Compact>
                   ) : null}
                 </div>

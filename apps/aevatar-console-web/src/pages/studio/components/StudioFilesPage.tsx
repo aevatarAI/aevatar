@@ -33,6 +33,7 @@ import {
   stretchColumnStyle,
 } from '@/shared/ui/proComponents';
 import { AEVATAR_INTERACTIVE_BUTTON_CLASS } from '@/shared/ui/interactionStandards';
+import AevatarContentSkeleton from '@/shared/ui/AevatarContentSkeleton';
 import StudioFilesDetailPane from './StudioFilesDetailPane';
 import {
   formatConsoleMessage,
@@ -643,7 +644,17 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                 onToggle={() => setWorkflowsOpen((current) => !current)}
               />
               {workflowsOpen ? (
-                filteredWorkflows.length > 0 ? (
+                workflows.isLoading ? (
+                  <AevatarContentSkeleton
+                    ariaLabel={t(
+                      "pages.studio.studiofilespage.loading.workflows",
+                      "Loading workflows",
+                    )}
+                    listLayout="tree"
+                    rows={3}
+                    variant="list"
+                  />
+                ) : filteredWorkflows.length > 0 ? (
                   filteredWorkflows.map((workflow) => (
                     <TreeRow
                       key={workflow.workflowId}
@@ -680,7 +691,17 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                   />
                   {scriptsOpen ? (
                     scopeId ? (
-                      filteredScripts.length > 0 ? (
+                      scripts.isLoading ? (
+                        <AevatarContentSkeleton
+                          ariaLabel={t(
+                            "pages.studio.studiofilespage.loading.scripts",
+                            "Loading scripts",
+                          )}
+                          listLayout="tree"
+                          rows={3}
+                          variant="list"
+                        />
+                      ) : filteredScripts.length > 0 ? (
                         filteredScripts.map((detail, index) => (
                           <TreeRow
                             key={detail.script?.scriptId}

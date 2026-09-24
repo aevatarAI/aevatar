@@ -81,6 +81,23 @@ describe("WorkflowsPage", () => {
     window.history.replaceState({}, "", "/runtime/workflows");
   });
 
+  it("keeps workflow filters visible while the initial catalog renders a table skeleton", async () => {
+    (runtimeCatalogApi.listWorkflowCatalog as jest.Mock).mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    renderWithQueryClient(React.createElement(WorkflowsPage));
+
+    expect(await screen.findByText("Find workflows")).toBeTruthy();
+    expect(await screen.findByRole("status")).toHaveAttribute(
+      "data-variant",
+      "table",
+    );
+    expect(
+      screen.queryByText("No workflows matched the current filters."),
+    ).toBeNull();
+  });
+
   it("opens the definition inspector from the workflow query", async () => {
     window.history.replaceState({}, "", "/runtime/workflows?workflow=demo_flow");
 

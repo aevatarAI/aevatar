@@ -166,8 +166,16 @@ describe('ServicesPage', () => {
 
     renderWithQueryClient(React.createElement(ServicesPage));
 
-    expect(await screen.findByText('正在加载服务目录')).toBeTruthy();
-    expect(screen.getByText('服务目录请求仍在进行，指标会在返回后更新。')).toBeTruthy();
+    expect(await screen.findByRole('status')).toHaveAttribute(
+      'data-variant',
+      'table',
+    );
+    expect(screen.getByText('正在加载服务目录')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+    expect(
+      screen.queryByText('服务目录请求仍在进行，指标会在返回后更新。'),
+    ).toBeNull();
     expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4);
     expect(screen.queryByText('当前范围没有服务')).toBeNull();
 

@@ -1,20 +1,19 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import React from 'react';
-import type { StudioNodeInspectorDraft } from '@/shared/studio/document';
-import type {
-  StudioGraphRole,
-  StudioGraphStep,
-} from '@/shared/studio/graph';
-import type {
-  StudioConnectorDefinition,
-  StudioRoleDefinition,
-  StudioValidationFinding,
-} from '@/shared/studio/models';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import * as React from 'react';
 import StudioInspectorPane from './StudioInspectorPane';
 
-type InspectorProps = React.ComponentProps<typeof StudioInspectorPane>;
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
 
-const workflowRole: StudioGraphRole = {
+jest.mock('@/shared/ui/ConsoleToast', () => ({
+  useConsoleToast: () => mockConsoleToast,
+}));
+
+const workflowRole = {
   id: 'assistant',
   name: 'Assistant',
   provider: 'openai',
@@ -23,16 +22,16 @@ const workflowRole: StudioGraphRole = {
   connectors: ['search'],
 };
 
-const workflowStep: StudioGraphStep = {
+const workflowStep = {
   id: 'review_step',
-  type: 'connector_call',
+  type: 'connector_call' as const,
   targetRole: 'assistant',
   parameters: { connector: 'search', query: 'hello' },
   next: 'publish_step',
   branches: { retry: 'retry_step' },
 };
 
-const connector: StudioConnectorDefinition = {
+const connector = {
   name: 'search',
   type: 'http',
   enabled: true,
@@ -40,7 +39,7 @@ const connector: StudioConnectorDefinition = {
   retry: 0,
 };
 
-const savedRole: StudioRoleDefinition = {
+const savedRole = {
   id: 'assistant_catalog',
   name: 'Catalog assistant',
   provider: 'openai',
@@ -49,11 +48,11 @@ const savedRole: StudioRoleDefinition = {
   connectors: ['search'],
 };
 
-function createBaseProps(
-  overrides: Partial<InspectorProps> = {},
-): InspectorProps {
-  const nodeInspectorDraft: StudioNodeInspectorDraft = {
-    kind: 'step',
+function createBaseProps<const Overrides extends object>(
+  overrides?: Overrides,
+) {
+  const nodeInspectorDraft = {
+    kind: 'step' as const,
     id: 'review_step',
     type: 'connector_call',
     targetRole: 'assistant',
@@ -64,7 +63,7 @@ function createBaseProps(
 
   return {
     draftYaml: 'name: studio_demo\nsteps:\n  - id: review_step\n',
-    inspectorTab: 'yaml',
+    inspectorTab: 'yaml' as const,
     workflowRoleIds: ['assistant'],
     workflowStepIds: ['review_step', 'publish_step', 'retry_step'],
     workflowRoles: [workflowRole],
@@ -81,7 +80,8 @@ function createBaseProps(
     validationFindings: [],
     parsedWorkflowName: 'studio_demo',
     activeWorkflowName: 'studio_demo',
-    activeWorkflowDescription: 'A demo workflow used for Studio inspector tests.',
+    activeWorkflowDescription:
+      'A demo workflow used for Studio inspector tests.',
     onSetInspectorTab: jest.fn(),
     onSetDraftYaml: jest.fn(),
     onValidateDraft: jest.fn(),
@@ -95,15 +95,19 @@ function createBaseProps(
     onDeleteWorkflowRole: jest.fn(),
     onDeleteStep: jest.fn(),
     onResetSelectedNode: jest.fn(),
-    ...overrides,
+    ...(overrides ?? {}),
   };
 }
 
 describe('StudioInspectorPane', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it('renders the YAML summary and validation digest', () => {
-    const validationFindings: StudioValidationFinding[] = [
+    const validationFindings = [
       {
-        level: 'warning',
+        level: 'warning' as const,
         path: '/steps/0',
         code: 'step-warning',
         message: 'Step should define a more specific timeout.',
@@ -125,7 +129,9 @@ describe('StudioInspectorPane', () => {
         'Edit the source document directly, then validate it before saving or running.',
       ),
     ).not.toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Show help' }).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByRole('button', { name: 'Show help' }).length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText('Validation digest')).toBeInTheDocument();
     expect(screen.getByText('1 validation finding(s)')).toBeInTheDocument();
     expect(screen.getByText('Parsed workflow')).toBeInTheDocument();
@@ -197,11 +203,40 @@ describe('StudioInspectorPane', () => {
       />,
     );
 
-    expect(screen.getByText('Unexpected end of JSON input')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Apply node changes' })).toBeDisabled();
+    expect(
+      screen.getByText('Unexpected end of JSON input'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Apply node changes' }),
+    ).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply node changes' }));
 
     expect(onApplyNodeChanges).not.toHaveBeenCalled();
+  });
+
+  it('reports node action failures with a safe toast', async () => {
+    render(
+      <StudioInspectorPane
+        {...createBaseProps({
+          inspectorNotice: {
+            message: 'PATCH /api/studio/node returned 500',
+            type: 'error',
+          },
+          inspectorTab: 'node',
+          selectedGraphStep: workflowStep,
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockConsoleToast.error).toHaveBeenCalledTimes(1);
+    });
+    expect(mockConsoleToast.error).not.toHaveBeenCalledWith(
+      'PATCH /api/studio/node returned 500',
+    );
+    expect(
+      screen.queryByText('PATCH /api/studio/node returned 500'),
+    ).not.toBeInTheDocument();
   });
 });

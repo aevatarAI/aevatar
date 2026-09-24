@@ -45,6 +45,8 @@ import {
   fillCardStyle,
 } from '@/shared/ui/proComponents';
 import { AevatarPanel, AevatarStatusTag } from '@/shared/ui/aevatarPageShells';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { describeError } from '@/shared/ui/errorText';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
@@ -1358,7 +1360,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                     ? t("pages.studio.studioworkbenchsections.waiting.for.manual.approval", "Waiting for manual approval")
                     : activeExecutionInteraction.kind === 'wait_signal'
                       ? t("pages.studio.studioworkbenchsections.wait.for.external.signal", "wait for external signal")
-                    : t("pages.studio.studioworkbenchsections.waiting.for.manual.input", "Waiting for manual input")}
+                    : null}
                 </Typography.Text>
                 <div style={{ color: '#6b7280', fontSize: 12, marginTop: 4 }}>
                   {activeExecutionInteraction.kind === 'human_approval'
@@ -1620,15 +1622,13 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
       type: 'error',
     });
   }
-  if (executionNotice) {
+  if (executionNotice && executionNotice.type !== 'error') {
     compactNotices.push({
       description: executionNotice.message,
       title:
-        executionNotice.type === 'error'
-          ? t("pages.studio.studioworkbenchsections.operation.failed", "Operation failed")
-          : executionNotice.type === 'info'
-            ? t("pages.studio.studioworkbenchsections.requested.to.stop.running", "Requested to stop running")
-            : t("pages.studio.studioworkbenchsections.execution.status.updated", "Execution status updated"),
+        executionNotice.type === 'info'
+          ? t("pages.studio.studioworkbenchsections.requested.to.stop.running", "Requested to stop running")
+          : t("pages.studio.studioworkbenchsections.execution.status.updated", "Execution status updated"),
       type: executionNotice.type,
     });
   }
@@ -1649,11 +1649,20 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
   return (
     <div style={cardStackStyle}>
+      <ConsoleOperationNotice
+        errorMessage={t(
+          'pages.studio.studioworkbenchsections.executionActionFailed',
+          'Execution action could not be completed. Try again.',
+        )}
+        notice={
+          executionNotice?.type === 'error' ? executionNotice : null
+        }
+      />
       {compactNotices.length > 0 ? (
         <div style={studioCompactNoticeStackStyle}>
-          {compactNotices.map((notice, index) => (
+          {compactNotices.map((notice) => (
             <StudioCompactNotice
-              key={`${notice.type}-${index}`}
+              key={String(notice.title)}
               {...notice}
             />
           ))}
@@ -1885,12 +1894,14 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 }}
               >
                 <Typography.Text type="secondary">{row.label}</Typography.Text>
-                <Typography.Text ellipsis={{ tooltip: row.current }}>
-                  {row.current}
-                </Typography.Text>
-                <Typography.Text type="secondary" ellipsis={{ tooltip: row.baseline }}>
-                  {row.baseline}
-                </Typography.Text>
+                <AevatarTooltip title={row.current}>
+                  <Typography.Text ellipsis>{row.current}</Typography.Text>
+                </AevatarTooltip>
+                <AevatarTooltip title={row.baseline}>
+                  <Typography.Text ellipsis type="secondary">
+                    {row.baseline}
+                  </Typography.Text>
+                </AevatarTooltip>
                 <AevatarStatusTag
                   domain="observation"
                   label="delta"

@@ -15,8 +15,9 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Tag, Tooltip, Typography, theme } from 'antd';
+import { Tag, Typography, theme } from 'antd';
 import React, { useMemo } from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import type {
   MissionControlSnapshot,
   MissionObservationStatus,
@@ -154,7 +155,7 @@ function TopologyNodeCard({
         }}
         type="target"
       />
-      <Tooltip
+      <AevatarTooltip
         title={`Observation: ${formatMissionLabel(node.observationStatus)} · freshness ${node.freshnessLabel}`}
       >
         <div
@@ -173,7 +174,7 @@ function TopologyNodeCard({
             width: 10,
           }}
         />
-      </Tooltip>
+      </AevatarTooltip>
       <div
         style={{
           alignItems: 'flex-start',
@@ -234,7 +235,7 @@ function TopologyNodeCard({
       >
         {node.summary}
       </Typography.Paragraph>
-      <Tooltip title={node.handoff.nextStep}>
+      <AevatarTooltip title={node.handoff.nextStep}>
         <div
           aria-label={t("pages.missioncontrol.topologycanvas.mission.control.node.handoff", "Mission Control node handoff")}
           style={{
@@ -266,7 +267,7 @@ function TopologyNodeCard({
             {node.handoff.evidence}
           </Typography.Text>
         </div>
-      </Tooltip>
+      </AevatarTooltip>
       <div
         style={{
           borderTop: `1px solid ${token.colorBorderSecondary}`,

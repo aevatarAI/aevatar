@@ -3,10 +3,11 @@ import {
   FullscreenExitOutlined,
   FullscreenOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Modal, message, Space, Tag, Typography } from 'antd';
+import { Button, Empty, Modal, Space, Tag, Typography } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { t } from '@/shared/i18n/messages';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { cardStackStyle, embeddedPanelStyle } from '@/shared/ui/proComponents';
-import { t } from "@/shared/i18n/messages";
 
 type WorkflowYamlViewerProps = {
   yaml: string;
@@ -207,7 +208,7 @@ function renderYamlValue(value: string | undefined): React.ReactNode {
 }
 
 const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
-  const [messageApi, contextHolder] = message.useMessage();
+  const toast = useConsoleToast();
   const [wrapLines, setWrapLines] = useState(true);
   const [isFullscreenOpen, setIsFullscreenOpen] = useState(false);
   const [viewportHeight, setViewportHeight] = useState(() =>
@@ -266,15 +267,21 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
         throw new Error('Clipboard is unavailable.');
       }
 
-      messageApi.success('YAML copied to clipboard.');
-    } catch (error) {
-      messageApi.error(
-        error instanceof Error
-          ? error.message
-          : t("pages.workflows.workflowyamlviewer.failed.to.copy.yaml", "Failed to copy YAML."),
+      toast.success(
+        t(
+          'pages.workflows.workflowyamlviewer.copy.success',
+          'YAML copied to clipboard.',
+        ),
+      );
+    } catch {
+      toast.error(
+        t(
+          'pages.workflows.workflowyamlviewer.failed.to.copy.yaml',
+          'Failed to copy YAML.',
+        ),
       );
     }
-  }, [messageApi, yaml]);
+  }, [toast, yaml]);
 
   const renderYamlPanel = (
     viewerHeight: number,
@@ -289,38 +296,71 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
             {renderChromeDot('#10b981')}
             <Typography.Text strong>
               {fullscreenMode
-                ? t("pages.workflows.workflowyamlviewer.fullscreen.yaml.inspector", "Fullscreen YAML inspector")
-                : t("pages.workflows.workflowyamlviewer.workflow.yaml", "Workflow YAML")}
+                ? t(
+                    'pages.workflows.workflowyamlviewer.fullscreen.yaml.inspector',
+                    'Fullscreen YAML inspector',
+                  )
+                : t(
+                    'pages.workflows.workflowyamlviewer.workflow.yaml',
+                    'Workflow YAML',
+                  )}
             </Typography.Text>
           </div>
           <Typography.Paragraph
             type="secondary"
             style={{ margin: 0, maxWidth: 720 }}
           >
-            {t("pages.workflows.workflowyamlviewer.read.only.workflow.definition.with", "Read-only workflow definition with syntax highlighting, inline copy, and editor-style controls.")}</Typography.Paragraph>
+            {t(
+              'pages.workflows.workflowyamlviewer.read.only.workflow.definition.with',
+              'Read-only workflow definition with syntax highlighting, inline copy, and editor-style controls.',
+            )}
+          </Typography.Paragraph>
           <Space wrap size={[8, 8]}>
-            <Tag color="blue">{t("pages.workflows.workflowyamlviewer.read.only", "Read only")}</Tag>
-            <Tag>{yamlStats.lineCount} {t("pages.workflows.workflowyamlviewer.lines", "lines")}</Tag>
-            <Tag>{yamlStats.charCount} {t("pages.workflows.workflowyamlviewer.chars", "chars")}</Tag>
-            <Tag>{yamlStats.longestLine} {t("pages.workflows.workflowyamlviewer.max.columns", "max columns")}</Tag>
+            <Tag color="blue">
+              {t('pages.workflows.workflowyamlviewer.read.only', 'Read only')}
+            </Tag>
+            <Tag>
+              {yamlStats.lineCount}{' '}
+              {t('pages.workflows.workflowyamlviewer.lines', 'lines')}
+            </Tag>
+            <Tag>
+              {yamlStats.charCount}{' '}
+              {t('pages.workflows.workflowyamlviewer.chars', 'chars')}
+            </Tag>
+            <Tag>
+              {yamlStats.longestLine}{' '}
+              {t(
+                'pages.workflows.workflowyamlviewer.max.columns',
+                'max columns',
+              )}
+            </Tag>
           </Space>
         </div>
 
         <div style={editorActionsStyle}>
           <Button
-            aria-label={t("pages.workflows.workflowyamlviewer.toggle.yaml.line.wrap", "Toggle YAML line wrap")}
+            aria-label={t(
+              'pages.workflows.workflowyamlviewer.toggle.yaml.line.wrap',
+              'Toggle YAML line wrap',
+            )}
             type={wrapLines ? 'primary' : 'default'}
             onClick={() => setWrapLines((current) => !current)}
           >
             {wrapLines
-              ? t("pages.workflows.workflowyamlviewer.wrapped", "Wrapped")
-              : t("pages.workflows.workflowyamlviewer.no.wrap", "No wrap")}
+              ? t('pages.workflows.workflowyamlviewer.wrapped', 'Wrapped')
+              : t('pages.workflows.workflowyamlviewer.no.wrap', 'No wrap')}
           </Button>
           <Button
             aria-label={
               fullscreenMode
-                ? t("pages.workflows.workflowyamlviewer.close.yaml.fullscreen", "Close YAML fullscreen")
-                : t("pages.workflows.workflowyamlviewer.open.yaml.fullscreen", "Open YAML fullscreen")
+                ? t(
+                    'pages.workflows.workflowyamlviewer.close.yaml.fullscreen',
+                    'Close YAML fullscreen',
+                  )
+                : t(
+                    'pages.workflows.workflowyamlviewer.open.yaml.fullscreen',
+                    'Open YAML fullscreen',
+                  )
             }
             icon={
               fullscreenMode ? (
@@ -336,15 +376,25 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
             }
           >
             {fullscreenMode
-              ? t("pages.workflows.workflowyamlviewer.exit.fullscreen", "Exit fullscreen")
-              : t("pages.workflows.workflowyamlviewer.open.fullscreen", "Open fullscreen")}
+              ? t(
+                  'pages.workflows.workflowyamlviewer.exit.fullscreen',
+                  'Exit fullscreen',
+                )
+              : t(
+                  'pages.workflows.workflowyamlviewer.open.fullscreen',
+                  'Open fullscreen',
+                )}
           </Button>
           <Button
-            aria-label={t("pages.workflows.workflowyamlviewer.copy.workflow.yaml", "Copy workflow YAML")}
+            aria-label={t(
+              'pages.workflows.workflowyamlviewer.copy.workflow.yaml',
+              'Copy workflow YAML',
+            )}
             icon={<CopyOutlined />}
             onClick={() => void handleCopy()}
           >
-            {t("pages.workflows.workflowyamlviewer.copy.yaml", "Copy YAML")}</Button>
+            {t('pages.workflows.workflowyamlviewer.copy.yaml', 'Copy YAML')}
+          </Button>
         </div>
       </div>
 
@@ -402,19 +452,18 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
 
   if (!yaml.trim()) {
     return (
-      <>
-        {contextHolder}
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={t("pages.workflows.workflowyamlviewer.no.yaml.is.available.for", "No YAML is available for this workflow.")}
-        />
-      </>
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description={t(
+          'pages.workflows.workflowyamlviewer.no.yaml.is.available.for',
+          'No YAML is available for this workflow.',
+        )}
+      />
     );
   }
 
   return (
     <div style={cardStackStyle}>
-      {contextHolder}
       {renderYamlPanel(620, false)}
       <Modal
         centered={false}
@@ -439,7 +488,10 @@ const WorkflowYamlViewer: React.FC<WorkflowYamlViewerProps> = ({ yaml }) => {
             marginBottom: 16,
           },
         }}
-        title={t("pages.workflows.workflowyamlviewer.workflow.yaml", "Workflow YAML")}
+        title={t(
+          'pages.workflows.workflowyamlviewer.workflow.yaml',
+          'Workflow YAML',
+        )}
         width="100vw"
       >
         {renderYamlPanel(fullscreenHeight, true)}

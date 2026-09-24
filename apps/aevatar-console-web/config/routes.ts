@@ -1,290 +1,47 @@
-﻿/**
- * @name umi 的路由配置
- * @description Aevatar Console 当前同时使用 path/component/routes/redirect/name/icon，以及用于菜单组织的 hideInMenu、parentKeys 和未来 badge 注入预留字段。
- * @param path  path 只支持两种占位符配置，第一种是动态参数 :id 的形式，第二种是 * 通配符，通配符只能出现路由字符串的最后。
- * @param component 配置 location 和 path 匹配后用于渲染的 React 组件路径。可以是绝对路径，也可以是相对路径，如果是相对路径，会从 src/pages 开始找起。
- * @param routes 配置子路由，通常在需要为多个路径增加 layout 组件时使用。
- * @param redirect 配置路由跳转
- * @param wrappers 配置路由组件的包装组件，通过包装组件可以为当前的路由组件组合进更多的功能。 比如，可以用于路由级别的权限校验
- * @param name 配置路由的标题，默认读取国际化文件 menu.ts 中 menu.xxxx 的值，如配置 name 为 login，则读取 menu.ts 中 menu.login 的取值作为标题
- * @param icon 配置路由的图标，取值参考 https://ant.design/components/icon-cn， 注意去除风格后缀和大小写，如想要配置图标为 <StepBackwardOutlined /> 则取值应为 stepBackward 或 StepBackward，如想要配置图标为 <UserOutlined /> 则取值应为 user 或者 User
- * @doc https://umijs.org/docs/guides/routes
- */
+import { CONSOLE_HOME_ROUTE } from '../src/shared/navigation/consoleHome';
+
+const workflowCanvasBenchmarkRoutes =
+  process.env.AEVATAR_WORKFLOW_CANVAS_BENCHMARK === '1'
+    ? [
+        {
+          path: '/workflow-canvas-benchmark',
+          component: './workflow-canvas-benchmark',
+          hideInMenu: true,
+          layout: false,
+        },
+      ]
+    : [];
+
 export default [
+  ...workflowCanvasBenchmarkRoutes,
+  { path: '/login', component: './login', layout: false },
+  { path: '/auth/callback', component: './auth/callback', layout: false },
+  ...['/', '/overview', '/scopes'].map((path) => ({
+    path,
+    redirect: CONSOLE_HOME_ROUTE,
+    hideInMenu: true,
+  })),
   {
-    path: "/login",
-    component: "./login",
-    layout: false,
-  },
-  {
-    path: "/auth/callback",
-    component: "./auth/callback",
-    layout: false,
-  },
-  {
-    path: "/overview",
-    redirect: "/scopes",
+    path: '/workflows',
+    component: './workflow-activity-vnext/WorkflowHomePage',
     hideInMenu: true,
   },
-  {
-    path: "/chat",
-    name: "Chat",
-    component: "./chat",
-    menuGroupKey: "chat",
-    hideInMenu: false,
-  },
-  {
-    path: "/scopes",
-    name: "My Teams",
-    component: "./teams",
-    menuGroupKey: "teams",
-    hideInMenu: false,
-  },
-  {
-    path: "/scopes/:scopeId/teams/new",
-    name: "Create Team",
-    component: "./teams/new",
+  ...[
+    'workflows',
+    'workflows/new',
+    'workflows/new/templates',
+    'workflows/:workflowId',
+    'activity',
+    'activity/:runId',
+    'channels',
+    'channels/bind/:botId',
+    'channels/:registrationId/edit',
+    'channels/:registrationId',
+    'settings',
+  ].map((resourcePath) => ({
+    path: `/scopes/:scopeId/${resourcePath}`,
+    component: './workflow-activity-vnext',
     hideInMenu: true,
-    parentKeys: ["/scopes"],
-  },
-  {
-    path: "/scopes/:scopeId/teams",
-    name: "My Teams",
-    component: "./teams",
-    hideInMenu: true,
-    parentKeys: ["/scopes"],
-  },
-  {
-    path: "/scopes/:scopeId/teams/:teamId/members/new/workflow",
-    name: "Team Member Workflow Studio",
-    component: "./team-member-workflow-studio",
-    hideInMenu: true,
-    parentKeys: ["/scopes"],
-  },
-  {
-    path: "/scopes/:scopeId/teams/:teamId/members/:memberId/workflow",
-    name: "Team Member Workflow Studio",
-    component: "./team-member-workflow-studio",
-    hideInMenu: true,
-    parentKeys: ["/scopes"],
-  },
-  {
-    path: "/scopes/:scopeId/teams/:teamId/members/:memberId/invoke",
-    name: "Team Member Invoke",
-    component: "./team-member-invoke",
-    hideInMenu: true,
-    parentKeys: ["/scopes"],
-  },
-  {
-    path: "/scopes/:scopeId/teams/:teamId/members/:memberId/runs",
-    name: "Team Member Published Runs",
-    component: "./runtime-published-runs",
-    hideInMenu: true,
-    parentKeys: ["/scopes"],
-  },
-  {
-    path: "/scopes/:scopeId/teams/:teamId/members/:memberId/automations",
-    component: "./teams/detail",
-    hideInMenu: true,
-    parentKeys: ["/scopes"],
-  },
-  {
-    path: "/scopes/:scopeId/teams/:teamId/work-orders/:workOrderId",
-    name: "WorkOrder Details",
-    component: "./team-work-order-detail",
-    hideInMenu: true,
-    parentKeys: ["/scopes"],
-  },
-  {
-    path: "/scopes/:scopeId/teams/:teamId",
-    name: "Team Details",
-    component: "./teams/detail",
-    hideInMenu: true,
-    parentKeys: ["/scopes"],
-  },
-  {
-    path: "/scopes/assets",
-    component: "./scopes/assets",
-    hideInMenu: true,
-  },
-  {
-    path: "/scopes/files",
-    name: "Files",
-    component: "./scopes/files",
-    menuGroupKey: "build",
-  },
-  {
-    path: "/studio",
-    component: "./studio",
-    hideInMenu: true,
-  },
-  {
-    path: "/runtime/workflows",
-    component: "./workflows",
-    hideInMenu: true,
-  },
-  {
-    path: "/runtime/primitives",
-    name: "Connectors",
-    component: "./primitives",
-    hideInMenu: true,
-  },
-  {
-    path: "/scopes/invoke",
-    component: "./scopes/invoke",
-    hideInMenu: true,
-  },
-  {
-    path: "/runtime/runs",
-    name: "Event Stream",
-    component: "./runs",
-    menuGroupKey: "platform",
-  },
-  {
-    path: "/runtime/mission-control",
-    name: "Mission Control",
-    component: "./MissionControl",
-    hideInMenu: true,
-  },
-  {
-    path: "/runtime/mission-wall",
-    component: "./MissionWall",
-    hideInMenu: true,
-  },
-  {
-    path: "/services",
-    name: "Services",
-    component: "./services",
-    menuGroupKey: "platform",
-  },
-  {
-    path: "/services/:serviceId",
-    component: "./services",
-    hideInMenu: true,
-    parentKeys: ["/services"],
-  },
-  {
-    path: "/governance",
-    name: "Governance",
-    component: "./governance",
-    menuGroupKey: "platform",
-  },
-  {
-    path: "/governance/policies",
-    component: "./governance/policies",
-    hideInMenu: true,
-    parentKeys: ["/governance"],
-  },
-  {
-    path: "/governance/bindings",
-    component: "./governance/bindings",
-    hideInMenu: true,
-    parentKeys: ["/governance"],
-  },
-  {
-    path: "/governance/endpoints",
-    component: "./governance/endpoints",
-    hideInMenu: true,
-    parentKeys: ["/governance"],
-  },
-  {
-    path: "/governance/activation",
-    component: "./governance/activation",
-    hideInMenu: true,
-    parentKeys: ["/governance"],
-  },
-  {
-    path: "/deployments",
-    name: "Deployments",
-    component: "./Deployments",
-    menuGroupKey: "platform",
-  },
-  {
-    path: "/runtime/explorer",
-    name: "Topology",
-    component: "./actors",
-    menuGroupKey: "platform",
-  },
-  {
-    path: "/runtime/explorer/detail",
-    component: "./actors/detail",
-    hideInMenu: true,
-    parentKeys: ["/runtime/explorer"],
-  },
-  {
-    path: "/runtime/gagents",
-    name: "Members",
-    component: "./gagents",
-    hideInMenu: true,
-  },
-  {
-    path: "/scopes/overview",
-    component: "./scopes/overview",
-    hideInMenu: true,
-  },
-  {
-    path: "/settings",
-    name: "Settings",
-    component: "./settings",
-    menuGroupKey: "settings",
-  },
-  {
-    path: "/scopes/workflows",
-    redirect: "/runtime/workflows",
-    hideInMenu: true,
-  },
-  {
-    path: "/scopes/scripts",
-    redirect: "/studio?tab=scripts",
-    hideInMenu: true,
-  },
-  {
-    path: "/governance/audit",
-    redirect: "/governance?view=changes",
-    hideInMenu: true,
-  },
-  {
-    path: "/workflows",
-    redirect: "/runtime/workflows",
-    hideInMenu: true,
-  },
-  {
-    path: "/primitives",
-    redirect: "/runtime/primitives",
-    hideInMenu: true,
-  },
-  {
-    path: "/runs",
-    redirect: "/runtime/runs",
-    hideInMenu: true,
-  },
-  {
-    path: "/actors",
-    redirect: "/runtime/explorer",
-    hideInMenu: true,
-  },
-  {
-    path: "/gagents",
-    redirect: "/runtime/gagents",
-    hideInMenu: true,
-  },
-  {
-    path: "/mission-control",
-    redirect: "/runtime/mission-control",
-    hideInMenu: true,
-  },
-  {
-    path: "/mission-wall",
-    redirect: "/runtime/mission-wall",
-    hideInMenu: true,
-  },
-  {
-    path: "/",
-    redirect: "/scopes",
-  },
-  {
-    component: "404",
-    layout: false,
-    path: "/*",
-  },
+  })),
+  { path: '/*', component: '404', layout: false },
 ];

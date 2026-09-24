@@ -23,6 +23,7 @@ import type {
   StudioWorkflowSummary,
 } from '@/shared/studio/models';
 import type { ScopedScriptDetail } from '@/shared/studio/scriptsModels';
+import ConsoleOperationNotice from '@/shared/ui/ConsoleOperationNotice';
 import { describeError } from '@/shared/ui/errorText';
 import {
   AEVATAR_INTERACTIVE_BUTTON_CLASS,
@@ -1090,9 +1091,13 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           </div>
         </div>
 
-        {roleNotice ? (
-          <Alert type={roleNotice.type} showIcon message={roleNotice.message} />
-        ) : null}
+        <ConsoleOperationNotice
+          errorMessage={t(
+            'pages.studio.studiofilesdetailpane.roleSaveFailed',
+            'Could not save role catalog. Try again.',
+          )}
+          notice={roleNotice}
+        />
 
         {roles.isError ? (
           <Alert
@@ -1420,13 +1425,13 @@ const StudioFilesDetailPane: React.FC<Props> = ({
           </div>
         </div>
 
-        {connectorNotice ? (
-          <Alert
-            type={connectorNotice.type}
-            showIcon
-            message={connectorNotice.message}
-          />
-        ) : null}
+        <ConsoleOperationNotice
+          errorMessage={t(
+            'pages.studio.studiofilesdetailpane.connectorSaveFailed',
+            'Could not save connector catalog. Try again.',
+          )}
+          notice={connectorNotice}
+        />
 
         {connectors.isError ? (
           <Alert
@@ -2251,9 +2256,13 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             />
           ) : null}
 
-          {chatNotice ? (
-            <Alert type={chatNotice.type} showIcon message={chatNotice.message} />
-          ) : null}
+          <ConsoleOperationNotice
+            errorMessage={t(
+              'pages.studio.studiofilesdetailpane.conversationDeleteFailed',
+              'Could not delete conversation. Try again.',
+            )}
+            notice={chatNotice}
+          />
 
           {selectedConversationMessages.isLoading ? (
             <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.loading.conversation", "Loading conversation...")}</div>
