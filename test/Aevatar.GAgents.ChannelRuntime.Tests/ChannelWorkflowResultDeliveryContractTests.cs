@@ -125,7 +125,12 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                     WebhookBaseUrl: "https://aevatar.example.com",
                     ScopeId: "scope-1",
                     Label: "Ops Bot",
-                    NyxProviderSlug: "api-lark-bot")),
+                    NyxProviderSlug: "api-lark-bot",
+                    NyxChannelBotOwnerScopeId: "scope-1"),
+                new VerifiedChannelRegistrationOwner(
+                    "scope-1",
+                    new ChannelRegistrationKeyOwner(ChannelRegistrationKeyOwnerKind.Personal, "scope-1"),
+                    null)),
             CancellationToken.None);
 
         provisioningResult.Succeeded.Should().BeTrue();

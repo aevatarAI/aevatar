@@ -81,8 +81,7 @@ public sealed class ChannelAgentKeyProvisioningService(
         var normalizedRegistrationId = registrationId.Trim();
         if (authorization is null &&
             (owner is null ||
-             !IsValidVerifiedOwner(owner) ||
-             !string.Equals(owner.KeyOwner.Id, normalizedScopeId, StringComparison.Ordinal)) ||
+             !IsValidVerifiedOwner(owner)) ||
             authorization is not null &&
             !string.Equals(authorization.Plan.KeyOwner.Id, normalizedScopeId, StringComparison.Ordinal))
         {
@@ -95,7 +94,7 @@ public sealed class ChannelAgentKeyProvisioningService(
                 normalizedPlatform,
                 normalizedRegistrationId[..nameSuffixLength],
                 relayCallbackUrl.Trim(),
-                owner!.TargetOrganizationId)
+                targetOrganizationId: null)
             : BuildExplicitRequest(normalizedPlatform, normalizedRegistrationId[..nameSuffixLength], relayCallbackUrl.Trim(), authorization);
         string response;
         try
