@@ -41,12 +41,9 @@ internal sealed class ChannelRegistrationAdoptionFacade(
         if (ChannelBotRuntimeConfigValidation.ValidateStructure(request.RuntimeConfig).Count > 0)
             return Failure("invalid_runtime_config");
 
-        var owner = await ownerResolver.ResolveAsync(accessToken, scopeId, ct);
-        if (!owner.Succeeded)
-            return Failure(owner.ErrorCode);
-        // Platform comes only from the caller-authorized Bot detail. Inventory DTOs cannot
-        // mint this handoff, and inaccessible Bots never reveal another registration's ID.
-        var detail = await botReader.ReadAsync(accessToken, request.NyxChannelBotId, null, owner.Owner!, ct);
+        // Platform and owner come only from the caller-authorized Bot detail. Inventory DTOs
+        // cannot mint this handoff, and inaccessible Bots never reveal another registration's ID.
+        var detail = await botReader.ReadAsync(accessToken, request.NyxChannelBotId, null, ownerResolver, ct);
         if (!detail.Succeeded)
             return Failure(detail.ErrorCode);
         var bot = detail.Bot!;
@@ -56,6 +53,10 @@ internal sealed class ChannelRegistrationAdoptionFacade(
                 string.Equals(registration.NyxChannelBotId, bot.Id, StringComparison.Ordinal));
         if (existing is not null)
             return Failure("channel_bot_already_bound") with { ExistingRegistrationId = existing.Id };
+
+        var registrationKeyOwner = await ownerResolver.ResolveAsync(accessToken, scopeId, ct);
+        if (!registrationKeyOwner.Succeeded)
+            return Failure(registrationKeyOwner.ErrorCode);
 
         var registrationId = string.IsNullOrWhiteSpace(request.RegistrationId)
             ? Guid.NewGuid().ToString("N")
@@ -79,11 +80,12 @@ internal sealed class ChannelRegistrationAdoptionFacade(
                 ? $"api-{bot.Platform.Value}-bot"
                 : request.NyxProviderSlug.Trim(),
             bot.Id,
+            bot.Owner.KeyOwner.Id,
             (request.RuntimeConfig?.DefaultSkill?.Name ?? string.Empty).Trim().TrimStart('/').ToLowerInvariant(),
             request.RuntimeConfig,
             serviceSelection,
             registrationId);
-        var result = await adoptionService.AdoptAsync(new(bot, registration), ct);
+        var result = await adoptionService.AdoptAsync(new(bot, registration, registrationKeyOwner.Owner!), ct);
         return result with
         {
             NyxProviderSlug = registration.NyxProviderSlug,

@@ -84,7 +84,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     IAgentTool,
     IAgentToolOperationAdmissionOwner
 {
-    private const int MaxReadSourceBytes = 16 * 1024;
+    private const int MaxReadSourceBytes = 256 * 1024;
+    private const int MaxReadProjectionBytes = 256 * 1024;
     private const int MaxSafeLabelLength = 80;
     private const string ProxyResponseTooLargeErrorCode = "NYXID_PROXY_RESPONSE_TOO_LARGE";
     private const string ReadTooLargeErrorCode = "NYXID_CONNECTED_SERVICE_READ_TOO_LARGE";
@@ -294,7 +295,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         }
 
         var projection = BuildReadProjection("succeeded", data, null, null);
-        if (Encoding.UTF8.GetByteCount(projection) > MaxReadSourceBytes)
+        if (Encoding.UTF8.GetByteCount(projection) > MaxReadProjectionBytes)
             return BuildReadTooLargeOutcome(callId, toolName);
 
         var successReceipt = sourceReceipt.Clone();
@@ -327,7 +328,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             ReadTooLargeErrorCode,
             ReadTooLargeErrorMessage,
             BuildReadRetryHints(includeQueryParameters: true));
-        if (Encoding.UTF8.GetByteCount(result) <= MaxReadSourceBytes)
+        if (Encoding.UTF8.GetByteCount(result) <= MaxReadProjectionBytes)
             return result;
 
         result = BuildReadProjection(
@@ -336,7 +337,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             ReadTooLargeErrorCode,
             ReadTooLargeErrorMessage,
             BuildReadRetryHints(includeQueryParameters: false));
-        return Encoding.UTF8.GetByteCount(result) <= MaxReadSourceBytes
+        return Encoding.UTF8.GetByteCount(result) <= MaxReadProjectionBytes
             ? result
             : BuildReadProjection(
                 "retry_required",

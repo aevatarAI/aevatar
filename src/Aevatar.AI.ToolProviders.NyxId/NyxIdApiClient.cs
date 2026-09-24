@@ -251,6 +251,9 @@ public sealed partial class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetCurrentUserAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/users/me", ct);
 
+    public Task<string> ListOrganizationsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/orgs", ct);
+
     // Admin-gated user search (email -> user id).
     // Existing NyxID route; case-insensitive regex match on email. Returns {"users":[{id,email,role,...}],...}.
     public Task<string> SearchAdminUsersAsync(string token, string email, CancellationToken ct) =>
@@ -1732,8 +1735,16 @@ public sealed partial class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     // ─── Channel Bot Relay ───
 
+    public Task<string> ListChannelBotsAsync(string token, string? scope, CancellationToken ct)
+    {
+        var path = "/api/v1/channel-bots";
+        if (!string.IsNullOrWhiteSpace(scope))
+            path += "?scope=" + Uri.EscapeDataString(scope.Trim());
+        return GetAsync(token, path, ct);
+    }
+
     public Task<string> ListChannelBotsAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/channel-bots", ct);
+        ListChannelBotsAsync(token, scope: null, ct);
 
     public Task<string> GetChannelBotAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/channel-bots/{Uri.EscapeDataString(id)}", ct);

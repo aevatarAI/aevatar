@@ -386,8 +386,8 @@ public static class ChannelCallbackEndpoints
     }
 
     /// <summary>
-    /// Lists channel-bot registrations scoped to the caller's own account. NyxID channel-bot
-    /// visibility is owner-scoped, so this endpoint does not expose a cross-account admin view.
+    /// Lists channel-bot registrations scoped to the caller's account, or to the NyxID
+    /// all-view when the caller requests <c>scope=all</c>.
     /// </summary>
     private static async Task<IResult> HandleListRegistrationsAsync(
         HttpContext http,
@@ -400,12 +400,18 @@ public static class ChannelCallbackEndpoints
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
 
-        var scopeResolution = ResolveScopeId(http, scope, required: false);
+        var allScopes = IsAllScope(scope);
+        var scopeResolution = allScopes
+            ? ResolveScopeId(http, null, required: false)
+            : ResolveScopeId(http, scope, required: false);
         if (scopeResolution.Error is not null)
             return Results.BadRequest(new { error = scopeResolution.Error });
         var callerScope = scopeResolution.ScopeId;
 
-        var botResponse = await nyxClient.ListChannelBotsAsync(accessToken, ct);
+        var botResponse = await nyxClient.ListChannelBotsAsync(
+            accessToken,
+            allScopes ? "all" : null,
+            ct);
         if (NyxApiResponseHelper.LooksLikeErrorEnvelope(botResponse))
         {
             return Results.Json(
@@ -415,9 +421,10 @@ public static class ChannelCallbackEndpoints
         }
 
         var bots = ParseNyxChannelBots(botResponse);
+        var organizationNames = await ReadOrganizationNamesAsync(nyxClient, accessToken, ct);
         var snapshots = await queryPort.QueryAllSnapshotsAsync(ct);
         var localByBotId = snapshots
-            .Where(snapshot => string.Equals(
+            .Where(snapshot => allScopes || string.Equals(
                 snapshot.Registration.ScopeId,
                 callerScope,
                 StringComparison.Ordinal))
@@ -428,7 +435,7 @@ public static class ChannelCallbackEndpoints
         var result = bots.Select(bot =>
         {
             localByBotId.TryGetValue(bot.Id, out var snapshot);
-            return MapRegistrationListRow(bot, snapshot, callerScope);
+            return MapRegistrationListRow(bot, snapshot, callerScope, organizationNames);
         }).ToArray();
 
         return Results.Json(result, RegistrationJsonOptions);
@@ -444,7 +451,10 @@ public static class ChannelCallbackEndpoints
         if (snapshot is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        if (!CallerOwnsRegistration(http, snapshot.Registration))
+        var managementOwner = ResolveRegistrationManagementOwner(
+            http,
+            snapshot.Registration);
+        if (managementOwner is null)
             return Results.NotFound(new { error = "Registration not found" });
 
         return Results.Json(
@@ -493,10 +503,12 @@ public static class ChannelCallbackEndpoints
         if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        if (!CallerOwnsRegistration(http, registration))
-        {
+        var accessToken = ResolveBearerAccessToken(http);
+        var managementOwner = ResolveRegistrationManagementOwner(
+            http,
+            registration);
+        if (managementOwner is null)
             return Results.NotFound(new { error = "Registration not found" });
-        }
 
         var effectiveServiceSelection = serviceSelection.Specified
             ? serviceSelection
@@ -514,7 +526,6 @@ public static class ChannelCallbackEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var accessToken = ResolveBearerAccessToken(http);
         VerifiedRegistrationServices verifiedServices = new(true, string.Empty, [], null);
         if (effectiveServiceSelection.AuthorizationMode == ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist ||
             serviceSelection.Specified)
@@ -664,6 +675,7 @@ public static class ChannelCallbackEndpoints
         string registrationId,
         HttpContext http,
         [FromServices] IChannelWorkflowResultDeliveryRepairService repairService,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
         CancellationToken ct)
     {
         var accessToken = ResolveBearerAccessToken(http);
@@ -678,9 +690,19 @@ public static class ChannelCallbackEndpoints
             return Results.NotFound(new { error = "Registration not found" });
         }
 
+        var registration = await queryPort.GetAsync(registrationId, ct);
+        if (registration is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
+        var managementOwner = ResolveRegistrationManagementOwner(
+            http,
+            registration);
+        if (managementOwner is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
         var result = await repairService.RepairAsync(
             registrationId,
-            callerScopeId,
+            managementOwner.ScopeId,
             requestedBySubjectId,
             accessToken,
             ct);
@@ -769,22 +791,18 @@ public static class ChannelCallbackEndpoints
                 ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
             : null;
 
-        // Cross-account bot: NyxID's channel-bot API is strictly owner-scoped, so we can't query its live status.
-        // Instead report aevatar's OWN observation: the relay-activity read model marks a bot
-        // active once it has received a verified inbound. No historical backfill exists, so a
-        // bot that was active before this feature shipped shows pending until its next inbound.
-        var callerScope = ResolveScopeId(http, null, required: false).ScopeId;
-        if (!string.IsNullOrWhiteSpace(callerScope)
-            && !string.Equals(registration.ScopeId, callerScope, StringComparison.Ordinal))
+        var accessToken = ResolveBearerAccessToken(http);
+        var managementOwner = ResolveRegistrationManagementOwner(
+            http,
+            registration);
+        if (managementOwner is null)
         {
             // L1: only aevatar admin access may see a foreign registration's status.
             // For any other caller a mismatched scope is a 404 (existence-hiding),
-            // NOT a populated degraded response — otherwise the platform/activity of
-            // another tenant's bot leaks to anyone who can guess a registration id.
-            var token = ResolveBearerAccessToken(http);
-            var caller = string.IsNullOrWhiteSpace(token)
+            // NOT a populated degraded response, otherwise another tenant's bot leaks.
+            var caller = string.IsNullOrWhiteSpace(accessToken)
                 ? PlatformCaller.NotElevated
-                : await adminAuthorizer.ResolveCallerAsync(token, ct);
+                : await adminAuthorizer.ResolveCallerAsync(accessToken, ct);
             if (!caller.IsElevated)
                 return Results.NotFound(new { error = "Registration not found" });
 
@@ -802,7 +820,6 @@ public static class ChannelCallbackEndpoints
             }, RegistrationJsonOptions);
         }
 
-        var accessToken = ResolveBearerAccessToken(http);
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
 
@@ -938,6 +955,12 @@ public static class ChannelCallbackEndpoints
         if (string.IsNullOrWhiteSpace(accessToken))
             return Results.Unauthorized();
 
+        var managementOwner = ResolveRegistrationManagementOwner(
+            http,
+            registration);
+        if (managementOwner is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
         var deprovisionResult = await deprovision.DeprovisionAsync(
             accessToken,
             NyxChannelBotDeprovisioningRequest.FromRegistration(registration),
@@ -1003,10 +1026,12 @@ public static class ChannelCallbackEndpoints
     private static object MapRegistrationListRow(
         NyxChannelBotRecord bot,
         ChannelBotRegistrationSnapshot? snapshot,
-        string? callerScope)
+        string? callerScope,
+        IReadOnlyDictionary<string, string> organizationNames)
     {
         if (snapshot is null)
         {
+            var unboundOwnerScopeName = ResolveOwnerScopeName(bot.OwnerScopeId, callerScope, organizationNames);
             return new
             {
                 id = (string?)null,
@@ -1023,6 +1048,8 @@ public static class ChannelCallbackEndpoints
                 callback_url = string.Empty,
                 webhook_url = bot.WebhookUrl,
                 nyx_channel_bot_id = bot.Id,
+                nyx_channel_bot_owner_scope_id = bot.OwnerScopeId,
+                nyx_channel_bot_owner_scope_name = unboundOwnerScopeName,
                 nyx_agent_api_key_id = string.Empty,
                 nyx_conversation_route_id = string.Empty,
                 skill_name = string.Empty,
@@ -1039,6 +1066,10 @@ public static class ChannelCallbackEndpoints
         }
 
         var e = snapshot.Registration;
+        var ownerScopeId = string.IsNullOrWhiteSpace(e.NyxChannelBotOwnerScopeId)
+            ? bot.OwnerScopeId
+            : e.NyxChannelBotOwnerScopeId;
+        var ownerScopeName = ResolveOwnerScopeName(ownerScopeId, callerScope, organizationNames);
         var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(e);
         var repairFailed = capabilityStatus ==
             ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
@@ -1058,6 +1089,8 @@ public static class ChannelCallbackEndpoints
             callback_url = string.Empty,
             webhook_url = string.IsNullOrWhiteSpace(e.WebhookUrl) ? bot.WebhookUrl : e.WebhookUrl,
             nyx_channel_bot_id = e.NyxChannelBotId,
+            nyx_channel_bot_owner_scope_id = ownerScopeId,
+            nyx_channel_bot_owner_scope_name = ownerScopeName,
             nyx_agent_api_key_id = e.NyxAgentApiKeyId,
             nyx_conversation_route_id = e.NyxConversationRouteId,
             skill_name = ResolveSkillName(e.RuntimeConfig, e.DefaultSkillName),
@@ -1082,12 +1115,18 @@ public static class ChannelCallbackEndpoints
     private static string MapNyxChannelBotAvailability(NyxChannelBotRecord bot) =>
         bot.Active ? "available" : "unavailable";
 
-    private static bool CallerOwnsRegistration(HttpContext http, ChannelBotRegistrationEntry registration)
+    private static RegistrationManagementOwner? ResolveRegistrationManagementOwner(
+        HttpContext http,
+        ChannelBotRegistrationEntry registration)
     {
         var callerScopeId = ResolveScopeId(http, null, required: false).ScopeId;
         return !string.IsNullOrWhiteSpace(callerScopeId) &&
-            string.Equals(registration.ScopeId, callerScopeId, StringComparison.Ordinal);
+            string.Equals(registration.ScopeId, callerScopeId, StringComparison.Ordinal)
+                ? new RegistrationManagementOwner(registration.ScopeId)
+                : null;
     }
+
+    private sealed record RegistrationManagementOwner(string ScopeId);
 
     private static object MapRegistrationDetail(ChannelBotRegistrationSnapshot snapshot)
     {
@@ -1110,6 +1149,7 @@ public static class ChannelCallbackEndpoints
             nyx_provider_slug = entry.NyxProviderSlug,
             webhook_url = entry.WebhookUrl,
             nyx_channel_bot_id = entry.NyxChannelBotId,
+            nyx_channel_bot_owner_scope_id = entry.NyxChannelBotOwnerScopeId,
             nyx_agent_api_key_id = entry.NyxAgentApiKeyId,
             nyx_conversation_route_id = entry.NyxConversationRouteId,
             agent_key = MapAgentKeyStatus(entry),
@@ -1364,6 +1404,9 @@ public static class ChannelCallbackEndpoints
             _ => "unspecified",
         };
 
+    private static bool IsAllScope(string? scope) =>
+        string.Equals(NormalizeOptional(scope), "all", StringComparison.OrdinalIgnoreCase);
+
     private static ScopeIdResolution ResolveScopeId(HttpContext http, string? explicitScopeId, bool required)
     {
         var explicitNormalized = NormalizeOptional(explicitScopeId);
@@ -1579,6 +1622,73 @@ public static class ChannelCallbackEndpoints
             : [];
     }
 
+    private static async Task<IReadOnlyDictionary<string, string>> ReadOrganizationNamesAsync(
+        NyxIdApiClient nyxClient,
+        string accessToken,
+        CancellationToken ct)
+    {
+        try
+        {
+            var response = await nyxClient.ListOrganizationsAsync(accessToken, ct);
+            if (NyxApiResponseHelper.LooksLikeErrorEnvelope(response))
+                return new Dictionary<string, string>(StringComparer.Ordinal);
+
+            return ParseOrganizationNames(response);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> ParseOrganizationNames(string response)
+    {
+        using var document = JsonDocument.Parse(response);
+        if (!TryGetArray(document.RootElement, ["data", "organizations", "orgs", "items"], out var array))
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var element in array.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var id = ReadNonEmptyString(element, "id") ??
+                ReadNonEmptyString(element, "org_id") ??
+                ReadNonEmptyString(element, "organization_id");
+            var name = ReadNonEmptyString(element, "display_name") ??
+                ReadNonEmptyString(element, "name") ??
+                ReadNonEmptyString(element, "label");
+            if (id is null || name is null)
+                continue;
+
+            names[id] = name;
+        }
+
+        return names;
+    }
+
+    private static string? ResolveOwnerScopeName(
+        string? ownerScopeId,
+        string? personalScopeId,
+        IReadOnlyDictionary<string, string> organizationNames)
+    {
+        if (string.IsNullOrWhiteSpace(ownerScopeId))
+            return null;
+
+        if (string.Equals(ownerScopeId, personalScopeId, StringComparison.Ordinal))
+            return "personal";
+
+        return organizationNames.TryGetValue(ownerScopeId, out var name) &&
+            !string.IsNullOrWhiteSpace(name)
+                ? name
+                : null;
+    }
+
     private static NyxChannelBotRecord? ParseNyxChannelBotElement(JsonElement element)
     {
         if (element.ValueKind != JsonValueKind.Object)
@@ -1601,7 +1711,8 @@ public static class ChannelCallbackEndpoints
             label,
             status,
             ReadBoolean(element, "active") ?? !string.Equals(status, "disabled", StringComparison.OrdinalIgnoreCase),
-            ReadNonEmptyString(element, "webhook_url") ?? ReadNonEmptyString(element, "callback_url") ?? string.Empty);
+            ReadNonEmptyString(element, "webhook_url") ?? ReadNonEmptyString(element, "callback_url") ?? string.Empty,
+            ReadNonEmptyString(element, "user_id") ?? string.Empty);
     }
 
     private static bool TryGetArray(JsonElement root, IReadOnlyList<string> propertyNames, out JsonElement array)
@@ -1677,7 +1788,8 @@ public static class ChannelCallbackEndpoints
         string Label,
         string Status,
         bool Active,
-        string WebhookUrl);
+        string WebhookUrl,
+        string OwnerScopeId);
 
     private sealed record VerifiedRegistrationServices(
         bool Succeeded,

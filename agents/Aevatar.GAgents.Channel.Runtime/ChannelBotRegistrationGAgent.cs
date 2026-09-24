@@ -116,6 +116,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             ChannelAgentKey = cmd.ChannelAgentKey?.Clone(),
             AuthorizationMode = cmd.AuthorizationMode,
             RuntimeConfig = runtimeConfig,
+            NyxChannelBotOwnerScopeId = cmd.NyxChannelBotOwnerScopeId?.Trim() ?? string.Empty,
             DefaultSkillName = runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
             CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
