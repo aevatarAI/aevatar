@@ -46,15 +46,61 @@ afterEach(() => {
   else Reflect.deleteProperty(navigator, 'clipboard');
 });
 
-function renderIdentity() {
+function renderIdentity(before?: React.ReactNode) {
   return renderWithQueryClient(
-    <ChannelIdentity
-      registration={registration}
-      label={registration.label}
-      pending={false}
-    />,
+    <>
+      {before}
+      <ChannelIdentity
+        registration={registration}
+        label={registration.label}
+        pending={false}
+      />
+    </>,
   );
 }
+
+it('previews IDs on hover without moving focus and stays open while the pointer enters the panel', async () => {
+  jest.useFakeTimers();
+  try {
+    renderIdentity(<button type="button">Another action</button>);
+    const otherAction = screen.getByRole('button', { name: 'Another action' });
+    const trigger = screen.getByRole('button', {
+      name: 'View IDs for Support',
+    });
+    act(() => otherAction.focus());
+    fireEvent.mouseEnter(trigger);
+    await act(async () => jest.advanceTimersByTime(300));
+    const panel = screen.getByRole('dialog', { name: 'Bot identifiers' });
+    expect(within(panel).getByText(registration.botId)).toBeVisible();
+    expect(otherAction).toHaveFocus();
+
+    fireEvent.mouseLeave(trigger);
+    fireEvent.mouseEnter(panel);
+    await act(async () => jest.advanceTimersByTime(300));
+    expect(panel).toBeVisible();
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+
+    writeText.mockResolvedValueOnce(undefined);
+    fireEvent.click(within(panel).getByRole('button', { name: 'Copy Bot ID' }));
+    await act(async () => jest.advanceTimersByTime(0));
+    expect(writeText).toHaveBeenCalledWith(registration.botId);
+    expect(screen.getByText('Bot ID copied.')).toBeInTheDocument();
+
+    fireEvent.mouseLeave(panel);
+    await act(async () => jest.advanceTimersByTime(300));
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.mouseEnter(trigger);
+    await act(async () => jest.advanceTimersByTime(300));
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(otherAction, { key: 'Escape' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(otherAction).toHaveFocus();
+  } finally {
+    await act(async () => jest.runOnlyPendingTimers());
+    jest.useRealTimers();
+  }
+});
 
 it('reveals and copies exact bot and owner IDs on demand for an unbound non-owned bot', async () => {
   let finishCopy!: () => void;

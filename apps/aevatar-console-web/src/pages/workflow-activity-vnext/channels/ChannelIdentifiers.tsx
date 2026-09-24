@@ -20,10 +20,19 @@ export default function ChannelIdentifiers({
   const [open, setOpen] = React.useState(false);
   const [copying, setCopying] = React.useState<string | null>(null);
   const copyInFlight = React.useRef(false);
+  const focusOnOpen = React.useRef(false);
   const trigger = React.useRef<HTMLButtonElement>(null);
   const firstCopy = React.useRef<HTMLButtonElement>(null);
   const panelId = React.useId();
   const toast = useConsoleToast();
+  React.useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('keydown', dismiss);
+    return () => document.removeEventListener('keydown', dismiss);
+  }, [open]);
   const fields = [
     { label: t('channels.botId', 'Bot ID'), value: registration.botId },
     ...(registration.botOwnerScopeId
@@ -67,12 +76,16 @@ export default function ChannelIdentifiers({
 
   return (
     <Popover
-      trigger="click"
+      trigger={['hover', 'click']}
+      mouseEnterDelay={0.15}
+      mouseLeaveDelay={0.2}
       placement="bottom"
       open={open}
       onOpenChange={setOpen}
       afterOpenChange={(visible) => {
-        if (visible) queueMicrotask(() => firstCopy.current?.focus());
+        if (visible && focusOnOpen.current)
+          queueMicrotask(() => firstCopy.current?.focus());
+        focusOnOpen.current = false;
       }}
       destroyOnHidden
       classNames={{ root: 'channels__identifiers-popup' }}
@@ -143,7 +156,9 @@ export default function ChannelIdentifiers({
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-controls={open ? panelId : undefined}
-        title={t('channels.identifier.title', 'Bot identifiers')}
+        onClick={() => {
+          focusOnOpen.current = true;
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') close();
         }}

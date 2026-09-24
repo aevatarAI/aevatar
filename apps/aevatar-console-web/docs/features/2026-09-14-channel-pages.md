@@ -44,13 +44,16 @@ missing IDs remain unlinked placeholders.
 
 The Owner column follows Channel name so personal and organization ownership
 can be compared across rows. An information button beside each name opens an
-identifier popover on click, tap, or keyboard activation, including for unbound
-and non-owned bots. It exposes the complete Bot ID and, when available, Owner
+identifier popover on hover, click, tap, or keyboard activation, including for
+unbound and non-owned bots. It exposes the complete Bot ID and, when available, Owner
 ID as selectable values with separate copy buttons. Copy success is reported
 only after the clipboard write resolves; failures retain manual selection.
-Opening moves focus into the popover; Escape and its close button dismiss it
-and return focus to the trigger. Narrow screens keep horizontal scrolling
-inside the table and the popover within the viewport.
+Hover previews keep keyboard focus unchanged, and the popover stays open while
+the pointer moves from the information button into its content for copying.
+Click or keyboard activation moves focus into the popover. Escape dismisses
+hover previews without moving focus; dismissing from inside the popover returns
+focus to the trigger. Narrow screens keep horizontal scrolling inside the table
+and the popover within the viewport.
 
 This placement applies [Carbon's data-table guidance](https://carbondesignsystem.com/components/data-table/usage/)
 for scannable columns and [NN/g's progressive disclosure principle](https://www.nngroup.com/articles/progressive-disclosure/):
