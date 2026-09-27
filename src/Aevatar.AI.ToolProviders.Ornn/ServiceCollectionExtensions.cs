@@ -35,11 +35,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<OrnnSkillPublishingService>();
         services.TryAddSingleton<NyxIdRecommendedSkillGenerator>();
         services.Replace(ServiceDescriptor.Singleton<INyxIdRecommendedSkillRefCreator>(sp =>
-            sp.GetService<NyxIdToolOptions>() is { } nyxIdOptions &&
             sp.GetService<INyxIdClientCredentialsTokenSource>() is { } tokenSource &&
             sp.GetService<NyxIdRecommendedSkillRefPersistenceService>() is { } persistenceService
                 ? new OrnnRecommendedSkillRefCreator(
-                    nyxIdOptions,
                     tokenSource,
                     sp.GetRequiredService<OrnnSkillPublishingService>(),
                     persistenceService,

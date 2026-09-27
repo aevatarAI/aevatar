@@ -160,6 +160,12 @@ public static class ServiceCollectionExtensions
         var configuredClientCredentialsScope = FirstConfiguredValue(
             configuration,
             "Aevatar:NyxId:ClientCredentialsScope");
+        var configuredLocalAgentKeyInventoryFallback = FirstConfiguredValue(
+            configuration,
+            "Aevatar:NyxId:EnableLocalAgentKeyInventoryFallback");
+        var configuredLocalAgentKeyInventoryFallbackJson = FirstConfiguredValue(
+            configuration,
+            "Aevatar:NyxId:LocalAgentKeyInventoryFallbackJson");
 
         if (configuredInternalApiBaseUrl is not null)
         {
@@ -191,14 +197,10 @@ public static class ServiceCollectionExtensions
             options.ClientSecret = configuredClientSecret;
         if (configuredClientCredentialsScope is not null)
             options.ClientCredentialsScope = configuredClientCredentialsScope;
-        if (configuration is not null)
-        {
-            var configuredCreationTemplates = configuration
-                .GetSection("Aevatar:NyxId:RecommendedSkillCreationTemplates")
-                .Get<List<NyxIdRecommendedSkillCreationTemplate>>();
-            if (configuredCreationTemplates is not null)
-                options.RecommendedSkillCreationTemplates = configuredCreationTemplates;
-        }
+        if (bool.TryParse(configuredLocalAgentKeyInventoryFallback, out var localAgentKeyInventoryFallback))
+            options.EnableLocalAgentKeyInventoryFallback = localAgentKeyInventoryFallback;
+        if (configuredLocalAgentKeyInventoryFallbackJson is not null)
+            options.LocalAgentKeyInventoryFallbackJson = configuredLocalAgentKeyInventoryFallbackJson;
         if (int.TryParse(configuredInternalFallbackTimeout, out var internalFallbackTimeoutSeconds) &&
             internalFallbackTimeoutSeconds > 0)
         {

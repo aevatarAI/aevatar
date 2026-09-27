@@ -13,7 +13,7 @@ namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 public sealed class OrnnRecommendedSkillRefCreatorTests
 {
     [Fact]
-    public async Task CreateRecommendedSkillRefsAsync_MatchingTemplate_PublishesPrivateSkillWithServerToken()
+    public async Task CreateRecommendedSkillRefsAsync_MatchingTemplate_PublishesPublicSkillWithServerToken()
     {
         var handler = new CapturingHandler();
         var creator = CreateCreator(handler);
@@ -26,10 +26,10 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var skillRef = refs.Should().ContainSingle().Subject;
         skillRef.Source.Should().Be(NyxIdRecommendedSkillSource.Ornn);
         skillRef.SkillId.Should().Be("33333333-3333-3333-3333-333333333333");
-        skillRef.LiteralVersion.Should().Be("3.0");
+        skillRef.LiteralVersion.Should().Be("1.0");
         skillRef.ManifestDigest.Should().Be(new string('a', 64));
-        skillRef.DisplayName.Should().Be("GitHub Operator");
-        skillRef.RecommendationName.Should().Be("github-service-default");
+        skillRef.DisplayName.Should().Be("GitHub");
+        skillRef.RecommendationName.Should().Be("api-github-connected-service");
 
         handler.Requests.Should().HaveCount(7);
         handler.Requests.Select(request => request.Path).Should().Equal(
@@ -48,7 +48,8 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
             .Should().ContainSingle();
         handler.Requests.Select(request => request.Authorization?.Parameter).Should().OnlyContain(token => token == "server-token");
         handler.Requests[2].ContentType.Should().Be("application/zip");
-        var skillMarkdown = ReadZipEntry(handler.Requests[2].Body, "github-service-default/SKILL.md");
+        var skillMarkdown = ReadZipEntry(handler.Requests[2].Body, "api-github-connected-service/SKILL.md");
+        skillMarkdown.Should().Contain("visibility: public");
         skillMarkdown.Should().Contain("nyxid_invoke_operation");
         skillMarkdown.Should().Contain("## Operation Selection Guide");
         skillMarkdown.Should().Contain("### Resource: repos");
@@ -62,6 +63,32 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         handler.Requests[4].Method.Should().Be(HttpMethod.Put);
         handler.Requests[4].BodyText.Should().Contain("recommended_skill_refs");
         handler.Requests[4].BodyText.Should().Contain("33333333-3333-3333-3333-333333333333");
+    }
+
+    [Fact]
+    public async Task CreateRecommendedSkillRefsAsync_WhenPublishConflicts_ReusesExistingSkill()
+    {
+        var handler = new CapturingHandler { ConflictOnPublish = true };
+        var creator = CreateCreator(handler);
+
+        var refs = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+
+        var skillRef = refs.Should().ContainSingle().Subject;
+        skillRef.Source.Should().Be(NyxIdRecommendedSkillSource.Ornn);
+        skillRef.SkillId.Should().Be("44444444-4444-4444-4444-444444444444");
+        skillRef.LiteralVersion.Should().Be("1.0");
+        skillRef.ManifestDigest.Should().Be(new string('b', 64));
+        handler.Requests.Select(request => request.Path).Should().Equal(
+            "/api/v1/catalog-specs/api-github/openapi.json",
+            "/api/v1/proxy/s/ornn/api/v1/skill-format/validate",
+            "/api/v1/proxy/s/ornn/api/v1/skills",
+            "/api/v1/proxy/s/ornn/api/v1/skill-search",
+            "/api/v1/proxy/s/ornn/api/v1/skills/44444444-4444-4444-4444-444444444444",
+            "/api/v1/keys/us-personal",
+            "/api/v1/keys/us-personal");
+        handler.Requests.Where(request => request.Method == HttpMethod.Put && request.Path == "/api/v1/keys/us-personal")
+            .Should().ContainSingle();
+        handler.Requests.Last().BodyText.Should().Contain("44444444-4444-4444-4444-444444444444");
     }
 
     [Fact]
@@ -87,7 +114,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
     }
 
     [Fact]
-    public async Task CreateRecommendedSkillRefsAsync_WhenNyxIdReadFails_ReturnsEmptyRefListWithoutUpdating()
+    public async Task CreateRecommendedSkillRefsAsync_WhenNyxIdReadFails_ReturnsEmptyWithoutDirectWriteOrRepublishing()
     {
         var handler = new CapturingHandler { FailRead = true };
         var creator = CreateCreator(handler);
@@ -97,15 +124,17 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
 
         refs.Should().BeEmpty();
         refsAgain.Should().BeEmpty();
-        handler.Requests.Should().HaveCount(8);
+        handler.Requests.Should().HaveCount(6);
+        handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")
+            .Should().ContainSingle();
         handler.Requests.Where(request => request.Method == HttpMethod.Get && request.Path == "/api/v1/keys/us-personal")
             .Should().HaveCount(2);
-        handler.Requests.Where(request => request.Method == HttpMethod.Put)
+        handler.Requests.Where(request => request.Method == HttpMethod.Put && request.Path == "/api/v1/keys/us-personal")
             .Should().BeEmpty();
     }
 
     [Fact]
-    public async Task CreateRecommendedSkillRefsAsync_WhenNyxIdUpdateFails_ReturnsEmptyRefList()
+    public async Task CreateRecommendedSkillRefsAsync_WhenNyxIdUpdateFails_ReturnsEmptyWithoutRepublishing()
     {
         var handler = new CapturingHandler { FailUpdate = true };
         var creator = CreateCreator(handler);
@@ -115,13 +144,15 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
 
         refs.Should().BeEmpty();
         refsAgain.Should().BeEmpty();
-        handler.Requests.Should().HaveCount(10);
+        handler.Requests.Should().HaveCount(8);
+        handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")
+            .Should().ContainSingle();
         handler.Requests.Where(request => request.Method == HttpMethod.Put)
             .Should().HaveCount(2);
     }
 
     [Fact]
-    public async Task CreateRecommendedSkillRefsAsync_UnmatchedService_ReturnsEmptyWithoutPublishing()
+    public async Task CreateRecommendedSkillRefsAsync_WhenNoOperationContracts_ReturnsEmptyWithoutPublishing()
     {
         var handler = new CapturingHandler();
         var creator = CreateCreator(handler);
@@ -131,25 +162,13 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var refs = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
 
         refs.Should().BeEmpty();
-        handler.Requests.Should().BeEmpty();
+        handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")
+            .Should().BeEmpty();
     }
 
     private static OrnnRecommendedSkillRefCreator CreateCreator(CapturingHandler handler)
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.example" };
-        options.RecommendedSkillCreationTemplates.Add(new NyxIdRecommendedSkillCreationTemplate
-        {
-            CatalogServiceSlug = "api-github",
-            SkillName = "github-service-default",
-            Description = "GitHub service default skill",
-            Version = "3.0",
-            Category = "tool-based",
-            InstructionsMarkdown = "Use exact GitHub service tools.",
-            DisplayName = "GitHub Operator",
-            RecommendationName = "github-service-default",
-            Tags = ["github"],
-            ToolList = ["nyxop_list_repositories"],
-        });
         var nyxClient = new NyxIdApiClient(options, new HttpClient(handler));
         var ornnOptions = new OrnnOptions { NyxIdSlug = "ornn" };
         var skillClient = new OrnnSkillClient(ornnOptions, nyxClient);
@@ -159,7 +178,6 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
             new OrnnSkillPackageFormatValidator(ornnOptions, nyxClient),
             skillClient);
         return new OrnnRecommendedSkillRefCreator(
-            options,
             new StaticTokenSource("server-token"),
             publishingService,
             new NyxIdRecommendedSkillRefPersistenceService(nyxClient),
@@ -239,6 +257,8 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
 
         public bool FailUpdate { get; set; }
 
+        public bool ConflictOnPublish { get; set; }
+
         private string _recommendedSkillRefsJson = "[]";
 
         public List<CapturedRequest> Requests { get; } = [];
@@ -272,7 +292,10 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
             {
                 ("GET", "/api/v1/catalog-specs/api-github/openapi.json") => new CapturingResponse(OpenApiSpec),
                 ("POST", "/api/v1/proxy/s/ornn/api/v1/skill-format/validate") => new CapturingResponse("""{"data":{"valid":true,"violations":[]}}"""),
-                ("POST", "/api/v1/proxy/s/ornn/api/v1/skills") => new CapturingResponse("""{"data":{"guid":"33333333-3333-3333-3333-333333333333","version":"3.0","skillHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"""),
+                ("POST", "/api/v1/proxy/s/ornn/api/v1/skills") when ConflictOnPublish => new CapturingResponse("""{"error":{"code":"skill_conflict","message":"skill already exists"}}""", HttpStatusCode.Conflict),
+                ("POST", "/api/v1/proxy/s/ornn/api/v1/skills") => new CapturingResponse("""{"data":{"guid":"33333333-3333-3333-3333-333333333333","version":"1.0","skillHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"""),
+                ("GET", "/api/v1/proxy/s/ornn/api/v1/skill-search") => new CapturingResponse("""{"data":{"total":1,"items":[{"guid":"44444444-4444-4444-4444-444444444444","name":"api-github-connected-service","description":"GitHub service default skill","isPrivate":false}]}}"""),
+                ("GET", "/api/v1/proxy/s/ornn/api/v1/skills/44444444-4444-4444-4444-444444444444") => new CapturingResponse("""{"data":{"guid":"44444444-4444-4444-4444-444444444444","name":"api-github-connected-service","skillHash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}"""),
                 ("GET", "/api/v1/keys/us-personal") when FailRead => new CapturingResponse("""{"code":"permission_denied"}""", HttpStatusCode.Forbidden),
                 ("GET", "/api/v1/keys/us-personal") => new CapturingResponse(
                     """

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Credentials;
@@ -91,15 +92,20 @@ public sealed class ChannelRemoteSkillAccessTokenResolver : IRemoteSkillAccessTo
         AgentToolExecutionContext context,
         CancellationToken ct)
     {
-        var agentKey = await ChannelRegistrationAgentKeySecretResolver.ResolveAsync(
+        var resolution = await ChannelRegistrationAgentKeySecretResolver.ResolveDetailedAsync(
                 context,
                 _secretVault,
                 "channel-default-skill",
                 ct)
             .ConfigureAwait(false);
-        return agentKey is null
-            ? RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.Unavailable)
-            : RemoteSkillAccessTokenResolution.Resolved(agentKey);
+        if (resolution.AgentKey is not null)
+            return RemoteSkillAccessTokenResolution.Resolved(resolution.AgentKey);
+
+        _logger.LogWarning(
+            "Channel registration Agent Key remote-skill credential unavailable: registration={RegistrationId} reason={Reason}",
+            context.Channel.BotRegistrationId ?? string.Empty,
+            resolution.FailureReason);
+        return RemoteSkillAccessTokenResolution.Failed(RemoteSkillAccessTokenFailureKind.Unavailable);
     }
 
     private static bool IsChannelDefaultSkillInvocation(AgentToolExecutionContext? context, string skillName)
@@ -151,40 +157,83 @@ internal static class ChannelRegistrationAgentKeySecretResolver
         AgentToolExecutionContext context,
         ISecretVault? secretVault,
         string auditReason,
+        CancellationToken ct) =>
+        (await ResolveDetailedAsync(context, secretVault, auditReason, ct).ConfigureAwait(false)).AgentKey;
+
+    public static async Task<ChannelRegistrationAgentKeySecretResolution> ResolveDetailedAsync(
+        AgentToolExecutionContext context,
+        ISecretVault? secretVault,
+        string auditReason,
         CancellationToken ct)
     {
         var credential = context.Channel.WorkflowResultDeliveryCredential;
         var registrationId = Normalize(context.Channel.BotRegistrationId);
         var scopeId = Normalize(context.Channel.RegistrationScopeId);
         var subjectId = Normalize(credential?.SubjectId);
-        if (secretVault is null || credential is null || registrationId is null || scopeId is null ||
-            context.ExecutionOwner.Kind != AgentToolExecutionOwnerKind.ChannelRegistration ||
-            !string.Equals(context.ExecutionOwner.OwnerId, registrationId, StringComparison.Ordinal) ||
-            subjectId is null ||
-            credential.SecretReference is not { } reference ||
-            string.IsNullOrWhiteSpace(reference.Ref) ||
-            !string.Equals(reference.Purpose, CredentialSecretPurposes.ChannelNyxIdAgentKey, StringComparison.Ordinal) ||
-            !string.Equals(reference.OwnerScopeKey, scopeId, StringComparison.Ordinal))
-        {
-            return null;
-        }
+        var reference = credential?.SecretReference;
+        var failureReason = ValidateInputs(
+            secretVault,
+            credential,
+            registrationId,
+            scopeId,
+            subjectId,
+            reference,
+            context.ExecutionOwner);
+        if (failureReason is not null)
+            return ChannelRegistrationAgentKeySecretResolution.Failed(failureReason);
 
-        var resolved = await secretVault.ResolveAsync(
+        var resolved = await secretVault!.ResolveAsync(
             new ResolveSecretRequest(
-                reference.Ref,
+                reference!.Ref,
                 CredentialSecretPurposes.ChannelNyxIdAgentKey,
-                scopeId,
-                subjectId,
+                scopeId!,
+                subjectId!,
                 auditReason),
             ct).ConfigureAwait(false);
-        if (!resolved.Resolved || string.IsNullOrWhiteSpace(resolved.Secret) ||
-            resolved.Reference is not { } resolvedReference ||
-            !MatchesReference(reference, resolvedReference))
-        {
-            return null;
-        }
+        if (!resolved.Resolved)
+            return ChannelRegistrationAgentKeySecretResolution.Failed("vault_not_resolved");
+        if (string.IsNullOrWhiteSpace(resolved.Secret))
+            return ChannelRegistrationAgentKeySecretResolution.Failed("vault_secret_empty");
+        if (resolved.Reference is not { } resolvedReference)
+            return ChannelRegistrationAgentKeySecretResolution.Failed("vault_reference_missing");
+        if (!MatchesReference(reference!, resolvedReference))
+            return ChannelRegistrationAgentKeySecretResolution.Failed("vault_reference_mismatch");
 
-        return resolved.Secret.Trim();
+        return ChannelRegistrationAgentKeySecretResolution.Resolved(resolved.Secret.Trim());
+    }
+
+    private static string? ValidateInputs(
+        ISecretVault? secretVault,
+        ChannelWorkflowResultDeliveryCredential? credential,
+        string? registrationId,
+        string? scopeId,
+        string? subjectId,
+        SecretReference? reference,
+        AgentToolExecutionOwner owner)
+    {
+        if (secretVault is null)
+            return "secret_vault_missing";
+        if (credential is null)
+            return "workflow_delivery_credential_missing";
+        if (registrationId is null)
+            return "registration_id_missing";
+        if (scopeId is null)
+            return "registration_scope_missing";
+        if (owner.Kind != AgentToolExecutionOwnerKind.ChannelRegistration)
+            return "execution_owner_kind_mismatch";
+        if (!string.Equals(owner.OwnerId, registrationId, StringComparison.Ordinal))
+            return "execution_owner_id_mismatch";
+        if (subjectId is null)
+            return "agent_key_subject_missing";
+        if (reference is null)
+            return "secret_reference_missing";
+        if (string.IsNullOrWhiteSpace(reference.Ref))
+            return "secret_reference_ref_missing";
+        if (!string.Equals(reference.Purpose, CredentialSecretPurposes.ChannelNyxIdAgentKey, StringComparison.Ordinal))
+            return "secret_reference_purpose_mismatch";
+        if (!string.Equals(reference.OwnerScopeKey, scopeId, StringComparison.Ordinal))
+            return "secret_reference_owner_scope_mismatch";
+        return null;
     }
 
     private static bool MatchesReference(SecretReference expected, SecretReference actual) =>
@@ -201,4 +250,15 @@ internal static class ChannelRegistrationAgentKeySecretResolver
         var normalized = value?.Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
+}
+
+internal sealed record ChannelRegistrationAgentKeySecretResolution(
+    string? AgentKey,
+    string FailureReason)
+{
+    public static ChannelRegistrationAgentKeySecretResolution Resolved(string agentKey) =>
+        new(agentKey, string.Empty);
+
+    public static ChannelRegistrationAgentKeySecretResolution Failed(string reason) =>
+        new(null, reason);
 }

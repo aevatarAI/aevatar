@@ -120,7 +120,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleCommitBinding_ReplacesExistingBindingWhenReadModelMissedIt()
+    public async Task HandleCommitBinding_DiscardsDuplicateBindingWhenReadModelMissedIt()
     {
         var subject = SampleSubject();
 
@@ -130,6 +130,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
             BindingId = "bnd_first",
             OwnerScopeId = "owner-user-1",
         });
+        var afterFirstVersion = _agent.EventSourcing!.CurrentVersion;
 
         await _agent.HandleCommitBinding(new CommitBindingCommand
         {
@@ -138,11 +139,12 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
             OwnerScopeId = "owner-user-1",
         });
 
-        _agent.State.BindingId.Should().Be("bnd_second");
+        _agent.State.BindingId.Should().Be("bnd_first");
         _agent.State.OwnerScopeId.Should().Be("owner-user-1");
         _agent.State.RevokedAt.Should().BeNull();
         _agent.State.PendingRetirementBindingIds.Should().BeEmpty();
-        _retirementPort.RetiredBindingIds.Should().Equal("bnd_first");
+        _agent.EventSourcing!.CurrentVersion.Should().Be(afterFirstVersion);
+        _retirementPort.RetiredBindingIds.Should().BeEmpty();
     }
 
     [Fact]

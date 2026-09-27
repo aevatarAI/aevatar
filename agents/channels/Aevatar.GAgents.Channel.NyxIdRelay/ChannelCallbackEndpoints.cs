@@ -1199,16 +1199,19 @@ public static class ChannelCallbackEndpoints
                 selector.EndpointNames.ToArray()))
             .ToArray() ?? [];
 
-    private static object MapAgentKeyStatus(ChannelBotRegistrationEntry entry) => new
+    private static object MapAgentKeyStatus(ChannelBotRegistrationEntry entry)
     {
-        api_key_id = entry.ChannelAgentKey?.ApiKeyId ?? entry.NyxAgentApiKeyId ?? string.Empty,
-        ready = entry.ChannelAgentKey?.SecretReference is not null ||
-            entry.WorkflowResultDeliveryCredential is not null,
-        status = entry.ChannelAgentKey?.SecretReference is not null ||
-            entry.WorkflowResultDeliveryCredential is not null
-                ? "ready"
-                : "missing",
-    };
+        var ready = ChannelWorkflowResultDeliveryCapability.TryGetDeliveryCredential(
+            entry,
+            out var apiKeyId,
+            out _);
+        return new
+        {
+            api_key_id = ready ? apiKeyId : entry.ChannelAgentKey?.ApiKeyId ?? entry.NyxAgentApiKeyId ?? string.Empty,
+            ready,
+            status = ready ? "ready" : "missing",
+        };
+    }
 
     private static object MapCredentialSource(NyxIdUserServiceCredentialSource source) => new
     {

@@ -768,7 +768,42 @@ public sealed class NyxIdConnectedServiceOperationInvoker
         CancellationToken ct)
     {
         if (context.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.AgentKey)
-            return await _client.DiscoverAgentKeyAsync(executionToken, ct).ConfigureAwait(false);
+        {
+            try
+            {
+                var bindings = await _client.DiscoverAgentKeyAsync(executionToken, ct).ConfigureAwait(false);
+                if (NyxIdAgentKeyInventoryFallback.TrySupplementMissingRecommendedSkillRefs(
+                        _options,
+                        executionToken,
+                        _logger,
+                        bindings))
+                {
+                    _logger.LogWarning(
+                        "NyxID Agent Key connected-service discovery is missing recommended skill refs; using configured local fallback refs for operation invocation");
+                }
+
+                return bindings;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (NyxIdServiceInventoryContractException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (NyxIdAgentKeyInventoryFallback.TryReadBindings(
+                       _options,
+                       executionToken,
+                       _logger,
+                       out var fallbackBindings))
+            {
+                _logger.LogWarning(
+                    ex,
+                    "NyxID Agent Key connected-service discovery failed; using configured local inventory fallback for operation invocation");
+                return fallbackBindings;
+            }
+        }
 
         var discovered = await _client.DiscoverAsync(
                 inventoryToken,

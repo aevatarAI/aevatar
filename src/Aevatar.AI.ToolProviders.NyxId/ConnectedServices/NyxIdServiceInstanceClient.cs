@@ -209,7 +209,7 @@ public sealed class NyxIdServiceInstanceClient
         }
     }
 
-    private IReadOnlyList<NyxIdServiceInstanceBinding> ParseBindings(
+    internal static IReadOnlyList<NyxIdServiceInstanceBinding> ParseBindings(
         string? json,
         string token,
         NyxIdServiceAccessTokenSource tokenSource)
@@ -241,7 +241,7 @@ public sealed class NyxIdServiceInstanceClient
         }
     }
 
-    private NyxIdServiceInstanceBinding? ParseSingleBinding(
+    private static NyxIdServiceInstanceBinding? ParseSingleBinding(
         string? json,
         string token,
         NyxIdServiceAccessTokenSource tokenSource)
@@ -268,7 +268,7 @@ public sealed class NyxIdServiceInstanceClient
         }
     }
 
-    private NyxIdServiceInstanceBinding? ParseBinding(
+    private static NyxIdServiceInstanceBinding? ParseBinding(
         JsonElement item,
         string token,
         NyxIdServiceAccessTokenSource tokenSource)

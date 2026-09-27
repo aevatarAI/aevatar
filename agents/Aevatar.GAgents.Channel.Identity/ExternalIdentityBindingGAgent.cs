@@ -58,7 +58,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
     /// adopts the binding; an already-current binding is idempotent. If the
     /// readmodel missed an existing binding and the callback reaches this command
     /// instead of ReplaceBindingCommand, the actor still owns the authoritative
-    /// CAS boundary and replaces only when the owner scope is unchanged.
+    /// CAS boundary and discards the incoming duplicate without overwriting state.
     /// </summary>
     /// <remarks>
     /// Single-actor turn ordering plus the event store's optimistic concurrency
@@ -138,24 +138,14 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
                 return;
             }
 
-            var previousBindingId = State.BindingId;
-            await PersistDomainEventAsync(new ExternalIdentityBindingReplacedEvent
-            {
-                ExternalSubject = cmd.ExternalSubject.Clone(),
-                PreviousBindingId = previousBindingId,
-                BindingId = cmd.BindingId,
-                ReplacedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Reason = "commit_found_existing_binding",
-                OwnerScopeId = ownerScopeId,
-            });
-
-            Logger.LogInformation(
-                "CommitBinding replaced existing binding for {Platform}:{Tenant}:{User} after readmodel miss (previous={PreviousBindingId}, current={BindingId})",
+            Logger.LogWarning(
+                "CommitBinding discarded duplicate binding for {Platform}:{Tenant}:{User} (existing={ExistingBindingId}, incoming={IncomingBindingId})",
                 cmd.ExternalSubject.Platform,
                 cmd.ExternalSubject.Tenant,
                 cmd.ExternalSubject.ExternalUserId,
-                previousBindingId,
+                State.BindingId,
                 cmd.BindingId);
+            await RepublishCurrentBindingStateAsync();
             await RetirePendingBindingsAsync();
             return;
         }
