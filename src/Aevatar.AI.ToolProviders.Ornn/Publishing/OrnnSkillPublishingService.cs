@@ -50,7 +50,20 @@ public sealed class OrnnSkillPublishingService
 
         var publish = await _client.PublishSkillAsync(accessToken, package.ZipBytes, ct).ConfigureAwait(false);
         if (!publish.Succeeded)
-            return OrnnSkillPublishingResult.Failed("error", publish.Error ?? "Ornn publish failed.");
+        {
+            if (IsConflictPublishFailure(publish) &&
+                await TryResolveExistingPublishedSkillAsync(accessToken, request, ct).ConfigureAwait(false) is { } existing)
+            {
+                return OrnnSkillPublishingResult.Succeeded(
+                    existing.Guid,
+                    existing.Version ?? request.Version,
+                    existing.SkillHash,
+                    package.ZipBytes.Length,
+                    publish.RawResponse);
+            }
+
+            return OrnnSkillPublishingResult.Failed(publish.Failure!);
+        }
 
         var published = ExtractPublishedSkill(publish.RawResponse);
         return OrnnSkillPublishingResult.Succeeded(
@@ -60,6 +73,50 @@ public sealed class OrnnSkillPublishingService
             package.ZipBytes.Length,
             publish.RawResponse);
     }
+
+    private async Task<PublishedSkillSubject?> TryResolveExistingPublishedSkillAsync(
+        string accessToken,
+        OrnnSkillPublishRequest request,
+        CancellationToken ct)
+    {
+        var searchResult = await _client.SearchSkillsAsync(
+            accessToken,
+            request.Name,
+            scope: "mixed",
+            page: 1,
+            pageSize: 20,
+            ct: ct).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(searchResult.Error))
+            return null;
+
+        foreach (var candidate in searchResult.Items)
+        {
+            if (!string.Equals(candidate.Name, request.Name, StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(candidate.Guid))
+            {
+                continue;
+            }
+
+            var exact = await _client.GetExactSkillDetailAsync(
+                accessToken,
+                candidate.Guid,
+                request.Version,
+                ct).ConfigureAwait(false);
+            if (exact.Value is null || string.IsNullOrWhiteSpace(exact.Value.SkillHash))
+                continue;
+
+            return new PublishedSkillSubject(
+                candidate.Guid,
+                request.Version,
+                exact.Value.SkillHash);
+        }
+
+        return null;
+    }
+
+    private static bool IsConflictPublishFailure(OrnnSkillMutationResponse publish) =>
+        publish.Failure?.HttpStatus == 409 ||
+        publish.RawResponse.Contains("\"status\":409", StringComparison.Ordinal);
 
     public static PublishedSkillSubject ExtractPublishedSkill(string? rawResponse)
     {

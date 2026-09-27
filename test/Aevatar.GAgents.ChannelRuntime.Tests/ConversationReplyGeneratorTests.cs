@@ -1022,6 +1022,58 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task BuildStepPlanAsync_WithChannelRegistrationCredential_DoesNotDisableToolsForUnboundSender()
+    {
+        var useSkill = new StubTool("use_skill");
+        var bookingTool = new StubTool("nyxid_service_inventory");
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory { Capabilities = MultimodalCapabilities },
+            BuiltInPromptFloorProvider,
+            toolSources: [new StubToolSource(useSkill, bookingTool)]);
+        var catalog = new AgentTurnToolCatalog(
+            [useSkill.Name, bookingTool.Name],
+            new ProfileRoutingPromptLayer(
+                "registration-runtime-route",
+                new ProfileRoutingPromptProvenance("channel-registration"),
+                new PromptLayerBounds(1024, 256)),
+            selectedSkillPromptLayer: null,
+            selectedIntentId: "booking-capacity",
+            candidateIntentId: "booking-capacity",
+            exactTools: [useSkill, bookingTool]);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext("telegram", "8823472623", "scope-1", "msg-runtime", null),
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+        };
+        var metadata = new Dictionary<string, string>
+        {
+            [ChannelMetadataKeys.Platform] = "telegram",
+            [ChannelMetadataKeys.SenderId] = "8823472623",
+            [ChannelMetadataKeys.MessageId] = "msg-runtime",
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "msg-runtime",
+                ChannelId = ChannelId.From("telegram"),
+                Conversation = new ConversationReference { CanonicalKey = "telegram:dm:8823472623" },
+                Content = new MessageContent { Text = "check booking capacity" },
+            },
+            metadata,
+            Control(token: "registration-agent-key"),
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            ct: CancellationToken.None,
+            turnCatalog: catalog);
+
+        OfferedToolNames(plan).Should().BeEquivalentTo(useSkill.Name, bookingTool.Name);
+        plan.DisableTools.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task BuildStepPlanAsync_InNyxIdChatTurn_UsesPinnedSourceAndAllowsHumanSessionReads()
     {
         var registeredSource = new StubToolSource(

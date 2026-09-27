@@ -237,33 +237,39 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
-    public void ComposedPrompt_ShouldRouteSenderInventoryThroughPositiveServiceInspection()
+    public void ComposedPrompt_ShouldUseInventoryFirstForConnectedServiceInspection()
     {
         var prompt = ComposedAgentPrompt();
-        var skillCall = prompt.IndexOf(
-            "first call `use_skill(skill=\"nyxid-service-discovery\")`",
-            StringComparison.Ordinal);
         var inventoryCall = prompt.IndexOf(
-            "then call `nyxid_service_inventory`",
+            "call it first and treat its typed result as the authority for the current caller",
+            StringComparison.Ordinal);
+        var ensureCall = prompt.IndexOf(
+            "call it once with the exact `user_service_id` or `service_slug` from inventory",
+            StringComparison.Ordinal);
+        var refreshedInventory = prompt.IndexOf(
+            "then call `nyxid_service_inventory` again",
+            StringComparison.Ordinal);
+        var loadRecommendedSkill = prompt.IndexOf(
+            "you must call `nyxid_load_recommended_skill` before any final answer",
             StringComparison.Ordinal);
 
-        skillCall.Should().BeGreaterThanOrEqualTo(0);
-        inventoryCall.Should().BeGreaterThan(skillCall);
+        inventoryCall.Should().BeGreaterThanOrEqualTo(0);
+        ensureCall.Should().BeGreaterThan(inventoryCall);
+        refreshedInventory.Should().BeGreaterThan(ensureCall);
+        loadRecommendedSkill.Should().BeGreaterThan(refreshedInventory);
         prompt.Should().Contain("inventory read present in the final request's tool schemas");
         prompt.Should().Contain("When `nyxid_service_inventory` is present");
         prompt.Should().Contain("When `nyxid_service_inventory` is absent");
         prompt.Should().Contain("such as `nyxid_services`");
         prompt.Should().Contain("For any connected-service read or write");
-        prompt.Should().Contain("route through the catalog/service-inspection path before operation execution");
         prompt.Should().Contain("establishes current caller-specific service facts");
-        prompt.Should().Contain("may materialize missing service recommended skill refs");
         prompt.Should().Contain("execution tools only run supplied work and cannot establish that inventory");
-        prompt.Should().Contain("typed inventory result as the authority for the current caller");
+        prompt.Should().Contain("copying the exact `user_service_id`, `source`, `skill_id`, `literal_version`, and `manifest_digest`");
         prompt.Should().Contain("temporary read failure");
         prompt.Should().Contain("binding is explicitly missing or revoked");
+        prompt.Should().NotContain("first call `use_skill(skill=\"nyxid-service-discovery\")`");
         prompt.Should().NotContain("Do not call `code_execute`");
         prompt.Should().NotContain("skill=\"nyxid\"");
-        prompt.Should().NotContain("call `nyxid_service_inventory` directly");
         prompt.Should().NotContain("Do not load a skill");
     }
 
@@ -286,10 +292,10 @@ public class NyxIdChatSystemPromptTests
     {
         var prompt = ComposedAgentPrompt();
 
-        prompt.Should().Contain("use_skill(skill=\"nyxid-service-connect\")");
-        prompt.Should().Contain("use_skill(skill=\"nyxid-service-discovery\")");
-        prompt.Should().Contain("use_skill(skill=\"nyxid-service-maintenance\")");
-        prompt.Should().Contain("use_skill(skill=\"nyxid-service-call\")");
+        prompt.Should().Contain("For NyxID service-management work that is not covered by the exact inventory/ref/invocation tools");
+        prompt.Should().Contain("call `ornn_search_skills` with the concrete task");
+        prompt.Should().Contain("load the best current match instead of guessing a generic skill name");
+        prompt.Should().NotContain("use_skill(skill=\"nyxid-service-discovery\")");
         prompt.Should().NotContain("skill=\"nyxid\"");
     }
 

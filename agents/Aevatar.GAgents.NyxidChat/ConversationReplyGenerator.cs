@@ -2147,9 +2147,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         // sender-owned attempt fails, we retry once with this owner snapshot.
         var senderBindingId = toolContext?.SenderBinding.BindingId?.Trim();
         var defaultSkillBinding = toolContext?.SkillRecovery.FromChannelDefaultSkillBinding == true;
+        var hasChannelRegistrationCredential = effectiveToolContext?.CredentialSource ==
+                                               AgentToolCredentialSource.ChannelRegistration;
         var disableTools = IsChannelTurn(effective) &&
                             string.IsNullOrWhiteSpace(senderBindingId) &&
-                            !defaultSkillBinding;
+                            !defaultSkillBinding &&
+                            !hasChannelRegistrationCredential;
         if (defaultSkillBinding &&
             string.IsNullOrWhiteSpace(senderBindingId) &&
             effectiveToolContext is not null &&

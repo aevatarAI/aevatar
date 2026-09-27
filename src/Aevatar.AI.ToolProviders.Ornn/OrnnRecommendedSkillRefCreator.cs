@@ -8,7 +8,6 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 
 public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCreator
 {
-    private readonly NyxIdToolOptions _options;
     private readonly INyxIdClientCredentialsTokenSource _tokenSource;
     private readonly OrnnSkillPublishingService _publishingService;
     private readonly NyxIdRecommendedSkillRefPersistenceService _persistenceService;
@@ -18,14 +17,12 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
     private readonly Dictionary<string, IReadOnlyList<NyxIdRecommendedSkillRef>> _createdRefs = new(StringComparer.Ordinal);
 
     public OrnnRecommendedSkillRefCreator(
-        NyxIdToolOptions options,
         INyxIdClientCredentialsTokenSource tokenSource,
         OrnnSkillPublishingService publishingService,
         NyxIdRecommendedSkillRefPersistenceService persistenceService,
         NyxIdRecommendedSkillGenerator skillGenerator,
         ILogger<OrnnRecommendedSkillRefCreator>? logger = null)
     {
-        _options = options ?? throw new ArgumentNullException(nameof(options));
         _tokenSource = tokenSource ?? throw new ArgumentNullException(nameof(tokenSource));
         _publishingService = publishingService ?? throw new ArgumentNullException(nameof(publishingService));
         _persistenceService = persistenceService ?? throw new ArgumentNullException(nameof(persistenceService));
@@ -38,9 +35,6 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(instance);
-        var template = ResolveTemplate(instance);
-        if (template is null)
-            return [];
 
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -50,7 +44,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                 return [];
 
             var generatedSkill = await _skillGenerator
-                .GenerateAsync(token, instance, template, ct)
+                .GenerateAsync(token, instance, ct)
                 .ConfigureAwait(false);
             if (generatedSkill is null)
             {
@@ -91,11 +85,8 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                     Revision = generatedSkill.Revision,
                 },
             };
-            var persistedRefs = await PersistCreatedRefsAsync(token, instance, refs, ct).ConfigureAwait(false);
-            if (persistedRefs.Count == 0)
-                return [];
-
             _createdRefs[cacheKey] = refs;
+            var persistedRefs = await PersistCreatedRefsAsync(token, instance, refs, ct).ConfigureAwait(false);
             return persistedRefs;
         }
         finally
@@ -126,17 +117,6 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         return [];
     }
 
-    private NyxIdRecommendedSkillCreationTemplate? ResolveTemplate(NyxIdServiceInstance instance) =>
-        _options.RecommendedSkillCreationTemplates.FirstOrDefault(template => Matches(template, instance));
-
-    private static bool Matches(
-        NyxIdRecommendedSkillCreationTemplate template,
-        NyxIdServiceInstance instance) =>
-        (!string.IsNullOrWhiteSpace(template.CatalogServiceSlug) &&
-         string.Equals(template.CatalogServiceSlug.Trim(), instance.CatalogServiceSlug, StringComparison.Ordinal)) ||
-        (!string.IsNullOrWhiteSpace(template.ServiceSlug) &&
-         string.Equals(template.ServiceSlug.Trim(), instance.DisplaySlug, StringComparison.Ordinal));
-
     private static OrnnSkillPublishRequest BuildPublishRequest(NyxIdGeneratedRecommendedSkill skill) =>
         new()
         {
@@ -145,7 +125,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
             Version = skill.Version,
             Category = skill.Category,
             InstructionsMarkdown = skill.InstructionsMarkdown,
-            Visibility = "private",
+            Visibility = "public",
             Tags = skill.Tags,
             ToolList = skill.ToolList,
         };

@@ -48,12 +48,10 @@ public sealed class NyxIdRecommendedSkillGenerator
     public async Task<NyxIdGeneratedRecommendedSkill?> GenerateAsync(
         string serverToken,
         NyxIdServiceInstance instance,
-        NyxIdRecommendedSkillCreationTemplate template,
         CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(serverToken);
         ArgumentNullException.ThrowIfNull(instance);
-        ArgumentNullException.ThrowIfNull(template);
 
         var services = await ReadOperationContractsAsync(serverToken, instance, ct).ConfigureAwait(false);
         var selectedServices = services
@@ -66,22 +64,20 @@ public sealed class NyxIdRecommendedSkillGenerator
             return null;
 
         var serviceLabel = FirstNonEmpty(instance.Label, selectedServices[0].ServiceName, instance.DisplaySlug, instance.CatalogServiceSlug);
-        var skillName = FirstNonEmpty(template.SkillName, BuildSkillName(instance));
-        var description = FirstNonEmpty(
-            template.Description,
-            $"Use the user's {serviceLabel} connected service through NyxID fixed operation invocation.");
-        var version = FirstNonEmpty(template.Version, "1.0");
-        var category = FirstNonEmpty(template.Category, "tool-based");
+        var skillName = BuildSkillName(instance);
+        var description = $"Use the user's {serviceLabel} connected service through NyxID fixed operation invocation.";
+        const string version = "1.0";
+        const string category = "tool-based";
         var instructions = BuildInstructions(instance, serviceLabel, selectedServices);
-        var revision = FirstNonEmpty(
-            template.Revision,
-            BuildRevision(selectedServices));
-        var tags = template.Tags
-            .Select(static tag => tag.Trim())
-            .Where(static tag => tag.Length > 0)
-            .Append(instance.CatalogServiceSlug)
-            .Append(instance.DisplaySlug)
+        var revision = BuildRevision(selectedServices);
+        var tags = new[]
+            {
+                instance.CatalogServiceSlug,
+                instance.DisplaySlug,
+                selectedServices[0].ServiceSlug,
+            }
             .Where(static tag => !string.IsNullOrWhiteSpace(tag))
+            .Select(static tag => tag.Trim())
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
@@ -93,8 +89,8 @@ public sealed class NyxIdRecommendedSkillGenerator
             instructions,
             tags,
             [FixedInvokeToolName],
-            FirstNonEmpty(template.DisplayName, serviceLabel),
-            FirstNonEmpty(template.RecommendationName, skillName),
+            serviceLabel,
+            skillName,
             revision);
     }
 
@@ -333,7 +329,7 @@ public sealed class NyxIdRecommendedSkillGenerator
 
     private static string BuildSkillName(NyxIdServiceInstance instance)
     {
-        var source = FirstNonEmpty(instance.DisplaySlug, instance.CatalogServiceSlug, instance.Label, "connected-service");
+        var source = FirstNonEmpty(instance.CatalogServiceSlug, instance.DisplaySlug, instance.Label, "connected-service");
         var builder = new StringBuilder();
         foreach (var character in source.Trim().ToLowerInvariant())
         {
@@ -347,8 +343,8 @@ public sealed class NyxIdRecommendedSkillGenerator
         }
         var normalized = builder.ToString().Trim('-');
         return string.IsNullOrWhiteSpace(normalized)
-            ? "connected-service-recommended"
-            : normalized + "-recommended";
+            ? "connected-service"
+            : normalized + "-connected-service";
     }
 
     private static string BuildRevision(IReadOnlyList<NyxIdMcpService> services) =>

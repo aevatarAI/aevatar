@@ -118,6 +118,33 @@ public sealed class ChannelRemoteSkillAccessTokenResolverTests
     }
 
     [Fact]
+    public async Task ResolveDetailedAsync_WhenChannelCredentialIsMissing_ReturnsSpecificFailureReason()
+    {
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                "legacy-channel-platform",
+                "ou-channel-alpha",
+                "scope-channel-alpha",
+                "message-alpha",
+                null,
+                null,
+                null,
+                "reg-channel-alpha"),
+            ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration("reg-channel-alpha"),
+        };
+
+        var resolution = await ChannelRegistrationAgentKeySecretResolver.ResolveDetailedAsync(
+            context,
+            new InMemorySecretVault(),
+            "test",
+            CancellationToken.None);
+
+        resolution.AgentKey.Should().BeNull();
+        resolution.FailureReason.Should().Be("workflow_delivery_credential_missing");
+    }
+
+    [Fact]
     public async Task ResolveAsync_ForBoundDefaultSkillBinding_PrefersChannelRegistrationAgentKeyOverSenderToken()
     {
         var secretVault = new InMemorySecretVault();

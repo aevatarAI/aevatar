@@ -71,6 +71,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private readonly IAgentToolReceiptRenderer _toolReceiptRenderer;
     private readonly IInteractiveReplyDispatcher? _interactiveReplyDispatcher;
     private AgentRunAuthorizedToolStep? _authorizedToolStep;
+    private AgentTurnToolCatalog? _turnCatalog;
     private string? _continuedToolApprovalRequestId;
 
     public AgentRunGAgent(
@@ -511,10 +512,12 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     {
         // Refactor (iter99/cluster-596-phase-e): Old pattern: ChatRuntime owned round/tool loop state in one executor call.
         // New principle: AgentRunGAgent persists the per-step waterline and advances through typed self-messages.
-        return await _generationExecutor.BuildInitialStepStateAsync(
+        var initialStep = await _generationExecutor.BuildInitialStepAsync(
                 new AgentRunReplyGenerationExecutionRequest(runId, Id, attempt, request.Clone()),
                 CancellationToken.None)
             .ConfigureAwait(false);
+        _turnCatalog = initialStep.TurnCatalog;
+        return initialStep.StepState;
     }
 
     private async Task PersistStepStateAsync(AgentRunReplyStepState stepState)
@@ -584,7 +587,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState.Attempt,
             stepState.NextStepIndex,
             request.Clone(),
-            stepState.Clone());
+            stepState.Clone(),
+            TurnCatalog: _turnCatalog);
         _authorizedToolStep = null;
         try
         {
@@ -634,7 +638,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 stepState.Attempt,
                 stepState.NextStepIndex,
                 request.Clone(),
-                stepState.Clone())) == true;
+                stepState.Clone(),
+                TurnCatalog: _turnCatalog)) == true;
         var allowDurableAuthorization = authorizedToolStep is null && durableAuthorizationAvailable;
         _logger.LogWarning(
             "Agent run tool step executor dispatching. runId={RunId} correlation={CorrelationId} step={StepIndex} pendingToolCallCount={PendingToolCallCount} pendingAuthorizationCount={PendingAuthorizationCount} pendingAuthorizationConsumed={PendingAuthorizationConsumed} transientAuthorizationPresent={TransientAuthorizationPresent} transientAuthorizationMatched={TransientAuthorizationMatched} durableAuthorizationAvailable={DurableAuthorizationAvailable} durableAuthorizationAllowed={DurableAuthorizationAllowed}",
@@ -661,6 +666,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState.NextStepIndex,
             request.Clone(),
             stepState.Clone(),
+            TurnCatalog: _turnCatalog,
             AllowDurableToolAuthorization: allowDurableAuthorization);
 
         try
@@ -1311,6 +1317,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             pending.StepIndex,
             continuationRequest.Clone(),
             stepState.Clone(),
+            TurnCatalog: _turnCatalog,
             AllowDurableToolAuthorization: true);
         try
         {
@@ -2229,6 +2236,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             DroppedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         };
         await PersistDomainEventAsync(dropped);
+        _turnCatalog = null;
 
         if (CanNotifyDrop(request))
         {
@@ -2277,9 +2285,10 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         evt.AppendedHistory.AddRange((appendedHistory ?? []).Select(entry => entry.Clone()));
         evt.ToolReceipts.AddRange((toolReceipts ?? []).Select(receipt => receipt.Clone()));
         await PersistDomainEventAsync(evt);
+        _turnCatalog = null;
     }
 
-    private Task PersistReplyProducedWithCardCompletionAsync(
+    private async Task PersistReplyProducedWithCardCompletionAsync(
         NeedsLlmReplyEvent request,
         string runId,
         string replyText,
@@ -2322,7 +2331,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             request.Activity,
             cardId: State.LarkCardDelivery?.CardId);
 
-        return PersistDomainEventsAsync(
+        await PersistDomainEventsAsync(
         [
             produced,
             deliveryProduced,
@@ -2331,6 +2340,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 Completion = completion.Clone(),
             },
         ]);
+        _turnCatalog = null;
     }
 
     private async Task PersistReplyDispatchedAsync(NeedsLlmReplyEvent request, string runId)
@@ -2382,6 +2392,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             ErrorSummary = errorSummary,
             FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         });
+        _turnCatalog = null;
 
         await ScheduleTerminalCleanupAsync(runId);
     }

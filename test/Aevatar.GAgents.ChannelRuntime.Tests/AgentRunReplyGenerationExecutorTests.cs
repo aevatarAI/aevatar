@@ -479,25 +479,16 @@ public sealed class AgentRunReplyGenerationExecutorTests
             : AgentToolNyxIdCredentialKind.AgentKey);
         persistedToolContext.Credentials.NyxIdCredentialAuthority.Should()
             .Be(AgentToolNyxIdCredentialAuthority.ToolExecutionContext);
-        persistedToolContext.CredentialSource.Should().Be(senderBound
-            ? AgentToolCredentialSource.BearerToken
-            : AgentToolCredentialSource.ChannelRegistration);
-        if (senderBound)
-        {
-            persistedToolContext.DurableNyxIdCredential.Should().BeNull();
-        }
-        else
-        {
-            persistedToolContext.DurableNyxIdCredential.Should().NotBeNull();
-            persistedToolContext.DurableNyxIdCredential!.Ref.Should().Be(stored.Reference.Ref);
-            persistedToolContext.DurableNyxIdCredential.Purpose.Should().Be(
-                CredentialSecretPurposes.ChannelNyxIdAgentKey);
-            persistedToolContext.DurableNyxIdCredential.OwnerScopeKey.Should().Be("scope-channel-alpha");
-            persistedToolContext.DurableNyxIdCredential.SubjectId.Should().Be("agent-key-channel-alpha");
-            persistedToolContext.DurableNyxIdCredential.SourceKind.Should()
-                .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
-            persistedToolContext.DurableNyxIdCredential.SecretReference.Should().Be(stored.Reference);
-        }
+        persistedToolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        persistedToolContext.DurableNyxIdCredential.Should().NotBeNull();
+        persistedToolContext.DurableNyxIdCredential!.Ref.Should().Be(stored.Reference.Ref);
+        persistedToolContext.DurableNyxIdCredential.Purpose.Should().Be(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey);
+        persistedToolContext.DurableNyxIdCredential.OwnerScopeKey.Should().Be("scope-channel-alpha");
+        persistedToolContext.DurableNyxIdCredential.SubjectId.Should().Be("agent-key-channel-alpha");
+        persistedToolContext.DurableNyxIdCredential.SourceKind.Should()
+            .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
+        persistedToolContext.DurableNyxIdCredential.SecretReference.Should().Be(stored.Reference);
 
         handler.Requests.Clear();
         var persistedState = AgentRunReplyStepCredentials.StripRuntimeCredentials(state);
@@ -659,11 +650,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
         const string suffix = "\",\"type\":\"object\"}";
         var schemaOverhead = Encoding.UTF8.GetByteCount(prefix + suffix);
         var tools = Enumerable.Range(0, toolCount)
-            .Select(index => new ConnectedOperationTool($"operation_{index}", "api-calendar", $"endpoint_{index}")
-            {
-                ParametersSchema = prefix + new string('x',
-                    schemaBytes / toolCount + (index < schemaBytes % toolCount ? 1 : 0) - schemaOverhead) + suffix,
-            })
+            .Select(index => new SchemaSizedRouteTool(
+                $"operation_{index}",
+                prefix + new string('x',
+                    schemaBytes / toolCount + (index < schemaBytes % toolCount ? 1 : 0) - schemaOverhead) + suffix))
             .ToArray();
         var registry = new RecordingToolSetRegistry();
         registry.Add("channel.reply.default", new StaticToolSource(tools));
@@ -3726,6 +3716,16 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ExecuteCount++;
             return Task.FromResult("{}");
         }
+    }
+
+    private sealed class SchemaSizedRouteTool(string name, string parametersSchema) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => parametersSchema;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     private sealed class ConnectedOperationTool : IAgentTool, IAgentToolOperationAdmissionOwner

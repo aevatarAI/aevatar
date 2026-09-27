@@ -50,30 +50,50 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
         if (refs.Count == 0)
             return NyxIdRecommendedSkillRefPersistenceResult.EmptyInput();
 
-        var currentResponse = await _client.GetServiceAsync(
-            serverToken,
-            instance.UserServiceId,
-            ct).ConfigureAwait(false);
-        var readFailure = ClassifyFailure(
-            currentResponse,
-            NyxIdRecommendedSkillRefPersistenceStatus.ReadDenied,
-            NyxIdRecommendedSkillRefPersistenceStatus.ReadUnavailable);
-        if (readFailure is not null)
-            return readFailure;
+        IReadOnlyList<NyxIdRecommendedSkillRef> currentRefs = instance.RecommendedSkillRefs
+            .Select(static skillRef => skillRef.Clone())
+            .ToArray();
+        if (currentRefs.Count == 0)
+        {
+            var currentResponse = await _client.GetServiceAsync(
+                serverToken,
+                instance.UserServiceId,
+                ct).ConfigureAwait(false);
+            var readFailure = ClassifyFailure(
+                currentResponse,
+                NyxIdRecommendedSkillRefPersistenceStatus.ReadDenied,
+                NyxIdRecommendedSkillRefPersistenceStatus.ReadUnavailable);
+            if (readFailure is not null)
+                return readFailure;
 
-        var currentRefs = ParseRecommendedSkillRefs(currentResponse);
+            currentRefs = ParseRecommendedSkillRefs(currentResponse);
+        }
+
         var mergedRefs = MergeRefs(currentRefs, refs);
         if (mergedRefs.Count == currentRefs.Count)
             return NyxIdRecommendedSkillRefPersistenceResult.Succeeded(currentRefs);
 
+        return await WriteRecommendedSkillRefsAsync(
+            serverToken,
+            instance.UserServiceId,
+            mergedRefs,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<NyxIdRecommendedSkillRefPersistenceResult> WriteRecommendedSkillRefsAsync(
+        string serverToken,
+        string userServiceId,
+        IReadOnlyList<NyxIdRecommendedSkillRef> refs,
+        CancellationToken ct)
+    {
         var body = JsonSerializer.Serialize(new
         {
-            recommended_skill_refs = mergedRefs.Select(ToJsonContract).ToArray(),
+            recommended_skill_refs = refs.Select(ToJsonContract).ToArray(),
         });
 
         var updateResponse = await _client.UpdateServiceAsync(
             serverToken,
-            instance.UserServiceId,
+            userServiceId,
             body,
             ct).ConfigureAwait(false);
         var writeFailure = ClassifyFailure(
@@ -83,7 +103,7 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
         if (writeFailure is not null)
             return writeFailure;
 
-        return NyxIdRecommendedSkillRefPersistenceResult.Succeeded(mergedRefs);
+        return NyxIdRecommendedSkillRefPersistenceResult.Succeeded(refs);
     }
 
     private static IReadOnlyList<NyxIdRecommendedSkillRef> ParseRecommendedSkillRefs(string json)

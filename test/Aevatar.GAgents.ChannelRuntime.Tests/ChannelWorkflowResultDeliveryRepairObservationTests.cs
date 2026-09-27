@@ -50,15 +50,27 @@ public sealed class ChannelWorkflowResultDeliveryRepairObservationTests
     {
         var newRegistration = NewRegistration(
             Repair(ChannelWorkflowResultDeliveryRepairStatus.Failed));
-        var invalidNewRegistration = NewRegistration();
-        invalidNewRegistration.ChannelAgentKey = null;
+        var missingNewCredential = NewRegistration();
+        missingNewCredential.ChannelAgentKey = null;
+        var wrongOwner = NewRegistration();
+        wrongOwner.ChannelAgentKey.SecretReference.OwnerScopeKey = "scope-beta";
+        var missingApiKeyId = NewRegistration();
+        missingApiKeyId.ChannelAgentKey.ApiKeyId = string.Empty;
 
         ChannelWorkflowResultDeliveryCapability.Resolve(newRegistration)
             .Should().Be(ChannelWorkflowResultDeliveryCapabilityStatus.Enabled);
-        ChannelWorkflowResultDeliveryCapability.IsEnabled(invalidNewRegistration)
-            .Should().BeFalse();
-        ChannelWorkflowResultDeliveryCapability.Resolve(invalidNewRegistration)
-            .Should().Be(ChannelWorkflowResultDeliveryCapabilityStatus.RepairRequired);
+        foreach (var invalidNewRegistration in new[] { missingNewCredential, wrongOwner, missingApiKeyId })
+        {
+            ChannelWorkflowResultDeliveryCapability.IsEnabled(invalidNewRegistration)
+                .Should().BeFalse();
+            ChannelWorkflowResultDeliveryCapability.Resolve(invalidNewRegistration)
+                .Should().Be(ChannelWorkflowResultDeliveryCapabilityStatus.RepairRequired);
+            ChannelWorkflowResultDeliveryCapability.TryGetDeliveryCredential(
+                    invalidNewRegistration,
+                    out _,
+                    out _)
+                .Should().BeFalse();
+        }
     }
 
     [Fact]

@@ -1563,6 +1563,48 @@ public sealed partial class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleStartAsync_WhenInitialStepReturnsTurnCatalog_PassesSameCatalogToLlmStep()
+    {
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("actor-1");
+        var actorRuntime = new DispatchingActorRuntime(("actor-1", actor));
+        var tool = new AgentRunNoopTool();
+        var catalog = new AgentTurnToolCatalog(
+            [tool.Name],
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            exactTools: [tool]);
+        var generationExecutor = new PausedReplyGenerationExecutor
+        {
+            InitialTurnCatalog = catalog,
+        };
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            generationExecutor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                InteractiveRepliesEnabled = true,
+                StreamingRepliesEnabled = false,
+            });
+
+        await runtime.HandleStartAsync(new NeedsLlmReplyEvent
+        {
+            CorrelationId = "corr-turn-catalog",
+            RunId = "run-turn-catalog",
+            TargetActorId = "actor-1",
+            RegistrationId = "reg-1",
+            Activity = BuildRelayActivity(),
+            ReplyToken = "relay-token-turn-catalog",
+        });
+
+        generationExecutor.Starts.Should().ContainSingle();
+        generationExecutor.LlmStepExecutions.Should().ContainSingle();
+        generationExecutor.LlmStepExecutions.Single().TurnCatalog.Should().BeSameAs(catalog);
+    }
+
+    [Fact]
     public async Task HandleStartAsync_WhenGenerationRequested_DoesNotStartSecondExecutor()
     {
         var actor = Substitute.For<IActor>();
@@ -4851,6 +4893,16 @@ public sealed partial class AgentRunGAgentTests
         public List<AgentRunReplyStepExecutionRequest> LlmStepExecutions { get; } = [];
 
         public List<AgentRunReplyStepExecutionRequest> ToolStepExecutions { get; } = [];
+
+        public AgentTurnToolCatalog? InitialTurnCatalog { get; init; }
+
+        public async Task<AgentRunReplyInitialStep> BuildInitialStepAsync(
+            AgentRunReplyGenerationExecutionRequest request,
+            CancellationToken ct)
+        {
+            var stepState = await BuildInitialStepStateAsync(request, ct).ConfigureAwait(false);
+            return new AgentRunReplyInitialStep(stepState, InitialTurnCatalog ?? request.TurnCatalog);
+        }
 
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,

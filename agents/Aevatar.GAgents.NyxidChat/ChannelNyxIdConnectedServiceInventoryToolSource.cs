@@ -800,16 +800,53 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         }
     }
 
-    private static Task<NyxIdServiceInventoryResult> ReadInventoryResultAsync(
+    private async Task<NyxIdServiceInventoryResult> ReadInventoryResultAsync(
         NyxIdConnectedServiceInventoryReader reader,
         string token,
         InventoryReadAuthority inventoryReadAuthority,
-        CancellationToken ct) =>
-        inventoryReadAuthority switch
+        CancellationToken ct)
+    {
+        try
         {
-            InventoryReadAuthority.AgentKey => reader.ReadAgentKeyAsync(token, ct),
-            _ => reader.ReadAsync(token, organizationToken: null, ct),
-        };
+            var inventory = inventoryReadAuthority switch
+            {
+                InventoryReadAuthority.AgentKey => await reader.ReadAgentKeyAsync(token, ct).ConfigureAwait(false),
+                _ => await reader.ReadAsync(token, organizationToken: null, ct).ConfigureAwait(false),
+            };
+            if (inventoryReadAuthority == InventoryReadAuthority.AgentKey &&
+                NyxIdAgentKeyInventoryFallback.TrySupplementMissingRecommendedSkillRefs(
+                    _options,
+                    token,
+                    _logger,
+                    inventory))
+            {
+                _logger.LogWarning(
+                    "NyxID Agent Key connected-service inventory is missing recommended skill refs; using configured local fallback refs");
+            }
+
+            return inventory;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (NyxIdServiceInventoryContractException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (inventoryReadAuthority == InventoryReadAuthority.AgentKey &&
+                                   NyxIdAgentKeyInventoryFallback.TryReadInventory(
+                                       _options,
+                                       token,
+                                       _logger,
+                                       out var fallbackInventory))
+        {
+            _logger.LogWarning(
+                ex,
+                "NyxID Agent Key connected-service inventory read failed; using configured local inventory fallback");
+            return fallbackInventory;
+        }
+    }
 
     private async Task<string> ReadInventoryAsync(
         NyxIdConnectedServiceInventoryReader reader,
@@ -821,6 +858,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         {
             var result = await ReadInventoryResultAsync(reader, token, inventoryReadAuthority, ct)
                 .ConfigureAwait(false);
+            result = await EnsureInventoryRecommendedSkillRefsAsync(result, ct).ConfigureAwait(false);
             return ResultFormatter.Format(result);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -838,6 +876,75 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             return InventoryFailure("inventory_query_unavailable");
         }
     }
+
+    private async Task<NyxIdServiceInventoryResult> EnsureInventoryRecommendedSkillRefsAsync(
+        NyxIdServiceInventoryResult inventory,
+        CancellationToken ct)
+    {
+        if (_recommendedSkillRefCreator is null || inventory.Instances.Count == 0)
+            return inventory;
+
+        var updated = false;
+        foreach (var service in inventory.Instances)
+        {
+            if (service.RecommendedSkillRefs.Count > 0)
+                continue;
+
+            IReadOnlyList<NyxIdRecommendedSkillRef> refs;
+            try
+            {
+                refs = await _recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "NyxID recommended skill ref auto-provision failed during inventory read. userServiceId={UserServiceId} serviceSlug={ServiceSlug}",
+                    service.UserServiceId,
+                    service.DisplaySlug);
+                continue;
+            }
+
+            if (refs.Count == 0)
+                continue;
+
+            service.RecommendedSkillRefs.Add(refs.Select(static skillRef => skillRef.Clone()));
+            updated = true;
+        }
+
+        if (!updated)
+            return inventory;
+
+        inventory.RecommendedSkillCatalog.Clear();
+        inventory.RecommendedSkillCatalog.Add(inventory.Instances.SelectMany(BuildRecommendedSkillCatalogEntries));
+        return inventory;
+    }
+
+    private static IEnumerable<NyxIdRecommendedSkillCatalogEntry> BuildRecommendedSkillCatalogEntries(
+        NyxIdServiceInstance service)
+    {
+        foreach (var skillRef in service.RecommendedSkillRefs)
+        {
+            var title = FirstNonEmpty(skillRef.DisplayName, skillRef.RecommendationName, skillRef.SkillId);
+            yield return new NyxIdRecommendedSkillCatalogEntry
+            {
+                UserServiceId = service.UserServiceId,
+                ServiceSlug = service.DisplaySlug,
+                ServiceLabel = FirstNonEmpty(service.Label, service.DisplaySlug, service.CatalogServiceSlug),
+                SkillRef = skillRef.Clone(),
+                Title = title,
+                TaskSummary = $"Load this recommended skill for {FirstNonEmpty(service.Label, service.DisplaySlug, service.CatalogServiceSlug)} connected-service tasks related to {title}.",
+            };
+        }
+    }
+
+    private static string FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
 
     private static string CreateInventoryReadCallId(string? outerCallId) =>
         $"{Normalize(outerCallId) ?? "missing"}:inventory-read";

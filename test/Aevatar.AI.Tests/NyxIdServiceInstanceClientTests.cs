@@ -16,7 +16,7 @@ public sealed class NyxIdServiceInstanceClientTests
         """;
 
     [Fact]
-    public void AddNyxIdApiAccess_Configuration_BindsClientCredentialsAndSkillCreationTemplates()
+    public void AddNyxIdApiAccess_Configuration_BindsClientCredentials()
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -25,11 +25,6 @@ public sealed class NyxIdServiceInstanceClientTests
                 ["Aevatar:NyxId:ClientId"] = "nyx-client",
                 ["Aevatar:NyxId:ClientSecret"] = "nyx-secret",
                 ["Aevatar:NyxId:ClientCredentialsScope"] = "ornn.publish",
-                ["Aevatar:NyxId:RecommendedSkillCreationTemplates:0:CatalogServiceSlug"] = "api-github",
-                ["Aevatar:NyxId:RecommendedSkillCreationTemplates:0:SkillName"] = "github-service-default",
-                ["Aevatar:NyxId:RecommendedSkillCreationTemplates:0:Description"] = "GitHub service default skill",
-                ["Aevatar:NyxId:RecommendedSkillCreationTemplates:0:InstructionsMarkdown"] = "Use exact GitHub service tools.",
-                ["Aevatar:NyxId:RecommendedSkillCreationTemplates:0:ToolList:0"] = "nyxop_list_repositories",
             })
             .Build();
         var services = new ServiceCollection();
@@ -41,9 +36,6 @@ public sealed class NyxIdServiceInstanceClientTests
         options.ClientId.Should().Be("nyx-client");
         options.ClientSecret.Should().Be("nyx-secret");
         options.ClientCredentialsScope.Should().Be("ornn.publish");
-        var template = options.RecommendedSkillCreationTemplates.Should().ContainSingle().Subject;
-        template.SkillName.Should().Be("github-service-default");
-        template.ToolList.Should().ContainSingle().Which.Should().Be("nyxop_list_repositories");
     }
 
     [Fact]
