@@ -43,6 +43,19 @@ public sealed class OrnnPublishSkillToolTests
             "references",
             "assets");
         properties.Should().NotContain(["license", "compatibility", "metadata", "skill_md", "runtime"]);
+
+        var referencePathDescription = root
+            .GetProperty("properties")
+            .GetProperty("references")
+            .GetProperty("items")
+            .GetProperty("properties")
+            .GetProperty("path")
+            .GetProperty("description")
+            .GetString();
+        referencePathDescription.Should().Contain("relative to the package references/ directory");
+        referencePathDescription.Should().Contain("Correct examples: guide.md, docs/usage.md");
+        referencePathDescription.Should().Contain(
+            "Incorrect examples: references/guide.md, references/docs/usage.md");
     }
 
     [Theory]

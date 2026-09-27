@@ -68,6 +68,19 @@ public sealed class OrnnUpdateSkillToolTests
             "raw_file_map",
             "skip_validation"
         ]);
+
+        var referencePathDescription = root
+            .GetProperty("properties")
+            .GetProperty("references")
+            .GetProperty("items")
+            .GetProperty("properties")
+            .GetProperty("path")
+            .GetProperty("description")
+            .GetString();
+        referencePathDescription.Should().Contain("relative to the package references/ directory");
+        referencePathDescription.Should().Contain("Correct examples: guide.md, docs/usage.md");
+        referencePathDescription.Should().Contain(
+            "Incorrect examples: references/guide.md, references/docs/usage.md");
     }
 
     [Fact]

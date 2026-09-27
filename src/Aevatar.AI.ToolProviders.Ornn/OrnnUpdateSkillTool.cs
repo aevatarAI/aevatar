@@ -155,7 +155,10 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "path": { "type": "string" },
+                  "path": {
+                    "type": "string",
+                    "description": "Path relative to the package references/ directory; the tool adds the references/ root automatically. Correct examples: guide.md, docs/usage.md. Incorrect examples: references/guide.md, references/docs/usage.md."
+                  },
                   "content": { "type": "string" }
                 },
                 "required": ["path", "content"]
