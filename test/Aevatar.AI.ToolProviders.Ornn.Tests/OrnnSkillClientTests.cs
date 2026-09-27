@@ -1,6 +1,8 @@
 using System.Net;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
 
@@ -596,6 +598,75 @@ public sealed class OrnnSkillClientTests
         request.ContentType.Should().Be("application/zip");
         request.RequestUri!.AbsoluteUri.Should().Be(
             "https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/skill%20id%2F1");
+    }
+
+    [Fact]
+    public async Task UpdateSkillAsync_WhenForbidden_ShouldReturnConfirmedTypedFailure()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "status": 403, "code": "permission_denied", "detail": "Missing ornn:skill:update permission" }""",
+            HttpStatusCode.Forbidden);
+        var client = CreateClient(handler);
+
+        var result = await client.UpdateSkillAsync("access-token", "skill-1", [1]);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().NotBeNull();
+        result.Failure!.Kind.Should().Be(OrnnSkillMutationFailureKind.Rejected);
+        result.Failure.Code.Should().Be("ornn_update_forbidden");
+        result.Failure.Message.Should().Contain("Missing ornn:skill:update permission");
+        result.Failure.HttpStatus.Should().Be(403);
+        result.Failure.Outcome.Should().Be(AgentToolFailureOutcome.CalleeConfirmed);
+    }
+
+    [Fact]
+    public async Task UpdateSkillAsync_WhenServerFails_ShouldReturnUncertainTypedFailure()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "message": "temporary upstream failure" }""",
+            HttpStatusCode.InternalServerError);
+        var client = CreateClient(handler);
+
+        var result = await client.UpdateSkillAsync("access-token", "skill-1", [1]);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().NotBeNull();
+        result.Failure!.Kind.Should().Be(OrnnSkillMutationFailureKind.Rejected);
+        result.Failure.Code.Should().Be("ornn_update_http_error");
+        result.Failure.HttpStatus.Should().Be(500);
+        result.Failure.Outcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task UpdateSkillAsync_WhenPerCallTimeoutFires_ShouldReturnUncertainTypedFailure()
+    {
+        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
+        var client = CreateClient(handler, perCallTimeout: TimeSpan.FromMilliseconds(150));
+
+        var result = await client.UpdateSkillAsync("access-token", "skill-1", [1]);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().NotBeNull();
+        result.Failure!.Kind.Should().Be(OrnnSkillMutationFailureKind.Timeout);
+        result.Failure.Code.Should().Be("ornn_update_timeout");
+        result.Failure.HttpStatus.Should().BeNull();
+        result.Failure.Outcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
+    }
+
+    [Fact]
+    public async Task UpdateSkillAsync_DoesNotMaskCallerCancellationAsTimeoutFailure()
+    {
+        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
+        var client = CreateClient(handler, perCallTimeout: TimeSpan.FromSeconds(10));
+        using var callerCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var act = async () => await client.UpdateSkillAsync(
+            "access-token",
+            "skill-1",
+            [1],
+            callerCts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
     private static OrnnSkillClient CreateClient(

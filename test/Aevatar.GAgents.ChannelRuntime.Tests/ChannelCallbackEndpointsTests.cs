@@ -330,6 +330,29 @@ public sealed class ChannelCallbackEndpointsTests
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task HandleRepairWorkflowResultDeliveryAsync_ReturnsNotFound_WhenCallerDoesNotOwnOrgRegistration()
+    {
+        var queryPort = QueryPortWith(NewModelRegistration("reg-org", "org-1", "key-org"));
+        var repairService = Substitute.For<IChannelWorkflowResultDeliveryRepairService>();
+        var http = CreateAuthenticatedHttpContext(
+            "scope-1",
+            new Claim("sub", "user-alpha"));
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRepairWorkflowResultDeliveryAsync",
+            "reg-org",
+            http,
+            repairService,
+            queryPort,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        await repairService.DidNotReceiveWithAnyArgs().RepairAsync(default!, default!, default!, default!, default);
+    }
+
     [Theory]
     [InlineData(ChannelWorkflowResultDeliveryRepairResultStatus.Repaired, 200, "repaired", "enabled")]
     [InlineData(ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled, 200, "already_enabled", "enabled")]
@@ -462,8 +485,16 @@ public sealed class ChannelCallbackEndpointsTests
             NullLoggerFactory.Instance, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
-        response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
-        response.Body.Should().Contain("nyxid_channel_bot_unavailable");
+        if (detailJson.Contains("\"user_id\":\"scope-other\"", StringComparison.Ordinal))
+        {
+            response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+            response.Body.Should().Contain("service_owner_forbidden");
+        }
+        else
+        {
+            response.StatusCode.Should().Be(StatusCodes.Status502BadGateway);
+            response.Body.Should().Contain("nyxid_channel_bot_unavailable");
+        }
         nyxHandler.Requests.Should().ContainSingle().Which.Method.Should().Be(HttpMethod.Get);
         await ((IActorDispatchPort)actorRuntime).DidNotReceiveWithAnyArgs()
             .DispatchAsync(default!, default!, default);
@@ -754,6 +785,124 @@ public sealed class ChannelCallbackEndpointsTests
         routeRequestJson.RootElement.GetProperty("default_agent").GetBoolean().Should().BeTrue();
         response.Body.Should().NotContain("nyx_full_key_secret");
         response.Body.Contains("secret_reference", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleRegisterAsync_AdoptsOrganizationNyxChannelBotWithVerifiedOrgOwner()
+    {
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = AcceptedRegistrationRuntime(envelope => capturedEnvelope = envelope);
+        var ownerResolver = Substitute.For<IChannelRegistrationOwnerResolver>();
+        ownerResolver.ResolveAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelRegistrationOwnerResolution(null, "service_owner_forbidden")));
+        ownerResolver.ResolveAsync(Arg.Any<string>(), "org-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelRegistrationOwnerResolution(
+                new VerifiedChannelRegistrationOwner(
+                    "user-alpha",
+                    new ChannelRegistrationKeyOwner(ChannelRegistrationKeyOwnerKind.Organization, "org-1"),
+                    "org-1"),
+                string.Empty)));
+        ownerResolver.ResolveAsync(Arg.Any<string>(), "scope-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelRegistrationOwnerResolution(
+                new VerifiedChannelRegistrationOwner(
+                    "scope-1",
+                    new ChannelRegistrationKeyOwner(ChannelRegistrationKeyOwnerKind.Personal, "scope-1"),
+                    null),
+                string.Empty)));
+        var nyxHandler = new RecordingNyxHttpMessageHandler(request =>
+        {
+            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath == "/api/v1/channel-bots/bot-org")
+            {
+                return JsonResponse("""
+                {
+                  "id": "bot-org",
+                  "platform": "lark",
+                  "name": "Org Bot",
+                  "status": "active",
+                  "active": true,
+                  "is_active": true,
+                  "user_id": "org-1",
+                  "webhook_url": "https://nyx.example.com/api/v1/webhooks/channel/lark/bot-org"
+                }
+                """);
+            }
+
+            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath == "/api/v1/channel-conversations")
+            {
+                request.RequestUri.Query.Should().Contain("bot_id=bot-org");
+                request.RequestUri.Query.Should().Contain("org_id=org-1");
+                return JsonResponse("""{"conversations":[]}""");
+            }
+
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/api/v1/api-keys")
+            {
+                return JsonResponse("""
+                {
+                  "id": "key-org",
+                  "full_key": "nyx_org_key_secret",
+                  "scopes": "read write proxy",
+                  "platform": "generic",
+                  "purpose": "general",
+                  "scheduled_write_enabled": false,
+                  "durable_grants": [],
+                  "allow_all_services": true,
+                  "allow_all_nodes": true,
+                  "allowed_service_ids": [],
+                  "allowed_node_ids": []
+                }
+                """);
+            }
+
+            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/api/v1/channel-conversations")
+            {
+                return JsonResponse("""{"id":"route-org","channel_bot_id":"bot-org","agent_api_key_id":"key-org","default_agent":true}""");
+            }
+
+            return NotFoundResponse(request);
+        });
+        var nyxClient = CreateNyxClient(nyxHandler);
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "registration_id": "reg-org",
+              "nyx_channel_bot_id": "bot-org",
+              "nyx_provider_slug": "api-lark-bot"
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleRegisterAsync",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            QueryPortWithSnapshots(),
+            ownerResolver,
+            AuthorizationPlanner(),
+            CreateAgentKeyProvisioningService(nyxClient),
+            nyxClient,
+            RegistrationOptions(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status202Accepted, response.Body);
+        capturedEnvelope.Should().NotBeNull();
+        var command = capturedEnvelope!.Payload.Unpack<ChannelBotRegisterCommand>();
+        command.ScopeId.Should().Be("scope-1");
+        command.NyxChannelBotOwnerScopeId.Should().Be("org-1");
+        command.NyxChannelBotId.Should().Be("bot-org");
+        command.NyxAgentApiKeyId.Should().Be("key-org");
+        command.NyxConversationRouteId.Should().Be("route-org");
+        var keyRequest = nyxHandler.Requests.Single(request =>
+            request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/api/v1/api-keys");
+        using var keyRequestJson = JsonDocument.Parse(await keyRequest.Content!.ReadAsStringAsync());
+        keyRequestJson.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
+        var routeRequest = nyxHandler.Requests.Single(request =>
+            request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/api/v1/channel-conversations");
+        using var routeRequestJson = JsonDocument.Parse(await routeRequest.Content!.ReadAsStringAsync());
+        routeRequestJson.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-1");
+        await ownerResolver.Received(1).ResolveAsync("test-token", "org-1", Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -1143,6 +1292,27 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task HandleGetRegistrationAsync_ReturnsNotFound_WhenCallerDoesNotOwnOrgRegistration()
+    {
+        var queryPort = QueryPortWithSnapshots(new ChannelBotRegistrationSnapshot(
+            NewModelRegistration("reg-org-runtime", "org-1", "key-org"),
+            12));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleGetRegistrationAsync",
+            "reg-org-runtime",
+            http,
+            queryPort,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        response.Body.Should().NotContain("key-org");
+    }
+
+    [Fact]
     public async Task HandleUpdateRegistrationAsync_ReturnsAcceptedReceiptWithCommandId()
     {
         var queryPort = QueryPortWith(ExplicitModelRegistration("reg-update", "scope-1", "key-update", "svc-calendar"));
@@ -1195,6 +1365,45 @@ public sealed class ChannelCallbackEndpointsTests
         command.DefaultSkillName.Should().Be("booking-capacity");
         command.RuntimeConfig.Instructions.Should().Be("Trimmed instructions.");
         command.RuntimeConfig.NyxidServiceSelectors.Single().ServiceSlug.Should().Be("api-calendar");
+    }
+
+    [Fact]
+    public async Task HandleUpdateRegistrationAsync_ReturnsNotFound_WhenCallerDoesNotOwnOrgRegistration()
+    {
+        var queryPort = QueryPortWith(NewModelRegistration("reg-org-update", "org-1", "key-org-update"));
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = Substitute.For<IActorRuntime, IActorDispatchPort>();
+        actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+            .Returns(Task.FromResult<IActor?>(Substitute.For<IActor>()));
+        ((IActorDispatchPort)actorRuntime).DispatchAsync(
+                ChannelBotRegistrationGAgent.WellKnownId,
+                Arg.Do<EventEnvelope>(envelope => capturedEnvelope = envelope),
+                Arg.Any<CancellationToken>())
+            .Returns(ActorDispatchPortTestSupport.AcceptAsync);
+        var http = CreateJsonHttpContext(
+            """
+            {
+              "skill_name": "org-booking"
+            }
+            """,
+            "scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleUpdateRegistrationAsync",
+            "reg-org-update",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            OwnerResolver("org-1"),
+            AuthorizationPlanner(),
+            CreateNyxClient(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        capturedEnvelope.Should().BeNull();
     }
 
     [Fact]
@@ -1402,6 +1611,8 @@ public sealed class ChannelCallbackEndpointsTests
     private static IChannelRegistrationOwnerResolver OwnerResolver(string scopeId)
     {
         var resolver = Substitute.For<IChannelRegistrationOwnerResolver>();
+        resolver.ResolveAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ChannelRegistrationOwnerResolution(null, "service_owner_forbidden")));
         resolver.ResolveAsync(Arg.Any<string>(), scopeId, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new ChannelRegistrationOwnerResolution(
                 new VerifiedChannelRegistrationOwner(
@@ -1837,6 +2048,64 @@ public sealed class ChannelCallbackEndpointsTests
         response.Body.Should().Contain("bot-mine");
         response.Body.Should().Contain("bot-theirs");
         response.Body.Should().NotContain("\"id\":\"theirs\"");
+        using var document = JsonDocument.Parse(response.Body);
+        var mineRow = document.RootElement.EnumerateArray()
+            .Single(row => row.GetProperty("nyx_channel_bot_id").GetString() == "bot-mine");
+        mineRow.GetProperty("nyx_channel_bot_owner_scope_id").GetString().Should().Be("scope-1");
+        mineRow.GetProperty("nyx_channel_bot_owner_scope_name").GetString().Should().Be("personal");
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_AllScope_ForwardsNyxScopeAndBindsOrgRegistration()
+    {
+        var queryPort = QueryPortWith(
+            new ChannelBotRegistrationEntry
+            {
+                Id = "theirs",
+                Platform = "lark",
+                ScopeId = "scope-2",
+                NyxChannelBotId = "bot-theirs",
+                NyxChannelBotOwnerScopeId = "org-1",
+            });
+        var nyxHandler = new RecordingNyxHttpMessageHandler(request =>
+        {
+            if (request.Method == HttpMethod.Get &&
+                request.RequestUri!.AbsolutePath == "/api/v1/channel-bots" &&
+                request.RequestUri.Query == "?scope=all")
+            {
+                return JsonResponse("""{"items":[{"id":"bot-theirs","platform":"lark","name":"Org Bot","status":"active","active":true,"is_active":true,"user_id":"org-1"}]}""");
+            }
+
+            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath == "/api/v1/orgs")
+                return JsonResponse("""{"items":[{"id":"org-1","display_name":"Test Org"}]}""");
+
+            return NotFoundResponse(request);
+        });
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleListRegistrationsAsync",
+            http,
+            queryPort,
+            CreateNyxClient(nyxHandler),
+            "all",
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status200OK, response.Body);
+        using var document = JsonDocument.Parse(response.Body);
+        var row = document.RootElement.EnumerateArray().Should().ContainSingle().Which;
+        row.GetProperty("id").GetString().Should().Be("theirs");
+        row.GetProperty("nyx_channel_bot_id").GetString().Should().Be("bot-theirs");
+        row.GetProperty("nyx_channel_bot_owner_scope_id").GetString().Should().Be("org-1");
+        row.GetProperty("nyx_channel_bot_owner_scope_name").GetString().Should().Be("Test Org");
+        row.GetProperty("owned").GetBoolean().Should().BeFalse();
+        nyxHandler.Requests.Should().ContainSingle(request =>
+            request.RequestUri!.AbsolutePath == "/api/v1/channel-bots" &&
+            request.RequestUri.Query == "?scope=all");
+        nyxHandler.Requests.Should().ContainSingle(request =>
+            request.RequestUri!.AbsolutePath == "/api/v1/orgs");
     }
 
     [Fact]
@@ -1984,6 +2253,42 @@ public sealed class ChannelCallbackEndpointsTests
     }
 
     [Fact]
+    public async Task HandleDeleteRegistrationAsync_ReturnsNotFound_WhenCallerDoesNotOwnOrgRegistration()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        var registration = NewModelRegistration("reg-org-delete", "org-1", "key-org-delete");
+        registration.NyxConversationRouteId = "route-org-delete";
+        registration.NyxChannelBotId = "bot-org-delete";
+        queryPort.GetAsync("reg-org-delete", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(registration));
+
+        var deprovision = Substitute.For<INyxChannelBotDeprovisioningService>();
+        deprovision.DeprovisionAsync(
+                "test-token",
+                Arg.Any<NyxChannelBotDeprovisioningRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new NyxChannelBotDeprovisioningResult(true, true, Array.Empty<string>())));
+        EventEnvelope? capturedEnvelope = null;
+        var actorRuntime = AcceptedRegistrationRuntime(envelope => capturedEnvelope = envelope);
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync(
+            "HandleDeleteRegistrationAsync",
+            "reg-org-delete",
+            http,
+            ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime),
+            queryPort,
+            deprovision,
+            CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        capturedEnvelope.Should().BeNull();
+        await deprovision.DidNotReceiveWithAnyArgs().DeprovisionAsync(default!, default!, default);
+    }
+
+    [Fact]
     public async Task HandleDeleteRegistrationAsync_HardAgentKeyFailure_ReturnsBadGateway_AndDoesNotTombstone()
     {
         var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
@@ -1992,6 +2297,7 @@ public sealed class ChannelCallbackEndpointsTests
             {
                 Id = "reg-1",
                 Platform = "lark",
+                ScopeId = "scope-1",
                 NyxChannelBotId = "bot-1",
                 NyxAgentApiKeyId = "key-1",
             }));
@@ -2028,6 +2334,7 @@ public sealed class ChannelCallbackEndpointsTests
             {
                 Id = "reg-1",
                 Platform = "lark",
+                ScopeId = "scope-1",
                 NyxConversationRouteId = "route-1",
                 NyxChannelBotId = "bot-1",
                 NyxAgentApiKeyId = "key-1",
@@ -2078,6 +2385,7 @@ public sealed class ChannelCallbackEndpointsTests
             {
                 Id = "reg-1",
                 Platform = "lark",
+                ScopeId = "scope-1",
                 NyxConversationRouteId = "route-1",
                 NyxChannelBotId = "bot-1",
                 NyxAgentApiKeyId = "key-1",
@@ -2127,6 +2435,7 @@ public sealed class ChannelCallbackEndpointsTests
             {
                 Id = "reg-tg",
                 Platform = "telegram",
+                ScopeId = "scope-1",
                 NyxConversationRouteId = "route-tg",
                 NyxChannelBotId = "bot-tg",
                 NyxAgentApiKeyId = "key-tg",
@@ -2189,6 +2498,7 @@ public sealed class ChannelCallbackEndpointsTests
             {
                 Id = "reg-1",
                 Platform = "lark",
+                ScopeId = "scope-1",
                 NyxChannelBotId = "bot-1",
             }));
 
@@ -2436,7 +2746,9 @@ public sealed class ChannelCallbackEndpointsTests
         builder.Services.AddSingleton<IAuditTrailAppender>(appender);
         builder.Services.AddSingleton<IAuditActorIdentityHasher>(new StableAuditActorIdentityHasher());
         builder.Services.AddSingleton(ChannelRegistrationCommandFacadeTestSupport.CreateFacade(actorRuntime, (IActorDispatchPort)actorRuntime));
-        builder.Services.AddSingleton(QueryPortWithSnapshots());
+        builder.Services.AddSingleton(QueryPortWithSnapshots(new ChannelBotRegistrationSnapshot(
+            NewModelRegistration("reg-alpha", "scope-1", "key-alpha"),
+            1)));
         builder.Services.AddSingleton(OwnerResolver("scope-1"));
         builder.Services.AddSingleton(AuthorizationPlanner());
         builder.Services.AddSingleton(nyxClient);
@@ -2528,15 +2840,36 @@ public sealed class ChannelCallbackEndpointsTests
             .GetMethod(methodName, BindingFlags.Static | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException($"Method '{methodName}' not found.");
 
-        var adaptedArgs = methodName == "HandleRegisterAsync" && args.Length == 10
-            ? AdaptRegisterInvocationArgs(args)
-            : args;
+        var adaptedArgs = methodName switch
+        {
+            "HandleRegisterAsync" when args.Length == 10 => AdaptRegisterInvocationArgs(args),
+            "HandleRepairWorkflowResultDeliveryAsync" when args.Length == 4 => AdaptRepairInvocationArgs(args),
+            _ => args,
+        };
         var invocationResult = method.Invoke(null, adaptedArgs);
         if (invocationResult is Task<IResult> resultTask)
             return await resultTask;
 
         throw new InvalidOperationException($"Method '{methodName}' did not return Task<IResult>.");
     }
+
+    private static object?[] AdaptRepairInvocationArgs(object?[] args)
+    {
+        var registrationId = (string)args[0]!;
+        var scopeId = ResolveTestScopeId((HttpContext)args[1]!) ?? "scope-alpha";
+        var queryPort = QueryPortWith(NewModelRegistration(registrationId, scopeId, "key-alpha"));
+        return
+        [
+            args[0],
+            args[1],
+            args[2],
+            queryPort,
+            args[3],
+        ];
+    }
+
+    private static string? ResolveTestScopeId(HttpContext http) =>
+        http.User.FindFirst("scope_id")?.Value;
 
     private static object?[] AdaptRegisterInvocationArgs(object?[] args)
     {

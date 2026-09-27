@@ -36,7 +36,7 @@ public sealed class ChannelRegistrationExplicitAuthorizationPreparationTests
                 new(NyxIdScopePlanFreshnessMode.MutationRevalidatedSnapshot, "scope_plan_digest", NyxIdScopePlanPostCreationDrift.FailClosed),
                 new(true, true, NyxIdScopePlanRouteCandidateBasis.ActiveConfiguredRoutes, true)), null));
         var request = new ChannelRelayRegistrationRequest("telegram", "owner-token", "https://aevatar.example.com",
-            ownerId, "label", "api-telegram-bot", "bot-owned",
+            ownerId, "label", "api-telegram-bot", "bot-owned", ownerId,
             RequestedServiceSelection: ChannelRegistrationServiceSelection.Explicit(["svc-alpha"]));
         var result = await ChannelExplicitAuthorizationTestSupport.Create(port).PlanAsync(request, verifiedOwner, CancellationToken.None);
         result.Succeeded.Should().BeTrue();
@@ -52,7 +52,7 @@ public sealed class ChannelRegistrationExplicitAuthorizationPreparationTests
         var port = ChannelExplicitAuthorizationTestSupport.Port();
         var preparation = ChannelExplicitAuthorizationTestSupport.Create(port);
         var request = new ChannelRelayRegistrationRequest(platform, "caller-token", "https://aevatar.example.com",
-            "owner-1", "label", "unrelated-provider-slug", "bot-owned",
+            "owner-1", "label", "unrelated-provider-slug", "bot-owned", "owner-1",
             RequestedServiceSelection: ChannelRegistrationServiceSelection.Explicit(["svc-selected"]));
         var result = await preparation.PlanAsync(request, ChannelExplicitAuthorizationTestSupport.Owner, CancellationToken.None);
         result.Succeeded.Should().BeTrue();
@@ -68,7 +68,7 @@ public sealed class ChannelRegistrationExplicitAuthorizationPreparationTests
     {
         var port = ChannelExplicitAuthorizationTestSupport.Port();
         var request = new ChannelRelayRegistrationRequest("lark", "caller-token", "https://aevatar.example.com",
-            "owner-1", "label", "api-lark-bot", "bot-owned",
+            "owner-1", "label", "api-lark-bot", "bot-owned", "owner-1",
             RequestedServiceSelection: ChannelRegistrationServiceSelection.Explicit(["svc-unavailable"]));
         var result = await ChannelExplicitAuthorizationTestSupport.Create(port).PlanAsync(request,
             ChannelExplicitAuthorizationTestSupport.Owner, CancellationToken.None);

@@ -162,6 +162,7 @@ public sealed record ChannelRelayRegistrationRequest(
     string Label,
     string NyxProviderSlug,
     string NyxChannelBotId,
+    string NyxChannelBotOwnerScopeId,
     string DefaultSkillName = "",
     ChannelBotRuntimeConfig? RuntimeConfig = null,
     ChannelRegistrationServiceSelection? RequestedServiceSelection = null,

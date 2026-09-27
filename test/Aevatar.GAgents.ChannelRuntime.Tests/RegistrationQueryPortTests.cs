@@ -166,6 +166,44 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
+    public async Task BotQueryPort_GetSnapshotAsync_FallsBackToRegistrationIdField_WhenDocumentKeyMisses()
+    {
+        ProjectionDocumentQuery? capturedQuery = null;
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.GetAsync("reg-historical", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(null));
+        reader.QueryAsync(
+                Arg.Do<ProjectionDocumentQuery>(query => capturedQuery = query),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ProjectionDocumentQueryResult<ChannelBotRegistrationDocument>
+            {
+                Items =
+                [
+                    new ChannelBotRegistrationDocument
+                    {
+                        Id = "reg-historical",
+                        Platform = "lark",
+                        ScopeId = "org-1",
+                        StateVersion = 55,
+                    },
+                ],
+            }));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var snapshot = await queryPort.GetSnapshotAsync("reg-historical");
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Registration.Id.Should().Be("reg-historical");
+        snapshot.Registration.ScopeId.Should().Be("org-1");
+        snapshot.StateVersion.Should().Be(55);
+        capturedQuery.Should().NotBeNull();
+        capturedQuery!.Take.Should().Be(1);
+        capturedQuery.Filters.Should().ContainSingle(filter =>
+            filter.FieldPath == nameof(ChannelBotRegistrationDocument.Id) &&
+            filter.Operator == ProjectionDocumentFilterOperator.Eq);
+    }
+
+    [Fact]
     public async Task BotQueryPort_QueryAllAsync_ReturnsMappedEntries()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();

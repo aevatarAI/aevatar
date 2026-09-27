@@ -16,7 +16,8 @@ public sealed record SkillSearchMatchView(
     string? Description,
     bool IsPrivate,
     string? Category,
-    IReadOnlyList<string> Tags);
+    IReadOnlyList<string> Tags,
+    string? SkillId = null);
 
 public sealed record SkillSearchToolResultView(
     ToolResultViewStatus Status,
@@ -24,7 +25,9 @@ public sealed record SkillSearchToolResultView(
     IReadOnlyList<SkillSearchMatchView> Matches,
     string? Error,
     int? HttpStatus,
-    string DisplayText);
+    string DisplayText,
+    string? Query = null,
+    string? Scope = null);
 
 public sealed record SkillLoadToolResultView(
     ToolResultViewStatus Status,

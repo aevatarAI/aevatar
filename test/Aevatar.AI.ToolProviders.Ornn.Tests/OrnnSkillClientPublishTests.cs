@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using FluentAssertions;
@@ -37,7 +38,12 @@ public sealed class OrnnSkillClientPublishTests
         var result = await client.PublishSkillAsync("token", [1]);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Contain("status=500");
+        result.Failure.Should().NotBeNull();
+        result.Failure!.Kind.Should().Be(OrnnSkillMutationFailureKind.Rejected);
+        result.Failure.Code.Should().Be("ornn_publish_http_error");
+        result.Failure.Message.Should().Contain("status=500");
+        result.Failure.HttpStatus.Should().Be(500);
+        result.Failure.Outcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
     }
 
     [Fact]
@@ -49,7 +55,12 @@ public sealed class OrnnSkillClientPublishTests
         var result = await client.PublishSkillAsync("token", [1]);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Contain("budget");
+        result.Failure.Should().NotBeNull();
+        result.Failure!.Kind.Should().Be(OrnnSkillMutationFailureKind.Timeout);
+        result.Failure.Code.Should().Be("ornn_publish_timeout");
+        result.Failure.Message.Should().Contain("budget");
+        result.Failure.HttpStatus.Should().BeNull();
+        result.Failure.Outcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
         handler.Requests.Should().Be(1);
     }
 
@@ -63,6 +74,22 @@ public sealed class OrnnSkillClientPublishTests
         var act = async () => await client.PublishSkillAsync("token", [1], callerCts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task PublishSkillAsync_WhenTransportFails_ShouldReturnUncertainTypedFailure()
+    {
+        var client = CreateClient(new ThrowingHandler());
+
+        var result = await client.PublishSkillAsync("token", [1]);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().NotBeNull();
+        result.Failure!.Kind.Should().Be(OrnnSkillMutationFailureKind.Transport);
+        result.Failure.Code.Should().Be("ornn_publish_transport_error");
+        result.Failure.Message.Should().Contain("transport failed");
+        result.Failure.HttpStatus.Should().BeNull();
+        result.Failure.Outcome.Should().Be(AgentToolFailureOutcome.OutcomeUncertain);
     }
 
     private static OrnnSkillClient CreateClient(
@@ -119,6 +146,14 @@ public sealed class OrnnSkillClientPublishTests
             cancellationToken.ThrowIfCancellationRequested();
             return new HttpResponseMessage(HttpStatusCode.OK);
         }
+    }
+
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            throw new HttpRequestException("connection failed");
     }
 
     private sealed record CapturedRequest(

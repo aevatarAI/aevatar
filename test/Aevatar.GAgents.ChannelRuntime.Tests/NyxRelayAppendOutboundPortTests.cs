@@ -30,7 +30,7 @@ public sealed class NyxRelayAppendOutboundPortTests
         string platform, int limit, bool whitespacePrefix)
     {
         var fixture = await CreateAsync(platform: platform);
-        var text = whitespacePrefix ? new string(' ', 500) + "AB" : "A" + new string('\u0301', 400) + "B";
+        var text = whitespacePrefix ? new string(' ', 900) + "AB" : "A" + new string('\u0301', 800) + "B";
         var prefix = NyxRelayAppendSegmenter.Select(text, 0, limit, false, false,
             raw => fixture.Port.PrepareText(platform, fixture.Activity.Conversation, raw));
         prefix.Should().Be(text[..^1]);

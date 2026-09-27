@@ -49,6 +49,49 @@ public sealed class OrnnPublishSkillTool : IAgentTool
         };
     }
 
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var success = CreateSuccessReceipt(callId, toolName, resultJson);
+        if (success is not null)
+            return success;
+
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(resultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !TryGetNonEmptyString(root, out var resultType, "result_type") ||
+                !string.Equals(resultType, "ornn_publish_skill", StringComparison.Ordinal) ||
+                !TryGetNonEmptyString(root, out var status, "status"))
+            {
+                return null;
+            }
+
+            return status switch
+            {
+                "validation_error" => CreateValidationErrorReceipt(callId, toolName, resultJson, root),
+                "format_validation_error" => CreateFormatValidationErrorReceipt(
+                    callId,
+                    toolName,
+                    resultJson,
+                    root),
+                "error" => CreateMutationErrorReceipt(callId, toolName, resultJson, root),
+                _ => null,
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     public string ParametersSchema => """
         {
           "type": "object",
@@ -96,7 +139,10 @@ public sealed class OrnnPublishSkillTool : IAgentTool
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "path": { "type": "string" },
+                  "path": {
+                    "type": "string",
+                    "description": "Path relative to the package references/ directory; the tool adds the references/ root automatically. Correct examples: guide.md, docs/usage.md. Incorrect examples: references/guide.md, references/docs/usage.md."
+                  },
                   "content": { "type": "string" }
                 },
                 "required": ["path", "content"]
@@ -123,7 +169,16 @@ public sealed class OrnnPublishSkillTool : IAgentTool
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
-            return BuildResult("error", "No NyxID access token available. User must be authenticated.");
+        {
+            return OrnnSkillMutationFailureProtocol.Serialize(
+                "ornn_publish_skill",
+                new OrnnSkillMutationFailure(
+                    OrnnSkillMutationFailureKind.Rejected,
+                    "nyxid_access_token_missing",
+                    "No NyxID access token available. User must be authenticated.",
+                    null,
+                    AgentToolFailureOutcome.CalleeConfirmed));
+        }
 
         var (request, parseDiagnostics) = OrnnSkillPublishRequestParser.Parse(argumentsJson);
         if (request == null)
@@ -152,7 +207,11 @@ public sealed class OrnnPublishSkillTool : IAgentTool
         }
 
         if (!result.IsSuccess)
-            return BuildResult(result.Status, result.Error ?? "Ornn publish failed.");
+        {
+            return result.Failure is null
+                ? BuildResult(result.Status, result.Error ?? "Ornn publish failed.")
+                : OrnnSkillMutationFailureProtocol.Serialize("ornn_publish_skill", result.Failure);
+        }
 
         return JsonSerializer.Serialize(new
         {
@@ -184,4 +243,129 @@ public sealed class OrnnPublishSkillTool : IAgentTool
             status,
             error,
         });
+
+    private AgentToolReceipt? CreateValidationErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        JsonElement root)
+    {
+        if (!root.TryGetProperty("diagnostics", out var diagnostics) ||
+            diagnostics.ValueKind != JsonValueKind.Array ||
+            diagnostics.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        var diagnostic = diagnostics[0];
+        if (diagnostic.ValueKind != JsonValueKind.Object ||
+            !TryGetNonEmptyString(diagnostic, out var code, "code", "Code") ||
+            !TryGetNonEmptyString(diagnostic, out var message, "message", "Message"))
+        {
+            return null;
+        }
+
+        var safeMessage = $"{code}: {message}";
+        if (TryGetNonEmptyString(diagnostic, out var path, "path", "Path"))
+            safeMessage += $" (path: {path})";
+
+        return CreateErrorReceipt(callId, toolName, resultJson, code, safeMessage);
+    }
+
+    private AgentToolReceipt? CreateFormatValidationErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        JsonElement root)
+    {
+        const string errorCode = "ornn_format_validation_error";
+        var details = new List<string>();
+        if (TryGetNonEmptyString(root, out var error, "error"))
+            details.Add(error);
+
+        if (root.TryGetProperty("violations", out var violations) &&
+            violations.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var violation in violations.EnumerateArray())
+            {
+                if (violation.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var hasRule = TryGetNonEmptyString(violation, out var rule, "rule", "Rule");
+                var hasMessage = TryGetNonEmptyString(violation, out var message, "message", "Message");
+                if (!hasRule && !hasMessage)
+                    continue;
+
+                details.Add(hasRule && hasMessage ? $"{rule}: {message}" : hasRule ? rule : message);
+            }
+        }
+
+        return details.Count == 0
+            ? null
+            : CreateErrorReceipt(
+                callId,
+                toolName,
+                resultJson,
+                errorCode,
+                $"{errorCode}: {string.Join("; ", details)}");
+    }
+
+    private AgentToolReceipt? CreateMutationErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        JsonElement root)
+    {
+        if (!OrnnSkillMutationFailureProtocol.TryParse(root, out var failure))
+            return null;
+
+        return CreateErrorReceipt(
+            callId,
+            toolName,
+            resultJson,
+            failure.Code,
+            $"{failure.Code}: {failure.Message}",
+            failure.Outcome);
+    }
+
+    private AgentToolReceipt CreateErrorReceipt(
+        string callId,
+        string toolName,
+        string resultJson,
+        string errorCode,
+        string errorMessage,
+        AgentToolFailureOutcome failureOutcome = AgentToolFailureOutcome.CalleeConfirmed) =>
+        new()
+        {
+            CallId = callId ?? string.Empty,
+            ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+            Status = AgentToolReceiptStatus.Error,
+            ApprovalMode = AgentToolReceiptApprovalMode.Auto,
+            IsDestructive = false,
+            SideEffectKind = SideEffectKind,
+            ErrorCode = errorCode,
+            ErrorMessage = errorMessage,
+            ResultJson = resultJson ?? string.Empty,
+            FailureOutcome = failureOutcome,
+        };
+
+    private static bool TryGetNonEmptyString(
+        JsonElement element,
+        out string value,
+        params string[] keys)
+    {
+        value = string.Empty;
+        foreach (var key in keys)
+        {
+            if (!element.TryGetProperty(key, out var property) || property.ValueKind != JsonValueKind.String)
+                continue;
+
+            value = property.GetString()?.Trim() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(value))
+                return true;
+        }
+
+        value = string.Empty;
+        return false;
+    }
 }

@@ -5,6 +5,10 @@ namespace Aevatar.GAgents.Channel.Runtime;
 /// <summary>Pure boundary selection; the actor owns all append state.</summary>
 internal static class NyxRelayAppendSegmenter
 {
+    private const int FirstSegmentTarget = 800;
+    private const int FirstSegmentMinimumNaturalBoundary = 400;
+    private const int SubsequentSegmentTarget = 1600;
+
     public static string Select(
         string suffix,
         int acceptedCount,
@@ -39,7 +43,9 @@ internal static class NyxRelayAppendSegmenter
         // A whitespace-only stable prefix must wait with the withheld visible grapheme.
         if (stableEnd <= firstVisibleStart)
             return string.Empty;
-        var target = terminal || progressDue ? maxLength : acceptedCount == 0 ? 400 : 1600;
+        var target = terminal || progressDue
+            ? maxLength
+            : acceptedCount == 0 ? FirstSegmentTarget : SubsequentSegmentTarget;
         // Soft targets control pacing. Exhaustion must still search the true hard cap.
         foreach (var selectionLimit in new[] { Math.Min(target, maxLength), maxLength }.Distinct())
         {
@@ -50,11 +56,13 @@ internal static class NyxRelayAppendSegmenter
             var natural = FindNaturalBoundary(suffix, boundaries, end, firstVisibleStart);
             if (!terminal && !progressDue && stableEnd < target)
             {
-                if (acceptedCount != 0 || natural < 80)
+                if (acceptedCount != 0 || natural < FirstSegmentMinimumNaturalBoundary)
                     return string.Empty;
                 end = natural;
             }
-            else if (end < stableEnd && natural > 0)
+            else if (end < stableEnd && natural > 0 &&
+                     (terminal || progressDue || acceptedCount != 0 ||
+                      natural >= FirstSegmentMinimumNaturalBoundary))
             {
                 end = natural;
             }

@@ -79,6 +79,8 @@ internal static class AgentRunReplyStepMappers
                 HasMatches = source.SkillSearch.HasMatches,
                 Error = source.SkillSearch.Error ?? string.Empty,
                 DisplayText = source.SkillSearch.DisplayText ?? string.Empty,
+                Query = source.SkillSearch.Query ?? string.Empty,
+                Scope = source.SkillSearch.Scope ?? string.Empty,
             };
             if (source.SkillSearch.HttpStatus.HasValue)
                 target.SkillSearch.HttpStatus = source.SkillSearch.HttpStatus.Value;
@@ -86,6 +88,7 @@ internal static class AgentRunReplyStepMappers
             {
                 var mapped = new AgentRunSkillSearchMatchView
                 {
+                    SkillId = match.SkillId ?? string.Empty,
                     SkillName = match.SkillName ?? string.Empty,
                     Description = match.Description ?? string.Empty,
                     IsPrivate = match.IsPrivate,
@@ -140,10 +143,13 @@ internal static class AgentRunReplyStepMappers
                         Normalize(match.Description),
                         match.IsPrivate,
                         Normalize(match.Category),
-                        match.Tags.ToArray())).ToArray(),
+                        match.Tags.ToArray(),
+                        Normalize(match.SkillId))).ToArray(),
                     Normalize(source.SkillSearch.Error),
                     source.SkillSearch.HasHttpStatus ? source.SkillSearch.HttpStatus : null,
-                    source.SkillSearch.DisplayText ?? string.Empty),
+                    source.SkillSearch.DisplayText ?? string.Empty,
+                    Normalize(source.SkillSearch.Query),
+                    Normalize(source.SkillSearch.Scope)),
             source.SkillLoad is null
                 ? null
                 : new SkillLoadToolResultView(

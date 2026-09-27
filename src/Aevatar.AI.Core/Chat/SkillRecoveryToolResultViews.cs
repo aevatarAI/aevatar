@@ -28,11 +28,13 @@ internal static class SkillRecoveryToolResultViews
                 SkillLoad: null,
                 Failure: failureView)
             : parsedView with { Failure = failureView };
-        var displayText = view.SkillSearch?.DisplayText ?? view.SkillLoad?.DisplayText ?? message.Content;
+        var modelContent = view.SkillSearch is { } search
+            ? BuildSearchModelContent(search)
+            : view.SkillLoad?.DisplayText ?? message.Content;
         return new ChatMessage
         {
             Role = message.Role,
-            Content = displayText,
+            Content = modelContent,
             ReasoningContent = message.ReasoningContent,
             ContentParts = message.ContentParts,
             ToolCallId = message.ToolCallId,
@@ -131,7 +133,8 @@ internal static class SkillRecoveryToolResultViews
                     Description: TryGetString(match, "description"),
                     IsPrivate: TryGetBoolean(match, "is_private"),
                     Category: TryGetString(match, "category"),
-                    Tags: ReadStringArray(match, "tags")));
+                    Tags: ReadStringArray(match, "tags"),
+                    SkillId: TryGetString(match, "skill_id")));
             }
         }
 
@@ -141,8 +144,35 @@ internal static class SkillRecoveryToolResultViews
             Matches: matches,
             Error: TryGetString(root, "error"),
             HttpStatus: TryGetInt32(root, "http_status"),
-            DisplayText: TryGetString(root, "text") ?? fallbackDisplayText);
+            DisplayText: TryGetString(root, "text") ?? fallbackDisplayText,
+            Query: TryGetString(root, "query"),
+            Scope: TryGetString(root, "scope"));
     }
+
+    private static string BuildSearchModelContent(SkillSearchToolResultView search) =>
+        JsonSerializer.Serialize(new
+        {
+            result_type = "skill_search",
+            status = ToWireStatus(search.Status),
+            query = search.Query,
+            scope = search.Scope,
+            error = search.Error,
+            matches = search.Matches.Select(static match => new
+            {
+                skill_id = match.SkillId,
+                skill_name = match.SkillName,
+            }),
+        });
+
+    private static string ToWireStatus(ToolResultViewStatus status) =>
+        status switch
+        {
+            ToolResultViewStatus.Success => "success",
+            ToolResultViewStatus.NoMatch => "no_match",
+            ToolResultViewStatus.NotFound => "not_found",
+            ToolResultViewStatus.Error => "error",
+            _ => "unknown",
+        };
 
     private static SkillLoadToolResultView ParseStructuredLoadResult(JsonElement root, string fallbackDisplayText)
     {

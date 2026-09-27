@@ -12,7 +12,7 @@ public sealed class NyxRelayAppendSegmenterTests
         foreach (var acceptedCount in new[] { 0, 1 })
         foreach (var whitespacePrefix in new[] { false, true })
         {
-            var target = acceptedCount == 0 ? 400 : 1600;
+            var target = acceptedCount == 0 ? 800 : 1600;
             foreach (var prefixLength in new[] { target - 1, target, target + 1, target + 101, limit - 1, limit })
                 yield return [limit, acceptedCount, whitespacePrefix, prefixLength, prefixLength >= target];
         }
@@ -111,12 +111,41 @@ public sealed class NyxRelayAppendSegmenterTests
     }
 
     [Fact]
-    public void FirstSegment_WaitsForUsefulText_AndPrefersParagraph()
+    public void FirstSegment_WaitsForEightHundredCharactersWithoutANaturalBoundary()
     {
-        NyxRelayAppendSegmenter.Select("short", 0, 2000, false, false, text => text).Should().BeEmpty();
-        var paragraph = new string('a', 100) + "\n\n";
-        NyxRelayAppendSegmenter.Select(paragraph + new string('b', 400), 0, 2000, false, false, text => text)
-            .Should().Be(paragraph);
+        NyxRelayAppendSegmenter.Select(new string('a', 800), 0, 2000, false, false, text => text)
+            .Should().BeEmpty();
+        NyxRelayAppendSegmenter.Select(new string('a', 801), 0, 2000, false, false, text => text)
+            .Should().Be(new string('a', 800));
+    }
+
+    [Fact]
+    public void FirstSegment_RequiresFourHundredCharacterNaturalBoundary()
+    {
+        var shortParagraph = new string('a', 397) + "\n\n";
+        NyxRelayAppendSegmenter.Select(shortParagraph + new string('b', 400), 0, 2000, false, false, text => text)
+            .Should().BeEmpty();
+
+        var minimumParagraph = new string('a', 398) + "\n\n";
+        NyxRelayAppendSegmenter.Select(minimumParagraph + new string('b', 400), 0, 2000, false, false, text => text)
+            .Should().Be(minimumParagraph);
+    }
+
+    [Fact]
+    public void FirstSegment_DoesNotSendMarkdownTableHeaderAlone()
+    {
+        const string tableHeader =
+            "| target | created | edited | identifier/link | notes |\n|---|---:|---:|---|---|\n";
+        tableHeader.Should().HaveLength(80);
+
+        NyxRelayAppendSegmenter.Select(
+                tableHeader + new string('x', 391),
+                0,
+                4096,
+                false,
+                false,
+                text => text)
+            .Should().BeEmpty();
     }
 
     [Fact]

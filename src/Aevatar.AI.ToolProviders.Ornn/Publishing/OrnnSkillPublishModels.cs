@@ -67,11 +67,6 @@ public sealed record OrnnSkillPackageFormatValidationResult(
     public static OrnnSkillPackageFormatValidationResult Valid { get; } = new(true, []);
 }
 
-public sealed record OrnnSkillPublishResponse(
-    bool Succeeded,
-    string RawResponse,
-    string? Error = null);
-
 public static partial class OrnnSkillPublishRequestParser
 {
     private static readonly HashSet<string> RootFields = new(StringComparer.Ordinal)
