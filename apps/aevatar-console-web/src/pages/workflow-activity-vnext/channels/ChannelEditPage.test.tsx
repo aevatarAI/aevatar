@@ -99,6 +99,13 @@ const selectedServiceIds = [
   'user-service-ornn',
 ];
 function catalogue(input: RequestInfo | URL, services = serviceCatalogue) {
+  if (String(input).endsWith('/catalog?include_all=true'))
+    return response({ entries: [] });
+  const name = String(input).match(/\/skills\/([^/]+)$/)?.[1];
+  if (name) return response({ data: { guid: `guid-${name}`, name } });
+  const packageName = String(input).match(/\/skills\/guid-([^/]+)\/json$/)?.[1];
+  if (packageName)
+    return response({ data: { name: packageName, files: { 'SKILL.md': '' } } });
   if (String(input).includes('/skill-search'))
     return response({
       data: {

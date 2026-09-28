@@ -2,6 +2,7 @@ import { authFetch } from '@/shared/auth/fetch';
 import { persistAuthSession } from '@/shared/auth/session';
 import { createNyxIDServiceSession } from '../../../tests/fixtures/nyxidServiceSession';
 import {
+  listChannelServiceCatalog,
   listChannelServiceIdentities,
   listChannelServices,
 } from './channelServicesApi';
@@ -27,6 +28,44 @@ const personal = {
 };
 const response = (value: unknown, status = 200) =>
   ({ ok: status === 200, status, json: async () => value }) as Response;
+
+it('reads unconnected catalog candidates with current credentials without exposing catalog IDs or secrets as choices', async () => {
+  const session = createNyxIDServiceSession({ allowed_service_ids: [] });
+  persistAuthSession(session);
+  fetchMock.mockResolvedValue(
+    response({
+      entries: [
+        {
+          id: 'catalog-github',
+          slug: 'api-github',
+          name: 'GitHub',
+          recommended_skills: ['support'],
+          api_key: 'TEST_ONLY_SECRET',
+        },
+      ],
+    }),
+  );
+  const signal = new AbortController().signal;
+  expect(await listChannelServiceCatalog(signal)).toEqual([
+    {
+      slug: 'api-github',
+      name: 'GitHub',
+      recommendedSkills: ['support'],
+    },
+  ]);
+  expect(fetchMock).toHaveBeenCalledWith(
+    'https://nyx.example.test/api/v1/catalog?include_all=true',
+    {
+      signal,
+      credentials: 'omit',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${session.tokens.accessToken}`,
+      },
+    },
+  );
+});
 
 it('reads safe service names independently of current selectable grants and activity', async () => {
   persistAuthSession(createNyxIDServiceSession({ allowed_service_ids: [] }));

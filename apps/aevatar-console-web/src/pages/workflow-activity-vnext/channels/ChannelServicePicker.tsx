@@ -18,6 +18,7 @@ export default function ChannelServicePicker({
   retry,
   editing = false,
   replacesDefaults = false,
+  suggestions,
 }: {
   readonly services: readonly ChannelServiceChoice[];
   readonly selectedIds: readonly string[];
@@ -31,6 +32,7 @@ export default function ChannelServicePicker({
   readonly retry: () => void;
   readonly editing?: boolean;
   readonly replacesDefaults?: boolean;
+  readonly suggestions?: React.ReactNode;
 }) {
   const [search, setSearch] = React.useState('');
   const term = search.trim().toLocaleLowerCase();
@@ -64,9 +66,10 @@ export default function ChannelServicePicker({
       <p className="channels__form-help">
         {t(
           'channels.connect.servicesHelp',
-          'Only services available through your current NyxID authorization are shown.',
+          'Choose from your authorized services, or connect additional services in NyxID.',
         )}
       </p>
+      {suggestions}
       {loading ? (
         <AevatarContentSkeleton
           ariaLabel={t('channels.connect.servicesLoading', 'Loading services')}

@@ -1,4 +1,34 @@
 export default {
+  'channels.suggestions.title': 'Suggested for {skill}',
+  'channels.suggestions.refresh': 'Refresh suggestions',
+  'channels.suggestions.loading': 'Finding related services...',
+  'channels.suggestions.error':
+    'Could not identify related services. Refresh to retry, or select services manually below.',
+  'channels.suggestions.help':
+    'Suggestions may be incomplete and do not confirm required dependencies. Select the services your task needs; each addition is saved with the channel.',
+  'channels.suggestions.linked': 'Linked to this skill in Ornn.',
+  'channels.suggestions.catalog': 'The service catalog recommends this skill.',
+  'channels.suggestions.mention':
+    'Mentioned in the skill description or instructions; may be needed for some tasks.',
+  'channels.suggestions.unknownSource': 'Unknown source',
+  'channels.suggestions.checking': 'Checking access...',
+  'channels.suggestions.accessError':
+    'Could not check access. Refresh to retry.',
+  'channels.suggestions.inactive': 'Inactive — manage this service in NyxID.',
+  'channels.suggestions.unavailable':
+    'Access unavailable — check with the service owner.',
+  'channels.suggestions.unauthorized':
+    'Not authorized for this session — review service access.',
+  'channels.suggestions.notSelected': 'Not selected',
+  'channels.suggestions.selected': 'Selected',
+  'channels.suggestions.selectNamed': 'Select {service}',
+  'channels.suggestions.select': 'Select',
+  'channels.suggestions.notConnected':
+    'No connection found in your account. Add this service in NyxID.',
+  'channels.suggestions.empty':
+    'No related services identified. You can still select services manually below.',
+  'channels.suggestions.manage': 'Manage connections in NyxID ↗',
+  'channels.suggestions.reviewAccess': 'Review service access ↗',
   'channels.column.owner': 'Owner',
   'channels.owner.organization': 'Organization',
   'channels.owner.id': 'Owner ID',
@@ -202,7 +232,7 @@ export default {
   'channels.connect.selectAll': 'Select all',
   'channels.connect.selectAllResults': 'Select all results',
   'channels.connect.servicesHelp':
-    'Only services available through your current NyxID authorization are shown.',
+    'Choose from your authorized services, or connect additional services in NyxID.',
   'channels.connect.servicesLoading': 'Loading services',
   'channels.connect.servicesError':
     'Could not load your services. Retry before connecting.',

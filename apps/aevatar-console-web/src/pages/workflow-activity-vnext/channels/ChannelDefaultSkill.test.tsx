@@ -59,7 +59,9 @@ const linkedSkill = (id = skillId) => ({
 });
 const detailReads = () =>
   fetchMock.mock.calls.filter(([input]) =>
-    String(input).includes('/api/v1/skills/'),
+    [skillId, secondSkillId].some((id) =>
+      String(input).endsWith(`/skills/${id}`),
+    ),
   );
 const writes = () =>
   fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST');
@@ -89,6 +91,17 @@ beforeEach(() => {
       return response(linkedSkill());
     if (String(input).endsWith(`/skills/${secondSkillId}`))
       return response(linkedSkill(secondSkillId));
+    if (String(input).endsWith('/catalog?include_all=true'))
+      return response({ entries: [] });
+    const name = String(input).match(/\/skills\/([^/]+)$/)?.[1];
+    if (name) return response({ data: { guid: `guid-${name}`, name } });
+    const packageName = String(input).match(
+      /\/skills\/guid-([^/]+)\/json$/,
+    )?.[1];
+    if (packageName)
+      return response({
+        data: { name: packageName, files: { 'SKILL.md': '' } },
+      });
     if (String(input).endsWith('/user-services'))
       return response({
         services: [

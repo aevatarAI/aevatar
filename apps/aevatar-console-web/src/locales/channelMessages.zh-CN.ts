@@ -1,4 +1,30 @@
 export default {
+  'channels.suggestions.title': '为 {skill} 推荐',
+  'channels.suggestions.refresh': '刷新推荐',
+  'channels.suggestions.loading': '正在识别相关服务…',
+  'channels.suggestions.error':
+    '暂时无法识别相关服务。请刷新重试，或在下方手动选择。',
+  'channels.suggestions.help':
+    '推荐结果可能不完整，也不代表必需依赖。请按任务需要选择服务，保存 Channel 后生效。',
+  'channels.suggestions.linked': '该 Skill 在 Ornn 中关联了此服务。',
+  'channels.suggestions.catalog': '服务目录将该 Skill 列为推荐技能。',
+  'channels.suggestions.mention':
+    'Skill 的描述或说明提到了此服务，部分任务可能需要。',
+  'channels.suggestions.unknownSource': '未知来源',
+  'channels.suggestions.checking': '正在检查访问权限…',
+  'channels.suggestions.accessError': '暂时无法检查访问权限，请刷新重试。',
+  'channels.suggestions.inactive': '服务未启用，请前往 NyxID 管理。',
+  'channels.suggestions.unavailable': '暂无访问权限，请联系服务所有者。',
+  'channels.suggestions.unauthorized': '当前会话尚未授权，请检查服务访问权限。',
+  'channels.suggestions.notSelected': '尚未选择',
+  'channels.suggestions.selected': '已选择',
+  'channels.suggestions.selectNamed': '选择 {service}',
+  'channels.suggestions.select': '选择',
+  'channels.suggestions.notConnected':
+    '账号中未找到此服务的连接，请前往 NyxID 添加。',
+  'channels.suggestions.empty': '未识别到相关服务。你仍可在下方手动选择。',
+  'channels.suggestions.manage': '在 NyxID 管理连接 ↗',
+  'channels.suggestions.reviewAccess': '检查服务访问权限 ↗',
   'channels.column.owner': '归属',
   'channels.owner.organization': '组织',
   'channels.owner.id': '归属 ID',
@@ -179,7 +205,8 @@ export default {
   'channels.connect.selected': '已选 {count} 项',
   'channels.connect.selectAll': '全选',
   'channels.connect.selectAllResults': '全选搜索结果',
-  'channels.connect.servicesHelp': '仅显示当前 NyxID 授权范围内可用的服务。',
+  'channels.connect.servicesHelp':
+    '选择已授权的服务，或前往 NyxID 连接更多服务。',
   'channels.connect.servicesLoading': '正在加载服务',
   'channels.connect.servicesError': '无法加载服务，请重试后再连接。',
   'channels.connect.servicesEmpty': '当前 NyxID 授权范围内暂无可用服务。',

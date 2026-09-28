@@ -23,6 +23,19 @@ export const channelConnectionCss = `
 .channels__connection-form button.ant-input-password-icon:focus-visible { outline: 2px solid var(--wa-blue); outline-offset: 2px; }
 .channels__services-heading { align-items: center; display: flex; gap: 16px; justify-content: space-between; }
 .channels__services-heading > span { color: var(--wa-blue); font-size: 11px; }
+.channels__skill-services { background: var(--wa-subtle); border: 1px solid var(--channels-border); border-radius: var(--wa-radius); margin-top: 12px; padding: 12px; }
+.channels__skill-services .channels__services-heading { align-items: flex-start; flex-wrap: wrap; gap: 8px; }
+.channels__skill-services h3 { color: var(--wa-ink); flex: 1 1 160px; font-size: 12px; line-height: 20px; margin: 0; overflow-wrap: anywhere; }
+.channels__suggestion-list { list-style: none; margin: 12px 0 0; max-height: 360px; overflow-y: auto; padding: 0; scrollbar-gutter: stable; }
+.channels__suggestion { border-top: 1px solid var(--channels-border); color: var(--wa-ink); font-size: 12px; padding: 12px 0; overflow-wrap: anywhere; }
+.channels__suggestion:first-child { border-top: 0; padding-top: 0; }
+.channels__suggestion:last-child { padding-bottom: 0; }
+.channels__suggestion-instance { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.channels__suggestion-instance > div { flex: 1 1 180px; min-width: 0; }
+.channels__suggestion-selected { color: var(--wa-blue); font-size: 11px; }
+.channels__suggestion-links { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; }
+.channels__suggestion-links a { color: var(--wa-blue); font-size: 11px; line-height: 18px; }
+.channels__suggestion-links a:focus-visible { outline: 2px solid var(--wa-blue); outline-offset: 2px; }
 .channels__service-picker { border: 1px solid var(--channels-border); border-radius: 5px; margin-top: 12px; padding: 10px 10px 0; }
 .channels__service-picker > .ant-input-affix-wrapper { background: var(--wa-subtle); min-height: 34px; }
 .channels__service-picker .ant-input { background: transparent; font-size: 12px; }
