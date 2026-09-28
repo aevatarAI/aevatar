@@ -314,6 +314,85 @@ public sealed class AdmittedAgentToolExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenToolRequiresSenderBearer_ShouldPreferSenderOverAgentKey()
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, false, false),
+            credentialRequirement: AgentToolNyxIdCredentialRequirement.SenderBearer);
+        var executor = CreateExecutor(appender);
+        var context = CreateTestExecutionContext() with
+        {
+            Request = new AgentToolRequestIdentity("request-1", "call-1"),
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+            Credentials = new AgentToolCredentials(
+                "agent-key",
+                null,
+                " sender-token ",
+                AgentToolNyxIdCredentialKind.AgentKey),
+            Channel = new AgentToolChannelContext(
+                "lark",
+                "sender-1",
+                "registration-1",
+                "message-1",
+                "platform-message-1"),
+            SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+        };
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool) with { ExecutionContext = context });
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        var executedContext = tool.ExecutionContexts.Should().ContainSingle().Subject;
+        executedContext.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
+        executedContext.DurableNyxIdCredential.Should().BeNull();
+        executedContext.Credentials.NyxIdAccessToken.Should().Be("sender-token");
+        executedContext.Credentials.NyxIdOrgToken.Should().Be("sender-token");
+        executedContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        executedContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be("sender-token");
+        executedContext.Credentials.NyxIdCredentialKind
+            .Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+        appender.Records.Single(record => record.ToolExecution.ExecutionPhase == AuditToolExecutionPhase.Terminal)
+            .CredentialSource.Should().Be(AuditCredentialSource.BearerToken);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenBoundSenderRequiredButTokenMissing_ShouldDenyBeforeAgentKey()
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, false, false),
+            credentialRequirement: AgentToolNyxIdCredentialRequirement.SenderBearer);
+        var executor = CreateExecutor(appender);
+        var context = CreateTestExecutionContext() with
+        {
+            Request = new AgentToolRequestIdentity("request-1", "call-1"),
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+            Credentials = new AgentToolCredentials(
+                "agent-key",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.AgentKey),
+            Channel = new AgentToolChannelContext(
+                "lark",
+                "sender-1",
+                "registration-1",
+                "message-1",
+                "platform-message-1"),
+            SenderBinding = new AgentToolSenderBindingContext("binding-1"),
+        };
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool) with { ExecutionContext = context });
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Denied);
+        outcome.FailureCode.Should().Be("credential_denied");
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.CredentialPolicy);
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenBoundSenderHasProxyDelegation_ShouldPreserveCredentialPurposes()
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>
@@ -2167,7 +2246,11 @@ public sealed class AdmittedAgentToolExecutorTests
         string name = "test_tool",
         Func<string, AgentToolCallSafety>? classify = null,
         AgentToolReplayPolicy? replayPolicy = null,
-        Func<string, string, AgentToolReceipt, string?>? resolveLiveResult = null) : IAgentTool, IAgentToolLiveResultMapper
+        Func<string, string, AgentToolReceipt, string?>? resolveLiveResult = null,
+        AgentToolNyxIdCredentialRequirement credentialRequirement = AgentToolNyxIdCredentialRequirement.Default) :
+        IAgentTool,
+        IAgentToolLiveResultMapper,
+        IAgentToolNyxIdCredentialRequirementOwner
     {
         private readonly Func<string, string> _execute = execute ?? (_ => "{}");
 
@@ -2175,6 +2258,7 @@ public sealed class AdmittedAgentToolExecutorTests
         public string Description => "test";
         public string ParametersSchema => "{}";
         public ToolApprovalMode ApprovalMode { get; init; } = ToolApprovalMode.NeverRequire;
+        public AgentToolNyxIdCredentialRequirement NyxIdCredentialRequirement => credentialRequirement;
         public int SafetyCalls { get; private set; }
         public int ExecutionCalls { get; private set; }
         public List<string> SafetyArguments { get; } = [];

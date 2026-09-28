@@ -182,7 +182,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         }
 
         var isMutation = AgentToolCredentialPolicy.IsMutation(tool, callSafety);
-        var credentialDecision = ResolveCredentials(executionContext, isMutation, toolName);
+        var credentialDecision = ResolveCredentials(tool, executionContext, isMutation, toolName);
         if (!credentialDecision.Allowed)
         {
             var denied = CreateDenied(
@@ -571,6 +571,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             }
 
             var intentCredentialDecision = ResolveCredentials(
+                tool,
                 executionContext,
                 terminalIntent.IsMutation,
                 toolName);
@@ -607,7 +608,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         }
 
         var isMutation = AgentToolCredentialPolicy.IsMutation(tool, callSafety);
-        var credentialDecision = ResolveCredentials(executionContext, isMutation, toolName);
+        var credentialDecision = ResolveCredentials(tool, executionContext, isMutation, toolName);
         if (HasCancellationDeadlineElapsed(request.DeadlineUnixMs))
         {
             return await FinalizeCancellationOutcomeUncertainAsync(
@@ -1619,10 +1620,18 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
     }
 
     private static CredentialDecision ResolveCredentials(
+        IAgentTool tool,
         AgentToolExecutionContext context,
         bool isMutation,
         string toolName)
     {
+        var senderBindingId = NormalizeIdentity(context.SenderBinding.BindingId);
+        if (RequiresSenderBearer(tool) &&
+            ResolveRequiredSenderBearerCredential(context, senderBindingId, toolName) is { } senderDecision)
+        {
+            return senderDecision;
+        }
+
         if (context.Credentials.NyxIdCredentialKind is
             AgentToolNyxIdCredentialKind.ProxyDelegation or
             AgentToolNyxIdCredentialKind.AgentKey)
@@ -1659,7 +1668,6 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 string.Empty);
         }
 
-        var senderBindingId = NormalizeIdentity(context.SenderBinding.BindingId);
         if (senderBindingId is null)
         {
             var isChannelMediated = NormalizeIdentity(context.Channel.SenderId) is not null;
@@ -1708,6 +1716,58 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             context,
             AgentToolCredentialSource.ChannelRegistration,
             $"Tool '{toolName}' was not executed because the bound sender has no valid NyxID credential.");
+    }
+
+    private static bool RequiresSenderBearer(IAgentTool tool) =>
+        tool is IAgentToolNyxIdCredentialRequirementOwner owner &&
+        owner.NyxIdCredentialRequirement == AgentToolNyxIdCredentialRequirement.SenderBearer;
+
+    private static CredentialDecision? ResolveRequiredSenderBearerCredential(
+        AgentToolExecutionContext context,
+        string? senderBindingId,
+        string toolName)
+    {
+        if (senderBindingId is null)
+        {
+            var isChannelMediated = NormalizeIdentity(context.Channel.SenderId) is not null;
+            return isChannelMediated
+                ? new CredentialDecision(
+                    false,
+                    context,
+                    AgentToolCredentialSource.BearerToken,
+                    $"Tool '{toolName}' was not executed because it requires the channel sender's NyxID credential, but the sender is not bound to a NyxID account.")
+                : null;
+        }
+
+        var senderToken = NormalizeIdentity(context.Credentials.SenderNyxIdAccessToken);
+        if (senderToken is null)
+        {
+            return new CredentialDecision(
+                false,
+                context,
+                AgentToolCredentialSource.BearerToken,
+                $"Tool '{toolName}' was not executed because it requires the channel sender's NyxID credential, but the bound sender has no valid NyxID credential.");
+        }
+
+        var senderContext = context with
+        {
+            CredentialSource = AgentToolCredentialSource.BearerToken,
+            DurableNyxIdCredential = null,
+            Credentials = context.Credentials with
+            {
+                NyxIdAccessToken = senderToken,
+                NyxIdOrgToken = senderToken,
+                SenderNyxIdAccessToken = senderToken,
+                SourceReadableNyxIdAccessToken = senderToken,
+                NyxIdCredentialKind = AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+            },
+        };
+        return new CredentialDecision(
+            true,
+            senderContext,
+            ResolveCredentialSource(senderContext),
+            string.Empty,
+            SelectedSenderBearer: true);
     }
 
     private async Task<ChannelRegistrationAuthorityAdmissionResult?> AdmitChannelRegistrationAuthorityAsync(

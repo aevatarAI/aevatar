@@ -6,7 +6,10 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-public sealed class NyxIdConnectLinksTool : INyxIdBuiltInTool, IAgentToolLiveResultMapper
+public sealed class NyxIdConnectLinksTool :
+    INyxIdBuiltInTool,
+    IAgentToolLiveResultMapper,
+    IAgentToolNyxIdCredentialRequirementOwner
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
     {
@@ -82,6 +85,9 @@ public sealed class NyxIdConnectLinksTool : INyxIdBuiltInTool, IAgentToolLiveRes
         """;
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+    public AgentToolNyxIdCredentialRequirement NyxIdCredentialRequirement =>
+        AgentToolNyxIdCredentialRequirement.SenderBearer;
 
     public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
         ActionParser.Classify(argumentsJson);

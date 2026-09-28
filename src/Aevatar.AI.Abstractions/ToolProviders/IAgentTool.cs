@@ -21,6 +21,17 @@ public interface IAgentToolLiveResultMapper
         AgentToolReceipt receipt);
 }
 
+public enum AgentToolNyxIdCredentialRequirement
+{
+    Default = 0,
+    SenderBearer = 1,
+}
+
+public interface IAgentToolNyxIdCredentialRequirementOwner
+{
+    AgentToolNyxIdCredentialRequirement NyxIdCredentialRequirement { get; }
+}
+
 public enum AgentToolPendingOperationStatus
 {
     Unspecified = 0,
