@@ -5194,5 +5194,6 @@ const projectMessages = {
   "pages.studio.studiomemberinvokesetuppanels.run.workflow": "运行工作流",
   "pages.studio.studiomemberinvokesetuppanels.stop.current.run": "停止",
   "pages.studio.studiomemberinvokepanel.value.copied": "{label} 已复制。",
+  "pages.auth.callback.index.back.to.previous.page": "返回上一页",
 };
 export default projectMessages;

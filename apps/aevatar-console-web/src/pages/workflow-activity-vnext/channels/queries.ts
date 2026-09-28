@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
-import { listChannelServices } from '@/shared/api/channelServicesApi';
+import { listChannelServiceAccess } from '@/shared/api/channelServicesApi';
 import { ChannelApiError, channelsApi } from '@/shared/api/channelsApi';
 
 export const channelKeys = {
   detail: (scopeId: string, id: string) =>
     ['channels', scopeId, 'detail', id] as const,
   services: (scopeId: string) =>
-    ['channels', scopeId, 'service-choices'] as const,
+    ['channels', scopeId, 'service-access'] as const,
   skills: (scopeId: string, search: string) =>
     ['channels', scopeId, 'skills', search] as const,
   skill: (scopeId: string, id: string) =>
@@ -20,15 +20,6 @@ const queryOptions = {
   refetchOnWindowFocus: false,
   refetchOnReconnect: false,
 } as const;
-
-export function useChannelServiceChoices(scopeId: string) {
-  return useQuery({
-    ...queryOptions,
-    queryKey: channelKeys.services(scopeId),
-    queryFn: ({ signal }) => listChannelServices(signal),
-    enabled: Boolean(scopeId),
-  });
-}
 
 export function useChannelRegistrations(scopeId: string, enabled = true) {
   return useQuery({
@@ -64,5 +55,15 @@ export function useChannelDetail(scopeId: string, id: string) {
       };
     },
     enabled: Boolean(scopeId && id),
+  });
+}
+
+export function useChannelServiceAccess(scopeId: string) {
+  return useQuery({
+    ...queryOptions,
+    queryKey: channelKeys.services(scopeId),
+    queryFn: ({ signal }) => listChannelServiceAccess(signal),
+    enabled: Boolean(scopeId),
+    refetchOnMount: 'always',
   });
 }

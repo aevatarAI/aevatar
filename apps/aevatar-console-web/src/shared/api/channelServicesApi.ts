@@ -90,7 +90,7 @@ export async function listChannelServiceIdentities(
   return services.map(({ id, slug, label }) => ({ id, slug, label }));
 }
 
-export async function listChannelServices(
+export async function listChannelServiceAccess(
   signal?: AbortSignal,
 ): Promise<ChannelServiceChoice[]> {
   const session = await ensureActiveAuthSession();
@@ -105,10 +105,10 @@ export async function listChannelServices(
     signal,
   );
   const authorizedIds = new Set(grants.allowedServiceIds);
-  return services.filter(
-    (service) =>
-      service.active &&
+  return services.map((service) => ({
+    ...service,
+    allowed:
       service.allowed &&
       (grants.allowAllServices || authorizedIds.has(service.id)),
-  );
+  }));
 }

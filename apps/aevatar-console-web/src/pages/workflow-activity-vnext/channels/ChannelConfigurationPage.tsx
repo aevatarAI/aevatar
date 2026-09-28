@@ -17,6 +17,8 @@ import {
   channelConfiguration,
   channelsApi,
 } from '@/shared/api/channelsApi';
+import { NyxIDAuthClient } from '@/shared/auth/client';
+import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
@@ -27,6 +29,7 @@ import {
   buildWorkflowActivitySectionHref,
 } from '../navigation';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
+import ChannelServiceAccessNotice from './ChannelServiceAccessNotice';
 import ChannelServicePicker from './ChannelServicePicker';
 import ChannelSkillField from './ChannelSkillField';
 import { channelConnectionCss } from './connectionStyles';
@@ -40,8 +43,13 @@ import {
   channelKeys,
   useChannelDetail,
   useChannelRegistrations,
-  useChannelServiceChoices,
+  useChannelServiceAccess,
 } from './queries';
+import {
+  clearChannelAccessDraft,
+  readChannelAccessDraft,
+  saveChannelAccessDraft,
+} from './serviceAccessDraft';
 import { channelsCss } from './styles';
 
 type Target =
@@ -60,8 +68,12 @@ const requiredServiceSlugs = ['ornn-api', 'chrono-llm-public'] as const;
 
 export default function ChannelConfigurationPage({
   scopeId,
+  requestedServiceIds = [],
   ...target
-}: Target & { readonly scopeId: string }) {
+}: Target & {
+  readonly scopeId: string;
+  readonly requestedServiceIds?: readonly string[];
+}) {
   const editing = Boolean(target.registrationId);
   const list = useChannelRegistrations(scopeId, !editing);
   const detail = useChannelDetail(scopeId, target.registrationId ?? '');
@@ -151,6 +163,7 @@ export default function ChannelConfigurationPage({
           initial={initial}
           editing={editing}
           defaultSkillId={target.defaultSkillId}
+          requestedServiceIds={requestedServiceIds}
           setNavigate={setNavigate}
         />
       ) : error && !query.isFetching ? (
@@ -178,21 +191,38 @@ function ConfigurationForm({
   initial,
   editing,
   defaultSkillId,
+  requestedServiceIds,
   setNavigate,
 }: {
   readonly scopeId: string;
   readonly initial: ChannelRegistration;
   readonly editing: boolean;
   readonly defaultSkillId?: string;
+  readonly requestedServiceIds: readonly string[];
   readonly setNavigate: React.Dispatch<
     React.SetStateAction<(target: string) => void>
   >;
 }) {
   const baseline = channelConfiguration(initial);
+  const [restoredDraft] = React.useState(() =>
+    editing && initial.id ? readChannelAccessDraft(scopeId, initial.id) : null,
+  );
+  const [reviewPending, setReviewPending] = React.useState(false);
+  const reviewLeaving = React.useRef(false);
+  const reviewLock = React.useRef(false);
+  const requestedIds = [
+    ...new Set(
+      requestedServiceIds
+        .map((id) => id.trim())
+        .filter((id) => id && id.length <= 128),
+    ),
+  ].slice(0, 20);
   const [initialSkillId] = React.useState(editing ? undefined : defaultSkillId);
   // Undefined means the link's default has not been resolved or overridden yet.
   const [skillName, setSkillName] = React.useState<string | undefined>(() =>
-    initialSkillId ? undefined : (initial.skill?.name ?? ''),
+    initialSkillId
+      ? undefined
+      : (restoredDraft?.skillName ?? initial.skill?.name ?? ''),
   );
   const skillReady = skillName !== undefined;
   const defaultSkill = useQuery({
@@ -220,9 +250,11 @@ function ConfigurationForm({
     defaultSkill.data,
   ]);
   const [chosenServiceIds, setServiceIds] = React.useState<readonly string[]>(
-    baseline?.serviceIds ?? [],
+    restoredDraft?.serviceIds ?? baseline?.serviceIds ?? [],
   );
-  const [label, setLabel] = React.useState(initial.label ?? '');
+  const [label, setLabel] = React.useState(
+    restoredDraft?.label ?? initial.label ?? '',
+  );
   const [savedLabel, setSavedLabel] = React.useState(initial.label ?? '');
   const [receipt, setReceipt] = React.useState<ChannelReceipt | null>(null);
   const [submitted, setSubmitted] = React.useState<ChannelConfiguration | null>(
@@ -237,7 +269,26 @@ function ConfigurationForm({
   const completed = React.useRef(false);
   const mounted = React.useRef(true);
   const labelId = React.useId();
-  const services = useChannelServiceChoices(scopeId);
+  const services = useChannelServiceAccess(scopeId);
+  React.useEffect(() => {
+    if (restoredDraft && initial.id)
+      clearChannelAccessDraft(scopeId, initial.id);
+  }, [restoredDraft, scopeId, initial.id]);
+  React.useEffect(() => {
+    const resume = (event: PageTransitionEvent) => {
+      if (!event.persisted || !reviewLeaving.current) return;
+      reviewLeaving.current = false;
+      reviewLock.current = false;
+      setReviewPending(false);
+      if (initial.id) clearChannelAccessDraft(scopeId, initial.id);
+      void services.refetch();
+    };
+    window.addEventListener('pageshow', resume);
+    return () => window.removeEventListener('pageshow', resume);
+  }, [services.refetch, scopeId, initial.id]);
+  const availableServices = (services.data ?? []).filter(
+    (service) => service.active && service.allowed,
+  );
   const requiredServices = (services.data ?? []).filter(
     (service) =>
       service.active &&
@@ -250,8 +301,12 @@ function ConfigurationForm({
   );
   const serviceIds = [...new Set([...chosenServiceIds, ...requiredIds])];
   const servicesReady =
-    !services.isPending &&
+    services.isFetchedAfterMount &&
+    !services.isFetching &&
     !services.isError &&
+    serviceIds.every((id) =>
+      availableServices.some((service) => service.id === id),
+    ) &&
     missingRequiredSlugs.length === 0;
   const toast = useConsoleToast();
   const client = useQueryClient();
@@ -270,9 +325,12 @@ function ConfigurationForm({
   const dirty = editing
     ? configDirty || labelDirty
     : Boolean(skillName || chosenServiceIds.length);
-  const busy = submitting || Boolean(receipt) || uncertain;
+  const busy = submitting || Boolean(receipt) || uncertain || reviewPending;
   const options = [
-    ...(services.data ?? []),
+    ...(services.data ?? []).filter(
+      (service) =>
+        (service.active && service.allowed) || serviceIds.includes(service.id),
+    ),
     ...serviceIds
       .filter((id) => !services.data?.some((service) => service.id === id))
       .map((id) => ({
@@ -307,6 +365,7 @@ function ConfigurationForm({
   React.useEffect(() => {
     if (!dirty || receipt || uncertain) return;
     const warn = (event: BeforeUnloadEvent) => {
+      if (reviewLeaving.current) return;
       event.preventDefault();
       event.returnValue = '';
     };
@@ -364,6 +423,7 @@ function ConfigurationForm({
     completed.current = true;
     client.setQueryData(channelKeys.detail(scopeId, actual.id), actual);
     void client.invalidateQueries({ queryKey: channelKeys.list(scopeId) });
+    if (editing && initial.id) clearChannelAccessDraft(scopeId, initial.id);
     toast.success(
       editing
         ? t('channels.edit.saved', 'Channel changes saved.')
@@ -371,6 +431,37 @@ function ConfigurationForm({
     );
     history.replace(buildChannelDetailsHref(scopeId, actual.id));
   }, [observation.data, submitted, initial, editing, client, scopeId, toast]);
+
+  async function reviewServiceAccess() {
+    if (!editing || !initial.id || busy || reviewLock.current || !skillReady)
+      return;
+    reviewLock.current = true;
+    setReviewPending(true);
+    try {
+      // Persist before navigation. If storage fails, keep the editor open.
+      saveChannelAccessDraft(scopeId, initial.id, {
+        label,
+        skillName: skillName ?? '',
+        serviceIds,
+      });
+      reviewLeaving.current = true;
+      await new NyxIDAuthClient(getNyxIDRuntimeConfig()).loginWithRedirect({
+        flow: 'serviceAccessReview',
+        returnTo: `${window.location.pathname}${window.location.search}${window.location.hash}`,
+      });
+    } catch {
+      reviewLeaving.current = false;
+      reviewLock.current = false;
+      setReviewPending(false);
+      clearChannelAccessDraft(scopeId, initial.id);
+      toast.error(
+        t(
+          'channels.access.startFailed',
+          'Could not open NyxID. Your changes are still here. Try again.',
+        ),
+      );
+    }
+  }
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -429,6 +520,7 @@ function ConfigurationForm({
         void client.invalidateQueries({
           queryKey: channelKeys.detail(scopeId, initial.id ?? ''),
         });
+        if (initial.id) clearChannelAccessDraft(scopeId, initial.id);
         toast.success(t('channels.edit.saved', 'Channel changes saved.'));
         history.replace(returnHref);
       }
@@ -554,6 +646,30 @@ function ConfigurationForm({
         ) : null}
         <ChannelServicePicker
           services={options}
+          accessAction={
+            editing
+              ? {
+                  onReview: () => void reviewServiceAccess(),
+                  pending: reviewPending,
+                  disabled: busy || !skillReady,
+                }
+              : undefined
+          }
+          accessNotice={
+            editing &&
+            services.isFetchedAfterMount &&
+            !services.isFetching &&
+            !services.isError ? (
+              <ChannelServiceAccessNotice
+                requestedIds={requestedIds}
+                services={services.data ?? []}
+                restored={Boolean(restoredDraft)}
+              />
+            ) : undefined
+          }
+          suggestedIds={requestedIds.filter((id) =>
+            availableServices.some((service) => service.id === id),
+          )}
           selectedIds={serviceIds}
           requiredIds={requiredIds}
           missingRequiredSlugs={missingRequiredSlugs}
@@ -621,7 +737,11 @@ function ConfigurationForm({
         title={t('channels.edit.discardTitle', 'Discard your changes?')}
         onCancel={() => setLeaveTarget(null)}
         onOk={() => {
-          if (leaveTarget) history.push(leaveTarget);
+          if (leaveTarget) {
+            if (editing && initial.id)
+              clearChannelAccessDraft(scopeId, initial.id);
+            history.push(leaveTarget);
+          }
           setLeaveTarget(null);
         }}
         okText={t('channels.connect.discard', 'Discard')}

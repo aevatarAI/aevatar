@@ -131,11 +131,13 @@ describe('NyxID callback page', () => {
   });
 
   it('shows retryable service access review cancellation without replacing the session route', async () => {
+    const channelReturnTo =
+      '/scopes/scope-alpha/channels/reg-alpha/edit?requiredServiceId=us-firecrawl';
     handleRedirectCallback.mockRejectedValue(
       Object.assign(new Error('OAuth error: access_denied'), {
         flow: 'serviceAccessReview',
         reason: 'oauthDenied',
-        returnTo: reviewReturnTo,
+        returnTo: channelReturnTo,
       }),
     );
 
@@ -154,11 +156,11 @@ describe('NyxID callback page', () => {
     fireEvent.click(retryButton);
     expect(loginWithRedirect).toHaveBeenCalledWith({
       flow: 'serviceAccessReview',
-      returnTo: reviewReturnTo,
+      returnTo: channelReturnTo,
     });
     expect(
-      await findByRole('link', { name: 'Back to Account settings' }),
-    ).toHaveAttribute('href', reviewReturnTo);
+      await findByRole('link', { name: 'Back to previous page' }),
+    ).toHaveAttribute('href', channelReturnTo);
     expect(replaceLocation).not.toHaveBeenCalled();
   });
 
@@ -279,7 +281,7 @@ describe('NyxID callback page', () => {
       returnTo: CONSOLE_HOME_ROUTE,
     });
     expect(
-      await findByRole('link', { name: 'Back to Account settings' }),
+      await findByRole('link', { name: 'Back to previous page' }),
     ).toHaveAttribute('href', CONSOLE_HOME_ROUTE);
   });
 
