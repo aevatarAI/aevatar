@@ -24,6 +24,7 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
     private readonly IRemoteSkillAccessTokenResolver? _remoteAccessTokenResolver;
     private readonly ISkillWorkflowMountPort _workflowMountPort;
     private readonly ILogger _logger;
+    private readonly ILogger<UseSkillTool> _useSkillLogger;
 
     public SkillsAgentToolSource(
         SkillsOptions options,
@@ -32,7 +33,8 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
         IRemoteSkillFetcher? remoteFetcher = null,
         ISkillWorkflowMountPort? workflowMountPort = null,
         IRemoteSkillAccessTokenResolver? remoteAccessTokenResolver = null,
-        ILogger<SkillsAgentToolSource>? logger = null)
+        ILogger<SkillsAgentToolSource>? logger = null,
+        ILogger<UseSkillTool>? useSkillLogger = null)
     {
         _options = options;
         _discovery = discovery;
@@ -41,6 +43,7 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
         _remoteAccessTokenResolver = remoteAccessTokenResolver;
         _workflowMountPort = workflowMountPort ?? new NoOpSkillWorkflowMountPort();
         _logger = logger ?? NullLogger<SkillsAgentToolSource>.Instance;
+        _useSkillLogger = useSkillLogger ?? NullLogger<UseSkillTool>.Instance;
     }
 
     /// <inheritdoc />
@@ -69,7 +72,8 @@ public sealed class SkillsAgentToolSource : IAgentToolSource
                 _localCatalog,
                 _remoteFetcher,
                 workflowMountPort: _workflowMountPort,
-                remoteAccessTokenResolver: _remoteAccessTokenResolver),
+                remoteAccessTokenResolver: _remoteAccessTokenResolver,
+                logger: _useSkillLogger),
         ];
         return Task.FromResult(tools);
     }

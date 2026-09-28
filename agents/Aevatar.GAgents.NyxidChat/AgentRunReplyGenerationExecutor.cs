@@ -1284,7 +1284,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return payload.OperationAdmission?.Clone();
     }
 
-    private static AgentRunToolStepResult BuildUnauthorizedToolStepResult(IReadOnlyList<ToolCall> toolCalls)
+    private AgentRunToolStepResult BuildUnauthorizedToolStepResult(IReadOnlyList<ToolCall> toolCalls)
     {
         var deniedResults = new List<ToolExecutionResult>(toolCalls.Count);
         foreach (var toolCall in toolCalls)
@@ -1302,7 +1302,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return BuildToolStepResult(deniedResults);
     }
 
-    private static AgentRunToolStepResult BuildToolStepResult(
+    private AgentRunToolStepResult BuildToolStepResult(
         IReadOnlyList<ToolExecutionResult> results)
     {
         var toolStepResult = new AgentRunToolStepResult
@@ -1321,7 +1321,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 toolStepResult.ToolReceipts.Add(toolResult.Receipt.Clone());
         }
 
-        ToolResultPayloadBounds.BoundResultMessages(toolStepResult.ResultMessages);
+        ToolResultPayloadBounds.BoundResultMessages(toolStepResult.ResultMessages, logger: _logger);
         return toolStepResult;
     }
 

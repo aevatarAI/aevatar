@@ -551,7 +551,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     [Theory]
     [InlineData(81_824)]
     [InlineData(102_400)]
-    public async Task ChannelRuntimeCatalog_WhenCombinedSchemaFits100KiB_ShouldExposeAllConnectedOperations(
+    public async Task ChannelRuntimeCatalog_WhenCombinedSchemaFitsChannelReplyBudget_ShouldExposeAllConnectedOperations(
         int schemaBytes)
     {
         var catalog = await MaterializeConnectedCatalogWithSchemaBytesAsync(schemaBytes);
@@ -559,19 +559,32 @@ public sealed class AgentRunReplyGenerationExecutorTests
         catalog.ExactTools.Should().HaveCount(300);
         catalog.FinalAllowedToolNames.Should().HaveCount(300);
         catalog.Proof.SchemaBytes.Should().Be(schemaBytes);
-        catalog.Proof.Budget.MaximumSchemaBytes.Should().Be(102_400);
+        catalog.Proof.Budget.MaximumSchemaBytes.Should()
+            .Be(AgentTurnToolCatalogBudget.ChannelReply.MaximumSchemaBytes);
         AgentTurnToolCatalogProofPayloadMapper.FromPayload(catalog.Proof.ToPayload())
             .ToPayload().Should().Be(catalog.Proof.ToPayload());
     }
 
     [Fact]
-    public async Task ChannelRuntimeCatalog_WhenCombinedSchemaExceeds100KiB_ShouldRejectCatalog()
+    public async Task ChannelRuntimeCatalog_WhenCombinedSchemaAtChannelReplyLimit_ShouldExposeAllConnectedOperations()
     {
-        var act = () => MaterializeConnectedCatalogWithSchemaBytesAsync(102_401);
+        var schemaBytes = AgentTurnToolCatalogBudget.ChannelReply.MaximumSchemaBytes;
+        var catalog = await MaterializeConnectedCatalogWithSchemaBytesAsync(schemaBytes);
+
+        catalog.Proof.SchemaBytes.Should().Be(schemaBytes);
+        catalog.Proof.Budget.MaximumSchemaBytes.Should().Be(schemaBytes);
+    }
+
+    [Fact]
+    public async Task ChannelRuntimeCatalog_WhenCombinedSchemaExceedsChannelReplyLimit_ShouldRejectCatalog()
+    {
+        var schemaLimit = AgentTurnToolCatalogBudget.ChannelReply.MaximumSchemaBytes;
+        var schemaBytes = schemaLimit + 1;
+        var act = () => MaterializeConnectedCatalogWithSchemaBytesAsync(schemaBytes);
 
         var exception = await act.Should().ThrowAsync<AgentTurnToolCatalogException>();
         exception.Which.Failure.Code.Should().Be(AgentTurnToolCatalogFailureCode.CatalogOverBudget);
-        exception.Which.Failure.Detail.Should().Contain("schema_bytes=102401/102400");
+        exception.Which.Failure.Detail.Should().Contain($"schema_bytes={schemaBytes}/{schemaLimit}");
     }
 
     private static Task<AgentTurnToolCatalog> MaterializeConnectedCatalogWithSchemaBytesAsync(int schemaBytes)
@@ -1846,6 +1859,34 @@ public sealed class AgentRunReplyGenerationExecutorTests
         roundTripped.ToolResultView.Should().NotBeNull();
         roundTripped.ToolResultView!.ToolName.Should().Be("use_skill");
         roundTripped.ToolResultView.Failure.Should().BeEquivalentTo(source.ToolResultView.Failure);
+    }
+
+    [Fact]
+    public void AgentRunChatMessage_NewSkillLoad_ShouldNotPersistFullDisplayText()
+    {
+        var skillBody = new string('x', 150_000);
+        var source = new ChatMessage
+        {
+            Role = "tool",
+            ToolCallId = "call-skill-load",
+            Content = skillBody,
+            ToolResultView = new ToolResultView(
+                "use_skill",
+                SkillSearch: null,
+                SkillLoad: new SkillLoadToolResultView(
+                    ToolResultViewStatus.Success,
+                    "merchant-assistant",
+                    Loaded: true,
+                    Error: null,
+                    HttpStatus: 200,
+                    DisplayText: skillBody)),
+        };
+
+        var proto = AgentRunReplyStepMappers.ToProto(source);
+
+        proto.Content.Should().Be(skillBody);
+        proto.ToolResultView.SkillLoad.DisplayText.Should().BeEmpty();
+        proto.CalculateSize().Should().BeLessThan(ToolResultPayloadBounds.DefaultMaxToolResultMessageBytes);
     }
 
     [Fact]

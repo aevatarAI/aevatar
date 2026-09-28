@@ -125,7 +125,7 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
     }
 
     [Fact]
-    public async Task DuplicateCommitDispatch_ShouldNotOverwriteFirstBinding()
+    public async Task DuplicateCommitDispatch_ShouldProjectSameOwnerReplacement()
     {
         var observer = new ObservingExternalIdentityBindingWriter();
         using var host = await StartSiloHostAsync(observer);
@@ -173,13 +173,15 @@ public sealed class ChannelIdentityOrleansDispatchProjectionTests
         await observer.WaitForDeleteAsync(actorId, TestTimeout);
 
         var observations = observer.Snapshot(actorId);
-        observations
+        var upserts = observations
             .Where(static observation => observation.Operation == nameof(BindingWriteObservation.Upsert))
-            .Should()
-            .OnlyContain(
-                observation => observation == BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1),
-                "at-least-once projection replay may repeat the first write but must never project the duplicate binding");
-        observations.Should().Contain(BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1));
+            .ToArray();
+        upserts.Should().OnlyContain(
+            observation => observation == BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1) ||
+                           observation == BindingWriteObservation.Upsert(actorId, "bnd-issue1355-second", 2),
+            "at-least-once projection replay may repeat committed states but must not project an uncommitted binding/version pair");
+        upserts.Should().Contain(BindingWriteObservation.Upsert(actorId, "bnd-issue1355-first", 1));
+        upserts.Should().Contain(BindingWriteObservation.Upsert(actorId, "bnd-issue1355-second", 2));
         observations.Should().Contain(BindingWriteObservation.Delete(actorId));
 
         var queryPort = host.Services.GetRequiredService<IExternalIdentityBindingQueryPort>();

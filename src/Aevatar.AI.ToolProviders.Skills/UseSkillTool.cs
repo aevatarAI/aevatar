@@ -6,6 +6,8 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.Workflow.Abstractions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.Skills;
 
@@ -34,17 +36,20 @@ public sealed class UseSkillTool : IAgentTool
     private readonly IRemoteSkillFetcher? _remoteFetcher;
     private readonly IRemoteSkillAccessTokenResolver? _remoteAccessTokenResolver;
     private readonly ISkillWorkflowMountPort _workflowMountPort;
+    private readonly ILogger<UseSkillTool> _logger;
 
     public UseSkillTool(
         LocalSkillCatalog localCatalog,
         IRemoteSkillFetcher? remoteFetcher = null,
         ISkillWorkflowMountPort? workflowMountPort = null,
-        IRemoteSkillAccessTokenResolver? remoteAccessTokenResolver = null)
+        IRemoteSkillAccessTokenResolver? remoteAccessTokenResolver = null,
+        ILogger<UseSkillTool>? logger = null)
     {
         _localCatalog = localCatalog;
         _remoteFetcher = remoteFetcher;
         _remoteAccessTokenResolver = remoteAccessTokenResolver;
         _workflowMountPort = workflowMountPort ?? new NoOpSkillWorkflowMountPort();
+        _logger = logger ?? NullLogger<UseSkillTool>.Instance;
     }
 
     public string Name => "use_skill";
@@ -534,7 +539,7 @@ public sealed class UseSkillTool : IAgentTool
     private static bool ShouldMountWorkflows(bool? requestedMountWorkflows) =>
         requestedMountWorkflows == true;
 
-    private static string BuildSkillResponse(SkillDefinition skill, string args)
+    private string BuildSkillResponse(SkillDefinition skill, string args)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"# {skill.Name}");
@@ -643,7 +648,25 @@ public sealed class UseSkillTool : IAgentTool
             }
         }
 
-        return sb.ToString();
+        var rendered = sb.ToString();
+        var summary = SkillPayloadDiagnostics.Summarize(skill.AssociatedFiles);
+        _logger.LogInformation(
+            "Skill response assembled: skill_name={SkillName} loaded_version={LoadedVersion} " +
+            "assembled_result_bytes={AssembledResultBytes} associated_file_count={AssociatedFileCount} " +
+            "associated_file_bytes={AssociatedFileBytes} empty_file_count={EmptyFileCount} " +
+            "root_skill_bytes={RootSkillBytes} largest_file_bytes={LargestFileBytes} " +
+            "largest_file_path={LargestFilePath} file_tree_sha256={FileTreeSha256}",
+            skill.Name,
+            skill.Version ?? string.Empty,
+            Encoding.UTF8.GetByteCount(rendered),
+            summary.FileCount,
+            summary.TotalFileBytes,
+            summary.EmptyFileCount,
+            summary.RootSkillBytes,
+            summary.LargestFileBytes,
+            summary.LargestFilePath,
+            summary.FileTreeSha256);
+        return rendered;
     }
 
     private static string BuildMountedWorkflowsSummary(SkillWorkflowMountResult workflowMount)

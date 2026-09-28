@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 
@@ -224,6 +225,26 @@ public sealed class OrnnUpdateSkillToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldLogMutationInputSummaryWithoutPackageBody()
+    {
+        var handler = new CapturingHandler(
+            """{ "data": { "valid": true, "violations": [] } }""",
+            """{ "data": { "id": "11111111-2222-3333-4444-555555555555", "version": "1.2" } }""");
+        var logger = new RecordingLogger<OrnnUpdateSkillTool>();
+        var tool = CreateTool(handler, logger: logger);
+
+        using var _ = BeginTokenScope();
+        var arguments = ValidArguments(extraFields: "\"references\": [{\"path\": \"rules.md\", \"content\": \"do-not-log-this-package-body\"}]");
+        var result = await tool.ExecuteAsync(arguments);
+
+        result.Should().Contain("\"status\":\"success\"");
+        logger.Output.Should().Contain("mutation_name=ornn_update_skill");
+        logger.Output.Should().Contain("mutation_input_file_count=");
+        logger.Output.Should().Contain("mutation_input_tree_sha256=");
+        logger.Output.Should().NotContain("do-not-log-this-package-body");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenUpdateReturnsPermissionError_ShouldReturnConfirmedTypedFailure()
     {
         var handler = new CapturingHandler(
@@ -419,7 +440,8 @@ public sealed class OrnnUpdateSkillToolTests
     private static OrnnUpdateSkillTool CreateTool(
         HttpMessageHandler handler,
         IReadOnlyList<IOrnnSkillPublishAssetValidator>? validators = null,
-        TimeSpan? perCallTimeout = null)
+        TimeSpan? perCallTimeout = null,
+        ILogger<OrnnUpdateSkillTool>? logger = null)
     {
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
@@ -434,7 +456,8 @@ public sealed class OrnnUpdateSkillToolTests
             pipeline,
             new OrnnSkillPackageBuilder(),
             formatValidator,
-            client);
+            client,
+            logger);
     }
 
     private static AgentToolContextScope BeginTokenScope() =>
@@ -453,6 +476,25 @@ public sealed class OrnnUpdateSkillToolTests
             OrnnSkillPublishRequest request,
             CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<OrnnSkillPublishDiagnostic>>(diagnostics);
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public string Output => string.Join('\n', Messages);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 
     private sealed class CapturingHandler : HttpMessageHandler
