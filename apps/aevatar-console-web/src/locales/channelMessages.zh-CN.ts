@@ -225,17 +225,14 @@ export default {
   'channels.access.help':
     '选择此频道可使用的服务。“管理服务权限”将打开 NyxID 的完整授权页面。',
   'channels.access.needed': '需要补充服务权限',
-  'channels.access.reviewed': '已检查服务权限',
   'channels.access.instructions':
     '在 NyxID 的 Service access 中点击 Customize。保留仍需使用的已选服务，勾选以下服务，再点击 Allow。',
-  'channels.access.available':
-    '请在下方选择此频道需要使用的服务，然后保存修改。',
   'channels.access.unknown': '未找到该服务',
   'channels.access.requestedIdentity': '所需服务 ID',
   'channels.access.unavailable': '请在 NyxID 检查服务是否可用',
   'channels.access.notAuthorized': '需要授权',
   'channels.access.restored':
-    '已恢复未保存的修改。请检查服务权限和所选服务后再保存。',
+    '已保留你离开前的修改。请确认下方服务选择，然后点击「保存修改」。',
   'channels.access.startFailed': '无法打开 NyxID，当前修改已保留，请重试。',
   'channels.access.requested': '本次需要',
   'channels.access.unavailableSelection':

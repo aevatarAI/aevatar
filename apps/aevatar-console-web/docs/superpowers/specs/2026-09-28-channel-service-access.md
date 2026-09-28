@@ -47,6 +47,9 @@ details disclosure; unavailable services are not presented as selectable.
    unselected until the user chooses them. Partial or cancelled authorization
    leaves the remaining access needs visible. The callback's return action is
    labeled Back to previous page because it may return to this editor.
+   Restored edits receive one short inline reminder to review selections and
+   save. Do not show a generic permission-check success heading or panel;
+   only unresolved access needs warrant a separate notice and service list.
 6. The user selects services and saves explicitly. Save still follows the
    channel's existing accepted-to-observed confirmation. Access review itself
    never saves the channel. Selected services that are no longer available

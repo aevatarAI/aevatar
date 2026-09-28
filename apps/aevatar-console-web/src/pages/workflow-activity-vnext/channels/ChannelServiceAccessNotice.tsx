@@ -1,4 +1,4 @@
-import { CheckCircleOutlined, LockOutlined } from '@ant-design/icons';
+import { LockOutlined } from '@ant-design/icons';
 import * as React from 'react';
 import type { ChannelServiceChoice } from '@/shared/api/channelServicesApi';
 import { t } from '@/shared/i18n/messages';
@@ -18,36 +18,34 @@ export default function ChannelServiceAccessNotice({
         (service) => service.id === id && service.active && service.allowed,
       ),
   );
-  if (!requestedIds.length && !restored) return null;
+  const draftNotice = restored ? (
+    <p className="channels__form-help" role="status">
+      {t(
+        'channels.access.restored',
+        'Your changes have been kept. Review the service selections below, then click Save changes.',
+      )}
+    </p>
+  ) : null;
+  if (!missing.length) return draftNotice;
   return (
-    <div
-      className={`channels__access-notice${missing.length ? ' channels__access-notice--needed' : ''}`}
-      role="status"
-    >
-      <div className="channels__access-notice-heading">
-        {missing.length ? (
+    <>
+      {draftNotice}
+      <div
+        className="channels__access-notice channels__access-notice--needed"
+        role="status"
+      >
+        <div className="channels__access-notice-heading">
           <LockOutlined aria-hidden="true" />
-        ) : (
-          <CheckCircleOutlined aria-hidden="true" />
-        )}
-        <strong>
-          {missing.length
-            ? t('channels.access.needed', 'Service access needed')
-            : t('channels.access.reviewed', 'Service access checked')}
-        </strong>
-      </div>
-      <p>
-        {missing.length
-          ? t(
-              'channels.access.instructions',
-              'In NyxID, choose Customize under Service access. Keep the services you still use selected and add the services below, then choose Allow.',
-            )
-          : t(
-              'channels.access.available',
-              'Choose the services this channel should use below, then save your changes.',
-            )}
-      </p>
-      {missing.length ? (
+          <strong>
+            {t('channels.access.needed', 'Service access needed')}
+          </strong>
+        </div>
+        <p>
+          {t(
+            'channels.access.instructions',
+            'In NyxID, choose Customize under Service access. Keep the services you still use selected and add the services below, then choose Allow.',
+          )}
+        </p>
         <ul className="channels__access-list">
           {missing.map((id) => {
             const service = services.find((item) => item.id === id);
@@ -86,15 +84,7 @@ export default function ChannelServiceAccessNotice({
             );
           })}
         </ul>
-      ) : null}
-      {restored ? (
-        <p>
-          {t(
-            'channels.access.restored',
-            'Your unsaved changes have been restored. Review service access and your selections before saving.',
-          )}
-        </p>
-      ) : null}
-    </div>
+      </div>
+    </>
   );
 }

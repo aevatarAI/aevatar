@@ -256,17 +256,14 @@ export default {
   'channels.access.help':
     'Choose what this channel can use. Manage service access opens the full NyxID authorization page.',
   'channels.access.needed': 'Service access needed',
-  'channels.access.reviewed': 'Service access checked',
   'channels.access.instructions':
     'In NyxID, choose Customize under Service access. Keep the services you still use selected and add the services below, then choose Allow.',
-  'channels.access.available':
-    'Choose the services this channel should use below, then save your changes.',
   'channels.access.unknown': 'Service not found',
   'channels.access.requestedIdentity': 'Requested service ID',
   'channels.access.unavailable': 'Check availability in NyxID',
   'channels.access.notAuthorized': 'Access needed',
   'channels.access.restored':
-    'Your unsaved changes have been restored. Review service access and your selections before saving.',
+    'Your changes have been kept. Review the service selections below, then click Save changes.',
   'channels.access.startFailed':
     'Could not open NyxID. Your changes are still here. Try again.',
   'channels.access.requested': 'Requested',

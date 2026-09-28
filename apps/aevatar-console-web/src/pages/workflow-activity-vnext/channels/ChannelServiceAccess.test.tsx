@@ -164,9 +164,10 @@ it('restores the draft after full consent, checks fresh grants and requires sele
   mount();
   expect(await screen.findByLabelText('Label')).toHaveValue('Edited label');
   expect(
-    await screen.findByText(/Your unsaved changes have been restored/),
+    await screen.findByText(/Your changes have been kept/),
   ).toBeInTheDocument();
   expect(screen.getByText('Lark Bot API')).toBeInTheDocument();
+  expect(screen.queryByText('Service access checked')).not.toBeInTheDocument();
   const firecrawl = screen.getByRole('checkbox', { name: /Firecrawl/ });
   expect(firecrawl).not.toBeChecked();
   expect(screen.getByRole('checkbox', { name: /GitHub/ })).not.toBeChecked();
@@ -195,7 +196,7 @@ it('retains missing access and draft after cancellation, and recovers from a fai
   first.unmount();
   mount();
   expect(
-    await screen.findByText(/Your unsaved changes have been restored/),
+    await screen.findByText(/Your changes have been kept/),
   ).toBeInTheDocument();
   expect(screen.getByText('Service access needed')).toBeInTheDocument();
   expect(screen.getByLabelText('Label')).toHaveValue('Edited label');
@@ -256,7 +257,7 @@ it('keeps the editor open when draft storage is unavailable and does not restore
   expect(await screen.findByLabelText('Label')).toHaveValue('Support bot');
   await screen.findByText('Service access needed');
   expect(
-    screen.queryByText(/Your unsaved changes have been restored/),
+    screen.queryByText(/Your changes have been kept/),
   ).not.toBeInTheDocument();
 });
 
