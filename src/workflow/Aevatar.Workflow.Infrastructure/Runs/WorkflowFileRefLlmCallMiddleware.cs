@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Microsoft.Extensions.Logging;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
 using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
@@ -8,12 +9,15 @@ using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourc
 
 namespace Aevatar.Workflow.Infrastructure.Runs;
 
-internal sealed class WorkflowFileRefLlmCallMiddleware(IFileArtifactReadPort fileArtifacts) : ILLMCallMiddleware
+internal sealed class WorkflowFileRefLlmCallMiddleware(
+    IFileArtifactReadPort fileArtifacts,
+    ILogger<WorkflowFileRefLlmCallMiddleware>? logger = null) : ILLMCallMiddleware
 {
     private const int MaxMediaBytes = 5 * 1024 * 1024;
 
     private readonly IFileArtifactReadPort _fileArtifacts =
         fileArtifacts ?? throw new ArgumentNullException(nameof(fileArtifacts));
+    private readonly ILogger<WorkflowFileRefLlmCallMiddleware>? _logger = logger;
 
     public async Task InvokeAsync(LLMCallContext context, Func<Task> next)
     {
@@ -55,8 +59,21 @@ internal sealed class WorkflowFileRefLlmCallMiddleware(IFileArtifactReadPort fil
         if (HasProviderReadyUri(part.Uri) || part.FileRef is null || !HasIdentity(part.FileRef))
             return part;
 
-        var artifact = await _fileArtifacts.OpenReadAsync(ToApplicationFileRef(part.FileRef), ct)
-            .ConfigureAwait(false);
+        FileArtifactContent artifact;
+        try
+        {
+            artifact = await _fileArtifacts.OpenReadAsync(ToApplicationFileRef(part.FileRef), ct)
+                .ConfigureAwait(false);
+        }
+        catch (FileNotFoundException)
+        {
+            return BuildUnavailableAttachmentPart(part);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return BuildUnavailableAttachmentPart(part);
+        }
+
         await using var content = artifact.Content;
         if (artifact.FileRef.SizeBytes > MaxMediaBytes)
             throw MediaTooLarge();
@@ -89,6 +106,22 @@ internal sealed class WorkflowFileRefLlmCallMiddleware(IFileArtifactReadPort fil
 
             buffer.Write(chunk, 0, read);
         }
+    }
+
+    private ContentPart BuildUnavailableAttachmentPart(ContentPart part)
+    {
+        var name = Normalize(part.FileRef?.FileName) ?? Normalize(part.Name) ?? "attachment";
+        if (name.Length > 128)
+            name = name[..128];
+
+        _logger?.LogWarning(
+            "Workflow file ref media unavailable for LLM request; degrading to text part: fileId={FileId} artifactId={ArtifactId} sourceKind={SourceKind} sourceMessageId={SourceMessageId} sourceResourceKey={SourceResourceKey}",
+            part.FileRef?.FileId,
+            part.FileRef?.ArtifactId,
+            part.FileRef?.SourceKind,
+            part.FileRef?.SourceMessageId,
+            part.FileRef?.SourceResourceKey);
+        return ContentPart.TextPart($"Attachment unavailable: '{name}' has expired or was removed.");
     }
 
     private static InvalidOperationException MediaTooLarge() =>
@@ -140,6 +173,12 @@ internal sealed class WorkflowFileRefLlmCallMiddleware(IFileArtifactReadPort fil
     private static bool HasIdentity(LlmChatFileRef fileRef) =>
         !string.IsNullOrWhiteSpace(fileRef.FileId) ||
         !string.IsNullOrWhiteSpace(fileRef.ArtifactId);
+
+    private static string? Normalize(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
 
     private static ApplicationFileArtifactRef ToApplicationFileRef(LlmChatFileRef source) =>
         new()
