@@ -62,6 +62,7 @@ public sealed partial class ConversationGAgent :
     // Drop them rather than burn an LLM round and reply hours late.
     private static readonly TimeSpan PendingLlmReplyRequestMaxAge = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan StreamingFailureUpdateTimeout = TimeSpan.FromSeconds(10);
+    private const string LlmReplyFailureFallbackText = "Sorry, I couldn't complete this reply. Please try again.";
 
     // Mirror of DeferredLlmDispatchRetryDelay for the inbound-turn retry pipeline.
     // The same reminder-granularity floor applies: any requested retry shorter than this
@@ -753,21 +754,15 @@ public sealed partial class ConversationGAgent :
         }
 
         var reason = string.IsNullOrWhiteSpace(evt.Reason) ? "deferred_llm_reply_dropped" : evt.Reason;
-        var failed = new ConversationContinueFailedEvent
-        {
-            CommandId = BuildLlmReplyCommandId(evt.CorrelationId),
-            CorrelationId = evt.CorrelationId,
-            CausationId = string.Empty,
-            Kind = FailureKind.PermanentAdapterError,
-            ErrorCode = reason,
-            ErrorSummary = "Deferred LLM reply request was dropped by the run actor pre-LLM gate.",
-            NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
-            FailedAtUnixMs = evt.DroppedAtUnixMs > 0
-                ? evt.DroppedAtUnixMs
-                : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        };
-        await PersistDomainEventAsync(failed);
-        await ClearReplyLifecyclesAsync(evt.CorrelationId, pending.Activity, "deferred_llm_reply_dropped");
+        var failedAtUnixMs = evt.DroppedAtUnixMs > 0
+            ? evt.DroppedAtUnixMs
+            : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await PersistLlmReplyTerminalFailureAsync(
+            pending,
+            reason,
+            "Deferred LLM reply request was dropped by the run actor pre-LLM gate.",
+            failedAtUnixMs,
+            "deferred_llm_reply_dropped");
 
         Logger.LogInformation(
             "Retired pending LLM reply after run drop: correlation={CorrelationId} reason={Reason}",
@@ -815,8 +810,9 @@ public sealed partial class ConversationGAgent :
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
         // Progress delivery fences reply-token replay; only a successful run handoff
-        // proves that the LLM run exists and must not be dispatched again.
-        if (FindAppendLifecycle(request.CorrelationId)?.NyxRelayAppendStreaming is { LlmRunDispatched: true })
+        // proves that the LLM run exists and must not be dispatched again. Telegram's
+        // append lifecycle owns this durable handoff marker.
+        if (IsLlmReplyRunHandoffConfirmed(request.CorrelationId))
             return;
         // Recovery may begin with only the committed request; restore admission before handoff.
         await InitializeAppendReplyAsync(request);
@@ -874,6 +870,13 @@ public sealed partial class ConversationGAgent :
             await dispatcher.DispatchAsync(dispatchRequest, ct);
             if (FindAppendLifecycle(request.CorrelationId) is { } appendLifecycle)
                 await ChangeAppendAsync(appendLifecycle, change => change.AppendLlmRunDispatched = true);
+            LogReplyLifecycleDecision(
+                "run_handoff_confirmed",
+                dispatchRequest,
+                phase: "dispatch",
+                handoffConfirmed: true,
+                terminalReason: string.Empty,
+                errorCode: string.Empty);
             Logger.LogInformation(
                 "Dispatched LLM reply run request: runId={RunId} correlation={CorrelationId} conversation={Key}",
                 dispatchRequest.RunId,
@@ -886,6 +889,13 @@ public sealed partial class ConversationGAgent :
                 ex,
                 "Failed to dispatch LLM reply run request; scheduling durable retry: correlation={CorrelationId}",
                 request.CorrelationId);
+            LogReplyLifecycleDecision(
+                "run_handoff_failed",
+                request,
+                phase: "dispatch",
+                handoffConfirmed: IsLlmReplyRunHandoffConfirmed(request.CorrelationId),
+                terminalReason: "dispatch_failed",
+                errorCode: "llm_run_dispatch_failed");
             await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
         }
     }
@@ -1065,12 +1075,27 @@ public sealed partial class ConversationGAgent :
         var pendingWorkflowRequest = FindPendingWorkflowDraftRunRequest(evt.CorrelationId);
         if (IsReplyTurnFinalized(evt.CorrelationId))
         {
+            LogReplyLifecycleDecision(
+                "late_ready_ignored",
+                evt,
+                phase: "late_ready",
+                handoffConfirmed: IsLlmReplyRunHandoffConfirmed(evt.CorrelationId),
+                terminalReason: "successful_delivery_already_recorded",
+                errorCode: string.Empty);
             Logger.LogInformation(
                 "Duplicate LLM reply ready event {CorrelationId} (conversation={Key}); skipping outbound",
                 evt.CorrelationId,
                 State.Conversation?.CanonicalKey);
             return;
         }
+
+        LogReplyLifecycleDecision(
+            "late_ready_accepted",
+            evt,
+            phase: "late_ready",
+            handoffConfirmed: IsLlmReplyRunHandoffConfirmed(evt.CorrelationId),
+            terminalReason: string.Empty,
+            errorCode: evt.ErrorCode);
 
         if (IsWorkflowRunDeliveryDelegation(evt.WorkflowRunDelivery))
         {
@@ -2558,17 +2583,123 @@ public sealed partial class ConversationGAgent :
             .ConfigureAwait(false);
     }
 
-    // ADR-0021 §6 / canon §9 — single source of truth for "this LLM reply turn is
-    // already finalized". Every reply-ready / dropped / streaming-chunk handler entry
-    // uses this so late or duplicate signals uniformly no-op. The dedup key is the
-    // `llm:<correlationId>` form appended to ProcessedCommandIds by
-    // ApplyTurnCompleted / ApplyContinueFailed when the turn reaches chain.finalized.
+    // ADR-0021 §6 / canon §9 — a command id alone is not enough to prove that a reply
+    // reached the user. Terminal failure is recoverable when no successful delivery was
+    // recorded, because a late LlmReplyReadyEvent may still be the only usable outcome.
     private bool IsLlmReplyTurnFinalized(string? correlationId) =>
         IsReplyTurnFinalized(correlationId);
 
-    private bool IsReplyTurnFinalized(string? correlationId) =>
-        State.ProcessedCommandIds.Contains(BuildLlmReplyCommandId(correlationId)) ||
-        State.ProcessedCommandIds.Contains(BuildWorkflowDraftRunCommandId(correlationId));
+    private bool IsReplyTurnFinalized(string? correlationId)
+    {
+        var commandIds = new[]
+        {
+            BuildLlmReplyCommandId(correlationId),
+            BuildWorkflowDraftRunCommandId(correlationId),
+        };
+        foreach (var commandId in commandIds)
+        {
+            if (!State.ProcessedCommandIds.Contains(commandId))
+                continue;
+
+            var deliveries = State.RecentDeliveries
+                .Where(delivery => string.Equals(delivery.RequestId, commandId, StringComparison.Ordinal))
+                .ToArray();
+            if (deliveries.Any(delivery => delivery.Status == DeliveryStatus.Succeeded))
+                return true;
+
+            // A terminal failure without a delivery-ledger record is historical state from
+            // before ADR-0021. Preserve its old absorbing behavior; all new failure paths
+            // write a failed delivery receipt and therefore remain eligible for late recovery.
+            if (deliveries.Length == 0)
+                return true;
+
+            return false;
+        }
+
+        return false;
+    }
+
+    private bool IsLlmReplyRunHandoffConfirmed(string? correlationId)
+    {
+        var normalized = NormalizeOptional(correlationId);
+        if (normalized is null)
+            return false;
+
+        return FindAppendLifecycle(normalized)?.NyxRelayAppendStreaming?.LlmRunDispatched == true;
+    }
+
+    private string DescribeReplyDeliveryState(string? correlationId)
+    {
+        var commandIds = new[]
+        {
+            BuildLlmReplyCommandId(correlationId),
+            BuildWorkflowDraftRunCommandId(correlationId),
+        };
+        var deliveries = State.RecentDeliveries
+            .Where(delivery => commandIds.Contains(delivery.RequestId, StringComparer.Ordinal))
+            .ToArray();
+        if (deliveries.Any(delivery => delivery.Status == DeliveryStatus.Succeeded))
+            return "succeeded";
+        if (deliveries.Any(delivery => delivery.Status is DeliveryStatus.FailedPreSend or DeliveryStatus.FailedPostSend))
+            return "failed";
+        if (FindPendingLlmReplyRequest(correlationId) is not null ||
+            FindPendingWorkflowDraftRunRequest(correlationId) is not null)
+            return "pending";
+        return "none";
+    }
+
+    private void LogReplyLifecycleDecision(
+        string decision,
+        NeedsLlmReplyEvent request,
+        string phase,
+        bool handoffConfirmed,
+        string terminalReason,
+        string errorCode) =>
+        LogReplyLifecycleDecision(
+            decision,
+            request.CorrelationId,
+            request.RunId,
+            phase,
+            handoffConfirmed,
+            terminalReason,
+            errorCode);
+
+    private void LogReplyLifecycleDecision(
+        string decision,
+        LlmReplyReadyEvent reply,
+        string phase,
+        bool handoffConfirmed,
+        string terminalReason,
+        string? errorCode) =>
+        LogReplyLifecycleDecision(
+            decision,
+            reply.CorrelationId,
+            reply.RunId,
+            phase,
+            handoffConfirmed,
+            terminalReason,
+            errorCode ?? string.Empty);
+
+    private void LogReplyLifecycleDecision(
+        string decision,
+        string? correlationId,
+        string? runId,
+        string phase,
+        bool handoffConfirmed,
+        string terminalReason,
+        string errorCode) =>
+        Logger.LogInformation(
+            "Channel reply lifecycle decision: decision={Decision} correlationId={CorrelationId} runId={RunId} conversationKey={ConversationKey} replyLifecyclePhase={ReplyLifecyclePhase} handoffConfirmed={HandoffConfirmed} llmRunDispatched={LlmRunDispatched} deliveryState={DeliveryState} terminalReason={TerminalReason} errorCode={ErrorCode}",
+            decision,
+            correlationId,
+            runId,
+            State.Conversation?.CanonicalKey,
+            phase,
+            handoffConfirmed,
+            handoffConfirmed,
+            DescribeReplyDeliveryState(correlationId),
+            terminalReason,
+            errorCode);
 
     private string ResolvePendingReplyCommandId(string? correlationId) =>
         FindPendingWorkflowDraftRunRequest(correlationId) is not null
@@ -2680,25 +2811,48 @@ public sealed partial class ConversationGAgent :
         foreach (var request in pending)
         {
             var ageMs = request.RequestedAtUnixMs > 0 ? nowMs - request.RequestedAtUnixMs : 0;
+            var handoffConfirmed = IsLlmReplyRunHandoffConfirmed(request.CorrelationId);
+            if (request.RequestedAtUnixMs > 0 && ageMs > maxAgeMs && !handoffConfirmed)
+            {
+                LogReplyLifecycleDecision(
+                    "stale_cleanup_decision",
+                    request,
+                    phase: "rehydration",
+                    handoffConfirmed: false,
+                    terminalReason: "admission_deadline_exceeded",
+                    errorCode: "stale_pending_request_dropped");
+                Logger.LogInformation(
+                    "Dropping stale pending LLM reply request on rehydration: correlation={CorrelationId} ageMs={AgeMs} handoffConfirmed={HandoffConfirmed}",
+                    request.CorrelationId,
+                    ageMs,
+                    handoffConfirmed);
+                if (await TryBeginVisibleFailureFallbackAsync(
+                        request,
+                        "stale_pending_request_dropped",
+                        "Pending LLM reply request exceeded the admission deadline before run handoff.",
+                        nowMs))
+                {
+                    continue;
+                }
+
+                await PersistLlmReplyTerminalFailureAsync(
+                    request,
+                    "stale_pending_request_dropped",
+                    "Pending LLM reply request exceeded max age and was dropped on actor rehydration.",
+                    nowMs,
+                    "stale_pending_request_dropped");
+                continue;
+            }
+
             if (request.RequestedAtUnixMs > 0 && ageMs > maxAgeMs)
             {
-                Logger.LogInformation(
-                    "Dropping stale pending LLM reply request on rehydration: correlation={CorrelationId} ageMs={AgeMs}",
-                    request.CorrelationId,
-                    ageMs);
-                var failed = new ConversationContinueFailedEvent
-                {
-                    CommandId = BuildLlmReplyCommandId(request.CorrelationId),
-                    CorrelationId = request.CorrelationId,
-                    CausationId = string.Empty,
-                    Kind = FailureKind.PermanentAdapterError,
-                    ErrorCode = "stale_pending_request_dropped",
-                    ErrorSummary = "Pending LLM reply request exceeded max age and was dropped on actor rehydration.",
-                    NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
-                    FailedAtUnixMs = nowMs,
-                };
-                await PersistDomainEventAsync(failed);
-                continue;
+                LogReplyLifecycleDecision(
+                    "stale_cleanup_deferred",
+                    request,
+                    phase: "rehydration",
+                    handoffConfirmed: true,
+                    terminalReason: "in_flight_run_waiting_for_terminal_reply",
+                    errorCode: string.Empty);
             }
 
             await DispatchPendingLlmReplyAsync(request, ct);
@@ -3212,6 +3366,126 @@ public sealed partial class ConversationGAgent :
         chunk.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
     }
 
+    private async Task<bool> TryBeginVisibleFailureFallbackAsync(
+        NeedsLlmReplyEvent request,
+        string errorCode,
+        string errorSummary,
+        long failedAtUnixMs)
+    {
+        if (string.IsNullOrWhiteSpace(request.CorrelationId) ||
+            string.IsNullOrWhiteSpace(request.RunId) ||
+            request.Activity is null)
+        {
+            return false;
+        }
+
+        var fallback = new LlmReplyReadyEvent
+        {
+            CorrelationId = request.CorrelationId,
+            RegistrationId = request.RegistrationId,
+            SourceActorId = Id,
+            Activity = request.Activity.Clone(),
+            Outbound = new MessageContent { Text = LlmReplyFailureFallbackText },
+            TerminalState = LlmReplyTerminalState.Failed,
+            ErrorCode = errorCode,
+            ErrorSummary = errorSummary,
+            ReadyAtUnixMs = failedAtUnixMs,
+            RunId = request.RunId,
+            RelayReplyTokenRef = request.RelayReplyTokenRef?.Clone(),
+            RelayUserAccessTokenRef = request.RelayUserAccessTokenRef?.Clone(),
+        };
+
+        LogReplyLifecycleDecision(
+            "failure_fallback_attempt",
+            request,
+            phase: "failure_fallback",
+            handoffConfirmed: IsLlmReplyRunHandoffConfirmed(request.CorrelationId),
+            terminalReason: errorSummary,
+            errorCode: errorCode);
+        try
+        {
+            await HandleLlmReplyReadyAsync(fallback);
+            LogReplyLifecycleDecision(
+                "failure_fallback_returned",
+                request,
+                phase: "failure_fallback",
+                handoffConfirmed: IsLlmReplyRunHandoffConfirmed(request.CorrelationId),
+                terminalReason: errorSummary,
+                errorCode: errorCode);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(
+                ex,
+                "User-visible LLM failure fallback could not be started: correlation={CorrelationId} runId={RunId} errorCode={ErrorCode}",
+                request.CorrelationId,
+                request.RunId,
+                errorCode);
+            LogReplyLifecycleDecision(
+                "failure_fallback_failed",
+                request,
+                phase: "failure_fallback",
+                handoffConfirmed: IsLlmReplyRunHandoffConfirmed(request.CorrelationId),
+                terminalReason: "fallback_exception",
+                errorCode: errorCode);
+            return false;
+        }
+    }
+
+    private async Task PersistLlmReplyTerminalFailureAsync(
+        NeedsLlmReplyEvent request,
+        string errorCode,
+        string errorSummary,
+        long failedAtUnixMs,
+        string lifecycleReason)
+    {
+        var commandId = BuildLlmReplyCommandId(request.CorrelationId);
+        var activity = request.Activity?.Clone() ?? new ChatActivity();
+        var deliveryFailed = new LlmReplyDeliveryFailedEvent
+        {
+            CorrelationId = request.CorrelationId ?? string.Empty,
+            RunId = request.RunId ?? string.Empty,
+            FailedAtUnixMs = failedAtUnixMs,
+            ErrorCode = errorCode,
+            ErrorMessage = errorSummary,
+        };
+        var produced = BuildDeliveryProducedEvent(
+            DeliveryKind.TextMessage,
+            DeliveryStatus.FailedPreSend,
+            activity,
+            request.RunId,
+            request.CorrelationId,
+            commandId,
+            sourceEventId: request.CorrelationId,
+            providerMessageId: string.Empty,
+            cardId: string.Empty);
+        var failed = new ConversationContinueFailedEvent
+        {
+            CommandId = commandId,
+            CorrelationId = request.CorrelationId,
+            CausationId = string.Empty,
+            Kind = FailureKind.PermanentAdapterError,
+            ErrorCode = errorCode,
+            ErrorSummary = errorSummary,
+            NotRetryable = new Google.Protobuf.WellKnownTypes.Empty(),
+            FailedAtUnixMs = failedAtUnixMs,
+        };
+        await PersistReplyReadyEventsWithLocalRetryAsync(
+            request.CorrelationId,
+            lifecycleReason,
+            [deliveryFailed, produced, failed],
+            CancellationToken.None);
+        await ClearReplyLifecyclesAsync(request.CorrelationId, request.Activity, lifecycleReason);
+        LogReplyLifecycleDecision(
+            "terminal_failure_committed",
+            request,
+            phase: "terminal_failure",
+            handoffConfirmed: IsLlmReplyRunHandoffConfirmed(request.CorrelationId),
+            terminalReason: lifecycleReason,
+            errorCode: errorCode);
+    }
+
     private async Task PersistMissingRuntimeCredentialFailureAsync(
         string commandId,
         string? correlationId,
@@ -3219,6 +3493,18 @@ public sealed partial class ConversationGAgent :
         string errorSummary,
         long failedAtUnixMs)
     {
+        if (commandId.StartsWith("llm:", StringComparison.Ordinal) &&
+            FindPendingLlmReplyRequest(correlationId) is { } pending)
+        {
+            await PersistLlmReplyTerminalFailureAsync(
+                pending,
+                errorCode,
+                errorSummary,
+                failedAtUnixMs,
+                "missing_runtime_credential");
+            return;
+        }
+
         var failed = new ConversationContinueFailedEvent
         {
             CommandId = commandId,
@@ -3258,7 +3544,8 @@ public sealed partial class ConversationGAgent :
         if (!string.IsNullOrEmpty(evt.CausationCommandId))
         {
             AppendBounded(next.ProcessedCommandIds, evt.CausationCommandId, ProcessedIdsCap);
-            RemovePendingLlmReplyRequest(next.PendingLlmReplyRequests, ExtractLlmReplyCorrelationId(evt.CausationCommandId));
+            var llmCorrelationId = ExtractLlmReplyCorrelationId(evt.CausationCommandId);
+            RemovePendingLlmReplyRequest(next.PendingLlmReplyRequests, llmCorrelationId);
             RemovePendingWorkflowDraftRunRequest(
                 next.PendingWorkflowDraftRunRequests,
                 ExtractWorkflowDraftRunCorrelationId(evt.CausationCommandId));
@@ -3431,7 +3718,8 @@ public sealed partial class ConversationGAgent :
             && evt.RetryPolicyCase == ConversationContinueFailedEvent.RetryPolicyOneofCase.NotRetryable)
         {
             AppendBounded(next.ProcessedCommandIds, evt.CommandId, ProcessedIdsCap);
-            RemovePendingLlmReplyRequest(next.PendingLlmReplyRequests, ExtractLlmReplyCorrelationId(evt.CommandId));
+            var llmCorrelationId = ExtractLlmReplyCorrelationId(evt.CommandId);
+            RemovePendingLlmReplyRequest(next.PendingLlmReplyRequests, llmCorrelationId);
             RemovePendingWorkflowDraftRunRequest(
                 next.PendingWorkflowDraftRunRequests,
                 ExtractWorkflowDraftRunCorrelationId(evt.CommandId));
