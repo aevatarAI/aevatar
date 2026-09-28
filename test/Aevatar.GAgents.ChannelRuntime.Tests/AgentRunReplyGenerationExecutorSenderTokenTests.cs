@@ -62,13 +62,17 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             CancellationToken.None);
 
         // The control passed to the generator (== BuildGenerationContext output)
-        // must carry the freshly minted sender token.
+        // must carry the freshly minted sender token both as the LLM bearer and
+        // as the sender-scoped tool credential.
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl.NyxIdOrgToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
 
         // And it must project into the resulting step-state tool credentials so
         // ToolCallCredentialPolicyMiddleware admits sender-credentialed tools.
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
 
         // The subject must come exclusively from the exact typed NyxID authority,
@@ -83,6 +87,40 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
 
         await reconciler.DidNotReceiveWithAnyArgs()
             .ReconcileRevokedAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WithRegistrationAgentKeyModeAndSenderBinding_UsesSenderAsLlmCredential()
+    {
+        var broker = Substitute.For<INyxIdCapabilityBroker>();
+        broker
+            .IssueShortLivedByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                SenderBindingId,
+                Arg.Any<CapabilityScope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CapabilityHandle { AccessToken = "fresh-sender-token" }));
+        var generator = new EchoStepPlanReplyGenerator();
+        var executor = CreateExecutor(generator, broker, Substitute.For<IBindingRevocationReconciler>());
+
+        var state = await executor.BuildInitialStepStateAsync(
+            BuildRequest(
+                senderBindingId: SenderBindingId,
+                senderTenant: "tenant-authority-alpha",
+                credentialSourceMode: ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey),
+            CancellationToken.None);
+
+        generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl.NyxIdOrgToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+
+        var control = AgentRunReplyStepMappers.LlmControlFromProto(state);
+        control.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        control.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
     }
 
     [Fact]
@@ -368,7 +406,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         string? senderId = "ou_user_y",
         string botId = "reg-1",
         LLMControlContext? llmControl = null,
-        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null)
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null,
+        ChannelBotRuntimeCredentialSourceMode credentialSourceMode =
+            ChannelBotRuntimeCredentialSourceMode.SenderBinding)
     {
         var toolContext = AgentToolExecutionContext.Empty with
         {
@@ -399,6 +439,12 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             },
             ToolContext = toolContext.ToPayload(),
             LlmControl = (llmControl ?? LLMControlContext.Empty).ToPayload(),
+            ChannelRuntimeConfig = new ChannelRuntimeConfigProof
+            {
+                RegistrationId = "reg-1",
+                ConfigRevision = 1,
+                CredentialSourceMode = credentialSourceMode,
+            },
         };
 
         return new AgentRunReplyGenerationExecutionRequest(

@@ -1788,12 +1788,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 senderConnectedServiceToken,
                 registrationAgentKey: null);
         }
-        var agentKeyOverlay = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
-                request,
-                toolContext,
-                control,
-                ct)
-            .ConfigureAwait(false);
+        var agentKeyOverlay = hasSenderBinding
+            ? new ChannelRegistrationAgentKeyCredentialOverlay(control, null)
+            : await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
+                    request,
+                    toolContext,
+                    control,
+                    ct)
+                .ConfigureAwait(false);
         control = agentKeyOverlay.Control;
         if (agentKeyOverlay.AgentKey is not null && !hasSenderBinding)
         {
@@ -1885,7 +1887,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 return control;
             }
 
-            return control with { SenderNyxIdAccessToken = accessToken };
+            return control with
+            {
+                NyxIdAccessToken = accessToken,
+                NyxIdOrgToken = accessToken,
+                SenderNyxIdAccessToken = accessToken,
+            };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1978,12 +1985,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 senderConnectedServiceToken,
                 registrationAgentKey: null);
         }
-        var agentKeyOverlay = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
-                request,
-                planToolContext,
-                requestControl,
-                ct)
-            .ConfigureAwait(false);
+        var agentKeyOverlay = hasSenderBinding
+            ? new ChannelRegistrationAgentKeyCredentialOverlay(requestControl, null)
+            : await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
+                    request,
+                    planToolContext,
+                    requestControl,
+                    ct)
+                .ConfigureAwait(false);
         requestControl = agentKeyOverlay.Control;
         var registrationAgentKeyMode = request.ChannelRuntimeConfig?.CredentialSourceMode ==
                                        ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
