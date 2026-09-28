@@ -68,6 +68,12 @@ public static class ToolSetNames
     public const string NyxIdConnectedServices = "nyxid.connected_services";
 
     /// <summary>
+    /// Narrow NyxID connect-link surface used when a runtime must send the user a browser
+    /// authorization URL without exposing broader service-management tools.
+    /// </summary>
+    public const string NyxIdConnectLinks = "nyxid.connect_links";
+
+    /// <summary>
     /// Pinned local NyxID Assistant tools used to materialize built-in admission intents.
     /// This set deliberately excludes request-local connected-service discovery so an
     /// unavailable external inventory cannot suppress local typed admission actions.
