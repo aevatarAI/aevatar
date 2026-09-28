@@ -393,6 +393,37 @@ public sealed class AdmittedAgentToolExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenSenderRequiredWithoutBinding_ShouldRejectAgentKey()
+    {
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, false, false),
+            credentialRequirement: AgentToolNyxIdCredentialRequirement.SenderBearer);
+        var executor = CreateExecutor(appender);
+        var context = CreateTestExecutionContext() with
+        {
+            Request = new AgentToolRequestIdentity("request-1", "call-1"),
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+            Credentials = new AgentToolCredentials(
+                "agent-key",
+                null,
+                null,
+                AgentToolNyxIdCredentialKind.AgentKey),
+            Channel = AgentToolChannelContext.Empty,
+            SenderBinding = AgentToolSenderBindingContext.Empty,
+        };
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool) with { ExecutionContext = context });
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Denied);
+        outcome.FailureCode.Should().Be("credential_denied");
+        outcome.FailureStage.Should().Be(AgentToolExecutionFailureStage.CredentialPolicy);
+        outcome.TerminalInvoked.Should().BeFalse();
+        tool.ExecutionCalls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenBoundSenderHasProxyDelegation_ShouldPreserveCredentialPurposes()
     {
         var appender = new RecordingAuditTrailAppender((record, _) =>

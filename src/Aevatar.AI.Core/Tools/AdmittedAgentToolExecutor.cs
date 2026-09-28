@@ -1730,13 +1730,14 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         if (senderBindingId is null)
         {
             var isChannelMediated = NormalizeIdentity(context.Channel.SenderId) is not null;
-            return isChannelMediated
-                ? new CredentialDecision(
-                    false,
-                    context,
-                    AgentToolCredentialSource.BearerToken,
-                    $"Tool '{toolName}' was not executed because it requires the channel sender's NyxID credential, but the sender is not bound to a NyxID account.")
-                : null;
+            var credentialMessage = isChannelMediated
+                ? "the channel sender is not bound to a NyxID account"
+                : "no sender NyxID binding is available";
+            return new CredentialDecision(
+                false,
+                context,
+                AgentToolCredentialSource.BearerToken,
+                $"Tool '{toolName}' was not executed because it requires the sender's NyxID credential, but {credentialMessage}.");
         }
 
         var senderToken = NormalizeIdentity(context.Credentials.SenderNyxIdAccessToken);
