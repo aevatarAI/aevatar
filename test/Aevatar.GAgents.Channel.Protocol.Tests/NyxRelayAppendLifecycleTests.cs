@@ -585,6 +585,28 @@ public sealed class NyxRelayAppendLifecycleTests
         fixture.Publisher.Steps.ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task FirstTerminalBodyPreDispatchFailure_RestoresSecretRefTokenFallback()
+    {
+        var secrets = new InMemoryRuntimeSecretStore();
+        await using var fixture = await Fixture.CreateAsync(runtimeSecretStore: secrets);
+        fixture.Outbound.Results.Enqueue(new NyxRelayAppendSendResult(NyxRelayAppendSendState.PreDispatchFailure,
+            ErrorCode: "agent_key_unavailable"));
+        await fixture.AdmitRelayAsync();
+        var ready = fixture.CreateReady("The original complete reply.");
+        ready.ReplyToken = string.Empty;
+        ready.ReplyTokenExpiresAtUnixMs = 0;
+        await fixture.Agent.HandleLlmReplyReadyAsync(ready);
+        await fixture.ExecuteAndCompleteNextAsync();
+
+        fixture.Outbound.DispatchedCount.ShouldBe(0);
+        fixture.Runner.FallbackReplies.ShouldBe(1);
+        fixture.Runner.LastFallbackToken.ShouldBe(Fixture.ReplyToken);
+        fixture.Agent.State.RetainedHistory.Where(entry => entry.Role == "assistant").Single().Content
+            .ShouldBe("The original complete reply.");
+        await fixture.AssertNoPersistedReplyTokenAsync();
+    }
+
     [Theory]
     [InlineData(NyxRelayAppendSendState.Rejected, NyxRelayAppendDeliveryDisposition.PartialAccepted)]
     [InlineData(NyxRelayAppendSendState.DeliveryUnknown, NyxRelayAppendDeliveryDisposition.DeliveryUnknown)]

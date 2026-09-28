@@ -399,6 +399,10 @@ public sealed partial class ConversationGAgent : INyxRelayAppendOperationActorCo
                 RegistrationId = pending?.RegistrationId ?? string.Empty, Activity = pending?.Activity?.Clone(),
                 Outbound = new MessageContent { Text = lifecycle.PendingFinalizeText },
                 TerminalState = lifecycle.PendingNyxRelayTerminalState,
+                ReplyToken = pending?.ReplyToken ?? string.Empty,
+                ReplyTokenExpiresAtUnixMs = pending?.ReplyTokenExpiresAtUnixMs ?? 0,
+                RelayReplyTokenRef = pending?.RelayReplyTokenRef?.Clone(),
+                RelayUserAccessTokenRef = pending?.RelayUserAccessTokenRef?.Clone(),
             };
             ready.AppendedHistory.AddRange(lifecycle.PendingAppendedHistory.Select(entry => entry.Clone()));
             await HandleLlmReplyReadyAsync(ready);

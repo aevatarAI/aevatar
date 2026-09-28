@@ -1794,15 +1794,23 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 control,
                 ct)
             .ConfigureAwait(false);
-        control = agentKeyOverlay.Control;
-        if (agentKeyOverlay.AgentKey is not null && !hasSenderBinding)
+        if (hasSenderBinding)
         {
-            toolContext = ApplyChannelRegistrationAgentKeyToolCredential(toolContext, agentKeyOverlay.AgentKey);
+            if (agentKeyOverlay.AgentKey is not null)
+                toolContext = ApplyChannelRegistrationAgentKeyToolCredential(toolContext, agentKeyOverlay.AgentKey);
         }
-        else if (!hasSenderBinding && request.ChannelRuntimeConfig?.CredentialSourceMode ==
-                 ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey)
+        else
         {
-            toolContext = ClearNyxIdCredentials(toolContext);
+            control = agentKeyOverlay.Control;
+            if (agentKeyOverlay.AgentKey is not null)
+            {
+                toolContext = ApplyChannelRegistrationAgentKeyToolCredential(toolContext, agentKeyOverlay.AgentKey);
+            }
+            else if (request.ChannelRuntimeConfig?.CredentialSourceMode ==
+                     ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey)
+            {
+                toolContext = ClearNyxIdCredentials(toolContext);
+            }
         }
 
         var ownerFallbackControl = control with { SenderNyxIdAccessToken = null };
@@ -1885,7 +1893,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 return control;
             }
 
-            return control with { SenderNyxIdAccessToken = accessToken };
+            return control with
+            {
+                NyxIdAccessToken = accessToken,
+                NyxIdOrgToken = accessToken,
+                SenderNyxIdAccessToken = accessToken,
+            };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1984,35 +1997,49 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 requestControl,
                 ct)
             .ConfigureAwait(false);
-        requestControl = agentKeyOverlay.Control;
         var registrationAgentKeyMode = request.ChannelRuntimeConfig?.CredentialSourceMode ==
                                        ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
-        if (agentKeyOverlay.AgentKey is not null && !hasSenderBinding)
+        if (hasSenderBinding)
         {
-            planToolContext = ApplyChannelRegistrationAgentKeyToolCredential(
-                planToolContext,
-                agentKeyOverlay.AgentKey);
+            if (agentKeyOverlay.AgentKey is not null)
+            {
+                planToolContext = ApplyChannelRegistrationAgentKeyToolCredential(
+                    planToolContext,
+                    agentKeyOverlay.AgentKey);
+            }
         }
-        else if (!hasSenderBinding && registrationAgentKeyMode)
+        else
         {
-            planToolContext = ClearNyxIdCredentials(planToolContext);
+            requestControl = agentKeyOverlay.Control;
+            if (agentKeyOverlay.AgentKey is not null)
+            {
+                planToolContext = ApplyChannelRegistrationAgentKeyToolCredential(
+                    planToolContext,
+                    agentKeyOverlay.AgentKey);
+            }
+            else if (registrationAgentKeyMode)
+            {
+                planToolContext = ClearNyxIdCredentials(planToolContext);
+            }
         }
 
         requestControl = OverlayActivityUserToken(request, requestControl);
 
         var control = stepControl with
         {
-            NyxIdAccessToken = registrationAgentKeyMode
-                ? NormalizeOptional(requestControl.NyxIdAccessToken)
-                : NormalizeOptional(requestControl.NyxIdAccessToken) ??
-                               planToolContext.Credentials.NyxIdAccessToken ??
+            NyxIdAccessToken = NormalizeOptional(requestControl.NyxIdAccessToken) ??
+                               (registrationAgentKeyMode ? null : planToolContext.Credentials.NyxIdAccessToken) ??
                                (registrationAgentKeyMode ? null : stepControl.NyxIdAccessToken),
-            NyxIdOrgToken = registrationAgentKeyMode ? null : NormalizeOptional(requestControl.NyxIdOrgToken) ??
-                            planToolContext.Credentials.NyxIdOrgToken ??
-                            (registrationAgentKeyMode ? null : stepControl.NyxIdOrgToken),
-            SenderNyxIdAccessToken = registrationAgentKeyMode ? null : NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
-                                     planToolContext.Credentials.SenderNyxIdAccessToken ??
-                                     (registrationAgentKeyMode ? null : stepControl.SenderNyxIdAccessToken),
+            NyxIdOrgToken = hasSenderBinding
+                ? NormalizeOptional(requestControl.NyxIdOrgToken)
+                : registrationAgentKeyMode ? null : NormalizeOptional(requestControl.NyxIdOrgToken) ??
+                                             planToolContext.Credentials.NyxIdOrgToken ??
+                                             stepControl.NyxIdOrgToken,
+            SenderNyxIdAccessToken = hasSenderBinding
+                ? NormalizeOptional(requestControl.SenderNyxIdAccessToken)
+                : registrationAgentKeyMode ? null : NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
+                                             planToolContext.Credentials.SenderNyxIdAccessToken ??
+                                             stepControl.SenderNyxIdAccessToken,
         };
         var toolContext = control.ToToolContext(planToolContext);
         var activityUserToken = registrationAgentKeyMode || hasSenderBinding
@@ -2141,7 +2168,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             {
                 NyxIdAccessToken = agentKey,
                 NyxIdOrgToken = null,
-                SenderNyxIdAccessToken = null,
+                SenderNyxIdAccessToken = toolContext.Credentials.SenderNyxIdAccessToken,
                 SourceReadableNyxIdAccessToken = null,
                 NyxIdCredentialKind = AgentToolNyxIdCredentialKind.AgentKey,
                 NyxIdCredentialAuthority = AgentToolNyxIdCredentialAuthority.ToolExecutionContext,

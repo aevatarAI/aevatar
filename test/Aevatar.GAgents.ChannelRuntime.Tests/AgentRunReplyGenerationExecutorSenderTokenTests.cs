@@ -5,6 +5,8 @@ using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
@@ -62,13 +64,17 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             CancellationToken.None);
 
         // The control passed to the generator (== BuildGenerationContext output)
-        // must carry the freshly minted sender token.
+        // must carry the freshly minted sender token both as the LLM bearer and
+        // as the sender-scoped tool credential.
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl.NyxIdOrgToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
 
         // And it must project into the resulting step-state tool credentials so
         // ToolCallCredentialPolicyMiddleware admits sender-credentialed tools.
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
 
         // The subject must come exclusively from the exact typed NyxID authority,
@@ -83,6 +89,61 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
 
         await reconciler.DidNotReceiveWithAnyArgs()
             .ReconcileRevokedAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task BuildInitialStepState_WithRegistrationAgentKeyModeAndSenderBinding_UsesSenderAsLlmCredential()
+    {
+        var vault = new InMemorySecretVault();
+        var stored = (await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-1",
+            "key-reg-1",
+            "registration-agent-key",
+            "test channel registration agent key"))).Reference;
+        var broker = Substitute.For<INyxIdCapabilityBroker>();
+        broker
+            .IssueShortLivedByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                SenderBindingId,
+                Arg.Any<CapabilityScope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CapabilityHandle { AccessToken = "fresh-sender-token" }));
+        var generator = new EchoStepPlanReplyGenerator();
+        var executor = CreateExecutor(generator, broker, Substitute.For<IBindingRevocationReconciler>(), secretVault: vault);
+
+        var state = await executor.BuildInitialStepStateAsync(
+            BuildRequest(
+                senderBindingId: SenderBindingId,
+                senderTenant: "tenant-authority-alpha",
+                credentialSourceMode: ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+                workflowResultDeliveryCredential: new ChannelWorkflowResultDeliveryCredential
+                {
+                    SubjectId = "key-reg-1",
+                    SecretReference = stored.Clone(),
+                }),
+            CancellationToken.None);
+
+        generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl.NyxIdOrgToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+
+        var control = AgentRunReplyStepMappers.LlmControlFromProto(state);
+        control.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        control.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+
+        generator.CapturedToolContext.Should().NotBeNull();
+        generator.CapturedToolContext!.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        generator.CapturedToolContext.Credentials.NyxIdAccessToken.Should().Be("registration-agent-key");
+        generator.CapturedToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedToolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
+
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
+        toolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("registration-agent-key");
+        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        toolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
     }
 
     [Fact]
@@ -348,7 +409,8 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         INyxIdCapabilityBroker? broker,
         IBindingRevocationReconciler? reconciler,
         INyxIdRelayScopeResolver? scopeResolver = null,
-        IUserConfigQueryPort? userConfigQueryPort = null) =>
+        IUserConfigQueryPort? userConfigQueryPort = null,
+        ISecretVault? secretVault = null) =>
         new(
             Substitute.For<IActorDispatchPort>(),
             generator,
@@ -359,7 +421,8 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             userConfigQueryPort: userConfigQueryPort,
             timeProvider: null,
             capabilityBroker: broker,
-            bindingRevocationReconciler: reconciler);
+            bindingRevocationReconciler: reconciler,
+            secretVault: secretVault);
 
     private static AgentRunReplyGenerationExecutionRequest BuildRequest(
         string? senderBindingId,
@@ -368,16 +431,22 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         string? senderId = "ou_user_y",
         string botId = "reg-1",
         LLMControlContext? llmControl = null,
-        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null)
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null,
+        ChannelBotRuntimeCredentialSourceMode credentialSourceMode =
+            ChannelBotRuntimeCredentialSourceMode.SenderBinding,
+        ChannelWorkflowResultDeliveryCredential? workflowResultDeliveryCredential = null)
     {
         var toolContext = AgentToolExecutionContext.Empty with
         {
+            ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration("reg-1"),
             Channel = new AgentToolChannelContext(
                 Platform: platform,
                 SenderId: senderId,
                 RegistrationScopeId: "scope-1",
                 MessageId: "msg-1",
-                PlatformMessageId: null),
+                PlatformMessageId: null,
+                WorkflowResultDeliveryCredential: workflowResultDeliveryCredential,
+                BotRegistrationId: "reg-1"),
             SenderBinding = senderBindingId is null
                 ? AgentToolSenderBindingContext.Empty
                 : new AgentToolSenderBindingContext(senderBindingId, NyxUserId: null, SenderTenant: senderTenant),
@@ -399,6 +468,12 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             },
             ToolContext = toolContext.ToPayload(),
             LlmControl = (llmControl ?? LLMControlContext.Empty).ToPayload(),
+            ChannelRuntimeConfig = new ChannelRuntimeConfigProof
+            {
+                RegistrationId = "reg-1",
+                ConfigRevision = 1,
+                CredentialSourceMode = credentialSourceMode,
+            },
         };
 
         return new AgentRunReplyGenerationExecutionRequest(
