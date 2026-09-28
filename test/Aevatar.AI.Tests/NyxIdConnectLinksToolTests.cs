@@ -23,7 +23,7 @@ public sealed class NyxIdConnectLinksToolTests
         });
         using var client = CreateClient(handler);
         var tool = new NyxIdConnectLinksTool(client);
-        const string arguments = """{"action":"create","service_slug":"api-github","label":"GitHub","requested_by":"default-skill","callback_url":"https://callback.example/nyx","expires_in":900,"target_org_id":"org-1"}""";
+        const string arguments = """{"action":"create","service_slug":"api-github","label":"GitHub","requested_by":"default-skill","scopes":["public_repo","repo:status"],"endpoint_url":"https://gateway.example/github","callback_url":"https://callback.example/nyx","expires_in":900,"target_org_id":"org-1"}""";
 
         tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
         tool.GetCallSafety(arguments).RequiresApproval.Should().BeTrue();
@@ -39,6 +39,8 @@ public sealed class NyxIdConnectLinksToolTests
         handler.LastRequestBody.Should().Contain("\"service_slug\":\"api-github\"");
         handler.LastRequestBody.Should().Contain("\"label\":\"GitHub\"");
         handler.LastRequestBody.Should().Contain("\"requested_by\":\"default-skill\"");
+        handler.LastRequestBody.Should().Contain("\"scopes\":[\"public_repo\",\"repo:status\"]");
+        handler.LastRequestBody.Should().Contain("\"endpoint_url\":\"https://gateway.example/github\"");
         handler.LastRequestBody.Should().Contain("\"callback_url\":\"https://callback.example/nyx\"");
         handler.LastRequestBody.Should().Contain("\"expires_in\":900");
         handler.LastRequestBody.Should().Contain("\"target_org_id\":\"org-1\"");
@@ -53,7 +55,7 @@ public sealed class NyxIdConnectLinksToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_ShowAndCancel_ShouldCallExpectedConnectLinkRoutes()
+    public async Task ExecuteAsync_GetAndCancel_ShouldCallExpectedConnectLinkRoutes()
     {
         var showHandler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -66,7 +68,7 @@ public sealed class NyxIdConnectLinksToolTests
         var showTool = new NyxIdConnectLinksTool(showClient);
 
         using var _scope = PushToken();
-        await showTool.ExecuteAsync("""{"action":"show","id":"link-1"}""");
+        await showTool.ExecuteAsync("""{"action":"get","id":"link-1"}""");
 
         showHandler.LastRequest.Should().NotBeNull();
         showHandler.LastRequest!.Method.Should().Be(HttpMethod.Get);
@@ -127,6 +129,87 @@ public sealed class NyxIdConnectLinksToolTests
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
         receipt.ResultJson.Should().NotContain("bearer-secret");
         receipt.ErrorMessage.Should().Be("The NyxID request failed.");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateWithInvalidScopes_ShouldReturnArgumentErrorWithoutRequest()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        });
+        using var client = CreateClient(handler);
+        var tool = new NyxIdConnectLinksTool(client);
+
+        using var _scope = PushToken();
+        var result = await tool.ExecuteAsync("""{"action":"create","service_slug":"api-github","scopes":"public_repo"}""");
+
+        result.Should().Contain("invalid_arguments");
+        result.Should().Contain("scopes");
+        result.Should().Contain("array of strings");
+        handler.LastRequest.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"id\":\"link-1\",\"expires_at\":\"2026-09-28T10:00:00Z\"}")]
+    [InlineData("{\"id\":\"link-1\",\"connect_url\":\"/connect/secret-token\",\"expires_at\":\"2026-09-28T10:00:00Z\"}")]
+    [InlineData("{\"id\":\"link-1\",\"connect_url\":\"ftp://nyx.example/connect/secret-token\",\"expires_at\":\"2026-09-28T10:00:00Z\"}")]
+    public async Task ExecuteAsync_CreateWithInvalidNyxIdResponse_ShouldReturnSafeError(string responseBody)
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
+        });
+        using var client = CreateClient(handler);
+        var tool = new NyxIdConnectLinksTool(client);
+        const string arguments = """{"action":"create","service_slug":"api-github"}""";
+
+        using var _scope = PushToken();
+        var result = await tool.ExecuteAsync(arguments);
+        var receipt = ((IAgentTool)tool).CreateResultReceipt("call-invalid", tool.Name, arguments, result);
+
+        result.Should().Contain("invalid_nyxid_response");
+        result.Should().NotContain("secret-token");
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ResultJson.Should().NotContain("secret-token");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CreateWithInvalidEndpointUrl_ShouldReturnArgumentErrorWithoutRequest()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        });
+        using var client = CreateClient(handler);
+        var tool = new NyxIdConnectLinksTool(client);
+
+        using var _scope = PushToken();
+        var result = await tool.ExecuteAsync("""{"action":"create","service_slug":"api-github","endpoint_url":"ftp://gateway.example"}""");
+
+        result.Should().Contain("invalid_arguments");
+        result.Should().Contain("endpoint_url");
+        result.Should().Contain("absolute HTTP or HTTPS URL");
+        handler.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShowAction_ShouldBeInvalid()
+    {
+        var handler = new CaptureHandler(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        });
+        using var client = CreateClient(handler);
+        var tool = new NyxIdConnectLinksTool(client);
+
+        using var _scope = PushToken();
+        var result = await tool.ExecuteAsync("""{"action":"show","id":"link-1"}""");
+
+        result.Should().Be("""{"error":"invalid_action"}""");
+        handler.LastRequest.Should().BeNull();
     }
 
     [Fact]
