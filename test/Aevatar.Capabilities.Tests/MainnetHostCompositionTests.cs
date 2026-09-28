@@ -1066,6 +1066,7 @@ public sealed class MainnetHostCompositionTests
             ToolSetNames.NyxIdAssistantAdmission,
             ToolSetNames.NyxIdChatBaseline,
             ToolSetNames.NyxIdChatDefault,
+            ToolSetNames.NyxIdConnectLinks,
             ToolSetNames.NyxIdConnectedServices,
             ToolSetNames.NyxIdExecution,
             ToolSetNames.NyxIdPrivileged,
@@ -1183,6 +1184,7 @@ public sealed class MainnetHostCompositionTests
             [
                 typeof(OrnnAuthoringAgentToolSource),
                 typeof(NyxIdConnectedServiceToolSource),
+                typeof(NyxIdConnectLinksToolSource),
                 typeof(ChannelNyxIdConnectedServiceInventoryToolSource),
             ]));
         channelReply.Sources.Select(static source => source.GetType()).Should()

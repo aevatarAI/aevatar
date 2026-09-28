@@ -208,7 +208,7 @@ require_pattern 'AddAevatarMainnetHost_ShouldRegisterDefaultToolSets' "${composi
 require_pattern 'total:13:11744' "${composition_tests}" \
   "the reviewed workspace.default count/schema snapshot changed without an explicit migration."
 require_pattern \
-  'sha256:9109bc325b6c4eea8693c8a0f6bf023ec74a7bdef4e0c521fb2a930797b71fd7' \
+  'sha256:60e9e319c6ff53722458d9bb5da3a9de37ed92f43b1b417308e0f89d4f138efc' \
   "${composition_tests}" \
   "the reviewed workspace.default catalog digest changed without an explicit migration."
 require_pattern '"unique_tool_count": 68' "${baseline_manifest}" \
