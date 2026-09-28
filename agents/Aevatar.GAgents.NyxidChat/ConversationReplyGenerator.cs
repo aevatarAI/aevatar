@@ -1080,6 +1080,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
+                _logger.LogWarning(
+                    "Lark image attachment ingested for chat LLM input: activityId={ActivityId} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind} fileId={FileId} artifactId={ArtifactId} ownerRunId={OwnerRunId} ownerScopeId={OwnerScopeId} sourceKind={SourceKind} sizeBytes={SizeBytes}",
+                    activity.Id,
+                    messageId,
+                    resourceKey,
+                    resourceKind,
+                    ingressResult.FileRef.FileId,
+                    ingressResult.FileRef.ArtifactId,
+                    ingressResult.FileRef.OwnerRunId,
+                    ingressResult.FileRef.OwnerScopeId,
+                    ingressResult.FileRef.SourceKind,
+                    ingressResult.FileRef.SizeBytes);
                 parts.Add(ContentPart.ImageFileRefPart(
                     ToChatFileRef(ingressResult.FileRef),
                     mediaType,

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ProtoWorkflowFileRef = Aevatar.Workflow.Abstractions.WorkflowFileRef;
 using ProtoWorkflowFileSourceKind = Aevatar.Workflow.Abstractions.WorkflowFileSourceKind;
@@ -18,10 +19,14 @@ public sealed class FileSystemFileArtifactPort :
     private const string DescriptorFileName = "descriptor.pb";
 
     private readonly IOptions<FileSystemFileArtifactOptions> _options;
+    private readonly ILogger<FileSystemFileArtifactPort>? _logger;
 
-    public FileSystemFileArtifactPort(IOptions<FileSystemFileArtifactOptions> options)
+    public FileSystemFileArtifactPort(
+        IOptions<FileSystemFileArtifactOptions> options,
+        ILogger<FileSystemFileArtifactPort>? logger = null)
     {
         _options = options;
+        _logger = logger;
     }
 
     public async ValueTask<FileArtifactIngressResult> IngestAsync(
@@ -61,10 +66,24 @@ public sealed class FileSystemFileArtifactPort :
             OwnerRunId = Normalize(request.OwnerRunId),
             OwnerScopeId = Normalize(request.OwnerScopeId),
         };
+        var descriptorPath = Path.Combine(artifactDirectory, DescriptorFileName);
         await File.WriteAllBytesAsync(
-            Path.Combine(artifactDirectory, DescriptorFileName),
+            descriptorPath,
             ToProto(descriptor).ToByteArray(),
             cancellationToken);
+
+        _logger?.LogWarning(
+            "Workflow file artifact ingested: fileId={FileId} artifactId={ArtifactId} sourceKind={SourceKind} sourceMessageId={SourceMessageId} sourceResourceKey={SourceResourceKey} ownerRunId={OwnerRunId} ownerScopeId={OwnerScopeId} rootDirectory={RootDirectory} descriptorPath={DescriptorPath} sizeBytes={SizeBytes}",
+            descriptor.FileId,
+            descriptor.ArtifactId,
+            descriptor.SourceKind,
+            descriptor.SourceMessageId,
+            descriptor.SourceResourceKey,
+            descriptor.OwnerRunId,
+            descriptor.OwnerScopeId,
+            rootDirectory,
+            descriptorPath,
+            descriptor.SizeBytes);
 
         return new FileArtifactIngressResult(descriptor);
     }
@@ -258,7 +277,20 @@ public sealed class FileSystemFileArtifactPort :
     {
         var descriptorPath = ResolveDescriptorPath(fileRef);
         if (!File.Exists(descriptorPath))
+        {
+            _logger?.LogWarning(
+                "Workflow file descriptor missing: fileId={FileId} artifactId={ArtifactId} sourceKind={SourceKind} sourceMessageId={SourceMessageId} sourceResourceKey={SourceResourceKey} ownerRunId={OwnerRunId} ownerScopeId={OwnerScopeId} rootDirectory={RootDirectory} descriptorPath={DescriptorPath}",
+                fileRef.FileId,
+                fileRef.ArtifactId,
+                fileRef.SourceKind,
+                fileRef.SourceMessageId,
+                fileRef.SourceResourceKey,
+                fileRef.OwnerRunId,
+                fileRef.OwnerScopeId,
+                NormalizeRootDirectory(_options.Value.RootDirectory),
+                descriptorPath);
             throw new FileNotFoundException("Workflow file descriptor was not found.", descriptorPath);
+        }
 
         var descriptorBytes = await File.ReadAllBytesAsync(descriptorPath, cancellationToken);
         return ToApplication(ProtoWorkflowFileRef.Parser.ParseFrom(descriptorBytes));
