@@ -16,13 +16,6 @@ export interface ChannelSkillChoice {
   readonly description: string;
 }
 
-export interface ChannelSkillServiceContext {
-  readonly name: string;
-  readonly description: string;
-  readonly instructions: string;
-  readonly linkedServiceSlug: string | null;
-}
-
 async function requestSkillData(path: string, signal?: AbortSignal) {
   const config = getNyxIDRuntimeConfig();
   if (config.configurationError || !config.baseUrl)
@@ -70,45 +63,6 @@ export async function getChannelSkillById(id: string, signal?: AbortSignal) {
   if (skill.id !== id || skill.name.trim().length > 128)
     throw new Error('Invalid skill identity.');
   return skill;
-}
-
-// Registrations store a skill name. Resolve that name through Ornn, then read
-// its package by the returned GUID; service associations are discovery hints,
-// never UserService identities or grants.
-export async function getChannelSkillServiceContext(
-  name: string,
-  signal?: AbortSignal,
-): Promise<ChannelSkillServiceContext> {
-  if (!name.trim() || name.length > 128 || name === '.' || name === '..')
-    throw new Error('Invalid skill name.');
-  const detail = await requestSkillData(
-    `skills/${encodeURIComponent(name)}`,
-    signal,
-  );
-  const skill = readSkill(detail);
-  if (skill.name !== name || skill.id === '.' || skill.id === '..')
-    throw new Error('Invalid skill identity.');
-  const data = await requestSkillData(
-    `skills/${encodeURIComponent(skill.id)}/json`,
-    signal,
-  );
-  if (readString(data, 'name', 'Skill name') !== name)
-    throw new Error('Skill identity changed.');
-  const files = expectRecord(data.files, 'Skill files');
-  const instructions = readString(files, 'SKILL.md', 'Skill instructions');
-  if (instructions.length > 200_000)
-    throw new Error('Skill instructions exceed the discovery limit.');
-  return {
-    name,
-    description: skill.description,
-    instructions,
-    linkedServiceSlug:
-      readOptionalString(
-        detail,
-        'nyxidServiceSlug',
-        'Linked service slug',
-      )?.trim() || null,
-  };
 }
 
 export async function searchChannelSkills(

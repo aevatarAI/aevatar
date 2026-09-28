@@ -91,16 +91,13 @@ beforeEach(() => {
       return response(linkedSkill());
     if (String(input).endsWith(`/skills/${secondSkillId}`))
       return response(linkedSkill(secondSkillId));
-    if (String(input).endsWith('/catalog?include_all=true'))
-      return response({ entries: [] });
-    const name = String(input).match(/\/skills\/([^/]+)$/)?.[1];
-    if (name) return response({ data: { guid: `guid-${name}`, name } });
-    const packageName = String(input).match(
-      /\/skills\/guid-([^/]+)\/json$/,
-    )?.[1];
-    if (packageName)
+    if (String(input).startsWith('/api/skills/service-recommendations?'))
       return response({
-        data: { name: packageName, files: { 'SKILL.md': '' } },
+        skillName: new URL(
+          String(input),
+          'https://console.test',
+        ).searchParams.get('skillName'),
+        suggestions: [],
       });
     if (String(input).endsWith('/user-services'))
       return response({

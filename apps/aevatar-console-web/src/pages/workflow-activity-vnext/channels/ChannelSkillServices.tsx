@@ -1,17 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { Button } from 'antd';
 import * as React from 'react';
-import {
-  type ChannelServiceChoice,
-  listChannelServiceCatalog,
-  listChannelServiceInventory,
-} from '@/shared/api/channelServicesApi';
-import { getChannelSkillServiceContext } from '@/shared/api/channelSkillsApi';
+import type { ChannelServiceChoice } from '@/shared/api/channelServicesApi';
+import { getChannelSkillServices } from '@/shared/api/channelSkillServicesApi';
 import { t } from '@/shared/i18n/messages';
 import { AevatarLoadingDots } from '@/shared/ui/AevatarLoading';
 import { buildWorkflowActivitySettingsHref } from '../navigation';
 import { channelKeys } from './queries';
-import { recommendSkillServices } from './skillServiceRecommendations';
 
 export default function ChannelSkillServices({
   scopeId,
@@ -37,14 +32,7 @@ export default function ChannelSkillServices({
   const titleId = React.useId();
   const query = useQuery({
     queryKey: channelKeys.skillServices(scopeId, skillName),
-    queryFn: async ({ signal }) => {
-      const [skill, catalog, inventory] = await Promise.all([
-        getChannelSkillServiceContext(skillName, signal),
-        listChannelServiceCatalog(signal),
-        listChannelServiceInventory(signal),
-      ]);
-      return recommendSkillServices(skill, catalog, inventory);
-    },
+    queryFn: ({ signal }) => getChannelSkillServices(skillName, signal),
     enabled: Boolean(scopeId && skillName),
     retry: false,
     refetchOnWindowFocus: false,

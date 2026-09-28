@@ -60,23 +60,99 @@ const registration = {
   service_ids: ['us-manual', 'us-ornn', 'us-llm'],
   state_version: 12,
 };
-const catalog = [
-  { slug: 'api-github', name: 'GitHub' },
-  { slug: 'slack', name: 'Slack' },
-  { slug: 'linear', name: 'Linear' },
-  { slug: 'api-drive', name: 'Drive', recommended_skills: ['support'] },
-  { slug: 'inactive-service', name: 'Inactive service' },
-  { slug: 'owner-service', name: 'Owner service' },
-  { slug: 'mail', name: 'Mail' },
-];
+const instance = (id: string, slug: string, label: string) => ({
+  id,
+  slug,
+  label,
+  active: true,
+  allowed: true,
+  source: 'personal',
+  organizationName: '',
+});
+function suggestionsResponse(skillName = 'support', recovered = false) {
+  return {
+    skillName,
+    suggestions:
+      skillName === 'no-services'
+        ? []
+        : [
+            {
+              slug: 'api-github',
+              label: 'GitHub',
+              evidence: 'linked',
+              instances: [
+                instance('us-personal', 'api-github', 'Personal GitHub'),
+                {
+                  ...instance('us-org', 'api-github', 'Team GitHub'),
+                  source: 'organization',
+                  organizationName: 'Acme',
+                },
+              ],
+            },
+            {
+              slug: 'linear',
+              label: 'Linear',
+              evidence: 'mention',
+              instances: [instance('us-linear', 'linear', 'Linear')],
+            },
+            {
+              slug: 'inactive-service',
+              label: 'Inactive service',
+              evidence: 'mention',
+              instances: [
+                {
+                  ...instance(
+                    'us-inactive',
+                    'inactive-service',
+                    'Inactive service',
+                  ),
+                  active: false,
+                },
+              ],
+            },
+            {
+              slug: 'owner-service',
+              label: 'Owner service',
+              evidence: 'mention',
+              instances: [
+                {
+                  ...instance('us-owner', 'owner-service', 'Owner service'),
+                  allowed: false,
+                  source: 'organization',
+                  organizationName: 'Other team',
+                },
+              ],
+            },
+            {
+              slug: 'api-drive',
+              label: 'Drive',
+              evidence: 'catalog',
+              instances: [],
+            },
+            {
+              slug: 'slack',
+              label: 'Slack',
+              evidence: 'mention',
+              instances: recovered
+                ? [instance('us-slack', 'slack', 'Connected Slack')]
+                : [],
+            },
+          ],
+  };
+}
 
 async function serve(input: RequestInfo | URL, init?: RequestInit) {
   const url = String(input);
   if (init?.method === 'POST')
     return response({ error: 'insecure_webhook_base_url' }, 400);
   if (url.endsWith('/user-services')) return response({ services: inventory });
-  if (url.endsWith('/catalog?include_all=true'))
-    return response({ entries: catalog });
+  if (url.startsWith('/api/skills/service-recommendations?'))
+    return response(
+      suggestionsResponse(
+        new URL(url, 'https://console.test').searchParams.get('skillName') ??
+          '',
+      ),
+    );
   if (url.includes('/skill-search'))
     return response({
       data: {
@@ -85,30 +161,6 @@ async function serve(input: RequestInfo | URL, init?: RequestInit) {
           name,
         })),
         meta: { hasMore: false },
-      },
-    });
-  const name = url.match(/\/skills\/([^/]+)$/)?.[1];
-  if (name)
-    return response({
-      data: {
-        guid: `guid-${name}`,
-        name,
-        description: 'Task guide',
-        nyxidServiceSlug: name === 'support' ? 'api-github' : null,
-        nyxidServiceId: 'catalog-id-is-not-authorization',
-      },
-    });
-  const packageName = url.match(/\/skills\/guid-([^/]+)\/json$/)?.[1];
-  if (packageName)
-    return response({
-      data: {
-        name: packageName,
-        files: {
-          'SKILL.md':
-            packageName === 'no-services'
-              ? 'No integrations.'
-              : 'Use Slack, Linear, inactive-service and owner-service. gmail and mail-helper are unrelated. TEST_ONLY_PRIVATE',
-        },
       },
     });
   if (url === '/api/channels/registrations?scope=all')
@@ -147,7 +199,7 @@ async function chooseSkill(name: string) {
 const writes = () =>
   fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST');
 
-it('discovers evidence and access gaps without granting access, then saves only the explicitly selected UserService instance', async () => {
+it('displays backend recommendations and access gaps, then saves only the explicitly selected UserService instance', async () => {
   renderForm();
   await screen.findByRole('button', { name: 'Select Team GitHub' });
   const related = within(suggestions());
@@ -161,7 +213,6 @@ it('discovers evidence and access gaps without granting access, then saves only 
   expect(related.getAllByText(/may be needed for some tasks/)).not.toHaveLength(
     0,
   );
-  expect(related.queryByText('Mail')).not.toBeInTheDocument();
   expect(
     related.getByText(/Not authorized for this session/),
   ).toBeInTheDocument();
@@ -177,7 +228,11 @@ it('discovers evidence and access gaps without granting access, then saves only 
   expect(
     related.getByRole('link', { name: /Review service access/ }),
   ).toHaveAttribute('href', '/scopes/scope-alpha/settings?section=account');
-  expect(document.body).not.toHaveTextContent('TEST_ONLY_PRIVATE');
+  expect(
+    fetchMock.mock.calls.some(([url]) =>
+      /\/skills\/.*\/json|\/catalog\?/.test(String(url)),
+    ),
+  ).toBe(false);
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
   expect(writes()).toHaveLength(0);
   fireEvent.click(related.getByRole('button', { name: 'Select Team GitHub' }));
@@ -203,7 +258,9 @@ it('updates suggestions on skill changes and ignores late results while retainin
   });
   let pendingSignal: AbortSignal | null | undefined;
   fetchMock.mockImplementation((input, init) => {
-    if (String(input).endsWith('/skills/guid-slow-skill/json')) {
+    if (
+      String(input).endsWith('/service-recommendations?skillName=slow-skill')
+    ) {
       pendingSignal = init?.signal;
       return pending;
     }
@@ -224,13 +281,7 @@ it('updates suggestions on skill changes and ignores late results while retainin
   await chooseSkill('no-services');
   await screen.findByText(/No related services identified/);
   expect(pendingSignal?.aborted).toBe(true);
-  await act(async () =>
-    complete(
-      response({
-        data: { name: 'slow-skill', files: { 'SKILL.md': 'Slack' } },
-      }),
-    ),
-  );
+  await act(async () => complete(response(suggestionsResponse('slow-skill'))));
   expect(
     within(suggestions('no-services')).queryByText('Slack'),
   ).not.toBeInTheDocument();
@@ -250,10 +301,12 @@ it('updates suggestions on skill changes and ignores late results while retainin
 it('keeps manual selection usable on discovery failure and refreshes connections and authorization on retry', async () => {
   let recovered = false;
   fetchMock.mockImplementation((input, init) => {
-    if (!recovered && String(input).includes('/catalog?'))
+    if (!recovered && String(input).includes('/service-recommendations?'))
       return Promise.resolve(
         response({ message: 'PRIVATE_SERVER_DETAIL' }, 503),
       );
+    if (recovered && String(input).includes('/service-recommendations?'))
+      return Promise.resolve(response(suggestionsResponse('support', true)));
     if (recovered && String(input).endsWith('/user-services'))
       return Promise.resolve(
         response({

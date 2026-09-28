@@ -1,11 +1,7 @@
 import { authFetch } from '@/shared/auth/fetch';
 import { persistAuthSession } from '@/shared/auth/session';
 import { createNyxIDServiceSession } from '../../../tests/fixtures/nyxidServiceSession';
-import {
-  getChannelSkillById,
-  getChannelSkillServiceContext,
-  searchChannelSkills,
-} from './channelSkillsApi';
+import { getChannelSkillById, searchChannelSkills } from './channelSkillsApi';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
 jest.mock('@/shared/auth/config', () => ({
@@ -15,80 +11,6 @@ jest.mock('@/shared/auth/config', () => ({
   }),
 }));
 const fetchMock = jest.mocked(authFetch);
-
-it('resolves the selected name and reads its exact package with authenticated, abortable requests', async () => {
-  fetchMock.mockReset();
-  const session = createNyxIDServiceSession();
-  persistAuthSession(session);
-  fetchMock.mockResolvedValueOnce({
-    ok: true,
-    json: async () => ({
-      data: {
-        guid: 'guid+one',
-        name: 'team+docs',
-        description: 'Documentation',
-        nyxidServiceSlug: 'api-github',
-        nyxidServiceId: 'catalog-id',
-      },
-    }),
-  } as Response);
-  fetchMock.mockResolvedValueOnce({
-    ok: true,
-    json: async () => ({
-      data: {
-        name: 'team+docs',
-        files: { 'SKILL.md': 'Use GitHub.', 'private.txt': 'TEST_ONLY_SECRET' },
-      },
-    }),
-  } as Response);
-  const signal = new AbortController().signal;
-  expect(await getChannelSkillServiceContext('team+docs', signal)).toEqual({
-    name: 'team+docs',
-    description: 'Documentation',
-    instructions: 'Use GitHub.',
-    linkedServiceSlug: 'api-github',
-  });
-  expect(
-    fetchMock.mock.calls.map(([url]) => new URL(String(url)).pathname),
-  ).toEqual([
-    '/api/v1/proxy/s/ornn-api/api/v1/skills/team%2Bdocs',
-    '/api/v1/proxy/s/ornn-api/api/v1/skills/guid%2Bone/json',
-  ]);
-  for (const [, init] of fetchMock.mock.calls) {
-    expect(init).toMatchObject({
-      credentials: 'omit',
-      cache: 'no-store',
-      headers: { Authorization: `Bearer ${session.tokens.accessToken}` },
-    });
-    expect(init?.signal).toBe(signal);
-  }
-});
-
-it('rejects another skill package instead of deriving recommendations from mismatched content', async () => {
-  fetchMock.mockReset();
-  persistAuthSession(createNyxIDServiceSession());
-  fetchMock.mockResolvedValueOnce({
-    ok: true,
-    json: async () => ({
-      data: {
-        guid: 'skill-guid',
-        name: 'support',
-      },
-    }),
-  } as Response);
-  fetchMock.mockResolvedValueOnce({
-    ok: true,
-    json: async () => ({
-      data: {
-        name: 'another-skill',
-        files: { 'SKILL.md': 'TEST_ONLY_SECRET' },
-      },
-    }),
-  } as Response);
-  await expect(getChannelSkillServiceContext('support')).rejects.toThrow(
-    'Skill identity changed.',
-  );
-});
 it('uses the current user token and private proxy search, preserving shared skills and cursor pagination', async () => {
   const session = createNyxIDServiceSession();
   persistAuthSession(session);

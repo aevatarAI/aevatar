@@ -714,6 +714,7 @@ public static class MainnetHostBuilderExtensions
         app.MapProjectionVersionRegressionRepairAdminEndpoints();
         app.MapManagedCodexCredentialEndpoints();
         app.MapWorkflowSkillsEndpoints();
+        app.MapSkillServiceRecommendations();
         app.MapStatusEndpoints();
 
         // Voice service registration is conditional on a configured provider

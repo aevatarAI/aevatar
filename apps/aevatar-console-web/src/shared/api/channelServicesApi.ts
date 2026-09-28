@@ -26,67 +26,6 @@ export type ChannelServiceIdentity = Pick<
   'id' | 'slug' | 'label'
 >;
 
-export interface ChannelServiceCatalogEntry {
-  readonly slug: string;
-  readonly name: string;
-  readonly recommendedSkills: readonly string[];
-}
-
-// Discovery may show unavailable services, but only listChannelServices owns
-// the selectable IDs admitted by the current bearer.
-export async function listChannelServiceInventory(signal?: AbortSignal) {
-  const session = await ensureActiveAuthSession();
-  if (!session) throw new ChannelApiError(401);
-  return readChannelServiceInventory(session.tokens.accessToken, signal);
-}
-
-export async function listChannelServiceCatalog(
-  signal?: AbortSignal,
-): Promise<ChannelServiceCatalogEntry[]> {
-  const config = getNyxIDRuntimeConfig();
-  if (config.configurationError || !config.baseUrl)
-    throw new Error('NyxID is unavailable.');
-  const session = await ensureActiveAuthSession();
-  if (!session) throw new ChannelApiError(401);
-  const response = await authFetch(
-    `${config.baseUrl}/api/v1/catalog?include_all=true`,
-    {
-      signal,
-      credentials: 'omit',
-      cache: 'no-store',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${session.tokens.accessToken}`,
-      },
-    },
-  );
-  if (!response.ok) throw new ChannelApiError(response.status);
-  const body = expectRecord(await response.json(), 'Service catalog');
-  return expectArray(body.entries, 'Service catalog entries', (value) => {
-    const row = expectRecord(value, 'Service catalog entry');
-    const slug = readString(row, 'slug', 'Catalog slug');
-    const name = readString(row, 'name', 'Catalog name');
-    if (!slug.trim() || !name.trim())
-      throw new Error('Missing catalog identity.');
-    return {
-      slug,
-      name,
-      recommendedSkills:
-        row.recommended_skills == null
-          ? []
-          : expectArray(
-              row.recommended_skills,
-              'Recommended skills',
-              (item) => {
-                if (typeof item !== 'string')
-                  throw new Error('Invalid recommended skill.');
-                return item;
-              },
-            ),
-    };
-  });
-}
-
 function decodeService(value: unknown): ChannelServiceChoice {
   const row = expectRecord(value, 'User service');
   const source = expectRecord(row.credential_source, 'Credential source');

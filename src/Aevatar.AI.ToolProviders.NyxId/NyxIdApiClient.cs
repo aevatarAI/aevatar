@@ -265,8 +265,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     // ─── Catalog ───
 
-    public Task<string> ListCatalogAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/catalog", ct);
+    public Task<string> ListCatalogAsync(string token, CancellationToken ct, bool includeAll = false) =>
+        GetAsync(token, includeAll ? "/api/v1/catalog?include_all=true" : "/api/v1/catalog", ct);
 
     public Task<string> GetCatalogEntryAsync(string token, string slug, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/catalog/{Uri.EscapeDataString(slug)}", ct);
