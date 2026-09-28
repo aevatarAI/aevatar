@@ -88,6 +88,31 @@ public sealed class AdmittedAgentToolExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenToolMapsLiveResult_ShouldReturnLiveResultAndAuditReceiptResult()
+    {
+        const string liveResult = "{\"connect_url\":\"https://nyx.example/connect/secret-token\"}";
+        const string auditedResult = "{\"connect_url\":\"[redacted]\"}";
+        var appender = new RecordingAuditTrailAppender((record, _) =>
+            AuditTrailAppendResult.Appended(record.AuditId));
+        var tool = new RecordingTool(
+            new AgentToolCallSafety(false, false, false),
+            _ => liveResult,
+            createReceipt: _ => new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Success,
+                ResultJson = auditedResult,
+            },
+            resolveLiveResult: (_, _, _) => liveResult);
+        var executor = CreateExecutor(appender);
+
+        var outcome = await executor.ExecuteAsync(CreateRequest(tool));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.ResultJson.Should().Be(liveResult);
+        outcome.Receipt.ResultJson.Should().Be(auditedResult);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenTerminalSucceeds_ShouldEmitSafeSpanAndDurationMetric()
     {
         const string secret = "telemetry-secret";
@@ -2141,7 +2166,8 @@ public sealed class AdmittedAgentToolExecutorTests
         Func<string, AgentToolReceipt?>? createReceipt = null,
         string name = "test_tool",
         Func<string, AgentToolCallSafety>? classify = null,
-        AgentToolReplayPolicy? replayPolicy = null) : IAgentTool
+        AgentToolReplayPolicy? replayPolicy = null,
+        Func<string, string, AgentToolReceipt, string?>? resolveLiveResult = null) : IAgentTool, IAgentToolLiveResultMapper
     {
         private readonly Func<string, string> _execute = execute ?? (_ => "{}");
 
@@ -2187,6 +2213,12 @@ public sealed class AdmittedAgentToolExecutorTests
                 ResultJson = resultJson,
             };
         }
+
+        public string? ResolveLiveResultJson(
+            string argumentsJson,
+            string terminalResultJson,
+            AgentToolReceipt receipt) =>
+            resolveLiveResult?.Invoke(argumentsJson, terminalResultJson, receipt);
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {

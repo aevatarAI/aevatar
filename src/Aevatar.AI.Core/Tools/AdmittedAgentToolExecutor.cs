@@ -851,9 +851,10 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             terminalOutcome.ResultJson,
             terminalOutcome.Receipt,
             argumentsJson);
+        var liveResultJson = ResolveLiveResultJson(tool, argumentsJson, terminalOutcome.ResultJson, receipt);
         var outcome = new AgentToolExecutionOutcome(
             AgentToolExecutionOutcomeKind.Executed,
-            receipt.ResultJson ?? string.Empty,
+            liveResultJson,
             receipt,
             isMutation,
             string.Empty,
@@ -1245,10 +1246,10 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 resultJson,
                 terminalOutcome.Receipt,
                 argumentsJson);
-            var safeResultJson = receipt.ResultJson ?? string.Empty;
+            var liveResultJson = ResolveLiveResultJson(tool, argumentsJson, resultJson, receipt);
             outcome = new AgentToolExecutionOutcome(
                 AgentToolExecutionOutcomeKind.Executed,
-                safeResultJson,
+                liveResultJson,
                 receipt,
                 isMutation,
                 string.Empty,
@@ -2259,6 +2260,21 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             CodexExecutionFailureKind.CleanupFailed => "Codex execution cleanup failed.",
             _ => "Codex execution failed.",
         };
+
+    private static string ResolveLiveResultJson(
+        IAgentTool tool,
+        string argumentsJson,
+        string terminalResultJson,
+        AgentToolReceipt receipt)
+    {
+        if (tool is IAgentToolLiveResultMapper mapper &&
+            mapper.ResolveLiveResultJson(argumentsJson, terminalResultJson, receipt) is { } liveResultJson)
+        {
+            return liveResultJson;
+        }
+
+        return receipt.ResultJson ?? string.Empty;
+    }
 
     private static string? NormalizeIdentity(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
