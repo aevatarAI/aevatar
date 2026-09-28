@@ -72,7 +72,7 @@ public sealed class NyxIdConnectLinksTool : INyxIdBuiltInTool, IAgentToolLiveRes
         }
         """;
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
     public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
         ActionParser.Classify(argumentsJson);

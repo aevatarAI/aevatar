@@ -25,6 +25,9 @@ public sealed class NyxIdConnectLinksToolTests
         var tool = new NyxIdConnectLinksTool(client);
         const string arguments = """{"action":"create","service_slug":"api-github","label":"GitHub","requested_by":"default-skill","callback_url":"https://callback.example/nyx","expires_in":900,"target_org_id":"org-1"}""";
 
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
+        tool.GetCallSafety(arguments).RequiresApproval.Should().BeTrue();
+
         using var _scope = PushToken();
         var result = await tool.ExecuteAsync(arguments);
         var receipt = ((IAgentTool)tool).CreateResultReceipt("call-create", tool.Name, arguments, result);
