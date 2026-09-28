@@ -2234,13 +2234,34 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         });
     }
 
-    private static ChatAttachmentInputContext BuildAttachmentInputContext(
+    private ChatAttachmentInputContext BuildAttachmentInputContext(
         NeedsLlmReplyEvent request,
         LLMControlContext control)
     {
-        var token = NormalizeOptional(control.NyxIdAccessToken)
-                    ?? NormalizeOptional(control.NyxIdOrgToken)
-                    ?? NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        var controlAccessToken = NormalizeOptional(control.NyxIdAccessToken);
+        var controlOrgToken = NormalizeOptional(control.NyxIdOrgToken);
+        var activityUserToken = NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        var token = controlAccessToken ?? controlOrgToken ?? activityUserToken;
+        var selectedCredentialSource = controlAccessToken is not null
+            ? "control_access_token"
+            : controlOrgToken is not null
+                ? "control_org_token"
+                : activityUserToken is not null
+                    ? "activity_user_token"
+                    : "none";
+        var attachmentCount = request.Activity?.Content?.Attachments?.Count ?? 0;
+        var recentAttachmentCount = request.RecentAttachmentActivities.Sum(static entry =>
+            entry.Activity?.Content?.Attachments?.Count ?? 0);
+        _logger.LogInformation(
+            "Attachment input credential facts selected: correlation={CorrelationId}, credentialSourceMode={CredentialSourceMode}, selectedCredentialSource={SelectedCredentialSource}, hasControlAccessToken={HasControlAccessToken}, hasControlOrgToken={HasControlOrgToken}, hasActivityUserToken={HasActivityUserToken}, attachmentCount={AttachmentCount}, recentAttachmentCount={RecentAttachmentCount}",
+            request.CorrelationId,
+            request.ChannelRuntimeConfig?.CredentialSourceMode,
+            selectedCredentialSource,
+            controlAccessToken is not null,
+            controlOrgToken is not null,
+            activityUserToken is not null,
+            attachmentCount,
+            recentAttachmentCount);
         return new ChatAttachmentInputContext(
             request.RecentAttachmentActivities.Select(entry => entry.Clone()).ToArray(),
             token,

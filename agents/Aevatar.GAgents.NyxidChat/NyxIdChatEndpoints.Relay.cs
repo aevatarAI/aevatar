@@ -120,6 +120,14 @@ public static partial class NyxIdChatEndpoints
             activity.TransportExtras ??= new TransportExtras();
             activity.TransportExtras.NyxUserAccessToken = validation.UserAccessToken ?? string.Empty;
             activity.TransportExtras.NyxRegistrationScopeId = scopeId.Trim();
+            logger.LogInformation(
+                "Relay callback credential facts resolved: message={MessageId}, apiKeyId={ApiKeyId}, scope={ScopeId}, relayApiKeyId={RelayApiKeyId}, hasUserToken={HasUserToken}, hasReplyToken={HasReplyToken}",
+                payload.MessageId,
+                payload.Agent?.ApiKeyId,
+                scopeId,
+                validation.RelayApiKeyId,
+                !string.IsNullOrWhiteSpace(validation.UserAccessToken),
+                !string.IsNullOrWhiteSpace(payload.ReplyToken));
             // Resolve sender NyxID at ingress so the actor can build a per-user
             // caller scope for chat-route policy lookup without making an HTTP
             // call inside the turn. Fail-soft: log + leave empty so policy

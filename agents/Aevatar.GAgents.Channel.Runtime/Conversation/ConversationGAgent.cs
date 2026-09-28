@@ -235,6 +235,13 @@ public sealed partial class ConversationGAgent :
             evt.ReplyToken,
             evt.ReplyTokenExpiresAtUnixMs,
             evt.NyxUserAccessToken);
+        Logger.LogInformation(
+            "Relay turn runtime credential facts restored: activity={ActivityId}, correlation={CorrelationId}, hasActivityUserToken={HasActivityUserToken}, hasRuntimeUserToken={HasRuntimeUserToken}, hasReplyToken={HasReplyToken}",
+            activity.Id,
+            activity.OutboundDelivery?.CorrelationId,
+            !string.IsNullOrWhiteSpace(activity.TransportExtras?.NyxUserAccessToken),
+            !string.IsNullOrWhiteSpace(runtimeContext.NyxUserAccessToken),
+            runtimeContext.NyxRelayReplyToken is not null);
         await HandleInboundActivityCoreAsync(activity.Clone(), runtimeContext);
     }
 
