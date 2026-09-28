@@ -44,6 +44,9 @@ public sealed class NyxIdConnectLinksToolTests
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         receipt.ResultJson.Should().NotContain("secret-token");
         receipt.ResultJson.Should().Contain("[redacted]");
+        ((IAgentToolLiveResultMapper)tool)
+            .ResolveLiveResultJson(arguments, result, receipt)
+            .Should().Contain("https://nyx.example/connect/secret-token");
     }
 
     [Fact]

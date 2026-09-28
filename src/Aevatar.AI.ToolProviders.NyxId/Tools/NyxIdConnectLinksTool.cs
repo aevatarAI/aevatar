@@ -6,7 +6,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-public sealed class NyxIdConnectLinksTool : INyxIdBuiltInTool
+public sealed class NyxIdConnectLinksTool : INyxIdBuiltInTool, IAgentToolLiveResultMapper
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
     {
@@ -81,12 +81,21 @@ public sealed class NyxIdConnectLinksTool : INyxIdBuiltInTool
         string callId,
         string toolName,
         string argumentsJson,
-        string resultJson) =>
-        NyxIdManagedToolReceiptFactory.TryCreate(
+        string resultJson)
+    {
+        var receipt = NyxIdManagedToolReceiptFactory.TryCreate(
             callId,
             toolName,
             resultJson,
             NyxIdApiClient.TryRedactConnectUrl);
+        return receipt;
+    }
+
+    public string? ResolveLiveResultJson(
+        string argumentsJson,
+        string terminalResultJson,
+        AgentToolReceipt receipt) =>
+        receipt.Status == AgentToolReceiptStatus.Success ? terminalResultJson ?? string.Empty : null;
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
