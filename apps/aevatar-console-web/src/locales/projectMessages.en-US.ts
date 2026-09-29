@@ -5194,5 +5194,6 @@ const projectMessages = {
   "pages.studio.studiomemberinvokesetuppanels.run.workflow": "Run workflow",
   "pages.studio.studiomemberinvokesetuppanels.stop.current.run": "Stop",
   "pages.studio.studiomemberinvokepanel.value.copied": "{label} copied.",
+  "pages.auth.callback.index.back.to.previous.page": "Back to previous page",
 };
 export default projectMessages;

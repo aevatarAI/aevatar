@@ -1,4 +1,8 @@
-import { SearchOutlined } from '@ant-design/icons';
+import {
+  ExportOutlined,
+  SafetyCertificateOutlined,
+  SearchOutlined,
+} from '@ant-design/icons';
 import { Button, Checkbox, Input } from 'antd';
 import * as React from 'react';
 import type { ChannelServiceChoice } from '@/shared/api/channelServicesApi';
@@ -7,6 +11,9 @@ import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
 
 export default function ChannelServicePicker({
   services,
+  accessAction,
+  accessNotice,
+  suggestedIds = [],
   selectedIds,
   requiredIds,
   missingRequiredSlugs,
@@ -20,6 +27,13 @@ export default function ChannelServicePicker({
   replacesDefaults = false,
   suggestions,
 }: {
+  readonly accessAction?: {
+    readonly onReview: () => void;
+    readonly pending: boolean;
+    readonly disabled: boolean;
+  };
+  readonly accessNotice?: React.ReactNode;
+  readonly suggestedIds?: readonly string[];
   readonly services: readonly ChannelServiceChoice[];
   readonly selectedIds: readonly string[];
   readonly requiredIds: readonly string[];
@@ -39,9 +53,7 @@ export default function ChannelServicePicker({
   const visible = services.filter((service) =>
     `${service.label} ${service.slug}`.toLocaleLowerCase().includes(term),
   );
-  const selectableIds = visible
-    .filter((service) => service.active && service.allowed)
-    .map((service) => service.id);
+  const selectableIds = visible.map((service) => service.id);
   const optionalIds = selectableIds.filter((id) => !requiredIds.includes(id));
   const selectedCount = selectableIds.filter((id) =>
     selectedIds.includes(id),
@@ -57,18 +69,37 @@ export default function ChannelServicePicker({
         <h2 id="channel-services-title">
           {t('channels.connect.services', 'Services')}
         </h2>
-        <span aria-live="polite">
-          {t('channels.connect.selected', '{count} selected', {
-            count: selectedIds.length,
-          })}
-        </span>
+        <div className="channels__services-actions">
+          <span aria-live="polite">
+            {t('channels.connect.selected', '{count} selected', {
+              count: selectedIds.length,
+            })}
+          </span>
+          {accessAction ? (
+            <Button
+              icon={<SafetyCertificateOutlined />}
+              loading={accessAction.pending}
+              disabled={accessAction.disabled}
+              onClick={accessAction.onReview}
+            >
+              {t('channels.access.manage', 'Manage service access')}{' '}
+              <ExportOutlined aria-hidden="true" />
+            </Button>
+          ) : null}
+        </div>
       </div>
       <p className="channels__form-help">
-        {t(
-          'channels.connect.servicesHelp',
-          'Choose from your authorized services, or connect additional services in NyxID.',
-        )}
+        {accessAction
+          ? t(
+              'channels.access.help',
+              'Missing a service? Click Manage service access to authorize it.',
+            )
+          : t(
+              'channels.connect.servicesHelp',
+              'Only services available through your current NyxID authorization are shown.',
+            )}
       </p>
+      {accessNotice}
       {suggestions}
       {loading ? (
         <AevatarContentSkeleton
@@ -143,7 +174,6 @@ export default function ChannelServicePicker({
             {visible.length ? (
               visible.map((service) => {
                 const selected = selectedIds.includes(service.id);
-                const unavailable = !service.active || !service.allowed;
                 const required = requiredIds.includes(service.id);
                 return (
                   <div
@@ -152,9 +182,7 @@ export default function ChannelServicePicker({
                   >
                     <Checkbox
                       checked={selected}
-                      disabled={
-                        disabled || required || (unavailable && !selected)
-                      }
+                      disabled={disabled || required}
                       onChange={(event) =>
                         onChange(
                           event.target.checked
@@ -165,6 +193,11 @@ export default function ChannelServicePicker({
                     >
                       <span className="channels__service-name">
                         {service.label}
+                        {suggestedIds.includes(service.id) ? (
+                          <span className="channels__service-requested">
+                            {t('channels.access.requested', 'Requested')}
+                          </span>
+                        ) : null}
                       </span>
                       <span className="channels__service-slug">
                         {service.slug}
@@ -174,15 +207,10 @@ export default function ChannelServicePicker({
                       </span>
                     </Checkbox>
                     <span className="channels__service-source">
-                      {unavailable
-                        ? t(
-                            'channels.connect.serviceUnavailable',
-                            'Unavailable',
-                          )
-                        : service.source === 'personal'
-                          ? t('channels.connect.personal', 'Personal')
-                          : service.organizationName ||
-                            t('channels.connect.organization', 'Organization')}
+                      {service.source === 'personal'
+                        ? t('channels.connect.personal', 'Personal')
+                        : service.organizationName ||
+                          t('channels.connect.organization', 'Organization')}
                     </span>
                   </div>
                 );

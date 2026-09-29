@@ -258,8 +258,8 @@ const CallbackPage: React.FC = () => {
           >
             {isReviewFlow
               ? t(
-                  'pages.auth.callback.index.back.to.account.settings',
-                  'Back to Account settings',
+                  'pages.auth.callback.index.back.to.previous.page',
+                  'Back to previous page',
                 )
               : t('pages.auth.callback.index.back.to.login', 'Back to login')}
           </Button>,

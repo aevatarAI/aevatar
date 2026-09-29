@@ -244,7 +244,6 @@ export default {
   'channels.edit.replaceDefaults':
     'Saving replaces NyxID default access with the selected services.',
   'channels.connect.searchServices': 'Search services by name or slug',
-  'channels.connect.serviceUnavailable': 'Unavailable',
   'channels.connect.personal': 'Personal',
   'channels.connect.organization': 'Organization',
   'channels.connect.noMatches': 'No services match your search.',
@@ -282,4 +281,18 @@ export default {
   'channels.connect.stay': 'Stay',
   'channels.connect.discardHelp':
     'Your bot token and unsaved choices will be cleared.',
+  'channels.access.manage': 'Manage service access',
+  'channels.access.help':
+    'Missing a service? Click Manage service access to authorize it.',
+  'channels.access.needed': 'Service access needed',
+  'channels.access.instructions':
+    'In NyxID, choose Customize under Service access. Keep the services you still use selected and add the services below, then choose Allow.',
+  'channels.access.unknown': 'Service not found',
+  'channels.access.requestedIdentity': 'Requested service ID',
+  'channels.access.unavailable': 'Check availability in NyxID',
+  'channels.access.notAuthorized': 'Access needed',
+  'channels.access.restored': 'Your changes have been kept. Review and save.',
+  'channels.access.startFailed':
+    'Could not open NyxID. Your changes are still here. Try again.',
+  'channels.access.requested': 'Requested',
 };

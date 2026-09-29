@@ -36,6 +36,19 @@ export const channelConnectionCss = `
 .channels__suggestion-links { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; }
 .channels__suggestion-links a { color: var(--wa-blue); font-size: 11px; line-height: 18px; }
 .channels__suggestion-links a:focus-visible { outline: 2px solid var(--wa-blue); outline-offset: 2px; }
+.channels__services-actions > span { color: var(--wa-blue); font-size: 11px; }
+.channels__services-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; justify-content: flex-end; }
+.channels__access-notice { background: var(--wa-blue-bg); border: 1px solid var(--channels-border); border-left: 3px solid var(--wa-blue); border-radius: var(--wa-radius); color: var(--wa-ink); font-size: 12px; line-height: 20px; margin-top: 16px; padding: 16px; }
+.channels__access-notice--needed { background: var(--wa-amber-bg); border-left-color: var(--wa-amber); }
+.channels__access-notice-heading { align-items: center; display: flex; gap: 8px; }
+.channels__access-notice--needed .channels__access-notice-heading { color: var(--wa-amber); }
+.channels__access-notice p { margin: 8px 0 0; }
+.channels__access-list { list-style: none; margin: 12px 0 0; padding: 0; }
+.channels__access-list li { align-items: center; border-top: 1px solid var(--channels-border); display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; padding: 10px 0; }
+.channels__access-list li > span { min-width: 0; overflow-wrap: anywhere; }
+.channels__access-list li > span:last-child { color: var(--wa-amber); font-size: 11px; }
+.channels__access-list summary { cursor: pointer; color: var(--wa-muted); font-size: 11px; }
+.channels__service-requested { color: var(--wa-blue); font-size: 10px; font-weight: 500; margin-left: 8px; }
 .channels__service-picker { border: 1px solid var(--channels-border); border-radius: 5px; margin-top: 12px; padding: 10px 10px 0; }
 .channels__service-picker > .ant-input-affix-wrapper { background: var(--wa-subtle); min-height: 34px; }
 .channels__service-picker .ant-input { background: transparent; font-size: 12px; }
@@ -65,6 +78,8 @@ export const channelConnectionCss = `
 .channels__connection-form .ant-btn { white-space: normal; height: auto; }
 .channels__bot-summary .channels__dot { display: none; }
 @media (max-width: 767px) {
+  .channels__services-heading { align-items: flex-start; flex-wrap: wrap; }
+  .channels__services-actions { flex: 1 1 220px; }
   .channels__name-fields { gap: 0; grid-template-columns: 1fr; }
   .channels__main--connect .channels__content { padding-top: 20px; }
   .channels__connect-heading h1 { font-size: 24px; line-height: 32px; }
