@@ -59,7 +59,9 @@ const linkedSkill = (id = skillId) => ({
 });
 const detailReads = () =>
   fetchMock.mock.calls.filter(([input]) =>
-    String(input).includes('/api/v1/skills/'),
+    [skillId, secondSkillId].some((id) =>
+      String(input).endsWith(`/skills/${id}`),
+    ),
   );
 const writes = () =>
   fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST');
@@ -89,6 +91,14 @@ beforeEach(() => {
       return response(linkedSkill());
     if (String(input).endsWith(`/skills/${secondSkillId}`))
       return response(linkedSkill(secondSkillId));
+    if (String(input).startsWith('/api/skills/service-recommendations?'))
+      return response({
+        skillName: new URL(
+          String(input),
+          'https://console.test',
+        ).searchParams.get('skillName'),
+        suggestions: [],
+      });
     if (String(input).endsWith('/user-services'))
       return response({
         services: [

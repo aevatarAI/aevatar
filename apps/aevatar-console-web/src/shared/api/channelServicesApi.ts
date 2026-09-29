@@ -1,7 +1,6 @@
 import { ensureActiveAuthSession } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { authFetch } from '@/shared/auth/fetch';
-import { readAccessTokenServiceGrants } from '@/shared/auth/serviceGrants';
 import { ChannelApiError } from './channelsApi';
 import {
   expectArray,
@@ -34,8 +33,8 @@ function decodeService(value: unknown): ChannelServiceChoice {
   if (!id.trim() || !slug.trim()) throw new Error('Missing service identity.');
   const personal = source.type === 'personal';
   const organization = source.type === 'org';
-  // This is account-level availability only. Current bearer access is checked
-  // separately against the current access token before returning choices.
+  // Channel selection uses account availability, independently of the services
+  // selected when signing in. Organization membership still controls access.
   return {
     id,
     slug,
@@ -90,25 +89,12 @@ export async function listChannelServiceIdentities(
   return services.map(({ id, slug, label }) => ({ id, slug, label }));
 }
 
-export async function listChannelServiceAccess(
+// NyxID owns the account inventory. Login consent limits the console session's
+// proxy access, not the explicit service selection for a channel's Agent Key.
+export async function listChannelServices(
   signal?: AbortSignal,
 ): Promise<ChannelServiceChoice[]> {
   const session = await ensureActiveAuthSession();
   if (!session) throw new ChannelApiError(401);
-  const grants = readAccessTokenServiceGrants(
-    session.tokens.accessToken,
-    session.user.sub,
-  );
-  // Pin inventory and selectable choices to the same authenticated bearer.
-  const services = await readChannelServiceInventory(
-    session.tokens.accessToken,
-    signal,
-  );
-  const authorizedIds = new Set(grants.allowedServiceIds);
-  return services.map((service) => ({
-    ...service,
-    allowed:
-      service.allowed &&
-      (grants.allowAllServices || authorizedIds.has(service.id)),
-  }));
+  return readChannelServiceInventory(session.tokens.accessToken, signal);
 }

@@ -1,8 +1,4 @@
-import {
-  ExportOutlined,
-  SafetyCertificateOutlined,
-  SearchOutlined,
-} from '@ant-design/icons';
+import { SearchOutlined } from '@ant-design/icons';
 import { Button, Checkbox, Input } from 'antd';
 import * as React from 'react';
 import type { ChannelServiceChoice } from '@/shared/api/channelServicesApi';
@@ -11,7 +7,6 @@ import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
 
 export default function ChannelServicePicker({
   services,
-  accessAction,
   accessNotice,
   suggestedIds = [],
   selectedIds,
@@ -25,12 +20,8 @@ export default function ChannelServicePicker({
   retry,
   editing = false,
   replacesDefaults = false,
+  suggestions,
 }: {
-  readonly accessAction?: {
-    readonly onReview: () => void;
-    readonly pending: boolean;
-    readonly disabled: boolean;
-  };
   readonly accessNotice?: React.ReactNode;
   readonly suggestedIds?: readonly string[];
   readonly services: readonly ChannelServiceChoice[];
@@ -45,6 +36,7 @@ export default function ChannelServicePicker({
   readonly retry: () => void;
   readonly editing?: boolean;
   readonly replacesDefaults?: boolean;
+  readonly suggestions?: React.ReactNode;
 }) {
   const [search, setSearch] = React.useState('');
   const term = search.trim().toLocaleLowerCase();
@@ -67,37 +59,20 @@ export default function ChannelServicePicker({
         <h2 id="channel-services-title">
           {t('channels.connect.services', 'Services')}
         </h2>
-        <div className="channels__services-actions">
-          <span aria-live="polite">
-            {t('channels.connect.selected', '{count} selected', {
-              count: selectedIds.length,
-            })}
-          </span>
-          {accessAction ? (
-            <Button
-              icon={<SafetyCertificateOutlined />}
-              loading={accessAction.pending}
-              disabled={accessAction.disabled}
-              onClick={accessAction.onReview}
-            >
-              {t('channels.access.manage', 'Manage service access')}{' '}
-              <ExportOutlined aria-hidden="true" />
-            </Button>
-          ) : null}
-        </div>
+        <span aria-live="polite">
+          {t('channels.connect.selected', '{count} selected', {
+            count: selectedIds.length,
+          })}
+        </span>
       </div>
       <p className="channels__form-help">
-        {accessAction
-          ? t(
-              'channels.access.help',
-              'Missing a service? Click Manage service access to authorize it.',
-            )
-          : t(
-              'channels.connect.servicesHelp',
-              'Only services available through your current NyxID authorization are shown.',
-            )}
+        {t(
+          'channels.connect.servicesHelp',
+          'Choose active services from your NyxID account, including services you did not select when signing in.',
+        )}
       </p>
       {accessNotice}
+      {suggestions}
       {loading ? (
         <AevatarContentSkeleton
           ariaLabel={t('channels.connect.servicesLoading', 'Loading services')}
@@ -126,11 +101,11 @@ export default function ChannelServicePicker({
           {editing
             ? t(
                 'channels.edit.servicesEmpty',
-                'No services are available with your current authorization.',
+                'No active services are available in your NyxID account.',
               )
             : t(
                 'channels.connect.servicesEmpty',
-                'No services are available with your current NyxID authorization.',
+                'No active services are available in your NyxID account.',
               )}
         </div>
       ) : (

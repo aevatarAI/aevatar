@@ -17,8 +17,6 @@ import {
   channelConfiguration,
   channelsApi,
 } from '@/shared/api/channelsApi';
-import { NyxIDAuthClient } from '@/shared/auth/client';
-import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { t } from '@/shared/i18n/messages';
 import { history } from '@/shared/navigation/history';
 import { AevatarContentSkeleton } from '@/shared/ui/AevatarContentSkeleton';
@@ -32,6 +30,7 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import ChannelServiceAccessNotice from './ChannelServiceAccessNotice';
 import ChannelServicePicker from './ChannelServicePicker';
 import ChannelSkillField from './ChannelSkillField';
+import ChannelSkillServices from './ChannelSkillServices';
 import { channelConnectionCss } from './connectionStyles';
 import {
   ChannelBadge,
@@ -43,14 +42,8 @@ import {
   channelKeys,
   useChannelDetail,
   useChannelRegistrations,
-  useChannelServiceAccess,
+  useChannelServices,
 } from './queries';
-import {
-  type ChannelAccessDraftTarget,
-  clearChannelAccessDraft,
-  readChannelAccessDraft,
-  saveChannelAccessDraft,
-} from './serviceAccessDraft';
 import { channelsCss } from './styles';
 
 type Target =
@@ -76,13 +69,6 @@ export default function ChannelConfigurationPage({
   readonly requestedServiceIds?: readonly string[];
 }) {
   const editing = Boolean(target.registrationId);
-  const draftTarget = React.useMemo<ChannelAccessDraftTarget>(
-    () =>
-      target.botId !== undefined
-        ? { kind: 'bind', botId: target.botId }
-        : { kind: 'edit', registrationId: target.registrationId },
-    [target.botId, target.registrationId],
-  );
   const list = useChannelRegistrations(scopeId, !editing);
   const detail = useChannelDetail(scopeId, target.registrationId ?? '');
   const query = editing ? detail : list;
@@ -169,7 +155,7 @@ export default function ChannelConfigurationPage({
         <ConfigurationForm
           scopeId={scopeId}
           initial={initial}
-          draftTarget={draftTarget}
+          editing={editing}
           defaultSkillId={target.defaultSkillId}
           requestedServiceIds={requestedServiceIds}
           setNavigate={setNavigate}
@@ -197,28 +183,21 @@ export default function ChannelConfigurationPage({
 function ConfigurationForm({
   scopeId,
   initial,
-  draftTarget,
+  editing,
   defaultSkillId,
   requestedServiceIds,
   setNavigate,
 }: {
   readonly scopeId: string;
   readonly initial: ChannelRegistration;
-  readonly draftTarget: ChannelAccessDraftTarget;
+  readonly editing: boolean;
   readonly defaultSkillId?: string;
   readonly requestedServiceIds: readonly string[];
   readonly setNavigate: React.Dispatch<
     React.SetStateAction<(target: string) => void>
   >;
 }) {
-  const editing = draftTarget.kind === 'edit';
   const baseline = channelConfiguration(initial);
-  const [restoredDraft] = React.useState(() =>
-    readChannelAccessDraft(scopeId, draftTarget),
-  );
-  const [reviewPending, setReviewPending] = React.useState(false);
-  const reviewLeaving = React.useRef(false);
-  const reviewLock = React.useRef(false);
   const requestedIds = [
     ...new Set(
       requestedServiceIds
@@ -228,10 +207,8 @@ function ConfigurationForm({
   ].slice(0, 20);
   const [initialSkillId] = React.useState(editing ? undefined : defaultSkillId);
   // Undefined means the link's default has not been resolved or overridden yet.
-  const [skillName, setSkillName] = React.useState<string | undefined>(
-    () =>
-      restoredDraft?.skillName ??
-      (initialSkillId ? undefined : (initial.skill?.name ?? '')),
+  const [skillName, setSkillName] = React.useState<string | undefined>(() =>
+    initialSkillId ? undefined : (initial.skill?.name ?? ''),
   );
   const skillReady = skillName !== undefined;
   const defaultSkill = useQuery({
@@ -259,11 +236,9 @@ function ConfigurationForm({
     defaultSkill.data,
   ]);
   const [chosenServiceIds, setServiceIds] = React.useState<readonly string[]>(
-    restoredDraft?.serviceIds ?? baseline?.serviceIds ?? [],
+    baseline?.serviceIds ?? [],
   );
-  const [label, setLabel] = React.useState(
-    restoredDraft?.label ?? initial.label ?? '',
-  );
+  const [label, setLabel] = React.useState(initial.label ?? '');
   const [savedLabel, setSavedLabel] = React.useState(initial.label ?? '');
   const [receipt, setReceipt] = React.useState<ChannelReceipt | null>(null);
   const [submitted, setSubmitted] = React.useState<ChannelConfiguration | null>(
@@ -278,31 +253,16 @@ function ConfigurationForm({
   const completed = React.useRef(false);
   const mounted = React.useRef(true);
   const labelId = React.useId();
-  const services = useChannelServiceAccess(scopeId);
-  React.useEffect(() => {
-    if (restoredDraft) clearChannelAccessDraft(scopeId, draftTarget);
-  }, [restoredDraft, scopeId, draftTarget]);
-  React.useEffect(() => {
-    const resume = (event: PageTransitionEvent) => {
-      if (!event.persisted || !reviewLeaving.current) return;
-      reviewLeaving.current = false;
-      reviewLock.current = false;
-      setReviewPending(false);
-      clearChannelAccessDraft(scopeId, draftTarget);
-      void services.refetch();
-    };
-    window.addEventListener('pageshow', resume);
-    return () => window.removeEventListener('pageshow', resume);
-  }, [services.refetch, scopeId, draftTarget]);
+  const services = useChannelServices(scopeId);
   const availableServices = (services.data ?? []).filter(
     (service) => service.active && service.allowed,
   );
-  const hasFreshServiceAccess =
+  const hasFreshServices =
     services.isFetchedAfterMount && services.isSuccess && !services.isFetching;
   React.useEffect(() => {
-    if (!hasFreshServiceAccess) return;
-    // Only confirmed access changes remove draft choices. A failed or pending
-    // refresh must not erase them, and later reauthorization must not reselect them.
+    if (!hasFreshServices) return;
+    // Only a successful inventory refresh removes unavailable choices. Failed
+    // requests preserve edits; reactivated services require a new selection.
     const availableIds = new Set(
       services.data
         ?.filter((service) => service.active && service.allowed)
@@ -312,7 +272,7 @@ function ConfigurationForm({
       const remaining = selected.filter((id) => availableIds.has(id));
       return remaining.length === selected.length ? selected : remaining;
     });
-  }, [hasFreshServiceAccess, services.data]);
+  }, [hasFreshServices, services.data]);
   const requiredServices = availableServices.filter((service) =>
     requiredServiceSlugs.some((slug) => service.slug === slug),
   );
@@ -324,14 +284,13 @@ function ConfigurationForm({
     ...new Set([
       ...chosenServiceIds.filter(
         (id) =>
-          !hasFreshServiceAccess ||
+          !hasFreshServices ||
           availableServices.some((service) => service.id === id),
       ),
       ...requiredIds,
     ]),
   ];
-  const servicesReady =
-    hasFreshServiceAccess && missingRequiredSlugs.length === 0;
+  const servicesReady = hasFreshServices && missingRequiredSlugs.length === 0;
   const toast = useConsoleToast();
   const client = useQueryClient();
   const listHref = buildWorkflowActivitySectionHref(scopeId, 'channels');
@@ -349,7 +308,7 @@ function ConfigurationForm({
   const dirty = editing
     ? configDirty || labelDirty
     : Boolean(skillName || chosenServiceIds.length);
-  const busy = submitting || Boolean(receipt) || uncertain || reviewPending;
+  const busy = submitting || Boolean(receipt) || uncertain;
   React.useEffect(() => {
     mounted.current = true;
     return () => {
@@ -372,7 +331,6 @@ function ConfigurationForm({
   React.useEffect(() => {
     if (!dirty || receipt || uncertain) return;
     const warn = (event: BeforeUnloadEvent) => {
-      if (reviewLeaving.current) return;
       event.preventDefault();
       event.returnValue = '';
     };
@@ -430,53 +388,13 @@ function ConfigurationForm({
     completed.current = true;
     client.setQueryData(channelKeys.detail(scopeId, actual.id), actual);
     void client.invalidateQueries({ queryKey: channelKeys.list(scopeId) });
-    clearChannelAccessDraft(scopeId, draftTarget);
     toast.success(
       editing
         ? t('channels.edit.saved', 'Channel changes saved.')
         : t('channels.bind.success', 'Bot bound successfully.'),
     );
     history.replace(buildChannelDetailsHref(scopeId, actual.id));
-  }, [
-    observation.data,
-    submitted,
-    initial,
-    editing,
-    client,
-    scopeId,
-    toast,
-    draftTarget,
-  ]);
-
-  async function reviewServiceAccess() {
-    if (busy || reviewLock.current || !skillReady) return;
-    reviewLock.current = true;
-    setReviewPending(true);
-    try {
-      // Persist before navigation. If storage fails, keep the editor open.
-      saveChannelAccessDraft(scopeId, draftTarget, {
-        label,
-        skillName: skillName ?? '',
-        serviceIds,
-      });
-      reviewLeaving.current = true;
-      await new NyxIDAuthClient(getNyxIDRuntimeConfig()).loginWithRedirect({
-        flow: 'serviceAccessReview',
-        returnTo: `${window.location.pathname}${window.location.search}${window.location.hash}`,
-      });
-    } catch {
-      reviewLeaving.current = false;
-      reviewLock.current = false;
-      setReviewPending(false);
-      clearChannelAccessDraft(scopeId, draftTarget);
-      toast.error(
-        t(
-          'channels.access.startFailed',
-          'Could not open NyxID. Your changes are still here. Try again.',
-        ),
-      );
-    }
-  }
+  }, [observation.data, submitted, initial, editing, client, scopeId, toast]);
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -535,7 +453,6 @@ function ConfigurationForm({
         void client.invalidateQueries({
           queryKey: channelKeys.detail(scopeId, initial.id ?? ''),
         });
-        clearChannelAccessDraft(scopeId, draftTarget);
         toast.success(t('channels.edit.saved', 'Channel changes saved.'));
         history.replace(returnHref);
       }
@@ -661,11 +578,6 @@ function ConfigurationForm({
         ) : null}
         <ChannelServicePicker
           services={availableServices}
-          accessAction={{
-            onReview: () => void reviewServiceAccess(),
-            pending: reviewPending,
-            disabled: busy || !skillReady,
-          }}
           accessNotice={
             services.isFetchedAfterMount &&
             !services.isFetching &&
@@ -673,7 +585,6 @@ function ConfigurationForm({
               <ChannelServiceAccessNotice
                 requestedIds={requestedIds}
                 services={services.data ?? []}
-                restored={Boolean(restoredDraft)}
               />
             ) : undefined
           }
@@ -691,6 +602,21 @@ function ConfigurationForm({
           retry={() => void services.refetch()}
           editing={editing}
           replacesDefaults={baseline?.authorizationMode === 'nyxid_default'}
+          suggestions={
+            <ChannelSkillServices
+              scopeId={scopeId}
+              skillName={skillName ?? ''}
+              services={availableServices}
+              selectedIds={serviceIds}
+              checkingAccess={services.isFetching || services.isPending}
+              accessFailed={services.isError}
+              disabled={busy}
+              onSelect={(id) =>
+                setServiceIds((ids) => [...new Set([...ids, id])])
+              }
+              refreshAccess={() => void services.refetch()}
+            />
+          }
         />
         {failure ? (
           <p role="alert" className="channels__form-error">
@@ -748,7 +674,6 @@ function ConfigurationForm({
         onCancel={() => setLeaveTarget(null)}
         onOk={() => {
           if (leaveTarget) {
-            clearChannelAccessDraft(scopeId, draftTarget);
             history.push(leaveTarget);
           }
           setLeaveTarget(null);

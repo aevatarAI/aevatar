@@ -1,6 +1,5 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import * as React from 'react';
-import { NyxIDAuthClient } from '@/shared/auth/client';
 import { authFetch } from '@/shared/auth/fetch';
 import { persistAuthSession } from '@/shared/auth/session';
 import { createNyxIDServiceSession } from '../../../../tests/fixtures/nyxidServiceSession';
@@ -73,10 +72,6 @@ const writes = () =>
   fetchMock.mock.calls.filter(([, init]) =>
     ['POST', 'PATCH'].includes(init?.method ?? ''),
   );
-const detailReads = () =>
-  fetchMock.mock.calls.filter(([input]) =>
-    String(input).endsWith(`/skills/${skillId}`),
-  );
 function grant(ids = baseIds) {
   persistAuthSession(createNyxIDServiceSession({ allowed_service_ids: ids }));
 }
@@ -138,43 +133,22 @@ beforeEach(() => {
   });
 });
 
-it('restores an unbound bot draft and fresh requested access after consent, then binds only on explicit submission and confirms the observed result', async () => {
-  const review = jest
-    .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')
-    .mockResolvedValue();
-  const first = mount();
-  await screen.findByText('Service access needed');
-  expect(screen.getByText('Firecrawl')).toBeInTheDocument();
-  expect(screen.getByText('Lark Bot API')).toBeInTheDocument();
+it('binds with active services outside login consent only after explicit selection and confirms the observed result', async () => {
+  grant([]);
+  const { queryClient } = mount();
+  const firecrawl = await screen.findByRole('checkbox', { name: /Firecrawl/ });
+  expect(firecrawl).toBeEnabled();
+  expect(firecrawl).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /Lark Bot API/ })).toBeEnabled();
   expect(
-    screen.queryByRole('checkbox', { name: /Firecrawl/ }),
+    screen.queryByRole('button', { name: /Manage service access/ }),
   ).not.toBeInTheDocument();
+  expect(screen.queryByText(/Missing a service/)).not.toBeInTheDocument();
+  await screen.findByText('linked-default');
   await chooseSupport();
   fireEvent.click(screen.getByRole('checkbox', { name: /GitHub/ }));
-  fireEvent.click(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() =>
-    expect(review).toHaveBeenCalledWith({
-      flow: 'serviceAccessReview',
-      returnTo: bindHref(),
-    }),
-  );
-  expect(writes()).toHaveLength(0);
-  first.unmount();
-
-  grant([...baseIds, 'us-firecrawl']);
-  const second = mount();
-  await screen.findByText(/Your changes have been kept/);
-  expect(screen.getByText('support', { exact: true })).toBeInTheDocument();
-  expect(screen.queryByText('linked-default')).not.toBeInTheDocument();
-  expect(detailReads()).toHaveLength(1);
-  expect(screen.getByRole('checkbox', { name: /GitHub/ })).toBeChecked();
-  expect(screen.getByText('Lark Bot API')).toBeInTheDocument();
-  const firecrawl = screen.getByRole('checkbox', { name: /Firecrawl/ });
-  expect(firecrawl).not.toBeChecked();
-  expect(writes()).toHaveLength(0);
   fireEvent.click(firecrawl);
+  expect(writes()).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: 'Bind bot' }));
   await screen.findByText('Confirming your changes...');
   expect(writes()).toHaveLength(1);
@@ -206,7 +180,7 @@ it('restores an unbound bot draft and fresh requested access after consent, then
       : normalFetch(input, init),
   );
   await act(async () => {
-    await second.queryClient.invalidateQueries({
+    await queryClient.invalidateQueries({
       queryKey: ['channels', 'scope-alpha', 'confirmation', 'cmd-alpha'],
     });
   });
@@ -216,108 +190,4 @@ it('restores an unbound bot draft and fresh requested access after consent, then
   expect(window.location.pathname).toBe(
     '/scopes/scope-alpha/channels/reg-alpha',
   );
-});
-
-it('preserves an explicitly cleared default skill after cancelled consent without binding', async () => {
-  const review = jest
-    .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')
-    .mockResolvedValue();
-  const first = mount();
-  await screen.findByText('linked-default');
-  fireEvent.mouseDown(screen.getByRole('img', { name: 'close-circle' }));
-  fireEvent.click(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() => expect(review).toHaveBeenCalledTimes(1));
-  first.unmount();
-  mount();
-  await screen.findByText(/Your changes have been kept/);
-  expect(screen.getByText('Select a skill')).toBeInTheDocument();
-  expect(detailReads()).toHaveLength(1);
-  expect(screen.getByText('Service access needed')).toBeInTheDocument();
-  expect(writes()).toHaveLength(0);
-  expect(screen.getByRole('button', { name: 'Bind bot' })).toBeEnabled();
-});
-
-it('removes a deleted service from the restored Bind draft, count and submission', async () => {
-  const review = jest
-    .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')
-    .mockResolvedValue();
-  const first = mount();
-  await screen.findByText('Service access needed');
-  await chooseSupport();
-  fireEvent.click(screen.getByRole('checkbox', { name: /GitHub/ }));
-  fireEvent.click(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() => expect(review).toHaveBeenCalledTimes(1));
-  first.unmount();
-  const normalFetch = fetchMock.getMockImplementation();
-  if (!normalFetch) throw new Error('Missing request fixture');
-  fetchMock.mockImplementation((input, init) =>
-    String(input).endsWith('/user-services')
-      ? Promise.resolve(
-          response({
-            services: inventory.filter((item) => item.id !== 'us-github'),
-          }),
-        )
-      : normalFetch(input, init),
-  );
-  mount();
-  await screen.findByText(/Your changes have been kept/);
-  expect(screen.getByText('support', { exact: true })).toBeInTheDocument();
-  expect(
-    screen.queryByRole('checkbox', { name: /GitHub|us-github/ }),
-  ).not.toBeInTheDocument();
-  expect(
-    screen.queryByText('Unavailable', { exact: true }),
-  ).not.toBeInTheDocument();
-  expect(screen.getByText('2 selected')).toBeInTheDocument();
-  expect(writes()).toHaveLength(0);
-  fireEvent.click(screen.getByRole('button', { name: 'Bind bot' }));
-  await screen.findByText('Confirming your changes...');
-  expect(JSON.parse(String(writes()[0][1]?.body))).toEqual({
-    nyx_channel_bot_id: 'bot-alpha',
-    skill_name: 'support',
-    authorization_mode: 'explicit_service_allowlist',
-    service_ids: ['us-llm', 'us-ornn'],
-  });
-});
-
-it('isolates bind drafts by bot and from edit registrations even when their raw IDs coincide', async () => {
-  const review = jest
-    .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')
-    .mockResolvedValue();
-  const first = mount(bindHref('reg-alpha'));
-  await screen.findByText('Service access needed');
-  await chooseSupport();
-  fireEvent.click(screen.getByRole('checkbox', { name: /GitHub/ }));
-  fireEvent.click(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() => expect(review).toHaveBeenCalledTimes(1));
-  first.unmount();
-  const other = mount(bindHref('bot-beta'));
-  await screen.findByText('linked-default');
-  expect(
-    screen.queryByText(/Your changes have been kept/),
-  ).not.toBeInTheDocument();
-  expect(
-    await screen.findByRole('checkbox', { name: /GitHub/ }),
-  ).not.toBeChecked();
-  other.unmount();
-  const edit = mount('/scopes/scope-alpha/channels/reg-alpha/edit');
-  await screen.findByText('saved-skill');
-  expect(
-    screen.queryByText(/Your changes have been kept/),
-  ).not.toBeInTheDocument();
-  expect(
-    await screen.findByRole('checkbox', { name: /GitHub/ }),
-  ).not.toBeChecked();
-  edit.unmount();
-  mount(bindHref('reg-alpha'));
-  await screen.findByText(/Your changes have been kept/);
-  expect(screen.getByText('support', { exact: true })).toBeInTheDocument();
-  expect(screen.getByRole('checkbox', { name: /GitHub/ })).toBeChecked();
-  expect(writes()).toHaveLength(0);
 });
