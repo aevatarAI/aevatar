@@ -15,7 +15,6 @@ import {
   Space,
   Spin,
   Tag,
-  Tooltip,
   Typography,
   theme,
 } from 'antd';
@@ -36,6 +35,8 @@ import {
 } from '@/shared/navigation/teamRoutes';
 import { NyxIDAuthClient } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 import { studioApi } from '@/shared/studio/api';
 import { AevatarPageShell } from '@/shared/ui/aevatarPageShells';
 import { resolveStudioScopeContext } from '../scopes/components/resolvedScope';
@@ -430,6 +431,7 @@ function actionReportResource(userServiceId: string): ChatActionResource {
 }
 
 const ChatPage: React.FC = () => {
+  const toast = useConsoleToast();
   const { token } = theme.useToken();
   const queryClient = useQueryClient();
   const activeConversationRef = useRef<ConversationState | null>(null);
@@ -451,7 +453,6 @@ const ChatPage: React.FC = () => {
     null,
   );
   const [deletingConversation, setDeletingConversation] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
   const [detailLoadState, setDetailLoadState] = useState<DetailLoadState>({
     status: 'idle',
   });
@@ -557,7 +558,6 @@ const ChatPage: React.FC = () => {
     applyProjection(null);
     setActionJourneys(new Map());
     setDeleteTarget(null);
-    setDeleteError('');
     setDetailLoadState({ status: 'idle' });
     setHistoryDrawerOpen(false);
     setNotice(null);
@@ -785,7 +785,6 @@ const ChatPage: React.FC = () => {
   const handleDeleteConversation = useCallback(async () => {
     if (!deleteTarget || deletingConversation || isStreaming) return;
     setDeletingConversation(true);
-    setDeleteError('');
     try {
       await chatHistoryApi.deleteConversation(deleteTarget.id);
       setNotice({
@@ -799,12 +798,12 @@ const ChatPage: React.FC = () => {
       await queryClient.invalidateQueries({
         queryKey: ['chat-conversations', scopeId],
       });
-    } catch (error) {
-      setDeleteError(errorMessage(error));
+    } catch {
+      toast.error(t('pages.chat.index.deleteChatFailed', 'Conversation could not be deleted'));
     } finally {
       setDeletingConversation(false);
     }
-  }, [deleteTarget, deletingConversation, isStreaming, queryClient, scopeId]);
+  }, [deleteTarget, deletingConversation, isStreaming, queryClient, scopeId, toast]);
 
   const streamCommand = useCallback(
     async (
@@ -1669,7 +1668,7 @@ const ChatPage: React.FC = () => {
                       </span>
                     </span>
                   </button>
-                  <Tooltip
+                  <AevatarTooltip
                     title={t('pages.chat.index.deleteChat', 'Delete {title}', {
                       title: conversation.title,
                     })}
@@ -1686,13 +1685,12 @@ const ChatPage: React.FC = () => {
                       disabled={isStreaming}
                       icon={<DeleteOutlined />}
                       onClick={() => {
-                        setDeleteError('');
                         setDeleteTarget(conversation);
                       }}
                       style={{ minHeight: 40, minWidth: 40 }}
                       type="text"
                     />
-                  </Tooltip>
+                  </AevatarTooltip>
                 </div>
               );
             })}
@@ -1755,7 +1753,7 @@ const ChatPage: React.FC = () => {
               padding: '10px 14px',
             }}
           >
-            <Tooltip
+            <AevatarTooltip
               title={t('pages.chat.index.openHistory', 'Open chat history')}
             >
               <Button
@@ -1769,7 +1767,7 @@ const ChatPage: React.FC = () => {
                 style={{ minHeight: 44, minWidth: 44 }}
                 type="text"
               />
-            </Tooltip>
+            </AevatarTooltip>
             <div style={{ flex: 1, minWidth: 0 }}>
               <Typography.Text
                 strong
@@ -2042,7 +2040,6 @@ const ChatPage: React.FC = () => {
         onCancel={() => {
           if (!deletingConversation) {
             setDeleteTarget(null);
-            setDeleteError('');
           }
         }}
         onOk={() => void handleDeleteConversation()}
@@ -2057,17 +2054,6 @@ const ChatPage: React.FC = () => {
             { title: deleteTarget?.title || '' },
           )}
         </Typography.Paragraph>
-        {deleteError ? (
-          <Alert
-            description={deleteError}
-            message={t(
-              'pages.chat.index.deleteChatFailed',
-              'Conversation could not be deleted',
-            )}
-            showIcon
-            type="error"
-          />
-        ) : null}
       </Modal>
     </AevatarPageShell>
   );

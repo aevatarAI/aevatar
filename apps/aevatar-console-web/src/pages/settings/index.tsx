@@ -14,12 +14,12 @@ import {
   Input,
   Select,
   Space,
-  Tooltip,
   Typography,
   theme,
 } from "antd";
 import type { CollapseProps, SelectProps } from "antd";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import {
   LLM_MODEL_HEADER_KEY,
   LLM_ROUTE_HEADER_KEY,
@@ -45,6 +45,7 @@ import {
 } from "@/shared/ui/compactText";
 import { describeError } from "@/shared/ui/errorText";
 import { AevatarPanel } from "@/shared/ui/aevatarPageShells";
+import { useConsoleToast } from "@/shared/ui/ConsoleToast";
 import { codeBlockStyle } from "@/shared/ui/proComponents";
 import AccountSettingsContent from "./accountContent";
 import {
@@ -410,7 +411,7 @@ const ConnectedProviderChip: React.FC<{
   const dotColor = ready ? token.colorSuccess : token.colorTextQuaternary;
 
   return (
-    <Tooltip
+    <AevatarTooltip
       mouseEnterDelay={0.15}
       placement="top"
       title={accessibleLabel}
@@ -444,11 +445,12 @@ const ConnectedProviderChip: React.FC<{
         />
         <span>{label}</span>
       </div>
-    </Tooltip>
+    </AevatarTooltip>
   );
 };
 
 const SettingsPage: React.FC = () => {
+  const toast = useConsoleToast();
   const locationSnapshot = React.useSyncExternalStore(
     subscribeToLocationChanges,
     getLocationSnapshot,
@@ -494,6 +496,15 @@ const SettingsPage: React.FC = () => {
   const draft = draftState.value;
   const pendingSave = draftState.pendingSave;
   const saveError = draftState.saveError;
+  React.useEffect(() => {
+    if (!saveError) return;
+    toast.error(
+      t(
+        "pages.settings.index.save.failed.toast",
+        "Settings could not be saved. Try again.",
+      ),
+    );
+  }, [saveError, toast]);
   const draftDirty = React.useMemo(
     () => !draftsEqual(draft, draftState.baseline),
     [draft, draftState.baseline],
@@ -1275,15 +1286,6 @@ const SettingsPage: React.FC = () => {
               />
             ) : null}
 
-            {saveError ? (
-              <Alert
-                message={t("pages.settings.index.save.failed", "Save failed")}
-                description={saveError}
-                showIcon
-                type="error"
-              />
-            ) : null}
-
             {pendingSave && pendingSave.phase !== "saving" ? (
               <Alert
                 action={
@@ -1572,7 +1574,7 @@ const SettingsPage: React.FC = () => {
                       <SummaryField
                         label={t("pages.settings.index.runtime.url", "Runtime URL")}
                         value={
-                          <Tooltip
+                          <AevatarTooltip
                             mouseEnterDelay={0.15}
                             placement="topLeft"
                             title={displayedRuntimeBaseUrl}
@@ -1580,7 +1582,7 @@ const SettingsPage: React.FC = () => {
                             <Typography.Text style={previewValueStyle}>
                               {truncateMiddle(displayedRuntimeBaseUrl, 18, 14)}
                             </Typography.Text>
-                          </Tooltip>
+                          </AevatarTooltip>
                         }
                       />
                     </div>
@@ -1625,7 +1627,7 @@ const SettingsPage: React.FC = () => {
                           <Typography.Text style={previewKeyStyle}>
                             {row.keyLabel}
                           </Typography.Text>
-                          <Tooltip
+                          <AevatarTooltip
                             mouseEnterDelay={0.15}
                             placement="topLeft"
                             title={
@@ -1642,7 +1644,7 @@ const SettingsPage: React.FC = () => {
                             <Typography.Text style={previewValueStyle}>
                               {truncateMiddle(row.value, 14, 12)}
                             </Typography.Text>
-                          </Tooltip>
+                          </AevatarTooltip>
                         </div>
                       ))}
                     </div>
@@ -1680,7 +1682,6 @@ const SettingsPage: React.FC = () => {
       selectionStatus,
       selectionSelectOptions,
       routeSummaryLabel,
-      saveError,
       settingsPanelStyle,
       summaryGridStyle,
       technicalPreviewRows,

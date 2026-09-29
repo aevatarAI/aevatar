@@ -7,8 +7,9 @@ import {
   PlayCircleOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Button, Input, Tooltip, Typography } from 'antd';
+import { Button, Input, Typography } from 'antd';
 import React from 'react';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 import type { InvokeResultState } from './StudioMemberInvokePanel.currentRun';
 import {
@@ -403,7 +404,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             event.currentTarget.value = '';
           }}
         />
-        <Tooltip
+        <AevatarTooltip
           title={t(
             "pages.studio.studiomemberinvokesetuppanels.attach.files",
             "Attach files",
@@ -418,7 +419,7 @@ export const StudioMemberInvokeComposerPanel: React.FC<
             icon={<PaperClipOutlined />}
             onClick={() => fileInputRef.current?.click()}
           />
-        </Tooltip>
+        </AevatarTooltip>
         <div style={attachmentListStyle}>
           {attachments.length === 0 ? (
             <span style={attachmentEmptyStyle}>
@@ -435,9 +436,9 @@ export const StudioMemberInvokeComposerPanel: React.FC<
                 style={attachmentChipStyle}
               >
                 {getFileIcon(file)}
-                <Tooltip title={`${file.name} · ${file.type || 'file'} · ${formatFileSize(file.size)}`}>
+                <AevatarTooltip title={`${file.name} · ${file.type || 'file'} · ${formatFileSize(file.size)}`}>
                   <span style={attachmentNameStyle}>{file.name}</span>
-                </Tooltip>
+                </AevatarTooltip>
                 <span style={attachmentMetaStyle}>{formatFileSize(file.size)}</span>
                 <Button
                   aria-label={t(

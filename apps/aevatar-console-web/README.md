@@ -2,6 +2,15 @@
 
 `aevatar-console-web` is the Ant Design Pro based admin shell for Aevatar.
 
+## Console entry
+
+The default `/workflows` entry resolves the signed-in account scope and opens
+`/scopes/:scopeId/workflows`. The current console exposes Workflows, Activity,
+Channels and Settings under `/scopes/:scopeId/`, without a preview namespace.
+Teams, Members and other legacy pages remain in source; their inactive route
+inventory lives in `config/legacyRoutes.ts` and is not registered. Old business
+URLs return 404. See [the route decision](docs/superpowers/specs/2026-09-21-console-entry-routes.md).
+
 ## Stack
 
 - `React 19`
