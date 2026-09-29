@@ -67,6 +67,9 @@ const WorkflowActivityVNextPage: React.FC = () => {
         scopeId={scopeId}
         botId={decodeURIComponent(channelBindMatch[1])}
         defaultSkillId={skillId || undefined}
+        requestedServiceIds={new URLSearchParams(location.search).getAll(
+          'requiredServiceId',
+        )}
       />
     );
   }
@@ -77,6 +80,9 @@ const WorkflowActivityVNextPage: React.FC = () => {
         key={`${scopeId}:${channelEditMatch[1]}`}
         scopeId={scopeId}
         registrationId={decodeURIComponent(channelEditMatch[1])}
+        requestedServiceIds={new URLSearchParams(location.search).getAll(
+          'requiredServiceId',
+        )}
       />
     );
   }

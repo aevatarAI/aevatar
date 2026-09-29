@@ -2,8 +2,8 @@ import { authFetch } from '@/shared/auth/fetch';
 import { persistAuthSession } from '@/shared/auth/session';
 import { createNyxIDServiceSession } from '../../../tests/fixtures/nyxidServiceSession';
 import {
+  listChannelServiceAccess,
   listChannelServiceIdentities,
-  listChannelServices,
 } from './channelServicesApi';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
@@ -108,12 +108,22 @@ it('includes authorized LLM services and matches exact UserService grants withou
     }),
   );
   const signal = new AbortController().signal;
-  const result = await listChannelServices(signal);
-  expect(result.map(({ id, label }) => ({ id, label }))).toEqual([
+  const result = await listChannelServiceAccess(signal);
+  expect(
+    result
+      .filter((service) => service.active && service.allowed)
+      .map(({ id, label }) => ({ id, label })),
+  ).toEqual([
     { id: 'us-work', label: 'GitHub work' },
     { id: 'us-model', label: 'Chrono Public' },
     { id: 'us-org', label: 'Google Drive' },
   ]);
+  expect(
+    result.find((service) => service.id === 'us-other-account-key')?.allowed,
+  ).toBe(false);
+  expect(result.find((service) => service.id === 'us-viewer')?.allowed).toBe(
+    false,
+  );
   expect(JSON.stringify(result)).not.toContain('TEST_ONLY');
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(fetchMock).toHaveBeenCalledWith(inventoryPath, {
@@ -138,8 +148,10 @@ it.each([
     }),
   );
   fetchMock.mockResolvedValue(response({ services: [personal] }));
-  const result = await listChannelServices();
-  expect(result.map(({ id }) => id)).toEqual(allowAll ? ['us-work'] : []);
+  const result = await listChannelServiceAccess();
+  expect(result.map(({ id, allowed }) => ({ id, allowed }))).toEqual([
+    { id: 'us-work', allowed: allowAll },
+  ]);
 });
 
 it.each([
@@ -151,7 +163,7 @@ it.each([
   persistAuthSession(
     createNyxIDServiceSession({ ...claims, note: 'TEST_ONLY_SECRET' }),
   );
-  await expect(listChannelServices()).rejects.toThrow(
+  await expect(listChannelServiceAccess()).rejects.toThrow(
     'Could not read the current NyxID service authorization.',
   );
   expect(fetchMock).not.toHaveBeenCalled();
@@ -160,7 +172,9 @@ it.each([
 it('does not treat locally decoded claims as successful server authorization', async () => {
   persistAuthSession(createNyxIDServiceSession({ allow_all_services: true }));
   fetchMock.mockResolvedValue(response({ services: [personal] }, 401));
-  await expect(listChannelServices()).rejects.toMatchObject({ status: 401 });
+  await expect(listChannelServiceAccess()).rejects.toMatchObject({
+    status: 401,
+  });
 });
 
 it('refreshes an expired session before filtering and pins the inventory request to the refreshed bearer', async () => {
@@ -185,9 +199,11 @@ it('refreshes an expired session before filtering and pins the inventory request
   fetchMock.mockResolvedValue(
     response({ services: [personal, { ...personal, id: 'us-old' }] }),
   );
-  expect((await listChannelServices()).map(({ id }) => id)).toEqual([
-    'us-work',
-  ]);
+  expect(
+    (await listChannelServiceAccess())
+      .filter((service) => service.active && service.allowed)
+      .map(({ id }) => id),
+  ).toEqual(['us-work']);
   expect(tokenFetch).toHaveBeenCalledTimes(1);
   expect(fetchMock).toHaveBeenCalledWith(
     inventoryPath,
