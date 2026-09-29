@@ -1151,6 +1151,156 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeOperationAsync_WithRawDelegatedRead_ExecutesProxyWithoutOpenApiOrRecommendedSkillRef()
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspace(),
+            ProxyResponseBody = "{\"matches\":[\"policy-a\"]}",
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync("""
+            {
+              "service_slug":"api-google-workspace",
+              "method":"GET",
+              "relative_path":"/docs/policies",
+              "query":{"restaurant":"north"},
+              "headers":{"Accept":"application/json"}
+            }
+            """);
+
+        result.Should().Contain("policy-a");
+        handler.RawOpenApiRequests.Should().BeEmpty();
+        var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
+        proxyRequest.Method.Should().Be("GET");
+        proxyRequest.Path.Should().Contain("/docs/policies");
+        proxyRequest.Query.Should().Contain("restaurant=north");
+        proxyRequest.BearerToken.Should().Be("registration-agent-key");
+    }
+
+    [Fact]
+    public async Task InvokeOperationAsync_WithRawDelegatedRead_UsesSenderBoundCredential()
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspace(),
+            ProxyResponseBody = "{\"matches\":[\"policy-a\"]}",
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        issuer.IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                "bnd-sender-1",
+                Arg.Any<CancellationToken>())
+            .Returns(new CapabilityHandle { AccessToken = "strict-sender-token", Scope = "proxy" });
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            issuer);
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext() with
+        {
+            Credentials = new AgentToolCredentials(
+                "bot-owner-token", "bot-owner-org-token", "strict-sender-token"),
+        });
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync("""
+            {
+              "service_slug":"api-google-workspace",
+              "method":"GET",
+              "relative_path":"/docs/policies",
+              "query":{"restaurant":"north"}
+            }
+            """);
+
+        result.Should().Contain("policy-a");
+        handler.RawOpenApiRequests.Should().BeEmpty();
+        var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
+        proxyRequest.BearerToken.Should().Be("strict-sender-token");
+        await issuer.Received(1).IssueByBindingIdAsync(
+            Arg.Any<ExternalSubjectRef>(),
+            "bnd-sender-1",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("https://evil.test/docs")]
+    [InlineData("/docs/policies?restaurant=north")]
+    [InlineData("/docs/policies#section")]
+    [InlineData("/docs/../secrets")]
+    public async Task InvokeOperationAsync_WithUnsafeRawDelegatedPath_RejectsWithoutProxyRequest(string relativePath)
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspace(),
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync($$"""
+            {
+              "service_slug":"api-google-workspace",
+              "method":"GET",
+              "relative_path":"{{relativePath}}"
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Be("raw_request_invalid");
+        handler.RawOpenApiRequests.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("Authorization")]
+    [InlineData("Host")]
+    [InlineData("X-Api-Key")]
+    public async Task InvokeOperationAsync_WithRawDelegatedSensitiveHeader_RejectsWithoutProxyRequest(string headerName)
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspace(),
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync($$"""
+            {
+              "service_slug":"api-google-workspace",
+              "method":"GET",
+              "relative_path":"/docs/policies",
+              "headers":{"{{headerName}}":"secret"}
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Be("raw_request_invalid");
+        handler.RawOpenApiRequests.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task InvokeOperationAsync_WithDocumentGuidedRequestWithoutRecommendedSkillRef_RejectsWithoutProxyRequest()
     {
         var handler = new InventoryHandler
@@ -1709,16 +1859,17 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             CancellationToken cancellationToken)
         {
             Authorization = request.Headers.Authorization?.ToString();
-            RequestPath = request.RequestUri?.AbsolutePath;
+            var requestPath = request.RequestUri?.AbsolutePath ?? string.Empty;
+            RequestPath = requestPath;
             ExecutionContext = AgentToolRequestContext.Current;
             request.Headers.TryGetValues("X-API-Key", out var apiKeyValues);
             var apiKey = apiKeyValues?.SingleOrDefault() ?? string.Empty;
             if (request.Method == HttpMethod.Get &&
-                RequestPath.StartsWith("/api/v1/catalog-specs/", StringComparison.Ordinal) &&
-                RequestPath.EndsWith("/openapi.json", StringComparison.Ordinal))
+                requestPath.StartsWith("/api/v1/catalog-specs/", StringComparison.Ordinal) &&
+                requestPath.EndsWith("/openapi.json", StringComparison.Ordinal))
             {
-                RawOpenApiRequests.Add(RequestPath);
-                if (OpenApiResponsesByPath.TryGetValue(RequestPath, out var openApiResponse))
+                RawOpenApiRequests.Add(requestPath);
+                if (OpenApiResponsesByPath.TryGetValue(requestPath, out var openApiResponse))
                 {
                     return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                     {
@@ -1729,11 +1880,11 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 throw new InvalidOperationException("catalog_openapi_must_be_configured");
             }
 
-            if (RequestPath.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
+            if (requestPath.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
             {
                 ProxyRequests.Add(new ProxyRequestRecord(
                     request.Method.Method,
-                    RequestPath,
+                    requestPath,
                     request.RequestUri?.Query ?? string.Empty,
                     request.Headers.Authorization?.Parameter ?? string.Empty,
                     apiKey));
@@ -1743,7 +1894,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 });
             }
 
-            var response = RequestPath switch
+            var response = requestPath switch
             {
                 "/api/v1/user-services" => """
                     {"services":[{"id":"user-service-1","slug":"github","label":"GitHub",
