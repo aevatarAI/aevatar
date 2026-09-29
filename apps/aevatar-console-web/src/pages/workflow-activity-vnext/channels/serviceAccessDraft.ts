@@ -1,34 +1,39 @@
 import { loadRestorableAuthSession } from '@/shared/auth/session';
 
+export type ChannelAccessDraftTarget =
+  | { readonly kind: 'bind'; readonly botId: string }
+  | { readonly kind: 'edit'; readonly registrationId: string };
+
 export interface ChannelAccessDraft {
   readonly label: string;
   readonly skillName: string;
   readonly serviceIds: readonly string[];
 }
 
-function storageKey(scopeId: string, registrationId: string): string {
+function storageKey(scopeId: string, target: ChannelAccessDraftTarget): string {
   const subject = loadRestorableAuthSession()?.user.sub;
   if (!subject) throw new Error('A signed-in account is required.');
-  return `aevatar:channel-access-draft:${JSON.stringify([subject, scopeId, registrationId])}`;
+  const id = target.kind === 'bind' ? target.botId : target.registrationId;
+  return `aevatar:channel-access-draft:${JSON.stringify([subject, scopeId, target.kind, id])}`;
 }
 
 export function saveChannelAccessDraft(
   scopeId: string,
-  registrationId: string,
+  target: ChannelAccessDraftTarget,
   draft: ChannelAccessDraft,
 ): void {
   window.sessionStorage.setItem(
-    storageKey(scopeId, registrationId),
+    storageKey(scopeId, target),
     JSON.stringify({ ...draft, expiresAt: Date.now() + 60 * 60 * 1000 }),
   );
 }
 
 export function clearChannelAccessDraft(
   scopeId: string,
-  registrationId: string,
+  target: ChannelAccessDraftTarget,
 ): void {
   try {
-    window.sessionStorage.removeItem(storageKey(scopeId, registrationId));
+    window.sessionStorage.removeItem(storageKey(scopeId, target));
   } catch {
     // A blocked browser store must not prevent leaving or saving the editor.
   }
@@ -36,12 +41,10 @@ export function clearChannelAccessDraft(
 
 export function readChannelAccessDraft(
   scopeId: string,
-  registrationId: string,
+  target: ChannelAccessDraftTarget,
 ): ChannelAccessDraft | null {
   try {
-    const raw = window.sessionStorage.getItem(
-      storageKey(scopeId, registrationId),
-    );
+    const raw = window.sessionStorage.getItem(storageKey(scopeId, target));
     if (!raw) return null;
     const draft: unknown = JSON.parse(raw);
     if (!draft || typeof draft !== 'object') return null;
@@ -50,7 +53,7 @@ export function readChannelAccessDraft(
       typeof draft.expiresAt !== 'number' ||
       draft.expiresAt <= Date.now()
     ) {
-      clearChannelAccessDraft(scopeId, registrationId);
+      clearChannelAccessDraft(scopeId, target);
       return null;
     }
     if (

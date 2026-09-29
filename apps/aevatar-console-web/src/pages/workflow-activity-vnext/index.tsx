@@ -67,6 +67,9 @@ const WorkflowActivityVNextPage: React.FC = () => {
         scopeId={scopeId}
         botId={decodeURIComponent(channelBindMatch[1])}
         defaultSkillId={skillId || undefined}
+        requestedServiceIds={new URLSearchParams(location.search).getAll(
+          'requiredServiceId',
+        )}
       />
     );
   }

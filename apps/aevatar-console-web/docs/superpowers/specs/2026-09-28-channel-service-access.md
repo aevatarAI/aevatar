@@ -1,4 +1,4 @@
-# Channel edit service access recovery
+# Channel configuration service access recovery
 
 Channel service selection and the user's NyxID authorization are separate
 decisions. The editor shows the services the current session can select;
@@ -7,10 +7,11 @@ promises a consent page limited to the services named in a link.
 
 ## Link contract
 
-Use repeated `requiredServiceId` query parameters on the canonical edit URL:
+Use repeated `requiredServiceId` query parameters on the canonical edit or Bind URL:
 
 ```text
 /scopes/:scopeId/channels/:registrationId/edit?requiredServiceId=:userServiceId&requiredServiceId=:anotherUserServiceId
+/scopes/:scopeId/channels/bind/:botId?skillId=:optionalSkillId&requiredServiceId=:userServiceId&requiredServiceId=:anotherUserServiceId
 ```
 
 Each value is the exact NyxID **UserService ID**, obtained from an authoritative
@@ -29,13 +30,13 @@ details disclosure; unavailable services are not presented as selectable.
 
 ## User path
 
-1. The user opens the edit link. Services lists the missing requested access
+1. The user opens the edit or Bind link. Services lists the missing requested access
    above the existing searchable channel selection.
 2. Manage service access saves the non-secret, unsaved label, skill name and
    selected IDs in tab-scoped session storage before leaving. A storage or
    redirect failure keeps the editor open with a retryable error.
 3. The existing `NyxIDAuthClient` starts `serviceAccessReview` with the complete
-   edit path, query and fragment as `returnTo`. It uses the existing PKCE,
+   configuration path, query and fragment as `returnTo`. It uses the existing PKCE,
    callback and backend finalization flow. It supplies no targeted `resource`
    or `preselect_service_ids` parameters.
 4. NyxID currently displays the full consent page. The editor directs users to
@@ -50,16 +51,29 @@ details disclosure; unavailable services are not presented as selectable.
    Restored edits receive one short inline reminder to review selections and
    save. Do not show a generic permission-check success heading or panel;
    only unresolved access needs warrant a separate notice and service list.
-6. The user selects services and saves explicitly. Save still follows the
-   channel's existing accepted-to-observed confirmation. Access review itself
-   never saves the channel. Selected services that are no longer available
+6. The user selects services and clicks **Save changes** or **Bind bot** explicitly.
+   Both actions follow the channel's existing accepted-to-observed confirmation.
+   Access review itself never saves or binds the channel. Selected services that are no longer available
    must be reauthorized or deselected before saving.
 
-The temporary draft is keyed by account subject, scope and registration, has
-a one-hour expiry, and is cleared after restoration, completed save or explicit
-discard. It contains no credentials and cannot establish authorization or a
-saved channel fact. Browser history restoration resets pending review state
-and refreshes service access.
+Both routes reuse `ChannelConfigurationPage`, `ChannelServicePicker` and
+`ChannelServiceAccessNotice`, including loading, retry and revoked-selection
+behavior. Bind needs no saved channel registration to review access.
+
+The temporary draft is keyed by account subject, scope and a typed target:
+`bind + botId` for an unbound bot, or `edit + registrationId` for a saved channel.
+These identities never substitute for each other, even if raw ID strings coincide.
+The draft has a one-hour expiry and is cleared after restoration, completed save
+or binding, or explicit discard. It contains no credentials and cannot establish
+authorization or a saved channel fact. Browser history restoration resets pending
+review state and refreshes service access.
+
+On Bind, a restored skill choice takes precedence over the link's `skillId`
+default, including an explicitly cleared choice. Authorization return preserves
+the complete link but does not reapply the default or automatically select newly
+authorized services. Binding still targets the original bot ID and completes only
+after the returned registration ID and bot ID are observed with the submitted
+configuration.
 
 ## Current NyxID review limitation
 
@@ -97,7 +111,10 @@ authorization, explicit selection/save, draft restoration, cancellation,
 redirect/storage failure and account isolation. Existing adapter and callback
 tests protect grant validation and the shared return flow. Browser history
 restoration coverage verifies fresh grants, temporary draft cleanup and the
-requirement to resolve revoked selections before saving. Full frontend
+requirement to resolve revoked selections before saving. Bind route coverage
+also verifies the complete return URL, explicit binding after refreshed grants,
+accepted-versus-observed completion, restored skill overrides and clearing, and
+isolation across bots and edit registrations. Full frontend
 typecheck, suite and production build are delegated to GitHub CI.
 
 Design baseline:
