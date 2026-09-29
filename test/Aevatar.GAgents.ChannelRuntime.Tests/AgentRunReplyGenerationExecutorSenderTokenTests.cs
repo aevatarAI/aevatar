@@ -92,7 +92,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
     }
 
     [Fact]
-    public async Task BuildInitialStepState_WithRegistrationAgentKeyModeAndSenderBinding_UsesSenderAsLlmCredential()
+    public async Task BuildInitialStepState_WithRegistrationAgentKeyModeAndSenderBinding_UsesSenderForLlmAndConnectedServices()
     {
         var vault = new InMemorySecretVault();
         var stored = (await vault.PutAsync(new StoreSecretRequest(
@@ -134,16 +134,18 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         control.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
 
         generator.CapturedToolContext.Should().NotBeNull();
-        generator.CapturedToolContext!.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
-        generator.CapturedToolContext.Credentials.NyxIdAccessToken.Should().Be("registration-agent-key");
+        generator.CapturedToolContext!.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
+        generator.CapturedToolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
         generator.CapturedToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
-        generator.CapturedToolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
+        generator.CapturedToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedToolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+        generator.CapturedToolContext.DurableNyxIdCredential.Should().BeNull();
 
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
-        toolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
-        toolContext.Credentials.NyxIdAccessToken.Should().Be("registration-agent-key");
+        toolContext.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
-        toolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
+        toolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
     }
 
     [Fact]

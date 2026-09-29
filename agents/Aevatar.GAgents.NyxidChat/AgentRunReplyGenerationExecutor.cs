@@ -1794,12 +1794,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 control,
                 ct)
             .ConfigureAwait(false);
-        if (hasSenderBinding)
-        {
-            if (agentKeyOverlay.AgentKey is not null)
-                toolContext = ApplyChannelRegistrationAgentKeyToolCredential(toolContext, agentKeyOverlay.AgentKey);
-        }
-        else
+        if (!hasSenderBinding)
         {
             control = agentKeyOverlay.Control;
             if (agentKeyOverlay.AgentKey is not null)
@@ -1999,16 +1994,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             .ConfigureAwait(false);
         var registrationAgentKeyMode = request.ChannelRuntimeConfig?.CredentialSourceMode ==
                                        ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
-        if (hasSenderBinding)
-        {
-            if (agentKeyOverlay.AgentKey is not null)
-            {
-                planToolContext = ApplyChannelRegistrationAgentKeyToolCredential(
-                    planToolContext,
-                    agentKeyOverlay.AgentKey);
-            }
-        }
-        else
+        if (!hasSenderBinding)
         {
             requestControl = agentKeyOverlay.Control;
             if (agentKeyOverlay.AgentKey is not null)

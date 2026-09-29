@@ -10,6 +10,7 @@ using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -362,10 +363,15 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(true, true, false, true)]
+    [InlineData(true, false, false, true)]
+    [InlineData(false, false, false, true)]
     public async Task BuildInitialStepState_WhenChannelRuntimeConfigUsesRegistrationAgentKey_ShouldSeparateLlmAndToolAuthority(
-        bool senderBound)
+        bool senderBound,
+        bool senderTokenAvailable,
+        bool senderHasGoogle,
+        bool registrationHasGoogle)
     {
         var secretVault = new InMemorySecretVault();
         var stored = await secretVault.PutAsync(new StoreSecretRequest(
@@ -374,7 +380,20 @@ public sealed class AgentRunReplyGenerationExecutorTests
             "agent-key-channel-alpha",
             "channel-agent-key-token",
             "test"));
-        var fixture = CreateProfiledChannelExecutor(secretVault: secretVault);
+        using var handler = new ChannelGoogleServiceHandler(senderHasGoogle, registrationHasGoogle);
+        using var httpClient = new HttpClient(handler);
+        var nyxIdOptions = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var nyxIdClient = new NyxIdApiClient(nyxIdOptions, httpClient);
+        var source = new NyxIdConnectedServiceToolSource(
+            nyxIdOptions, nyxIdClient, new NyxIdServiceInstanceClient(nyxIdClient));
+        var fixture = CreateProfiledChannelExecutor(secretVault: secretVault, connectedServiceSource: source);
+        var senderToken = senderTokenAvailable ? "bound-sender-token" : null;
+        var expectedToolToken = senderBound ? senderToken : "channel-agent-key-token";
+        var expectedLlmToken = senderBound ? "sender-llm-token" : "channel-agent-key-token";
+        string? expectedServiceId = senderBound
+            ? senderTokenAvailable && senderHasGoogle ? "sender-google" : null
+            : registrationHasGoogle ? "registration-google" : null;
+        string[] expectedServiceIds = expectedServiceId is null ? [] : [expectedServiceId];
         var request = fixture.Request.Clone();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
         {
@@ -404,9 +423,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
             NyxUserAccessToken = "activity-user-token-must-not-win",
         };
         request.LlmControl = new LLMControlContext(
-            NyxIdAccessToken: null,
+            NyxIdAccessToken: senderBound ? "sender-llm-token" : null,
             NyxIdOrgToken: null,
-            SenderNyxIdAccessToken: senderBound ? "bound-sender-token" : null,
+            SenderNyxIdAccessToken: senderToken,
             ModelOverride: null,
             NyxIdRoutePreference: null,
             MaxToolRoundsOverride: null,
@@ -418,26 +437,30 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ConfigDigest = "sha256:config",
             InstructionsDigest = "sha256:instructions",
             Instructions = "Only answer booking capacity questions.",
-            DefaultSkillName = "booking-capacity",
-            DefaultSkillVersion = "2.3",
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
         };
         request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.default");
+        request.ChannelRuntimeConfig.NyxidServiceSelectors.Add(
+            new ChannelBotRuntimeNyxIdServiceSelector { ServiceSlug = "api-google-workspace" });
 
         var state = await fixture.Executor.BuildInitialStepStateAsync(
             new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
             CancellationToken.None);
 
+        fixture.Generator.ReceivedCatalog!.ExactTools.Values
+            .OfType<IAgentToolOperationAdmissionOwner>()
+            .Select(tool => tool.OperationAdmission.ServiceInstanceId)
+            .Should().Equal(expectedServiceIds);
         var control = AgentRunReplyStepMappers.LlmControlFromProto(state);
-        control.NyxIdAccessToken.Should().Be("channel-agent-key-token");
-        control.SenderNyxIdAccessToken.Should().BeNull();
+        control.NyxIdAccessToken.Should().Be(expectedLlmToken);
+        control.SenderNyxIdAccessToken.Should().Be(senderToken);
         var persistedToolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
         persistedToolContext.Channel.WorkflowResultDeliveryCredential!.SecretReference.Should().Be(stored.Reference);
-        var expectedToolToken = senderBound ? "bound-sender-token" : "channel-agent-key-token";
         persistedToolContext.Credentials.NyxIdAccessToken.Should().Be(expectedToolToken);
         persistedToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
         persistedToolContext.Credentials.SenderNyxIdAccessToken.Should()
-            .Be(senderBound ? "bound-sender-token" : null);
+            .Be(senderToken);
+        persistedToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be(senderToken);
         persistedToolContext.Credentials.NyxIdCredentialKind.Should().Be(senderBound
             ? AgentToolNyxIdCredentialKind.SourceReadableUserBearer
             : AgentToolNyxIdCredentialKind.AgentKey);
@@ -463,6 +486,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             persistedToolContext.DurableNyxIdCredential.SecretReference.Should().Be(stored.Reference);
         }
 
+        handler.Requests.Clear();
         var persistedState = AgentRunReplyStepCredentials.StripRuntimeCredentials(state);
         await fixture.Executor.BuildLlmStepExecutionAsync(
             new AgentRunReplyStepExecutionRequest(
@@ -475,9 +499,37 @@ public sealed class AgentRunReplyGenerationExecutorTests
             CancellationToken.None);
 
         var providerRequest = fixture.Provider.Requests.Should().ContainSingle().Subject;
-        providerRequest.LlmControl!.NyxIdAccessToken.Should().Be("channel-agent-key-token");
+        providerRequest.LlmControl!.NyxIdAccessToken.Should().Be(expectedLlmToken);
         providerRequest.ToolContext!.Credentials.NyxIdAccessToken.Should().Be(expectedToolToken);
         providerRequest.ToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
+        var googleTools = providerRequest.Tools!
+            .Where(tool => tool is IAgentToolOperationAdmissionOwner).ToArray();
+        googleTools.Cast<IAgentToolOperationAdmissionOwner>()
+            .Select(tool => tool.OperationAdmission.ServiceInstanceId)
+            .Should().Equal(expectedServiceIds);
+        if (expectedToolToken is null)
+        {
+            handler.Requests.Should().BeEmpty();
+        }
+        else
+        {
+            handler.Requests.Should().Contain(entry => entry.Path == "/api/v1/keys");
+            handler.Requests.Should().OnlyContain(entry => entry.Token == expectedToolToken);
+        }
+        if (expectedServiceId is not null)
+        {
+            var googleTool = googleTools.Should().ContainSingle().Subject;
+            var admission = ((IAgentToolOperationAdmissionOwner)googleTool).OperationAdmission;
+            admission.HttpMethod.Should().Be("GET");
+            admission.PathTemplate.Should().Be("/calendar/v3/users/me/calendarList");
+            using var scope = AgentToolContextScope.Push(providerRequest.ToolContext);
+            var outcome = await googleTool.ExecuteWithOutcomeAsync("call-calendar", googleTool.Name, "{}");
+            outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+            var proxyRequest = handler.Requests.Should().ContainSingle(entry =>
+                entry.Path == "/api/v1/proxy/s/api-google-workspace/calendar/v3/users/me/calendarList").Subject;
+            proxyRequest.Token.Should().Be(expectedToolToken);
+            proxyRequest.Query.Should().Contain("_nyxid_via=" + expectedServiceId);
+        }
         fixture.ProfileResolver.ReceivedCalls().Should().BeEmpty();
         fixture.ProfilePlanner.ReceivedCalls().Should().BeEmpty();
     }
@@ -2985,7 +3037,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
     private static ProfiledChannelExecutorFixture CreateProfiledChannelExecutor(
         string routeToolSet = AgentProfilePolicies.ChannelReplyRouteToolSet,
-        ISecretVault? secretVault = null)
+        ISecretVault? secretVault = null,
+        IAgentToolSource? connectedServiceSource = null)
     {
         var tool = new CountingTool("workspace_profile_tool");
         var askUserTool = new CountingTool("ask_user");
@@ -3044,7 +3097,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(AgentTurnToolCatalogMaterialization.Create(catalog, authority)));
         var toolSetRegistry = new RecordingToolSetRegistry();
-        toolSetRegistry.Add("channel.reply.default", new StaticToolSource([tool, askUserTool]));
+        toolSetRegistry.Add("channel.reply.default", connectedServiceSource is null
+            ? [new StaticToolSource([tool, askUserTool])]
+            : [new StaticToolSource([tool, askUserTool]), connectedServiceSource]);
         var channelRuntimeCatalogMaterializer = new ChannelRuntimeToolCatalogMaterializer(toolSetRegistry);
         var executor = new AgentRunReplyGenerationExecutor(
             Substitute.For<IActorDispatchPort>(),
@@ -3456,6 +3511,66 @@ public sealed class AgentRunReplyGenerationExecutorTests
                     "missing",
                     GetRegisteredNames()));
         }
+    }
+
+    private sealed class ChannelGoogleServiceHandler(
+        bool senderHasGoogle,
+        bool registrationHasGoogle) : HttpMessageHandler
+    {
+        public List<(string Path, string Token, string Query)> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var token = request.Headers.Authorization?.Parameter ?? string.Empty;
+            var path = request.RequestUri!.AbsolutePath;
+            Requests.Add((path, token, request.RequestUri.Query));
+            var serviceId = token switch
+            {
+                "bound-sender-token" when senderHasGoogle => "sender-google",
+                "channel-agent-key-token" when registrationHasGoogle => "registration-google",
+                _ => null,
+            };
+            var json = path switch
+            {
+                "/api/v1/keys" => serviceId is null ? "{\"keys\":[]}" : $$"""
+                    {"keys":[{
+                      "id":"{{serviceId}}", "slug":"api-google-workspace", "label":"Google Workspace",
+                      "catalog_service_id":"catalog-google", "catalog_service_slug":"api-google-workspace",
+                      "endpoint_id":"instance-google", "endpoint_url":"https://www.googleapis.com",
+                      "is_active":true, "status":"active", "connected":true,
+                      "credential_source":{"type":"personal"}
+                    }]}
+                    """,
+                "/api/v1/mcp/config" => $$"""
+                    {
+                      "contract_version":"1.0",
+                      "catalog_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                      "user_id":"nyx-user-google",
+                      "services":{{(serviceId is null ? "[]" : GoogleCatalogService(serviceId))}}
+                    }
+                    """,
+                "/api/v1/proxy/s/api-google-workspace/calendar/v3/users/me/calendarList"
+                    when serviceId is not null => "{\"items\":[]}",
+                _ => throw new InvalidOperationException("Unexpected NyxID request: " + path),
+            };
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            });
+        }
+
+        private static string GoogleCatalogService(string serviceId) => $$"""
+            [{
+              "service_id":"{{serviceId}}", "service_name":"Google Workspace",
+              "service_slug":"api-google-workspace", "is_user_service":true, "is_generic_proxy":false,
+              "endpoints":[{
+                "endpoint_id":"calendar-list", "name":"calendar_list", "method":"GET",
+                "path":"/calendar/v3/users/me/calendarList", "parameters":[],
+                "request_body_schema":null, "request_content_type":null, "request_body_required":false,
+                "response":{"content_types":["application/json"], "binary_artifact":false}
+              }]
+            }]
+            """;
     }
 
     private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
