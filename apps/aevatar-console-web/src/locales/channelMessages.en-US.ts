@@ -17,8 +17,8 @@ export default {
   'channels.suggestions.inactive': 'Inactive — manage this service in NyxID.',
   'channels.suggestions.unavailable':
     'Access unavailable — check with the service owner.',
-  'channels.suggestions.unauthorized':
-    'Not authorized for this session — review service access.',
+  'channels.suggestions.missingInstance':
+    'No active connection found. Refresh or check this service in NyxID.',
   'channels.suggestions.notSelected': 'Not selected',
   'channels.suggestions.selected': 'Selected',
   'channels.suggestions.selectNamed': 'Select {service}',
@@ -28,7 +28,6 @@ export default {
   'channels.suggestions.empty':
     'No related services identified. You can still select services manually below.',
   'channels.suggestions.manage': 'Manage connections in NyxID ↗',
-  'channels.suggestions.reviewAccess': 'Review service access ↗',
   'channels.column.owner': 'Owner',
   'channels.owner.organization': 'Organization',
   'channels.owner.id': 'Owner ID',
@@ -112,7 +111,7 @@ export default {
   'channels.edit.servicesError':
     'Could not load your services. Try again before saving.',
   'channels.edit.servicesEmpty':
-    'No services are available with your current authorization.',
+    'No active services are available in your NyxID account.',
   'channels.edit.missingServices':
     'Some saved services are no longer available. Deselect them before saving.',
   'channels.edit.selectionError':
@@ -232,12 +231,12 @@ export default {
   'channels.connect.selectAll': 'Select all',
   'channels.connect.selectAllResults': 'Select all results',
   'channels.connect.servicesHelp':
-    'Choose from your authorized services, or connect additional services in NyxID.',
+    'Choose active services from your NyxID account, including services you did not select when signing in.',
   'channels.connect.servicesLoading': 'Loading services',
   'channels.connect.servicesError':
     'Could not load your services. Retry before connecting.',
   'channels.connect.servicesEmpty':
-    'No services are available with your current NyxID authorization.',
+    'No active services are available in your NyxID account.',
   'channels.connect.serviceRequired': 'Required',
   'channels.connect.requiredServicesMissing':
     'Required services unavailable: {services}. Check your NyxID access, then retry.',
@@ -281,18 +280,12 @@ export default {
   'channels.connect.stay': 'Stay',
   'channels.connect.discardHelp':
     'Your bot token and unsaved choices will be cleared.',
-  'channels.access.manage': 'Manage service access',
-  'channels.access.help':
-    'Missing a service? Click Manage service access to authorize it.',
-  'channels.access.needed': 'Service access needed',
+  'channels.access.needed': 'Requested services unavailable',
   'channels.access.instructions':
-    'In NyxID, choose Customize under Service access. Keep the services you still use selected and add the services below, then choose Allow.',
+    'Check these services in NyxID. Active services your account can use can be selected here.',
   'channels.access.unknown': 'Service not found',
   'channels.access.requestedIdentity': 'Requested service ID',
   'channels.access.unavailable': 'Check availability in NyxID',
-  'channels.access.notAuthorized': 'Access needed',
-  'channels.access.restored': 'Your changes have been kept. Review and save.',
-  'channels.access.startFailed':
-    'Could not open NyxID. Your changes are still here. Try again.',
+  'channels.access.notAuthorized': 'Account access unavailable',
   'channels.access.requested': 'Requested',
 };

@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
-import { listChannelServiceAccess } from '@/shared/api/channelServicesApi';
+import { listChannelServices } from '@/shared/api/channelServicesApi';
 import { ChannelApiError, channelsApi } from '@/shared/api/channelsApi';
 
 export const channelKeys = {
   detail: (scopeId: string, id: string) =>
     ['channels', scopeId, 'detail', id] as const,
   services: (scopeId: string) =>
-    ['channels', scopeId, 'service-access'] as const,
+    ['channels', scopeId, 'service-inventory'] as const,
   skills: (scopeId: string, search: string) =>
     ['channels', scopeId, 'skills', search] as const,
   skill: (scopeId: string, id: string) =>
@@ -60,11 +60,11 @@ export function useChannelDetail(scopeId: string, id: string) {
   });
 }
 
-export function useChannelServiceAccess(scopeId: string) {
+export function useChannelServices(scopeId: string) {
   return useQuery({
     ...queryOptions,
     queryKey: channelKeys.services(scopeId),
-    queryFn: ({ signal }) => listChannelServiceAccess(signal),
+    queryFn: ({ signal }) => listChannelServices(signal),
     enabled: Boolean(scopeId),
     refetchOnMount: 'always',
   });

@@ -26,8 +26,11 @@ manual picker still usable; there is no local inference fallback.
 Binding and editing show suggestions after a Skill is selected. Reasons name the
 backend's evidence category without exposing private instructions. Account
 instances show personal/organization source, activity and availability.
-The existing authorized-service choices determine which exact IDs are selectable;
-backend `allowed` is account access and does not replace current bearer grants.
+Active services available to the NyxID account determine which exact IDs are
+selectable, including services omitted at login. Account-level organization
+restrictions still apply. Login service grants do not constrain a channel
+Agent Key selection. Both Bind and Edit use this same inventory boundary; see
+[Channel service selection](2026-09-28-channel-service-access.md).
 
 Selecting an instance adds its exact UserService ID to the form; normal save
 commits it. Discovery never selects, authorizes or removes services. Changing or
@@ -35,9 +38,9 @@ clearing the Skill preserves manual choices. Queries are keyed by scope and
 Skill name and consume abort signals, so late results do not replace the current
 Skill's recommendations.
 
-No connection, inactive access and missing session authorization offer NyxID
-connection management or existing Account service-access review in a new tab.
-Refresh reloads backend discovery and selectable access after recovery.
+Missing connections and inactive services offer NyxID connection management in a
+new tab. Channel forms no longer show an OAuth service-access review action or
+consent instructions. Refresh reloads backend discovery and account inventory.
 Pending and failed discovery stay within the suggestion region.
 
 The current backend sources do not declare mandatory dependencies. Suggestions

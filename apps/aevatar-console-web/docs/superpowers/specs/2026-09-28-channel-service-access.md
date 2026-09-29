@@ -1,134 +1,68 @@
-# Channel configuration service access recovery
+# Channel service selection
 
-Channel service selection and the user's NyxID authorization are separate
-decisions. The editor shows the services the current session can select;
-Manage service access opens the existing full NyxID consent flow. It never
-promises a consent page limited to the services named in a link.
+Bind and Edit list active services the user's NyxID account can use, regardless
+of which services the user selected at login. The Services header has no Manage
+service access action, and the channel form does not redirect into OAuth consent.
+This supersedes the former login-grant filtering and consent-return draft flow.
 
-## Link contract
+## Source and authorization boundary
 
-Use repeated `requiredServiceId` query parameters on the canonical edit or Bind URL:
+The authenticated `GET /api/v1/user-services` inventory owns service identity,
+activity and account access. Human-session inventory is independent of OAuth
+service selections. The console does not decode `allowed_service_ids` or
+`allow_all_services` to constrain channel selection. Personal services and
+organization services allowed by membership are selectable when active; NyxID
+organization viewer entries (`credential_source.allowed=false`) remain unavailable.
+
+Both Bind and Edit submit exact UserService IDs with
+`authorization_mode=explicit_service_allowlist`. Saving uses the existing backend
+registration authorization planner: it verifies active instances and ownership,
+asks NyxID for the Agent Key scope plan, and creates or updates that independent
+channel credential. This behavior was checked against `feature/integrate`;
+no backend contract change is needed. Account access does not prove credential
+health, and the server revalidates each submitted selection.
+
+## Link hints and user path
+
+Repeated `requiredServiceId` parameters on the canonical Bind or Edit URL remain
+advisory hints for exact UserService IDs:
 
 ```text
-/scopes/:scopeId/channels/:registrationId/edit?requiredServiceId=:userServiceId&requiredServiceId=:anotherUserServiceId
-/scopes/:scopeId/channels/bind/:botId?skillId=:optionalSkillId&requiredServiceId=:userServiceId&requiredServiceId=:anotherUserServiceId
+/scopes/:scopeId/channels/:registrationId/edit?requiredServiceId=:userServiceId
+/scopes/:scopeId/channels/bind/:botId?skillId=:optionalSkillId&requiredServiceId=:userServiceId
 ```
 
-Each value is the exact NyxID **UserService ID**, obtained from an authoritative
-service reference. A catalog ID, display name, slug, channel registration ID,
-or Aevatar published-service ID is not interchangeable with this identity.
-The editor trims and deduplicates hints, accepts at most 20 nonempty values of
-at most 128 characters each, and ignores invalid values. Hints are not grants,
-do not select a service automatically, and do not become channel requirements.
+The editor trims and deduplicates hints, accepts at most 20 nonempty values of at
+most 128 characters, and ignores invalid values. Hints neither select services
+nor add channel requirements. Active matching instances are marked Requested;
+a same-slug instance never substitutes for the requested ID. Missing or inactive
+hints get an availability notice with unresolved IDs behind a details disclosure.
+There are no instructions to customize login consent.
 
-Names and slugs come from the authenticated NyxID user-service inventory.
-Effective availability requires an active service, account access, and the
-current bearer grant for that exact ID (or an explicit all-services grant).
-Another service with the same slug cannot satisfy the hint. Missing inventory
-entries are shown as unresolved services with the requested ID behind a
-details disclosure; unavailable services are not presented as selectable.
+Users search and select services, then explicitly click Bind bot or Save changes.
+The optional Skill's backend suggestions use this same inventory boundary.
+Required built-in services retain their existing selection and validation rules.
+A successful inventory refresh removes missing, inactive or account-denied
+selections from the draft, selected count and next submission. Active services
+outside login consent remain selected. Failed or pending refreshes preserve edits
+and block saving. Reactivation makes services selectable without reselecting them.
 
-## User path
-
-1. The user opens the edit or Bind link. Services lists the missing requested access
-   above the existing searchable channel selection.
-2. Manage service access saves the non-secret, unsaved label, skill name and
-   selected IDs in tab-scoped session storage before leaving. A storage or
-   redirect failure keeps the editor open with a retryable error.
-3. The existing `NyxIDAuthClient` starts `serviceAccessReview` with the complete
-   configuration path, query and fragment as `returnTo`. It uses the existing PKCE,
-   callback and backend finalization flow. It supplies no targeted `resource`
-   or `preselect_service_ids` parameters.
-4. NyxID currently displays the full consent page. The editor directs users to
-   **Customize** under **Service access**, retain services they still need,
-   select the listed services, and choose **Allow**. Viewing that page does not
-   imply that any permission was granted.
-5. Returning reloads the actual service inventory/grants and restores the
-   editor draft. New available services are marked Requested but remain
-   unselected until the user chooses them. Partial or cancelled authorization
-   leaves the remaining access needs visible. The callback's return action is
-   labeled Back to previous page because it may return to this editor.
-   Restored edits receive one short inline reminder to review selections and
-   save. Do not show a generic permission-check success heading or panel;
-   only unresolved access needs warrant a separate notice and service list.
-6. The user selects services and clicks **Save changes** or **Bind bot** explicitly.
-   Both actions follow the channel's existing accepted-to-observed confirmation.
-   Access review itself never saves or binds the channel. After a successful access
-   refresh, deleted, inactive or unauthorized services disappear from the selection
-   list and are removed from the draft, selected count and next submission. There
-   are no Unavailable placeholder rows or manual-deselection warnings. Later
-   reauthorization makes a service selectable again without restoring its old
-   selection. Pending or failed access requests never erase draft choices.
-   Required built-in services still block submission when unavailable. A missing
-   service explicitly requested by the URL remains in the separate access notice.
-
-Both routes reuse `ChannelConfigurationPage`, `ChannelServicePicker` and
-`ChannelServiceAccessNotice`, including loading, retry and revoked-selection cleanup
-behavior. Bind needs no saved channel registration to review access.
-
-The temporary draft is keyed by account subject, scope and a typed target:
-`bind + botId` for an unbound bot, or `edit + registrationId` for a saved channel.
-These identities never substitute for each other, even if raw ID strings coincide.
-The draft has a one-hour expiry and is cleared after restoration, completed save
-or binding, or explicit discard. It contains no credentials and cannot establish
-authorization or a saved channel fact. Browser history restoration resets pending
-review state and refreshes service access.
-
-On Bind, a restored skill choice takes precedence over the link's `skillId`
-default, including an explicitly cleared choice. Authorization return preserves
-the complete link but does not reapply the default or automatically select newly
-authorized services. Binding still targets the original bot ID and completes only
-after the returned registration ID and bot ID are observed with the submitted
-configuration.
-
-## Current NyxID review limitation
-
-The ordinary `prompt=consent` page can initialize from the app's default
-services instead of the user's latest saved consent. On 2026-09-29, the live
-review page showed the original six services even though the latest Authorized
-Apps entry contained the two additionally granted UserService IDs. Both extra
-services were available but unchecked under Customize. Merely opening the
-review did not remove the saved grant.
-
-The user must include every service they intend to retain before submitting
-that ordinary review. Its consent decision replaces the selected service
-boundary; the channel's draft selections do not initialize NyxID's picker.
-Do not send the consent page's server-generated `preselect_service_ids` as
-an invented `/oauth/authorize` contract, or substitute slug-based `resource`
-parameters: resource requests can narrow issued authority and cannot reliably
-represent distinct same-slug UserServices.
-
-[NyxID PR #1683](https://github.com/ChronoAIProject/NyxID/pull/1683) introduces
-explicit incremental consent with `service_access_mode=incremental` and exact
-repeated `requested_service_ids`. It was open during this investigation.
-After the backend and consent UI deploy, Aevatar must integrate that contract
-and verify repeated consent preserves the accumulated grant. This full-review
-fallback does not claim that capability.
+There is no channel consent redirect or temporary session-storage draft. Unsaved
+navigation retains its ordinary discard protection. Saving still completes only
+when the submitted configuration is observed, not when a command is accepted.
 
 ## Verification and visual direction
 
-Keep the existing compact white work surface, AlibabaSans typography, blue
-actions and token-based amber access notice. Missing services are a short list
-with readable names and slugs; the existing search and checkboxes remain the
-channel-selection controls. Actions and rows wrap at mobile widths.
+Keep the compact Channels form, search, selected count, typography and design
+tokens. Route integration tests cover Bind and Edit with empty login grants,
+exact-instance selection, explicit submission, Bind observation, inactive/deleted
+cleanup, failed-refresh preservation and reactivation. Adapter tests cover account
+inventory, organization availability, authentication rejection and token refresh.
+Full frontend typecheck, suite and production build are delegated to GitHub CI.
 
-Route integration tests exercise exact-ID hints, duplicate slugs, partial
-authorization, explicit selection/save, draft restoration, cancellation,
-redirect/storage failure and account isolation. Existing adapter and callback
-tests protect grant validation and the shared return flow. Browser history
-restoration coverage verifies fresh grants, temporary draft cleanup and the
-removal of revoked selections from the list, count and submission, while failed
-refreshes preserve the draft. Bind route coverage
-also verifies the complete return URL, explicit binding after refreshed grants,
-accepted-versus-observed completion, restored skill overrides and clearing, and
-isolation across bots and edit registrations. Full frontend
-typecheck, suite and production build are delegated to GitHub CI.
-
-Design baseline:
-`../../design-baselines/workflow-activity-vnext/`, primary
+Design baseline: `../../design-baselines/workflow-activity-vnext/`, primary
 `aevatar-workflow-activity-vnext.excalidraw`, SHA-256
 `30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de`.
 Contract: `2026-08-04-workflow-activity-vnext-design.md`.
 User paths: `2026-08-04-workflow-activity-vnext-user-paths.md`.
-Existing auth/session/returnTo and Umi localization remain authoritative.
 Production data comes from real APIs and acknowledged user actions only.

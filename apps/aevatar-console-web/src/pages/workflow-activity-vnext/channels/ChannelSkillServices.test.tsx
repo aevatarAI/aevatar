@@ -213,21 +213,19 @@ it('displays backend recommendations and access gaps, then saves only the explic
   expect(related.getAllByText(/may be needed for some tasks/)).not.toHaveLength(
     0,
   );
-  expect(
-    related.getByText(/Not authorized for this session/),
-  ).toBeInTheDocument();
+  expect(related.getByRole('button', { name: 'Select Linear' })).toBeEnabled();
   expect(related.getByText(/Inactive —/)).toBeInTheDocument();
   expect(related.getByText(/Access unavailable —/)).toBeInTheDocument();
   expect(related.getAllByText(/No connection found/)).toHaveLength(2);
   expect(
-    related.queryByRole('button', { name: 'Select Linear' }),
+    related.queryByRole('button', { name: 'Select Owner service' }),
   ).not.toBeInTheDocument();
   expect(
     related.getByRole('link', { name: /Manage connections/ }),
   ).toHaveAttribute('href', 'https://nyx.chrono-ai.fun/services');
   expect(
-    related.getByRole('link', { name: /Review service access/ }),
-  ).toHaveAttribute('href', '/scopes/scope-alpha/settings?section=account');
+    related.queryByRole('link', { name: /Review service access/ }),
+  ).not.toBeInTheDocument();
   expect(
     fetchMock.mock.calls.some(([url]) =>
       /\/skills\/.*\/json|\/catalog\?/.test(String(url)),
@@ -235,8 +233,9 @@ it('displays backend recommendations and access gaps, then saves only the explic
   ).toBe(false);
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
   expect(writes()).toHaveLength(0);
+  fireEvent.click(related.getByRole('button', { name: 'Select Linear' }));
   fireEvent.click(related.getByRole('button', { name: 'Select Team GitHub' }));
-  expect(related.getByText('Selected')).toBeInTheDocument();
+  expect(related.getAllByText('Selected')).toHaveLength(2);
   expect(
     screen.getByRole('checkbox', { name: /Personal GitHub/ }),
   ).not.toBeChecked();
@@ -247,7 +246,7 @@ it('displays backend recommendations and access gaps, then saves only the explic
   expect(JSON.parse(String(writes()[0][1]?.body))).toEqual({
     skill_name: 'support',
     authorization_mode: 'explicit_service_allowlist',
-    service_ids: ['us-llm', 'us-manual', 'us-org', 'us-ornn'],
+    service_ids: ['us-linear', 'us-llm', 'us-manual', 'us-org', 'us-ornn'],
   });
 });
 

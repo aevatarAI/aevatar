@@ -1,12 +1,5 @@
-import {
-  act,
-  cleanup,
-  fireEvent,
-  screen,
-  waitFor,
-} from '@testing-library/react';
+import { act, fireEvent, screen } from '@testing-library/react';
 import * as React from 'react';
-import { NyxIDAuthClient } from '@/shared/auth/client';
 import { authFetch } from '@/shared/auth/fetch';
 import { persistAuthSession } from '@/shared/auth/session';
 import { createNyxIDServiceSession } from '../../../../tests/fixtures/nyxidServiceSession';
@@ -116,170 +109,46 @@ beforeEach(() => {
   });
 });
 
-it('shows exact missing services from the link without selecting or granting them, even when another account has the same slug', async () => {
-  grant([...baseIds, 'us-firecrawl-other']);
+it('lets Edit select active services omitted at login and saves exact IDs without an access review', async () => {
+  grant([]);
   mount(
     `${editHref}&requiredServiceId=us-firecrawl&requiredServiceId=unknown-service`,
   );
-  await screen.findByText('Service access needed');
-  expect(screen.getAllByText('Firecrawl', { exact: true })).toHaveLength(1);
-  expect(screen.getByText('Lark Bot API')).toBeInTheDocument();
-  expect(screen.getByText('Service not found')).toBeInTheDocument();
-  expect(
-    screen.getByText(/choose Customize under Service access/),
-  ).toBeInTheDocument();
-  expect(
-    screen.queryByRole('checkbox', { name: /^Firecrawl/ }),
-  ).not.toBeInTheDocument();
+  const firecrawl = await screen.findByRole('checkbox', { name: /^Firecrawl/ });
+  expect(firecrawl).toBeEnabled();
+  expect(firecrawl).not.toBeChecked();
   expect(
     screen.getByRole('checkbox', { name: /Other Firecrawl account/ }),
   ).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /GitHub/ })).toBeChecked();
   expect(screen.getByText('3 selected')).toBeInTheDocument();
-  expect(writes()).toHaveLength(0);
-});
-
-it('restores the draft after full consent, checks fresh grants and requires selecting the newly available service before saving', async () => {
-  const review = jest
-    .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')
-    .mockResolvedValue();
-  const first = mount();
-  fireEvent.change(await screen.findByLabelText('Label'), {
-    target: { value: 'Edited label' },
-  });
-  fireEvent.click(await screen.findByRole('checkbox', { name: /GitHub/ }));
-  fireEvent.click(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() =>
-    expect(review).toHaveBeenCalledWith({
-      flow: 'serviceAccessReview',
-      returnTo: editHref,
-    }),
-  );
-  expect(writes()).toHaveLength(0);
-  const leaving = new Event('beforeunload', { cancelable: true });
-  window.dispatchEvent(leaving);
-  expect(leaving.defaultPrevented).toBe(false);
-  first.unmount();
-  grant([...baseIds, 'us-firecrawl']);
-  mount();
-  expect(await screen.findByLabelText('Label')).toHaveValue('Edited label');
+  expect(screen.getByText('Service not found')).toBeInTheDocument();
   expect(
-    await screen.findByText(/Your changes have been kept/),
-  ).toBeInTheDocument();
-  expect(screen.getByText('Lark Bot API')).toBeInTheDocument();
-  expect(screen.queryByText('Service access checked')).not.toBeInTheDocument();
-  const firecrawl = screen.getByRole('checkbox', { name: /Firecrawl/ });
-  expect(firecrawl).not.toBeChecked();
-  expect(screen.getByRole('checkbox', { name: /GitHub/ })).not.toBeChecked();
+    screen.queryByRole('button', { name: /Manage service access/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByText(/choose Customize under Service access/),
+  ).not.toBeInTheDocument();
+  expect(writes()).toHaveLength(0);
   fireEvent.click(firecrawl);
   fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
   await screen.findByText('Confirming your changes...');
-  const post = writes().find(([, init]) => init?.method === 'POST');
-  expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({
-    service_ids: ['us-firecrawl', 'us-llm', 'us-ornn'],
+  expect(writes()).toHaveLength(1);
+  expect(writes()[0][0]).toBe('/api/channels/registrations/reg-alpha');
+  expect(JSON.parse(String(writes()[0][1]?.body))).toEqual({
+    skill_name: 'support',
+    authorization_mode: 'explicit_service_allowlist',
+    service_ids: ['us-firecrawl', 'us-github', 'us-llm', 'us-ornn'],
   });
   expect(mockToast.success).not.toHaveBeenCalled();
 });
 
-it('retains missing access and draft after cancellation, and recovers from a failed review launch', async () => {
-  const review = jest
-    .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')
-    .mockResolvedValue();
-  const first = mount();
-  fireEvent.change(await screen.findByLabelText('Label'), {
-    target: { value: 'Edited label' },
-  });
-  fireEvent.click(
-    await screen.findByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() => expect(review).toHaveBeenCalledTimes(1));
-  first.unmount();
-  mount();
-  expect(
-    await screen.findByText(/Your changes have been kept/),
-  ).toBeInTheDocument();
-  expect(screen.getByText('Service access needed')).toBeInTheDocument();
-  expect(screen.getByLabelText('Label')).toHaveValue('Edited label');
-  review.mockRejectedValueOnce(new Error('TEST_PRIVATE_ERROR'));
-  fireEvent.click(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() =>
-    expect(mockToast.error).toHaveBeenCalledWith(
-      'Could not open NyxID. Your changes are still here. Try again.',
-    ),
-  );
-  expect(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  ).toBeEnabled();
-  expect(screen.getByLabelText('Label')).toHaveValue('Edited label');
-  const leaving = new Event('beforeunload', { cancelable: true });
-  window.dispatchEvent(leaving);
-  expect(leaving.defaultPrevented).toBe(true);
-  fireEvent.click(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() => expect(review).toHaveBeenCalledTimes(3));
-  expect(writes()).toHaveLength(0);
-});
-
-it('keeps the editor open when draft storage is unavailable and does not restore a draft for another account', async () => {
-  const review = jest
-    .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')
-    .mockResolvedValue();
-  const first = mount();
-  fireEvent.change(await screen.findByLabelText('Label'), {
-    target: { value: 'Edited label' },
-  });
-  const storage = jest
-    .spyOn(Storage.prototype, 'setItem')
-    .mockImplementation(() => {
-      throw new Error('Storage blocked');
-    });
-  fireEvent.click(
-    await screen.findByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() => expect(mockToast.error).toHaveBeenCalled());
-  expect(review).not.toHaveBeenCalled();
-  expect(screen.getByLabelText('Label')).toHaveValue('Edited label');
-  storage.mockRestore();
-  fireEvent.click(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() => expect(review).toHaveBeenCalledTimes(1));
-  first.unmount();
-  const other = createNyxIDServiceSession({
-    sub: 'user-other',
-    allowed_service_ids: baseIds,
-  });
-  persistAuthSession({ ...other, user: { sub: 'user-other' } });
-  mount();
-  expect(await screen.findByLabelText('Label')).toHaveValue('Support bot');
-  await screen.findByText('Service access needed');
-  expect(
-    screen.queryByText(/Your changes have been kept/),
-  ).not.toBeInTheDocument();
-});
-
-it('preserves choices on failed history refresh, then removes revoked selections without reselecting them on later authorization', async () => {
-  const review = jest
-    .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')
-    .mockResolvedValue();
+it('preserves edits during failed inventory refresh, then removes inactive choices without reselecting them on reactivation', async () => {
   const { queryClient } = mount();
   fireEvent.change(await screen.findByLabelText('Label'), {
     target: { value: 'Edited label' },
   });
-  await screen.findByText('Service access needed');
-  fireEvent.click(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  );
-  await waitFor(() => expect(review).toHaveBeenCalledTimes(1));
-  const draftKeys = () =>
-    Object.keys(window.sessionStorage).filter((key) =>
-      key.startsWith('aevatar:channel-access-draft:'),
-    );
-  expect(draftKeys()).toHaveLength(1);
+  await screen.findByRole('checkbox', { name: /GitHub/ });
   const normalFetch = fetchMock.getMockImplementation();
   if (!normalFetch) throw new Error('Missing request fixture');
   fetchMock.mockImplementation((input, init) => {
@@ -287,34 +156,34 @@ it('preserves choices on failed history refresh, then removes revoked selections
       return Promise.resolve({ ok: false, status: 503 } as Response);
     return normalFetch(input, init);
   });
-  grant(['us-ornn', 'us-llm', 'us-firecrawl']);
-  act(() => {
-    const restored = new Event('pageshow');
-    Object.defineProperty(restored, 'persisted', { value: true });
-    window.dispatchEvent(restored);
+  await act(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: channelKeys.services('scope-alpha'),
+    });
   });
   await screen.findByText(
     'Could not load your services. Try again before saving.',
   );
   expect(screen.getByText('3 selected')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
-  fetchMock.mockImplementation(normalFetch);
+  fetchMock.mockImplementation((input, init) =>
+    String(input).endsWith('/user-services')
+      ? Promise.resolve(
+          response({
+            services: inventory.map((item) =>
+              item.id === 'us-github' ? { ...item, is_active: false } : item,
+            ),
+          }),
+        )
+      : normalFetch(input, init),
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
   await screen.findByText('2 selected');
   expect(
     screen.queryByRole('checkbox', { name: /GitHub/ }),
   ).not.toBeInTheDocument();
-  expect(
-    screen.queryByText('Unavailable', { exact: true }),
-  ).not.toBeInTheDocument();
-  expect(draftKeys()).toHaveLength(0);
   expect(screen.getByLabelText('Label')).toHaveValue('Edited label');
-  expect(screen.getByRole('checkbox', { name: /Firecrawl/ })).not.toBeChecked();
-  expect(
-    screen.getByRole('button', { name: /Manage service access/ }),
-  ).toBeEnabled();
-  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
-  grant([...baseIds, 'us-firecrawl']);
+  fetchMock.mockImplementation(normalFetch);
   await act(async () => {
     await queryClient.invalidateQueries({
       queryKey: channelKeys.services('scope-alpha'),
@@ -335,8 +204,8 @@ it('preserves choices on failed history refresh, then removes revoked selections
   ]);
 });
 
-it('removes saved missing, inactive and unauthorized services on initial load while retaining URL access hints', async () => {
-  grant(baseIds.filter((id) => id !== 'us-github').concat('us-firecrawl'));
+it('removes saved missing and inactive services while preserving active selections outside login consent', async () => {
+  grant([]);
   const normalFetch = fetchMock.getMockImplementation();
   if (!normalFetch) throw new Error('Missing request fixture');
   const saved = {
@@ -359,22 +228,19 @@ it('removes saved missing, inactive and unauthorized services on initial load wh
     return normalFetch(input, init);
   });
   mount();
-  await screen.findByText('Service access needed');
+  await screen.findByText('Requested services unavailable');
   expect(screen.getByText('Firecrawl', { exact: true })).toBeInTheDocument();
   expect(
-    screen.queryByRole('checkbox', { name: /GitHub|Firecrawl|us-deleted/ }),
+    screen.queryByRole('checkbox', { name: /^Firecrawl|us-deleted/ }),
   ).not.toBeInTheDocument();
-  expect(
-    screen.queryByText('Unavailable', { exact: true }),
-  ).not.toBeInTheDocument();
-  expect(screen.getByText('2 selected')).toBeInTheDocument();
+  expect(screen.getByRole('checkbox', { name: /GitHub/ })).toBeChecked();
+  expect(screen.getByText('3 selected')).toBeInTheDocument();
   expect(writes()).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
   await screen.findByText('Confirming your changes...');
   expect(JSON.parse(String(writes()[0][1]?.body)).service_ids).toEqual([
+    'us-github',
     'us-llm',
     'us-ornn',
   ]);
 });
-
-afterEach(cleanup);

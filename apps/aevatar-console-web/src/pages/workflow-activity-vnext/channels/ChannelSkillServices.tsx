@@ -5,7 +5,6 @@ import type { ChannelServiceChoice } from '@/shared/api/channelServicesApi';
 import { getChannelSkillServices } from '@/shared/api/channelSkillServicesApi';
 import { t } from '@/shared/i18n/messages';
 import { AevatarLoadingDots } from '@/shared/ui/AevatarLoading';
-import { buildWorkflowActivitySettingsHref } from '../navigation';
 import { channelKeys } from './queries';
 
 export default function ChannelSkillServices({
@@ -39,7 +38,11 @@ export default function ChannelSkillServices({
     refetchOnReconnect: false,
   });
   if (!skillName) return null;
-  const authorizedIds = new Set(services.map((service) => service.id));
+  const availableIds = new Set(
+    services
+      .filter((service) => service.active && service.allowed)
+      .map((service) => service.id),
+  );
   const refreshing = query.isFetching || checkingAccess;
   return (
     <section className="channels__skill-services" aria-labelledby={titleId}>
@@ -108,7 +111,7 @@ export default function ChannelSkillServices({
                   {recommendation.instances.length ? (
                     recommendation.instances.map((instance) => {
                       const selected = selectedIds.includes(instance.id);
-                      const selectable = authorizedIds.has(instance.id);
+                      const selectable = availableIds.has(instance.id);
                       return (
                         <div
                           className="channels__suggestion-instance"
@@ -155,8 +158,8 @@ export default function ChannelSkillServices({
                                         )
                                       : !selectable
                                         ? t(
-                                            'channels.suggestions.unauthorized',
-                                            'Not authorized for this session — review service access.',
+                                            'channels.suggestions.missingInstance',
+                                            'No active connection found. Refresh or check this service in NyxID.',
                                           )
                                         : !selected
                                           ? t(
@@ -219,13 +222,6 @@ export default function ChannelSkillServices({
           rel="noreferrer"
         >
           {t('channels.suggestions.manage', 'Manage connections in NyxID ↗')}
-        </a>
-        <a
-          href={buildWorkflowActivitySettingsHref(scopeId, 'account')}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {t('channels.suggestions.reviewAccess', 'Review service access ↗')}
         </a>
       </div>
     </section>

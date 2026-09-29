@@ -450,23 +450,12 @@ it('locks required services through individual, bulk and filtered deselection an
 it.each([
   ['missing', 'ornn-api'],
   ['inactive', 'chrono-llm-public'],
-  ['unauthorized', 'ornn-api'],
+  ['account access denied', 'ornn-api'],
   ['similar slug', 'chrono-llm-public'],
 ])('blocks submission with a %s required service and recovers on retry', async (condition, slug) => {
   jest.useFakeTimers();
   try {
     let restored = false;
-    const unavailableId = serviceCatalogue.find(
-      (service) => service.slug === slug,
-    )?.id;
-    if (condition === 'unauthorized')
-      persistAuthSession(
-        createNyxIDServiceSession({
-          allowed_service_ids: selectedServiceIds.filter(
-            (id) => id !== unavailableId,
-          ),
-        }),
-      );
     const unavailableServices = serviceCatalogue
       .filter((service) => condition !== 'missing' || service.slug !== slug)
       .map((service) =>
@@ -474,6 +463,10 @@ it.each([
           ? service
           : {
               ...service,
+              credential_source:
+                condition === 'account access denied'
+                  ? { type: 'org', allowed: false }
+                  : service.credential_source,
               is_active: condition !== 'inactive',
               slug: condition === 'similar slug' ? `${slug}-other` : slug,
               label: slug,
