@@ -22,7 +22,7 @@ export default function ChannelServiceAccessNotice({
     <p className="channels__form-help" role="status">
       {t(
         'channels.access.restored',
-        'Your changes have been kept. Review the service selections below, then click Save changes.',
+        'Your changes have been kept. Review and save.',
       )}
     </p>
   ) : null;

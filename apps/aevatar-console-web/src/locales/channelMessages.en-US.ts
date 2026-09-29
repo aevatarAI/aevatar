@@ -254,7 +254,7 @@ export default {
     'Your bot token and unsaved choices will be cleared.',
   'channels.access.manage': 'Manage service access',
   'channels.access.help':
-    'Choose what this channel can use. Manage service access opens the full NyxID authorization page.',
+    'Missing a service? Click Manage service access to authorize it.',
   'channels.access.needed': 'Service access needed',
   'channels.access.instructions':
     'In NyxID, choose Customize under Service access. Keep the services you still use selected and add the services below, then choose Allow.',
@@ -262,8 +262,7 @@ export default {
   'channels.access.requestedIdentity': 'Requested service ID',
   'channels.access.unavailable': 'Check availability in NyxID',
   'channels.access.notAuthorized': 'Access needed',
-  'channels.access.restored':
-    'Your changes have been kept. Review the service selections below, then click Save changes.',
+  'channels.access.restored': 'Your changes have been kept. Review and save.',
   'channels.access.startFailed':
     'Could not open NyxID. Your changes are still here. Try again.',
   'channels.access.requested': 'Requested',

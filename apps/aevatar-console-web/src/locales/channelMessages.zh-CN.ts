@@ -222,8 +222,7 @@ export default {
   'channels.connect.stay': '继续填写',
   'channels.connect.discardHelp': '机器人令牌和未保存的选择将被清除。',
   'channels.access.manage': '管理服务权限',
-  'channels.access.help':
-    '选择此频道可使用的服务。“管理服务权限”将打开 NyxID 的完整授权页面。',
+  'channels.access.help': '缺少服务？点击「管理服务权限」补充授权。',
   'channels.access.needed': '需要补充服务权限',
   'channels.access.instructions':
     '在 NyxID 的 Service access 中点击 Customize。保留仍需使用的已选服务，勾选以下服务，再点击 Allow。',
@@ -231,8 +230,7 @@ export default {
   'channels.access.requestedIdentity': '所需服务 ID',
   'channels.access.unavailable': '请在 NyxID 检查服务是否可用',
   'channels.access.notAuthorized': '需要授权',
-  'channels.access.restored':
-    '已保留你离开前的修改。请确认下方服务选择，然后点击「保存修改」。',
+  'channels.access.restored': '修改已保留，确认后请保存。',
   'channels.access.startFailed': '无法打开 NyxID，当前修改已保留，请重试。',
   'channels.access.requested': '本次需要',
   'channels.access.unavailableSelection':

@@ -92,7 +92,7 @@ export default function ChannelServicePicker({
         {accessAction
           ? t(
               'channels.access.help',
-              'Choose what this channel can use. Manage service access opens the full NyxID authorization page.',
+              'Missing a service? Click Manage service access to authorize it.',
             )
           : t(
               'channels.connect.servicesHelp',
