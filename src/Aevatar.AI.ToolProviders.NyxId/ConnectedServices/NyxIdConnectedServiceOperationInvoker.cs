@@ -16,13 +16,19 @@ public sealed record NyxIdConnectedServiceOperationInvocation(
     string? ServiceSlug,
     string? OperationId,
     string OperationArgumentsJson,
-    NyxIdConnectedServiceDocumentRequest? DocumentRequest = null);
+    NyxIdConnectedServiceDocumentRequest? DocumentRequest = null,
+    NyxIdConnectedServiceRawRequest? RawRequest = null);
 
 public sealed record NyxIdConnectedServiceDocumentRequest(
     string Method,
     string RelativePath,
     string RequestArgumentsJson,
     NyxIdRecommendedSkillRef SkillRef);
+
+public sealed record NyxIdConnectedServiceRawRequest(
+    string Method,
+    string RelativePath,
+    string RequestArgumentsJson);
 
 public sealed record NyxIdConnectedServiceOperationInvokeResult(
     bool IsSuccess,
@@ -114,6 +120,21 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                         executionToken,
                         matchedBindings[0],
                         invocation.DocumentRequest,
+                        callId,
+                        toolName,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+
+            if (invocation.RawRequest is not null)
+            {
+                if (matchedBindings.Length > 1)
+                    return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_ambiguous");
+                return await InvokeRawDelegatedRequestAsync(
+                        context,
+                        executionToken,
+                        matchedBindings[0],
+                        invocation.RawRequest,
                         callId,
                         toolName,
                         ct)
@@ -322,6 +343,84 @@ public sealed class NyxIdConnectedServiceOperationInvoker
         return NyxIdConnectedServiceOperationInvokeResult.Success(terminalOutcome);
     }
 
+    private async Task<NyxIdConnectedServiceOperationInvokeResult> InvokeRawDelegatedRequestAsync(
+        AgentToolExecutionContext context,
+        string executionToken,
+        NyxIdServiceInstanceBinding binding,
+        NyxIdConnectedServiceRawRequest request,
+        string callId,
+        string toolName,
+        CancellationToken ct)
+    {
+        if (!TryBuildRawDelegatedAdmission(binding.Instance, request, out var admission, out var runtimeArgumentsJson))
+            return NyxIdConnectedServiceOperationInvokeResult.Failure("raw_request_invalid");
+        if (admission.ExecutionPolicy.Risk != AgentToolOperationRisk.ReadOnly &&
+            !_options.EnableAssistantConnectedServiceEffects)
+        {
+            return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_not_visible");
+        }
+
+        var proxy = new NyxIdProxyTool(
+            _apiClient,
+            _logger,
+            _fileArtifactIngress,
+            _options.EffectiveProxyFileArtifactMaxBytes,
+            _options.ManagedWorkflowAdmissionMode,
+            _delegationTokenLease);
+        var sourceReadableToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context.Credentials)
+                                  ?? context.Credentials.NyxIdAccessToken;
+        var operationToken = binding.Instance.AccessTokenSource == NyxIdServiceAccessTokenSource.Organization
+            ? context.Credentials.NyxIdOrgToken
+            : executionToken;
+        var credentials = context.Credentials with
+        {
+            NyxIdAccessToken = operationToken,
+            SourceReadableNyxIdAccessToken = sourceReadableToken,
+        };
+        using var scope = AgentToolContextScope.Push(context with
+        {
+            Credentials = credentials,
+            OperationAdmission = admission,
+        });
+        var outcome = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
+            ? await proxy.ExecuteAdmittedReadWithOutcomeAsync(
+                callId,
+                toolName,
+                runtimeArgumentsJson,
+                MaxReadSourceBytes,
+                ct).ConfigureAwait(false)
+            : await proxy.ExecuteAdmittedEffectWithOutcomeAsync(
+                callId,
+                toolName,
+                runtimeArgumentsJson,
+                ct).ConfigureAwait(false);
+        var receipt = outcome.Receipt ?? proxy.CreateResultReceipt(
+            callId,
+            toolName,
+            runtimeArgumentsJson,
+            outcome.ResultJson);
+        var label = FirstNonEmpty(binding.Instance.Label, binding.Instance.DisplaySlug, binding.Instance.CatalogServiceSlug);
+        var operationLabel = $"{admission.HttpMethod} {admission.PathTemplate}";
+        var terminalOutcome = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
+            ? BuildReadOutcome(
+                admission,
+                label,
+                operationLabel,
+                callId,
+                toolName,
+                outcome.ResultJson,
+                receipt)
+            : BuildEffectOutcome(
+                admission,
+                readBackPlan: null,
+                label,
+                operationLabel,
+                callId,
+                toolName,
+                receipt);
+        return NyxIdConnectedServiceOperationInvokeResult.Success(terminalOutcome);
+    }
+
     private static bool HasExactRecommendedSkillRef(
         NyxIdServiceInstance instance,
         NyxIdRecommendedSkillRef requestedRef) =>
@@ -335,16 +434,42 @@ public sealed class NyxIdConnectedServiceOperationInvoker
         NyxIdServiceInstance instance,
         NyxIdConnectedServiceDocumentRequest request,
         out AgentToolOperationAdmission admission,
+        out string runtimeArgumentsJson) => TryBuildAuthoredRequestAdmission(
+        instance,
+        request.Method,
+        request.RelativePath,
+        request.RequestArgumentsJson,
+        out admission,
+        out runtimeArgumentsJson);
+
+    private static bool TryBuildRawDelegatedAdmission(
+        NyxIdServiceInstance instance,
+        NyxIdConnectedServiceRawRequest request,
+        out AgentToolOperationAdmission admission,
+        out string runtimeArgumentsJson) => TryBuildAuthoredRequestAdmission(
+        instance,
+        request.Method,
+        request.RelativePath,
+        request.RequestArgumentsJson,
+        out admission,
+        out runtimeArgumentsJson);
+
+    private static bool TryBuildAuthoredRequestAdmission(
+        NyxIdServiceInstance instance,
+        string requestMethod,
+        string relativePath,
+        string requestArgumentsJson,
+        out AgentToolOperationAdmission admission,
         out string runtimeArgumentsJson)
     {
         admission = null!;
         runtimeArgumentsJson = string.Empty;
-        var method = NormalizeDocumentRequestMethod(request.Method);
-        if (method is null || !TryNormalizeDocumentRequestPath(request.RelativePath, out var pathTemplate))
+        var method = NormalizeDocumentRequestMethod(requestMethod);
+        if (method is null || !TryNormalizeDocumentRequestPath(relativePath, out var pathTemplate))
             return false;
 
         if (!TryReadDocumentRuntimeArguments(
-                request.RequestArgumentsJson,
+                requestArgumentsJson,
                 out var queryParameters,
                 out var headerParameters,
                 out var hasBody))
@@ -412,7 +537,7 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                 [AgentToolOperationExecutionMode.Interactive]),
             CatalogDigest: string.Empty,
             CatalogServiceSlug: instance.CatalogServiceSlug);
-        runtimeArgumentsJson = request.RequestArgumentsJson;
+        runtimeArgumentsJson = requestArgumentsJson;
         return true;
     }
 
@@ -455,6 +580,8 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                     .Where(static name => !string.IsNullOrWhiteSpace(name))
                     .Order(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
+                if (headerParameters.Any(NyxIdProxyHeaderPolicy.IsSensitive))
+                    return false;
             }
             hasBody = root.TryGetProperty("body", out var body) && body.ValueKind != JsonValueKind.Null;
             return !hasBody || body.ValueKind == JsonValueKind.Object;

@@ -780,7 +780,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                         arguments.ServiceSlug,
                         arguments.OperationId,
                         arguments.OperationArgumentsJson,
-                        arguments.DocumentRequest),
+                        arguments.DocumentRequest,
+                        arguments.RawRequest),
                     callId,
                     "nyxid_invoke_operation",
                     ct)
@@ -1029,8 +1030,11 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
 
             foreach (var property in root.EnumerateObject())
             {
-                if (property.Name is not ("user_service_id" or "service_slug" or "operation_id" or "operation_arguments" or "document_request"))
+                if (property.Name is not ("user_service_id" or "service_slug" or "operation_id" or "operation_arguments" or
+                    "document_request" or "method" or "relative_path" or "query" or "headers" or "body"))
+                {
                     return null;
+                }
             }
 
             var userServiceId = ReadOptionalString(root, "user_service_id");
@@ -1040,9 +1044,14 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
 
             var hasTypedOperation = root.TryGetProperty("operation_id", out _);
             var hasDocumentRequest = root.TryGetProperty("document_request", out var documentRequestElement);
-            if (hasTypedOperation == hasDocumentRequest)
+            var hasRawRequest = root.TryGetProperty("method", out _) ||
+                                root.TryGetProperty("relative_path", out _) ||
+                                root.TryGetProperty("query", out _) ||
+                                root.TryGetProperty("headers", out _) ||
+                                root.TryGetProperty("body", out _);
+            if ((hasTypedOperation ? 1 : 0) + (hasDocumentRequest ? 1 : 0) + (hasRawRequest ? 1 : 0) != 1)
                 return null;
-            if (hasDocumentRequest && root.TryGetProperty("operation_arguments", out _))
+            if ((hasDocumentRequest || hasRawRequest) && root.TryGetProperty("operation_arguments", out _))
                 return null;
 
             if (hasDocumentRequest)
@@ -1055,7 +1064,22 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                         serviceSlug,
                         OperationId: null,
                         OperationArgumentsJson: "{}",
-                        documentRequest);
+                        documentRequest,
+                        RawRequest: null);
+            }
+
+            if (hasRawRequest)
+            {
+                var rawRequest = ParseRawRequest(root);
+                return rawRequest is null
+                    ? null
+                    : new OperationArguments(
+                        userServiceId,
+                        serviceSlug,
+                        OperationId: null,
+                        OperationArgumentsJson: "{}",
+                        DocumentRequest: null,
+                        rawRequest);
             }
 
             var operationId = ReadRequiredString(root, "operation_id");
@@ -1075,12 +1099,46 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 serviceSlug,
                 operationId,
                 operationArgumentsJson,
-                DocumentRequest: null);
+                DocumentRequest: null,
+                RawRequest: null);
         }
         catch (JsonException)
         {
             return null;
         }
+    }
+
+    private static NyxIdConnectedServiceRawRequest? ParseRawRequest(JsonElement root)
+    {
+        var method = ReadRequiredString(root, "method");
+        var relativePath = ReadRequiredString(root, "relative_path");
+        if (method is null || relativePath is null)
+            return null;
+
+        var runtimeArguments = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        if (root.TryGetProperty("query", out var query))
+        {
+            if (query.ValueKind != JsonValueKind.Object)
+                return null;
+            runtimeArguments["query"] = query;
+        }
+        if (root.TryGetProperty("headers", out var headers))
+        {
+            if (headers.ValueKind != JsonValueKind.Object)
+                return null;
+            runtimeArguments["headers"] = headers;
+        }
+        if (root.TryGetProperty("body", out var body))
+        {
+            if (body.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
+                return null;
+            runtimeArguments["body"] = body;
+        }
+
+        return new NyxIdConnectedServiceRawRequest(
+            method,
+            relativePath,
+            JsonSerializer.Serialize(runtimeArguments));
     }
 
     private static NyxIdConnectedServiceDocumentRequest? ParseDocumentRequest(JsonElement documentRequest)
@@ -1400,7 +1458,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         string? ServiceSlug,
         string? OperationId,
         string OperationArgumentsJson,
-        NyxIdConnectedServiceDocumentRequest? DocumentRequest);
+        NyxIdConnectedServiceDocumentRequest? DocumentRequest,
+        NyxIdConnectedServiceRawRequest? RawRequest);
 
     private sealed record RecommendedSkillArguments(
         string UserServiceId,
@@ -1423,6 +1482,11 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 "service_slug":{"type":"string","description":"Exact connected-service slug from inventory or channel runtime selectors."},
                 "operation_id":{"type":"string","description":"Exact endpoint or operation id named by the loaded recommended skill for typed operation mode."},
                 "operation_arguments":{"type":"object","description":"Typed mode only. Only path_params, query, headers, body, and response_mode values declared by the operation contract.","additionalProperties":true},
+                "method":{"type":"string","description":"Raw delegated mode only. HTTP method for a service-relative request when operation_id is omitted.","enum":["GET","HEAD","OPTIONS","POST","PUT","PATCH","DELETE"]},
+                "relative_path":{"type":"string","description":"Raw delegated mode only. Safe relative service path. Absolute URLs, query strings, fragments, and traversal are rejected."},
+                "query":{"type":"object","description":"Raw delegated mode only. Query string values for the service-relative request.","additionalProperties":{"type":"string"}},
+                "headers":{"type":"object","description":"Raw delegated mode only. Non-sensitive headers. Authorization, Host, cookies, API keys, and tokens are rejected.","additionalProperties":{"type":"string"}},
+                "body":{"type":"object","description":"Raw delegated mode only. JSON object body for methods that allow a body.","additionalProperties":true},
                 "document_request":{
                   "type":"object",
                   "description":"Document-guided mode only. Use only when the loaded recommended skill explicitly describes a service without typed operations. This is not a fallback for a missing operation_id.",
@@ -1450,7 +1514,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 }
               },
               "anyOf":[{"required":["user_service_id"]},{"required":["service_slug"]}],
-              "oneOf":[{"required":["operation_id"]},{"required":["document_request"]}],
+              "oneOf":[{"required":["operation_id"]},{"required":["document_request"]},{"required":["method","relative_path"]}],
               "additionalProperties":false
             }
             """;

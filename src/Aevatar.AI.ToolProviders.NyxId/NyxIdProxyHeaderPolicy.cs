@@ -8,7 +8,7 @@ internal static class NyxIdProxyHeaderPolicy
             .Where(char.IsLetterOrDigit)
             .Select(char.ToLowerInvariant)
             .ToArray());
-        return normalized is "authorization" or "proxyauthorization" or "cookie" or "setcookie" or
+        return normalized is "authorization" or "proxyauthorization" or "cookie" or "setcookie" or "host" or
                "apikey" or "xapikey" or "token" or "apitoken" or "xauthtoken" or
                "accesstoken" or "xaccesstoken" or "bearertoken" ||
                normalized.EndsWith("apikey", StringComparison.Ordinal) ||
