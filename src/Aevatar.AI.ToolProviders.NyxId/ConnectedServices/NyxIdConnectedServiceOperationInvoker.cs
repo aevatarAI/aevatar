@@ -210,25 +210,15 @@ public sealed class NyxIdConnectedServiceOperationInvoker
     {
         if (!HasExactRecommendedSkillRef(binding.Instance, request.SkillRef))
             return NyxIdConnectedServiceOperationInvokeResult.Failure("document_request_not_admitted");
-        if (!TryBuildAuthoredRequestAdmission(
-                binding.Instance,
+        return await InvokeAuthoredRequestAsync(
+                context,
+                binding,
                 request.Method,
                 request.RelativePath,
                 request.RequestArgumentsJson,
-                out var admission,
-                out var runtimeArgumentsJson))
-            return NyxIdConnectedServiceOperationInvokeResult.Failure("document_request_invalid");
-
-        return await ExecuteThroughOperationToolAsync(
-                context,
-                binding,
-                admission,
-                runtimeArgumentsJson,
-                FirstNonEmpty(binding.Instance.Label, binding.Instance.DisplaySlug, binding.Instance.CatalogServiceSlug),
-                $"{admission.HttpMethod} {admission.PathTemplate}",
+                invalidFailureCode: "document_request_invalid",
                 callId,
                 toolName,
-                readBackPlan: null,
                 ct)
             .ConfigureAwait(false);
     }
@@ -241,20 +231,45 @@ public sealed class NyxIdConnectedServiceOperationInvoker
         string toolName,
         CancellationToken ct)
     {
-        if (!TryBuildAuthoredRequestAdmission(
-                binding.Instance,
+        return await InvokeAuthoredRequestAsync(
+                context,
+                binding,
                 request.Method,
                 request.RelativePath,
                 request.RequestArgumentsJson,
-                out var admission,
-                out var runtimeArgumentsJson))
-            return NyxIdConnectedServiceOperationInvokeResult.Failure("raw_request_invalid");
+                invalidFailureCode: "raw_request_invalid",
+                callId,
+                toolName,
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<NyxIdConnectedServiceOperationInvokeResult> InvokeAuthoredRequestAsync(
+        AgentToolExecutionContext context,
+        NyxIdServiceInstanceBinding binding,
+        string method,
+        string relativePath,
+        string requestArgumentsJson,
+        string invalidFailureCode,
+        string callId,
+        string toolName,
+        CancellationToken ct)
+    {
+        if (!TryBuildAuthoredRequestAdmission(
+                binding.Instance,
+                method,
+                relativePath,
+                requestArgumentsJson,
+                out var admission))
+        {
+            return NyxIdConnectedServiceOperationInvokeResult.Failure(invalidFailureCode);
+        }
 
         return await ExecuteThroughOperationToolAsync(
                 context,
                 binding,
                 admission,
-                runtimeArgumentsJson,
+                requestArgumentsJson,
                 FirstNonEmpty(binding.Instance.Label, binding.Instance.DisplaySlug, binding.Instance.CatalogServiceSlug),
                 $"{admission.HttpMethod} {admission.PathTemplate}",
                 callId,
@@ -324,11 +339,9 @@ public sealed class NyxIdConnectedServiceOperationInvoker
         string requestMethod,
         string relativePath,
         string requestArgumentsJson,
-        out AgentToolOperationAdmission admission,
-        out string runtimeArgumentsJson)
+        out AgentToolOperationAdmission admission)
     {
         admission = null!;
-        runtimeArgumentsJson = string.Empty;
         var method = NormalizeDocumentRequestMethod(requestMethod);
         if (method is null || !TryNormalizeDocumentRequestPath(relativePath, out var pathTemplate))
             return false;
@@ -395,14 +408,11 @@ public sealed class NyxIdConnectedServiceOperationInvoker
             AgentToolOperationResponsePolicy.TextOnly,
             new AgentToolOperationExecutionPolicy(
                 risk,
-                risk == AgentToolOperationRisk.ReadOnly
-                    ? AgentToolOperationApproval.None
-                    : AgentToolOperationApproval.Required,
+                AgentToolOperationApproval.None,
                 AgentToolOperationEnforcementOwner.Aevatar,
                 [AgentToolOperationExecutionMode.Interactive]),
             CatalogDigest: string.Empty,
             CatalogServiceSlug: instance.CatalogServiceSlug);
-        runtimeArgumentsJson = requestArgumentsJson;
         return true;
     }
 
