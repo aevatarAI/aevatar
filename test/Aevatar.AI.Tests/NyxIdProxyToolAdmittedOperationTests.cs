@@ -1725,6 +1725,29 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         handler.ProxyRequests.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ShouldAcceptProofBoundDestructivePolicyInEnforceMode()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(
+            handler,
+            managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Enforce);
+        using var scope = PushContext(AuthoredRequestAdmission() with
+        {
+            HttpMethod = "DELETE",
+            PathTemplate = "/events/{event_id}",
+            RequestBody = null,
+            ExecutionPolicy = DestructivePolicy(),
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"event_id":"evt-runtime"}}""");
+
+        result.Should().NotContain("NYXID_OPERATION_ADMISSION_REQUIRED");
+        handler.ProxyRequests.Should().ContainSingle()
+            .Which.Method.Should().Be("DELETE");
+    }
+
     private static AgentToolOperationAdmission MessageResourceAdmission() =>
         new(
             "us-lark-alpha",
