@@ -61,6 +61,30 @@ discard. It contains no credentials and cannot establish authorization or a
 saved channel fact. Browser history restoration resets pending review state
 and refreshes service access.
 
+## Current NyxID review limitation
+
+The ordinary `prompt=consent` page can initialize from the app's default
+services instead of the user's latest saved consent. On 2026-09-29, the live
+review page showed the original six services even though the latest Authorized
+Apps entry contained the two additionally granted UserService IDs. Both extra
+services were available but unchecked under Customize. Merely opening the
+review did not remove the saved grant.
+
+The user must include every service they intend to retain before submitting
+that ordinary review. Its consent decision replaces the selected service
+boundary; the channel's draft selections do not initialize NyxID's picker.
+Do not send the consent page's server-generated `preselect_service_ids` as
+an invented `/oauth/authorize` contract, or substitute slug-based `resource`
+parameters: resource requests can narrow issued authority and cannot reliably
+represent distinct same-slug UserServices.
+
+[NyxID PR #1683](https://github.com/ChronoAIProject/NyxID/pull/1683) introduces
+explicit incremental consent with `service_access_mode=incremental` and exact
+repeated `requested_service_ids`. It was open during this investigation.
+After the backend and consent UI deploy, Aevatar must integrate that contract
+and verify repeated consent preserves the accumulated grant. This full-review
+fallback does not claim that capability.
+
 ## Verification and visual direction
 
 Keep the existing compact white work surface, AlibabaSans typography, blue
