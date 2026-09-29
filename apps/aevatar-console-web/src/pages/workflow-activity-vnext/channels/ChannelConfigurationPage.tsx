@@ -204,6 +204,8 @@ function ConfigurationForm({
         .filter((id) => id && id.length <= 128),
     ),
   ].slice(0, 20);
+  const [initialRequestedIds] = React.useState(requestedIds);
+  const servicesInitialized = React.useRef(false);
   const [initialSkillId] = React.useState(editing ? undefined : defaultSkillId);
   // Undefined means the link's default has not been resolved or overridden yet.
   const [skillName, setSkillName] = React.useState<string | undefined>(() =>
@@ -260,18 +262,26 @@ function ConfigurationForm({
     services.isFetchedAfterMount && services.isSuccess && !services.isFetching;
   React.useEffect(() => {
     if (!hasFreshServices) return;
-    // Only a successful inventory refresh removes unavailable choices. Failed
-    // requests preserve edits; reactivated services require a new selection.
+    // URL defaults apply only to the first fresh inventory for this form.
+    // Later refreshes remove unavailable choices without reapplying defaults.
     const availableIds = new Set(
       services.data
         ?.filter((service) => service.active && service.allowed)
         .map((service) => service.id),
     );
+    const requested = servicesInitialized.current
+      ? []
+      : initialRequestedIds.filter((id) => availableIds.has(id));
+    servicesInitialized.current = true;
     setServiceIds((selected) => {
       const remaining = selected.filter((id) => availableIds.has(id));
-      return remaining.length === selected.length ? selected : remaining;
+      const next = [...new Set([...remaining, ...requested])];
+      return next.length === selected.length &&
+        next.every((id, index) => id === selected[index])
+        ? selected
+        : next;
     });
-  }, [hasFreshServices, services.data]);
+  }, [hasFreshServices, initialRequestedIds, services.data]);
   const requiredServices = availableServices.filter((service) =>
     requiredServiceSlugs.some((slug) => service.slug === slug),
   );
@@ -593,7 +603,11 @@ function ConfigurationForm({
           selectedIds={serviceIds}
           requiredIds={requiredIds}
           missingRequiredSlugs={missingRequiredSlugs}
-          onChange={setServiceIds}
+          onChange={(ids) => {
+            // An edit made from cached inventory also overrides URL defaults.
+            servicesInitialized.current = true;
+            setServiceIds(ids);
+          }}
           loading={services.isPending}
           failed={services.isError}
           refreshing={services.isFetching}
