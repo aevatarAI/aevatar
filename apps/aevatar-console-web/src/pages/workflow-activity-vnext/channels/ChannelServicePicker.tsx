@@ -20,7 +20,6 @@ export default function ChannelServicePicker({
   retry,
   editing = false,
   replacesDefaults = false,
-  suggestions,
 }: {
   readonly accessNotice?: React.ReactNode;
   readonly suggestedIds?: readonly string[];
@@ -36,7 +35,6 @@ export default function ChannelServicePicker({
   readonly retry: () => void;
   readonly editing?: boolean;
   readonly replacesDefaults?: boolean;
-  readonly suggestions?: React.ReactNode;
 }) {
   const [search, setSearch] = React.useState('');
   const term = search.trim().toLocaleLowerCase();
@@ -72,7 +70,6 @@ export default function ChannelServicePicker({
         )}
       </p>
       {accessNotice}
-      {suggestions}
       {loading ? (
         <AevatarContentSkeleton
           ariaLabel={t('channels.connect.servicesLoading', 'Loading services')}

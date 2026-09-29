@@ -11,8 +11,6 @@ export const channelKeys = {
     ['channels', scopeId, 'skills', search] as const,
   skill: (scopeId: string, id: string) =>
     ['channels', scopeId, 'skill', id] as const,
-  skillServices: (scopeId: string, name: string) =>
-    ['channels', scopeId, 'skill-services', name] as const,
   list: (scopeId: string) => ['channels', scopeId, 'registrations'] as const,
 };
 
