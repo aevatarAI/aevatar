@@ -3,17 +3,18 @@
   "nyxid": {
     "repository": "https://github.com/ChronoAIProject/NyxID.git",
     "tracked_ref": "main",
-    "reviewed_revision": "cdd0e3fdad4b45365dc7da3effdb1c1447de8286"
+    "reviewed_revision": "301fbe732a0f20a3c674184e7ea3408ab62968ab"
   },
   "wire_contract": {
     "revision": "nyxid-code-execution-wire.v1",
     "files": {
-      "backend/src/handlers/api_keys.rs": "820577ddec0da09cb0ab813c3c8e8e15c6caf2deb9d8667ee5b7e85b5232dc52",
-      "backend/src/handlers/keys.rs": "188140f2282305fc23ea944885c38e0d66e78edfd44253f05221597c04c761a7",
-      "backend/src/handlers/proxy.rs": "2320a918a05fce25959f30d5ee8247ae8cca25a8a6eeecef4cc87763f91d10df",
-      "backend/src/handlers/user_services_handler.rs": "f0afeb1315b581d597e3f076bef35795f967fc014d950ebd56e6dfad20843309",
-      "backend/src/services/catalog_identity_service.rs": "bf27e10c89a6d419910db20f39fe535d3f8b987e6e1f57fc306ee78a151e6979",
-      "backend/src/services/unified_key_service.rs": "b75932c6fb74a13cf875a9fe28be3156d2dbfbd8cfdb7bc2b660c9a0aae4da1a"
+      "backend/src/handlers/api_keys.rs": "3b9bca75b2ae0ad2b1c2e329d73fe91c4f2432d5d70a74749cb4f43c5063154a",
+      "backend/src/handlers/keys.rs": "217df762b1c1ce3ad3f2e90f2af096a7fc95be7cfb40530c0f3d2d0b5abdf1f4",
+      "backend/src/handlers/proxy.rs": "7f62c570306be81e4b85ba876107d6d3a6e1149c57af65a626f53274c94d882c",
+      "backend/src/handlers/user_services_handler.rs": "bd10cdfe9f0e8bbcb561e542beb98d2a947688340ed4094a66c2cb50c2ef99f7",
+      "backend/src/services/catalog_identity_service.rs": "ad46e5583784041ba358cfdcc1ae86972955e672d6959755a845e6472dc65ef7",
+      "backend/src/services/proxy_service.rs": "55eff78ffaeb6b18671a247c81180f2b17c9af859d1b25a046b14a53610ae0ca",
+      "backend/src/services/unified_key_service.rs": "23edabcfae267f7c8c83d32b97c4ae574e123322f21251bd07de40d495c6b06e"
     },
     "required_markers": {
       "backend/src/handlers/api_keys.rs": [
@@ -28,20 +29,25 @@
         "pub auto_connected: bool,",
         "pub credential: Option<String>,",
         "let credential = body.credential.as_deref().unwrap_or(\"\");",
-        "unified_key_service::create_key("
+        "unified_key_service::create_key(",
+        "unified_key_service::list_keys_read_only_with_grants(",
+        "crate::services::key_service::ensure_api_key_service_scope("
       ],
       "backend/src/handlers/proxy.rs": [
         "if target.service.inject_delegation_token {",
         "&target.service.delegation_token_scope,",
         "X-NyxID-Durable-Grant-Id is required for scheduled_invocation keys",
         "X-NyxID-Operation-Id is required for scheduled_invocation keys",
-        "if target.service.forward_access_token"
+        "if target.service.forward_access_token",
+        "proxy_service::forwarded_caller_token("
       ],
       "backend/src/handlers/user_services_handler.rs": [
         "pub catalog_service_id: Option<String>,",
         "pub forward_access_token: bool,",
         "pub inject_delegation_token: bool,",
-        "pub delegation_token_scope: String,"
+        "pub delegation_token_scope: String,",
+        "let scope = auth_user.api_key_service_scope();",
+        "scope.is_none_or(|ids| ids.contains(&item.service.id))"
       ],
       "backend/src/services/catalog_identity_service.rs": [
         "if changes.is_empty() {",
@@ -53,7 +59,16 @@
       "backend/src/services/unified_key_service.rs": [
         "if credential.is_empty()",
         "Credential is required for direct routing (or select a node)",
-        "validate_token_exchange_catalog_credential(&svc, credential)?;"
+        "validate_catalog_credential(&svc, credential)?;",
+        "if svc.auth_method != \"token_exchange\"",
+        "crate::services::provider_token_exchange_service::parse_credential(",
+        "&exchange_config.credential_fields,"
+      ],
+      "backend/src/services/proxy_service.rs": [
+        "pub(crate) fn forwarded_caller_token<'a>(",
+        "if target.service.forward_access_token",
+        "name.eq_ignore_ascii_case(\"authorization\")",
+        "if let Some(token) = forwarded_caller_token(target, caller_token, &extra_outbound_headers) {"
       ]
     },
     "forbidden_markers": {

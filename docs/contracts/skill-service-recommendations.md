@@ -39,7 +39,9 @@ channel registration, limited to 128 characters and excluding dot path segments.
 
 `evidence` is `linked`, `catalog`, or `mention`. These are advisory sources,
 not required/optional dependency declarations. Empty `instances` means no
-matching connection in the caller's account inventory. `allowed` reports
+matching connection in the caller-visible inventory. Restricted Agent Keys may
+see only their granted services, so absence is not proof that the account has no
+connection. `allowed` reports
 account-level access only; it does not grant access to the current session or
 channel. `source` is `personal`, `organization`, or `unknown`. Existing
 channel authorization still uses explicitly selected exact UserService IDs.
