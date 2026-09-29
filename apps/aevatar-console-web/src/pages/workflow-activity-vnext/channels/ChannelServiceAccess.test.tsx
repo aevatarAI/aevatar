@@ -12,6 +12,7 @@ import { persistAuthSession } from '@/shared/auth/session';
 import { createNyxIDServiceSession } from '../../../../tests/fixtures/nyxidServiceSession';
 import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
 import WorkflowActivityVNextPage from '../index';
+import { channelKeys } from './queries';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
 jest.mock('@/shared/auth/config', () => ({
@@ -261,11 +262,11 @@ it('keeps the editor open when draft storage is unavailable and does not restore
   ).not.toBeInTheDocument();
 });
 
-it('refreshes grants on browser history restoration and requires resolving revoked selections before saving', async () => {
+it('preserves choices on failed history refresh, then removes revoked selections without reselecting them on later authorization', async () => {
   const review = jest
     .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')
     .mockResolvedValue();
-  mount();
+  const { queryClient } = mount();
   fireEvent.change(await screen.findByLabelText('Label'), {
     target: { value: 'Edited label' },
   });
@@ -279,26 +280,101 @@ it('refreshes grants on browser history restoration and requires resolving revok
       key.startsWith('aevatar:channel-access-draft:'),
     );
   expect(draftKeys()).toHaveLength(1);
+  const normalFetch = fetchMock.getMockImplementation();
+  if (!normalFetch) throw new Error('Missing request fixture');
+  fetchMock.mockImplementation((input, init) => {
+    if (String(input).endsWith('/user-services'))
+      return Promise.resolve({ ok: false, status: 503 } as Response);
+    return normalFetch(input, init);
+  });
   grant(['us-ornn', 'us-llm', 'us-firecrawl']);
   act(() => {
     const restored = new Event('pageshow');
     Object.defineProperty(restored, 'persisted', { value: true });
     window.dispatchEvent(restored);
   });
-  await screen.findByText(/Some selected services are unavailable/);
+  await screen.findByText(
+    'Could not load your services. Try again before saving.',
+  );
+  expect(screen.getByText('3 selected')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  fetchMock.mockImplementation(normalFetch);
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  await screen.findByText('2 selected');
+  expect(
+    screen.queryByRole('checkbox', { name: /GitHub/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByText('Unavailable', { exact: true }),
+  ).not.toBeInTheDocument();
   expect(draftKeys()).toHaveLength(0);
   expect(screen.getByLabelText('Label')).toHaveValue('Edited label');
   expect(screen.getByRole('checkbox', { name: /Firecrawl/ })).not.toBeChecked();
   expect(
     screen.getByRole('button', { name: /Manage service access/ }),
   ).toBeEnabled();
-  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
-  fireEvent.click(screen.getByRole('checkbox', { name: /GitHub/ }));
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  grant([...baseIds, 'us-firecrawl']);
+  await act(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: channelKeys.services('scope-alpha'),
+    });
+  });
+  expect(screen.getByRole('checkbox', { name: /GitHub/ })).not.toBeChecked();
+  expect(screen.getByText('2 selected')).toBeInTheDocument();
   const leaving = new Event('beforeunload', { cancelable: true });
   window.dispatchEvent(leaving);
   expect(leaving.defaultPrevented).toBe(true);
   expect(writes()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  await screen.findByText('Confirming your changes...');
+  const post = writes().find(([, init]) => init?.method === 'POST');
+  expect(JSON.parse(String(post?.[1]?.body)).service_ids).toEqual([
+    'us-llm',
+    'us-ornn',
+  ]);
+});
+
+it('removes saved missing, inactive and unauthorized services on initial load while retaining URL access hints', async () => {
+  grant(baseIds.filter((id) => id !== 'us-github').concat('us-firecrawl'));
+  const normalFetch = fetchMock.getMockImplementation();
+  if (!normalFetch) throw new Error('Missing request fixture');
+  const saved = {
+    ...row,
+    service_ids: [...baseIds, 'us-firecrawl', 'us-deleted'],
+  };
+  fetchMock.mockImplementation((input, init) => {
+    const url = String(input);
+    if (url.endsWith('/user-services'))
+      return Promise.resolve(
+        response({
+          services: inventory.map((item) =>
+            item.id === 'us-firecrawl' ? { ...item, is_active: false } : item,
+          ),
+        }),
+      );
+    if (url.endsWith('?scope=all')) return Promise.resolve(response([saved]));
+    if (url.endsWith('/registrations/reg-alpha') && init?.method !== 'POST')
+      return Promise.resolve(response(saved));
+    return normalFetch(input, init);
+  });
+  mount();
+  await screen.findByText('Service access needed');
+  expect(screen.getByText('Firecrawl', { exact: true })).toBeInTheDocument();
+  expect(
+    screen.queryByRole('checkbox', { name: /GitHub|Firecrawl|us-deleted/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByText('Unavailable', { exact: true }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText('2 selected')).toBeInTheDocument();
+  expect(writes()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+  await screen.findByText('Confirming your changes...');
+  expect(JSON.parse(String(writes()[0][1]?.body)).service_ids).toEqual([
+    'us-llm',
+    'us-ornn',
+  ]);
 });
 
 afterEach(cleanup);

@@ -239,6 +239,51 @@ it('preserves an explicitly cleared default skill after cancelled consent withou
   expect(screen.getByRole('button', { name: 'Bind bot' })).toBeEnabled();
 });
 
+it('removes a deleted service from the restored Bind draft, count and submission', async () => {
+  const review = jest
+    .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')
+    .mockResolvedValue();
+  const first = mount();
+  await screen.findByText('Service access needed');
+  await chooseSupport();
+  fireEvent.click(screen.getByRole('checkbox', { name: /GitHub/ }));
+  fireEvent.click(
+    screen.getByRole('button', { name: /Manage service access/ }),
+  );
+  await waitFor(() => expect(review).toHaveBeenCalledTimes(1));
+  first.unmount();
+  const normalFetch = fetchMock.getMockImplementation();
+  if (!normalFetch) throw new Error('Missing request fixture');
+  fetchMock.mockImplementation((input, init) =>
+    String(input).endsWith('/user-services')
+      ? Promise.resolve(
+          response({
+            services: inventory.filter((item) => item.id !== 'us-github'),
+          }),
+        )
+      : normalFetch(input, init),
+  );
+  mount();
+  await screen.findByText(/Your changes have been kept/);
+  expect(screen.getByText('support', { exact: true })).toBeInTheDocument();
+  expect(
+    screen.queryByRole('checkbox', { name: /GitHub|us-github/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByText('Unavailable', { exact: true }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText('2 selected')).toBeInTheDocument();
+  expect(writes()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Bind bot' }));
+  await screen.findByText('Confirming your changes...');
+  expect(JSON.parse(String(writes()[0][1]?.body))).toEqual({
+    nyx_channel_bot_id: 'bot-alpha',
+    skill_name: 'support',
+    authorization_mode: 'explicit_service_allowlist',
+    service_ids: ['us-llm', 'us-ornn'],
+  });
+});
+
 it('isolates bind drafts by bot and from edit registrations even when their raw IDs coincide', async () => {
   const review = jest
     .spyOn(NyxIDAuthClient.prototype, 'loginWithRedirect')

@@ -189,7 +189,6 @@ export default {
   'channels.edit.replaceDefaults':
     '保存后将使用所选服务替代 NyxID 默认授权范围。',
   'channels.connect.searchServices': '按名称或标识搜索服务',
-  'channels.connect.serviceUnavailable': '不可用',
   'channels.connect.personal': '个人',
   'channels.connect.organization': '组织',
   'channels.connect.noMatches': '没有匹配的服务。',
@@ -233,6 +232,4 @@ export default {
   'channels.access.restored': '修改已保留，确认后请保存。',
   'channels.access.startFailed': '无法打开 NyxID，当前修改已保留，请重试。',
   'channels.access.requested': '本次需要',
-  'channels.access.unavailableSelection':
-    '部分已选服务不可用。请在 NyxID 恢复权限，或取消勾选这些服务后再保存。',
 };

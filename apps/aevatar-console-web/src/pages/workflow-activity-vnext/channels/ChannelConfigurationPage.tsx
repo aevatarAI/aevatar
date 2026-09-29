@@ -297,25 +297,41 @@ function ConfigurationForm({
   const availableServices = (services.data ?? []).filter(
     (service) => service.active && service.allowed,
   );
-  const requiredServices = (services.data ?? []).filter(
-    (service) =>
-      service.active &&
-      service.allowed &&
-      requiredServiceSlugs.some((slug) => service.slug === slug),
+  const hasFreshServiceAccess =
+    services.isFetchedAfterMount && services.isSuccess && !services.isFetching;
+  React.useEffect(() => {
+    if (!hasFreshServiceAccess) return;
+    // Only confirmed access changes remove draft choices. A failed or pending
+    // refresh must not erase them, and later reauthorization must not reselect them.
+    const availableIds = new Set(
+      services.data
+        ?.filter((service) => service.active && service.allowed)
+        .map((service) => service.id),
+    );
+    setServiceIds((selected) => {
+      const remaining = selected.filter((id) => availableIds.has(id));
+      return remaining.length === selected.length ? selected : remaining;
+    });
+  }, [hasFreshServiceAccess, services.data]);
+  const requiredServices = availableServices.filter((service) =>
+    requiredServiceSlugs.some((slug) => service.slug === slug),
   );
   const requiredIds = requiredServices.map((service) => service.id);
   const missingRequiredSlugs = requiredServiceSlugs.filter(
     (slug) => !requiredServices.some((service) => service.slug === slug),
   );
-  const serviceIds = [...new Set([...chosenServiceIds, ...requiredIds])];
+  const serviceIds = [
+    ...new Set([
+      ...chosenServiceIds.filter(
+        (id) =>
+          !hasFreshServiceAccess ||
+          availableServices.some((service) => service.id === id),
+      ),
+      ...requiredIds,
+    ]),
+  ];
   const servicesReady =
-    services.isFetchedAfterMount &&
-    !services.isFetching &&
-    !services.isError &&
-    serviceIds.every((id) =>
-      availableServices.some((service) => service.id === id),
-    ) &&
-    missingRequiredSlugs.length === 0;
+    hasFreshServiceAccess && missingRequiredSlugs.length === 0;
   const toast = useConsoleToast();
   const client = useQueryClient();
   const listHref = buildWorkflowActivitySectionHref(scopeId, 'channels');
@@ -334,23 +350,6 @@ function ConfigurationForm({
     ? configDirty || labelDirty
     : Boolean(skillName || chosenServiceIds.length);
   const busy = submitting || Boolean(receipt) || uncertain || reviewPending;
-  const options = [
-    ...(services.data ?? []).filter(
-      (service) =>
-        (service.active && service.allowed) || serviceIds.includes(service.id),
-    ),
-    ...serviceIds
-      .filter((id) => !services.data?.some((service) => service.id === id))
-      .map((id) => ({
-        id,
-        slug: id,
-        label: id,
-        active: false,
-        allowed: false,
-        source: 'unknown' as const,
-        organizationName: null,
-      })),
-  ];
   React.useEffect(() => {
     mounted.current = true;
     return () => {
@@ -661,7 +660,7 @@ function ConfigurationForm({
           </div>
         ) : null}
         <ChannelServicePicker
-          services={options}
+          services={availableServices}
           accessAction={{
             onReview: () => void reviewServiceAccess(),
             pending: reviewPending,

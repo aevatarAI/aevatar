@@ -214,7 +214,6 @@ export default {
   'channels.edit.replaceDefaults':
     'Saving replaces NyxID default access with the selected services.',
   'channels.connect.searchServices': 'Search services by name or slug',
-  'channels.connect.serviceUnavailable': 'Unavailable',
   'channels.connect.personal': 'Personal',
   'channels.connect.organization': 'Organization',
   'channels.connect.noMatches': 'No services match your search.',
@@ -266,6 +265,4 @@ export default {
   'channels.access.startFailed':
     'Could not open NyxID. Your changes are still here. Try again.',
   'channels.access.requested': 'Requested',
-  'channels.access.unavailableSelection':
-    'Some selected services are unavailable. Restore their access in NyxID or deselect them before saving.',
 };

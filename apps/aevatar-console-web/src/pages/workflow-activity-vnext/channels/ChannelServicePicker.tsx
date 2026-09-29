@@ -51,9 +51,7 @@ export default function ChannelServicePicker({
   const visible = services.filter((service) =>
     `${service.label} ${service.slug}`.toLocaleLowerCase().includes(term),
   );
-  const selectableIds = visible
-    .filter((service) => service.active && service.allowed)
-    .map((service) => service.id);
+  const selectableIds = visible.map((service) => service.id);
   const optionalIds = selectableIds.filter((id) => !requiredIds.includes(id));
   const selectedCount = selectableIds.filter((id) =>
     selectedIds.includes(id),
@@ -100,20 +98,6 @@ export default function ChannelServicePicker({
             )}
       </p>
       {accessNotice}
-      {!loading &&
-      !failed &&
-      services.some(
-        (service) =>
-          selectedIds.includes(service.id) &&
-          (!service.active || !service.allowed),
-      ) ? (
-        <p className="channels__service-state" role="status">
-          {t(
-            'channels.access.unavailableSelection',
-            'Some selected services are unavailable. Restore their access in NyxID or deselect them before saving.',
-          )}
-        </p>
-      ) : null}
       {loading ? (
         <AevatarContentSkeleton
           ariaLabel={t('channels.connect.servicesLoading', 'Loading services')}
@@ -187,7 +171,6 @@ export default function ChannelServicePicker({
             {visible.length ? (
               visible.map((service) => {
                 const selected = selectedIds.includes(service.id);
-                const unavailable = !service.active || !service.allowed;
                 const required = requiredIds.includes(service.id);
                 return (
                   <div
@@ -196,9 +179,7 @@ export default function ChannelServicePicker({
                   >
                     <Checkbox
                       checked={selected}
-                      disabled={
-                        disabled || required || (unavailable && !selected)
-                      }
+                      disabled={disabled || required}
                       onChange={(event) =>
                         onChange(
                           event.target.checked
@@ -223,15 +204,10 @@ export default function ChannelServicePicker({
                       </span>
                     </Checkbox>
                     <span className="channels__service-source">
-                      {unavailable
-                        ? t(
-                            'channels.connect.serviceUnavailable',
-                            'Unavailable',
-                          )
-                        : service.source === 'personal'
-                          ? t('channels.connect.personal', 'Personal')
-                          : service.organizationName ||
-                            t('channels.connect.organization', 'Organization')}
+                      {service.source === 'personal'
+                        ? t('channels.connect.personal', 'Personal')
+                        : service.organizationName ||
+                          t('channels.connect.organization', 'Organization')}
                     </span>
                   </div>
                 );
