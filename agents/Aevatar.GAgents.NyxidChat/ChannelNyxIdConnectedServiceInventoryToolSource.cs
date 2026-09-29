@@ -1521,7 +1521,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
 
         public string Name => "nyxid_invoke_operation";
         public string Description =>
-            "Invoke one current NyxID connected-service request selected by exact service identity and either a typed operation id or an explicit document-guided request.";
+            "Invoke one current NyxID connected-service request selected by exact service identity. " +
+            "Use a typed operation id or document guidance when available; otherwise provide a service-relative delegated request.";
         public string ParametersSchema => Schema;
         public bool IsReadOnly => false;
         public bool IsDestructive => false;

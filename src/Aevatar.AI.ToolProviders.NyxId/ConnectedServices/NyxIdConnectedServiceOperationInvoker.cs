@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
@@ -44,21 +43,9 @@ public sealed record NyxIdConnectedServiceOperationInvokeResult(
 
 public sealed class NyxIdConnectedServiceOperationInvoker
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = false,
-    };
-
     private static readonly TimeSpan CatalogFreshnessWindow = TimeSpan.FromMinutes(5);
     private const int CustomOpenApiMaxBytes = 1024 * 1024;
     private const int MaxReadSourceBytes = 16 * 1024;
-    private const string ProxyResponseTooLargeErrorCode = "NYXID_PROXY_RESPONSE_TOO_LARGE";
-    private const string ReadTooLargeErrorCode = "NYXID_CONNECTED_SERVICE_READ_TOO_LARGE";
-    private const string ReadTooLargeErrorMessage =
-        "The connected-service read result exceeded the bounded projection limit. " +
-        "Retry with a narrower query or smaller page size and paginate across bounded reads.";
-    private const string ReadProjectionKind = "connected_service_read_projection";
-    private const string EffectReceiptKind = "connected_service_effect_receipt";
 
     private readonly NyxIdToolOptions _options;
     private readonly NyxIdApiClient _apiClient;
@@ -117,7 +104,6 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                     return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_ambiguous");
                 return await InvokeDocumentGuidedRequestAsync(
                         context,
-                        executionToken,
                         matchedBindings[0],
                         invocation.DocumentRequest,
                         callId,
@@ -132,7 +118,6 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                     return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_ambiguous");
                 return await InvokeRawDelegatedRequestAsync(
                         context,
-                        executionToken,
                         matchedBindings[0],
                         invocation.RawRequest,
                         callId,
@@ -191,66 +176,18 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                 match.Endpoint,
                 match.Service.Source.ContentDigest,
                 match.Binding.Instance);
-            if (readBackPlan?.TryFreeze(invocation.OperationArgumentsJson, out var readBack) == true)
-                admission = admission with { ReadBack = readBack };
-
-            var proxy = new NyxIdProxyTool(
-                _apiClient,
-                _logger,
-                _fileArtifactIngress,
-                _options.EffectiveProxyFileArtifactMaxBytes,
-                _options.ManagedWorkflowAdmissionMode,
-                _delegationTokenLease);
-            var sourceReadableToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context.Credentials)
-                                      ?? context.Credentials.NyxIdAccessToken;
-            var operationToken = match.Binding.Instance.AccessTokenSource == NyxIdServiceAccessTokenSource.Organization
-                ? context.Credentials.NyxIdOrgToken
-                : context.Credentials.NyxIdAccessToken;
-            var credentials = context.Credentials with
-            {
-                NyxIdAccessToken = operationToken,
-                SourceReadableNyxIdAccessToken = sourceReadableToken,
-            };
-            using var scope = AgentToolContextScope.Push(context with
-            {
-                Credentials = credentials,
-                OperationAdmission = admission,
-            });
-            var outcome = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
-                ? await proxy.ExecuteAdmittedReadWithOutcomeAsync(
-                    callId,
-                    toolName,
-                    invocation.OperationArgumentsJson,
-                    MaxReadSourceBytes,
-                    ct).ConfigureAwait(false)
-                : await proxy.ExecuteAdmittedEffectWithOutcomeAsync(
-                    callId,
-                    toolName,
-                    invocation.OperationArgumentsJson,
-                    ct).ConfigureAwait(false);
-            var receipt = outcome.Receipt ?? proxy.CreateResultReceipt(
-                callId,
-                toolName,
-                invocation.OperationArgumentsJson,
-                outcome.ResultJson);
-            var terminalOutcome = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
-                ? BuildReadOutcome(
+            return await ExecuteThroughOperationToolAsync(
+                    context,
+                    match.Binding,
                     admission,
+                    invocation.OperationArgumentsJson,
                     match.Service.ServiceName,
                     match.Endpoint.Name,
                     callId,
                     toolName,
-                    outcome.ResultJson,
-                    receipt)
-                : BuildEffectOutcome(
-                    admission,
                     readBackPlan,
-                    match.Service.ServiceName,
-                    match.Endpoint.Name,
-                    callId,
-                    toolName,
-                    receipt);
-            return NyxIdConnectedServiceOperationInvokeResult.Success(terminalOutcome);
+                    ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -265,7 +202,6 @@ public sealed class NyxIdConnectedServiceOperationInvoker
 
     private async Task<NyxIdConnectedServiceOperationInvokeResult> InvokeDocumentGuidedRequestAsync(
         AgentToolExecutionContext context,
-        string executionToken,
         NyxIdServiceInstanceBinding binding,
         NyxIdConnectedServiceDocumentRequest request,
         string callId,
@@ -274,86 +210,72 @@ public sealed class NyxIdConnectedServiceOperationInvoker
     {
         if (!HasExactRecommendedSkillRef(binding.Instance, request.SkillRef))
             return NyxIdConnectedServiceOperationInvokeResult.Failure("document_request_not_admitted");
-        if (!TryBuildDocumentGuidedAdmission(binding.Instance, request, out var admission, out var runtimeArgumentsJson))
+        if (!TryBuildAuthoredRequestAdmission(
+                binding.Instance,
+                request.Method,
+                request.RelativePath,
+                request.RequestArgumentsJson,
+                out var admission,
+                out var runtimeArgumentsJson))
             return NyxIdConnectedServiceOperationInvokeResult.Failure("document_request_invalid");
-        if (admission.ExecutionPolicy.Risk != AgentToolOperationRisk.ReadOnly &&
-            !_options.EnableAssistantConnectedServiceEffects)
-        {
-            return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_not_visible");
-        }
 
-        var proxy = new NyxIdProxyTool(
-            _apiClient,
-            _logger,
-            _fileArtifactIngress,
-            _options.EffectiveProxyFileArtifactMaxBytes,
-            _options.ManagedWorkflowAdmissionMode,
-            _delegationTokenLease);
-        var sourceReadableToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context.Credentials)
-                                  ?? context.Credentials.NyxIdAccessToken;
-        var operationToken = binding.Instance.AccessTokenSource == NyxIdServiceAccessTokenSource.Organization
-            ? context.Credentials.NyxIdOrgToken
-            : executionToken;
-        var credentials = context.Credentials with
-        {
-            NyxIdAccessToken = operationToken,
-            SourceReadableNyxIdAccessToken = sourceReadableToken,
-        };
-        using var scope = AgentToolContextScope.Push(context with
-        {
-            Credentials = credentials,
-            OperationAdmission = admission,
-        });
-        var outcome = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
-            ? await proxy.ExecuteAdmittedReadWithOutcomeAsync(
-                callId,
-                toolName,
-                runtimeArgumentsJson,
-                MaxReadSourceBytes,
-                ct).ConfigureAwait(false)
-            : await proxy.ExecuteAdmittedEffectWithOutcomeAsync(
-                callId,
-                toolName,
-                runtimeArgumentsJson,
-                ct).ConfigureAwait(false);
-        var receipt = outcome.Receipt ?? proxy.CreateResultReceipt(
-            callId,
-            toolName,
-            runtimeArgumentsJson,
-            outcome.ResultJson);
-        var label = FirstNonEmpty(binding.Instance.Label, binding.Instance.DisplaySlug, binding.Instance.CatalogServiceSlug);
-        var operationLabel = $"{admission.HttpMethod} {admission.PathTemplate}";
-        var terminalOutcome = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
-            ? BuildReadOutcome(
+        return await ExecuteThroughOperationToolAsync(
+                context,
+                binding,
                 admission,
-                label,
-                operationLabel,
+                runtimeArgumentsJson,
+                FirstNonEmpty(binding.Instance.Label, binding.Instance.DisplaySlug, binding.Instance.CatalogServiceSlug),
+                $"{admission.HttpMethod} {admission.PathTemplate}",
                 callId,
                 toolName,
-                outcome.ResultJson,
-                receipt)
-            : BuildEffectOutcome(
-                admission,
                 readBackPlan: null,
-                label,
-                operationLabel,
-                callId,
-                toolName,
-                receipt);
-        return NyxIdConnectedServiceOperationInvokeResult.Success(terminalOutcome);
+                ct)
+            .ConfigureAwait(false);
     }
 
     private async Task<NyxIdConnectedServiceOperationInvokeResult> InvokeRawDelegatedRequestAsync(
         AgentToolExecutionContext context,
-        string executionToken,
         NyxIdServiceInstanceBinding binding,
         NyxIdConnectedServiceRawRequest request,
         string callId,
         string toolName,
         CancellationToken ct)
     {
-        if (!TryBuildRawDelegatedAdmission(binding.Instance, request, out var admission, out var runtimeArgumentsJson))
+        if (!TryBuildAuthoredRequestAdmission(
+                binding.Instance,
+                request.Method,
+                request.RelativePath,
+                request.RequestArgumentsJson,
+                out var admission,
+                out var runtimeArgumentsJson))
             return NyxIdConnectedServiceOperationInvokeResult.Failure("raw_request_invalid");
+
+        return await ExecuteThroughOperationToolAsync(
+                context,
+                binding,
+                admission,
+                runtimeArgumentsJson,
+                FirstNonEmpty(binding.Instance.Label, binding.Instance.DisplaySlug, binding.Instance.CatalogServiceSlug),
+                $"{admission.HttpMethod} {admission.PathTemplate}",
+                callId,
+                toolName,
+                readBackPlan: null,
+                ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<NyxIdConnectedServiceOperationInvokeResult> ExecuteThroughOperationToolAsync(
+        AgentToolExecutionContext context,
+        NyxIdServiceInstanceBinding binding,
+        AgentToolOperationAdmission admission,
+        string runtimeArgumentsJson,
+        string serviceLabel,
+        string operationLabel,
+        string callId,
+        string toolName,
+        NyxIdConnectedServiceReadBackPlan? readBackPlan,
+        CancellationToken ct)
+    {
         if (admission.ExecutionPolicy.Risk != AgentToolOperationRisk.ReadOnly &&
             !_options.EnableAssistantConnectedServiceEffects)
         {
@@ -367,58 +289,25 @@ public sealed class NyxIdConnectedServiceOperationInvoker
             _options.EffectiveProxyFileArtifactMaxBytes,
             _options.ManagedWorkflowAdmissionMode,
             _delegationTokenLease);
-        var sourceReadableToken = AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(context.Credentials)
-                                  ?? context.Credentials.NyxIdAccessToken;
-        var operationToken = binding.Instance.AccessTokenSource == NyxIdServiceAccessTokenSource.Organization
-            ? context.Credentials.NyxIdOrgToken
-            : executionToken;
-        var credentials = context.Credentials with
-        {
-            NyxIdAccessToken = operationToken,
-            SourceReadableNyxIdAccessToken = sourceReadableToken,
-        };
-        using var scope = AgentToolContextScope.Push(context with
-        {
-            Credentials = credentials,
-            OperationAdmission = admission,
-        });
-        var outcome = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
-            ? await proxy.ExecuteAdmittedReadWithOutcomeAsync(
+        using var scope = AgentToolContextScope.Push(context);
+        var operationTool = new NyxIdConnectedServiceOperationTool(
+            proxy,
+            admission,
+            serviceLabel,
+            operationLabel,
+            FirstNonEmpty(binding.Instance.Label, binding.Instance.DisplaySlug, binding.Instance.CatalogServiceSlug),
+            readinessCapabilityId: null,
+            accessTokenSource: binding.Instance.AccessTokenSource,
+            readBackPlan: readBackPlan,
+            maxReadSourceBytes: MaxReadSourceBytes,
+            maxReadProjectionBytes: MaxReadSourceBytes);
+        var outcome = await operationTool.ExecuteWithOutcomeAsync(
                 callId,
                 toolName,
                 runtimeArgumentsJson,
-                MaxReadSourceBytes,
-                ct).ConfigureAwait(false)
-            : await proxy.ExecuteAdmittedEffectWithOutcomeAsync(
-                callId,
-                toolName,
-                runtimeArgumentsJson,
-                ct).ConfigureAwait(false);
-        var receipt = outcome.Receipt ?? proxy.CreateResultReceipt(
-            callId,
-            toolName,
-            runtimeArgumentsJson,
-            outcome.ResultJson);
-        var label = FirstNonEmpty(binding.Instance.Label, binding.Instance.DisplaySlug, binding.Instance.CatalogServiceSlug);
-        var operationLabel = $"{admission.HttpMethod} {admission.PathTemplate}";
-        var terminalOutcome = admission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly
-            ? BuildReadOutcome(
-                admission,
-                label,
-                operationLabel,
-                callId,
-                toolName,
-                outcome.ResultJson,
-                receipt)
-            : BuildEffectOutcome(
-                admission,
-                readBackPlan: null,
-                label,
-                operationLabel,
-                callId,
-                toolName,
-                receipt);
-        return NyxIdConnectedServiceOperationInvokeResult.Success(terminalOutcome);
+                ct)
+            .ConfigureAwait(false);
+        return NyxIdConnectedServiceOperationInvokeResult.Success(outcome);
     }
 
     private static bool HasExactRecommendedSkillRef(
@@ -429,30 +318,6 @@ public sealed class NyxIdConnectedServiceOperationInvoker
             string.Equals(skillRef.SkillId, requestedRef.SkillId, StringComparison.Ordinal) &&
             string.Equals(skillRef.LiteralVersion, requestedRef.LiteralVersion, StringComparison.Ordinal) &&
             string.Equals(skillRef.ManifestDigest, requestedRef.ManifestDigest, StringComparison.Ordinal));
-
-    private static bool TryBuildDocumentGuidedAdmission(
-        NyxIdServiceInstance instance,
-        NyxIdConnectedServiceDocumentRequest request,
-        out AgentToolOperationAdmission admission,
-        out string runtimeArgumentsJson) => TryBuildAuthoredRequestAdmission(
-        instance,
-        request.Method,
-        request.RelativePath,
-        request.RequestArgumentsJson,
-        out admission,
-        out runtimeArgumentsJson);
-
-    private static bool TryBuildRawDelegatedAdmission(
-        NyxIdServiceInstance instance,
-        NyxIdConnectedServiceRawRequest request,
-        out AgentToolOperationAdmission admission,
-        out string runtimeArgumentsJson) => TryBuildAuthoredRequestAdmission(
-        instance,
-        request.Method,
-        request.RelativePath,
-        request.RequestArgumentsJson,
-        out admission,
-        out runtimeArgumentsJson);
 
     private static bool TryBuildAuthoredRequestAdmission(
         NyxIdServiceInstance instance,
@@ -635,258 +500,6 @@ public sealed class NyxIdConnectedServiceOperationInvoker
 
     private static string FirstNonEmpty(params string?[] values) =>
         values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
-
-    private static AgentToolTerminalOutcome BuildReadOutcome(
-        AgentToolOperationAdmission admission,
-        string serviceLabel,
-        string operationLabel,
-        string callId,
-        string toolName,
-        string sourceResult,
-        AgentToolReceipt? sourceReceipt)
-    {
-        var sourceBytes = Encoding.UTF8.GetByteCount(sourceResult ?? string.Empty);
-        if (sourceBytes > MaxReadSourceBytes ||
-            string.Equals(
-                sourceReceipt?.ErrorCode,
-                ProxyResponseTooLargeErrorCode,
-                StringComparison.Ordinal))
-        {
-            return BuildReadTooLargeOutcome(admission, serviceLabel, operationLabel, callId, toolName);
-        }
-
-        if (sourceReceipt?.Status != AgentToolReceiptStatus.Success)
-        {
-            var result = BuildReadProjection(
-                admission,
-                serviceLabel,
-                operationLabel,
-                "failed",
-                data: null,
-                SafeCode(sourceReceipt?.ErrorCode),
-                SafeMessage(sourceReceipt?.ErrorMessage));
-            var receipt = sourceReceipt?.Clone() ?? NyxIdProxyReceiptFactory.CreateError(
-                callId,
-                toolName,
-                admission.ServiceInstanceId,
-                "NYXID_CONNECTED_SERVICE_READ_UNVERIFIED",
-                "The connected-service read result could not be verified.",
-                result);
-            receipt.ResultJson = result;
-            return new AgentToolTerminalOutcome(result, receipt);
-        }
-
-        JsonNode? data;
-        try
-        {
-            data = JsonNode.Parse(sourceResult ?? string.Empty);
-        }
-        catch (JsonException)
-        {
-            data = JsonValue.Create(sourceResult);
-        }
-
-        var projection = BuildReadProjection(admission, serviceLabel, operationLabel, "succeeded", data, null, null);
-        if (Encoding.UTF8.GetByteCount(projection) > MaxReadSourceBytes)
-            return BuildReadTooLargeOutcome(admission, serviceLabel, operationLabel, callId, toolName);
-
-        var successReceipt = sourceReceipt.Clone();
-        successReceipt.ResultJson = projection;
-        return new AgentToolTerminalOutcome(projection, successReceipt);
-    }
-
-    private static AgentToolTerminalOutcome BuildReadTooLargeOutcome(
-        AgentToolOperationAdmission admission,
-        string serviceLabel,
-        string operationLabel,
-        string callId,
-        string toolName)
-    {
-        var result = BuildBoundedReadTooLargeProjection(admission, serviceLabel, operationLabel);
-        var receipt = NyxIdProxyReceiptFactory.CreateSuccess(
-            callId,
-            toolName,
-            admission.ServiceInstanceId,
-            result) ?? throw new InvalidOperationException(
-            "A connected-service operation must have a valid UserService identity.");
-        receipt.Effect = AgentToolReceiptEffect.ReadOnly;
-        return new AgentToolTerminalOutcome(result, receipt);
-    }
-
-    private static string BuildBoundedReadTooLargeProjection(
-        AgentToolOperationAdmission admission,
-        string serviceLabel,
-        string operationLabel)
-    {
-        var result = BuildReadProjection(
-            admission,
-            serviceLabel,
-            operationLabel,
-            "retry_required",
-            data: null,
-            ReadTooLargeErrorCode,
-            ReadTooLargeErrorMessage,
-            BuildReadRetryHints(admission, includeQueryParameters: true));
-        if (Encoding.UTF8.GetByteCount(result) <= MaxReadSourceBytes)
-            return result;
-
-        result = BuildReadProjection(
-            admission,
-            serviceLabel,
-            operationLabel,
-            "retry_required",
-            data: null,
-            ReadTooLargeErrorCode,
-            ReadTooLargeErrorMessage,
-            BuildReadRetryHints(admission, includeQueryParameters: false));
-        return Encoding.UTF8.GetByteCount(result) <= MaxReadSourceBytes
-            ? result
-            : BuildReadProjection(
-                admission,
-                serviceLabel,
-                operationLabel,
-                "retry_required",
-                data: null,
-                ReadTooLargeErrorCode,
-                ReadTooLargeErrorMessage);
-    }
-
-    private static AgentToolTerminalOutcome BuildEffectOutcome(
-        AgentToolOperationAdmission admission,
-        NyxIdConnectedServiceReadBackPlan? readBackPlan,
-        string serviceLabel,
-        string operationLabel,
-        string callId,
-        string toolName,
-        AgentToolReceipt? sourceReceipt)
-    {
-        var receipt = sourceReceipt?.Clone() ?? NyxIdProxyReceiptFactory.CreateError(
-            callId,
-            toolName,
-            admission.ServiceInstanceId,
-            "NYXID_CONNECTED_SERVICE_EFFECT_UNVERIFIED",
-            "The connected-service effect result could not be verified.",
-            string.Empty);
-        if (receipt.Status == AgentToolReceiptStatus.Success)
-            receipt.ProviderResourceId = readBackPlan?.ExtractProviderResourceId(receipt.ResultJson) ?? string.Empty;
-
-        var result = new JsonObject
-        {
-            ["kind"] = EffectReceiptKind,
-            ["status"] = receipt.Status.ToString().ToLowerInvariant(),
-            ["provenance"] = BuildProvenance(admission, serviceLabel, operationLabel),
-            ["approval_request_id"] = string.IsNullOrWhiteSpace(receipt.ApprovalRequestId)
-                ? null
-                : receipt.ApprovalRequestId,
-            ["error_code"] = SafeCode(receipt.ErrorCode),
-            ["error_message"] = SafeMessage(receipt.ErrorMessage),
-        }.ToJsonString(JsonOptions);
-        receipt.ResultJson = result;
-        return new AgentToolTerminalOutcome(result, receipt);
-    }
-
-    private static string BuildReadProjection(
-        AgentToolOperationAdmission admission,
-        string serviceLabel,
-        string operationLabel,
-        string status,
-        JsonNode? data,
-        string? errorCode,
-        string? errorMessage,
-        JsonNode? retryHints = null) => new JsonObject
-    {
-        ["kind"] = ReadProjectionKind,
-        ["status"] = status,
-        ["provenance"] = BuildProvenance(admission, serviceLabel, operationLabel),
-        ["content_boundary"] = "untrusted_external_data_only",
-        ["instructions_allowed"] = false,
-        ["data"] = data?.DeepClone(),
-        ["error_code"] = errorCode,
-        ["error_message"] = errorMessage,
-        ["retry_hints"] = retryHints?.DeepClone(),
-    }.ToJsonString(JsonOptions);
-
-    private static JsonObject BuildReadRetryHints(
-        AgentToolOperationAdmission admission,
-        bool includeQueryParameters)
-    {
-        var result = new JsonObject
-        {
-            ["reason"] = "bounded_projection_limit_exceeded",
-            ["operation_path_template"] = admission.PathTemplate,
-            ["retry_guidance"] = "Retry the same read with a narrower query, smaller page size, or the next page token when the operation publishes those query parameters.",
-        };
-        if (!includeQueryParameters)
-            return result;
-
-        result["query_parameters"] = new JsonArray(admission.QueryParameters
-            .OrderBy(static parameter => parameter.Name, StringComparer.Ordinal)
-            .Select(parameter => new JsonObject
-            {
-                ["name"] = parameter.Name,
-                ["required"] = parameter.Required,
-                ["description"] = NyxIdConnectedServiceOperationSchema.BuildModelParameterDescription(
-                    "query",
-                    parameter),
-            })
-            .ToArray());
-        return result;
-    }
-
-    private static JsonObject BuildProvenance(
-        AgentToolOperationAdmission admission,
-        string serviceLabel,
-        string operationLabel) => new()
-    {
-        ["source_kind"] = "nyxid_connected_service",
-        ["operation_selector_digest"] = AgentToolOperationSelector.ComputeDigest(admission),
-        ["service_label"] = NormalizeLabel(serviceLabel, "Connected service"),
-        ["operation_label"] = NormalizeLabel(operationLabel, "Operation"),
-    };
-
-    private static string NormalizeLabel(string? value, string fallback)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return fallback;
-
-        var builder = new StringBuilder(Math.Min(value.Length, 80));
-        var lastWasSpace = false;
-        foreach (var character in value.Trim())
-        {
-            if (builder.Length >= 80)
-                break;
-            var allowed = char.IsLetterOrDigit(character) || character is '-' or '_' or '.' or '/' or ':';
-            if (allowed)
-            {
-                builder.Append(character);
-                lastWasSpace = false;
-            }
-            else if (!lastWasSpace)
-            {
-                builder.Append(' ');
-                lastWasSpace = true;
-            }
-        }
-
-        var normalized = builder.ToString().Trim();
-        return normalized.Length == 0 ? fallback : normalized;
-    }
-
-    private static string? SafeCode(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-        var normalized = value.Trim();
-        return normalized.Length <= 96 ? normalized : normalized[..96];
-    }
-
-    private static string? SafeMessage(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-        var normalized = value.Trim();
-        return normalized.Length <= 256 ? normalized : normalized[..256];
-    }
 
     private async Task<IReadOnlyList<NyxIdServiceInstanceBinding>> ReadBindingsAsync(
         AgentToolExecutionContext context,
