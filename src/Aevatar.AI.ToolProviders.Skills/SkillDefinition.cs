@@ -27,6 +27,9 @@ public sealed class SkillDefinition
     /// <summary>技能描述（用于 LLM 理解技能用途，也展示在系统 prompt 中）。</summary>
     public required string Description { get; init; }
 
+    /// <summary>远程技能版本；本地技能通常为空。</summary>
+    public string? Version { get; init; }
+
     /// <summary>技能指令内容（SKILL.md 正文，frontmatter 之后的部分）。</summary>
     public required string Instructions { get; init; }
 

@@ -1107,15 +1107,21 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             ResolveOwnerFallbackControl(currentStep),
             inboundControl,
             relayOwnerAccessToken).ToPayload();
-        request.ToolContext = ResolveOwnerFallbackToolContext(currentStep).ToPayload();
+        var ownerFallbackToolContext = ResolveOwnerFallbackToolContext(currentStep);
+        request.ToolContext = ownerFallbackToolContext.ToPayload();
         StripServerDefaultFallbackMetadata(request.Metadata);
 
         var fallbackStep = BuildOwnerFallbackStepState(currentStep, command.StepIndex);
+        var currentToolContext = AgentRunReplyStepMappers.ToolContextFromProto(currentStep);
+        var fallbackStepToolContext = AgentRunReplyStepMappers.ToolContextFromProto(fallbackStep);
         _logger.LogWarning(
-            "Agent run switching to bot-owner no-tools fallback: runId={RunId} correlation={CorrelationId} reason={Reason}",
+            "Agent run switching to bot-owner no-tools fallback: runId={RunId} correlation={CorrelationId} reason={Reason} currentInputFileRefCount={CurrentInputFileRefCount} ownerFallbackInputFileRefCount={OwnerFallbackInputFileRefCount} fallbackStepInputFileRefCount={FallbackStepInputFileRefCount}",
             command.RunId,
             command.CorrelationId,
-            command.Reason);
+            command.Reason,
+            currentToolContext.InputFileRefs.Count,
+            ownerFallbackToolContext.InputFileRefs.Count,
+            fallbackStepToolContext.InputFileRefs.Count);
         await PersistStepStateAsync(fallbackStep);
         await DispatchLlmStepExecutorAsync(request, fallbackStep);
     }

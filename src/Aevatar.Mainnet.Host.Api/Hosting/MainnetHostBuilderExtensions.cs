@@ -620,6 +620,8 @@ public static class MainnetHostBuilderExtensions
                 [
                     ToolSetNames.WorkspaceDefault,
                     ToolSetNames.SkillAuthoring,
+                    ToolSetNames.NyxIdConnectedServices,
+                    ToolSetNames.NyxIdConnectLinks,
                 ],
                 [
                     static sp => sp.GetRequiredService<
@@ -657,6 +659,10 @@ public static class MainnetHostBuilderExtensions
                 ToolSetNames.NyxIdConnectedServices,
                 [CreateToolSource<NyxIdConnectedServiceToolSource>],
                 "NyxID request-local operations admitted from the exact MCP and connected-service inventory intersection.");
+            options.AddToolSet(
+                ToolSetNames.NyxIdConnectLinks,
+                [CreateToolSource<NyxIdConnectLinksToolSource>],
+                "NyxID connect-link creation and status tools for sending browser authorization URLs.");
             options.AddToolSet(
                 ToolSetNames.NyxIdAssistantAdmission,
                 [CreateToolSource<NyxIdAssistantToolSource>],

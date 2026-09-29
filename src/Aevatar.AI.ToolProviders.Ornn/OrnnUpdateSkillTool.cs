@@ -3,6 +3,9 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
+using Aevatar.AI.ToolProviders.Skills;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.Ornn;
 
@@ -12,17 +15,20 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
     private readonly OrnnSkillPackageBuilder _packageBuilder;
     private readonly OrnnSkillPackageFormatValidator _formatValidator;
     private readonly OrnnSkillClient _client;
+    private readonly ILogger<OrnnUpdateSkillTool> _logger;
 
     public OrnnUpdateSkillTool(
         OrnnSkillPublishValidationPipeline validationPipeline,
         OrnnSkillPackageBuilder packageBuilder,
         OrnnSkillPackageFormatValidator formatValidator,
-        OrnnSkillClient client)
+        OrnnSkillClient client,
+        ILogger<OrnnUpdateSkillTool>? logger = null)
     {
         _validationPipeline = validationPipeline;
         _packageBuilder = packageBuilder;
         _formatValidator = formatValidator;
         _client = client;
+        _logger = logger ?? NullLogger<OrnnUpdateSkillTool>.Instance;
     }
 
     public string Name => "ornn_update_skill";
@@ -183,6 +189,12 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
+        var normalizedArgumentsJson = argumentsJson ?? string.Empty;
+        _logger.LogInformation(
+            "Ornn skill mutation started: mutation_name={MutationName} input_bytes={InputBytes}",
+            Name,
+            Encoding.UTF8.GetByteCount(normalizedArgumentsJson));
+
         var token = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(token))
         {
@@ -196,13 +208,34 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
                     AgentToolFailureOutcome.CalleeConfirmed));
         }
 
-        var (skillId, packageArgumentsJson, skillIdDiagnostics) = ExtractSkillIdAndPackageArguments(argumentsJson);
+        var (skillId, packageArgumentsJson, skillIdDiagnostics) = ExtractSkillIdAndPackageArguments(normalizedArgumentsJson);
         if (skillId == null || packageArgumentsJson == null)
             return BuildDiagnosticsResult("validation_error", skillIdDiagnostics);
 
         var (request, parseDiagnostics) = OrnnSkillPublishRequestParser.Parse(packageArgumentsJson);
         if (request == null)
             return BuildDiagnosticsResult("validation_error", parseDiagnostics);
+
+        var inputFiles = BuildInputFileEntries(request);
+        var inputSummary = SkillPayloadDiagnostics.Summarize(inputFiles);
+        _logger.LogInformation(
+            "Ornn skill mutation input summarized: mutation_name={MutationName} skill_name={SkillName} " +
+            "loaded_version={LoadedVersion} mutation_input_file_count={MutationInputFileCount} " +
+            "mutation_input_file_bytes={MutationInputFileBytes} mutation_input_empty_file_count={MutationInputEmptyFileCount} " +
+            "mutation_input_root_skill_bytes={MutationInputRootSkillBytes} " +
+            "mutation_input_largest_file_bytes={MutationInputLargestFileBytes} " +
+            "mutation_input_largest_file_path={MutationInputLargestFilePath} " +
+            "mutation_input_tree_sha256={MutationInputTreeSha256}",
+            Name,
+            request.Name,
+            request.Version,
+            inputSummary.FileCount,
+            inputSummary.TotalFileBytes,
+            inputSummary.EmptyFileCount,
+            inputSummary.RootSkillBytes,
+            inputSummary.LargestFileBytes,
+            inputSummary.LargestFilePath,
+            inputSummary.FileTreeSha256);
 
         var localValidation = await _validationPipeline.ValidateAsync(request, ct);
         if (!localValidation.IsValid)
@@ -226,7 +259,27 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
 
         var update = await _client.UpdateSkillAsync(token, skillId, package.ZipBytes, ct);
         if (!update.Succeeded)
+        {
+            var failure = update.Failure!;
+            _logger.LogWarning(
+                "Ornn skill mutation failed: mutation_name={MutationName} skill_id={SkillId} " +
+                "failure_kind={FailureKind} failure_code={FailureCode} http_status={HttpStatus} " +
+                "failure_outcome={FailureOutcome}",
+                Name,
+                skillId,
+                failure.Kind,
+                failure.Code,
+                failure.HttpStatus,
+                failure.Outcome);
             return OrnnSkillMutationFailureProtocol.Serialize("ornn_update_skill", update.Failure!);
+        }
+
+        _logger.LogInformation(
+            "Ornn skill mutation completed: mutation_name={MutationName} skill_id={SkillId} " +
+            "package_bytes={PackageBytes} status=success",
+            Name,
+            skillId,
+            package.ZipBytes.Length);
 
         var updated = ExtractUpdatedSkill(update.RawResponse);
         return JsonSerializer.Serialize(new
@@ -241,6 +294,25 @@ public sealed class OrnnUpdateSkillTool : IAgentTool
             package_bytes = package.ZipBytes.Length,
             response = update.RawResponse,
         });
+    }
+
+    private static IReadOnlyList<KeyValuePair<string, string>> BuildInputFileEntries(
+        OrnnSkillPublishRequest request)
+    {
+        var files = new List<KeyValuePair<string, string>>
+        {
+            new($"{request.Name}/SKILL.md", request.InstructionsMarkdown),
+        };
+
+        files.AddRange(request.WorkflowYamls.Select(static workflow =>
+            new KeyValuePair<string, string>($"workflows/{workflow.WorkflowId}.yaml", workflow.Content)));
+        files.AddRange(request.Scripts.Select(static script =>
+            new KeyValuePair<string, string>($"scripts/{script.Path}", script.Content)));
+        files.AddRange(request.References.Select(static reference =>
+            new KeyValuePair<string, string>($"references/{reference.Path}", reference.Content)));
+        files.AddRange(request.Assets.Select(static asset =>
+            new KeyValuePair<string, string>($"assets/{asset.Path}", asset.Content)));
+        return files;
     }
 
     private static (string? SkillId, string? PackageArgumentsJson, IReadOnlyList<OrnnSkillPublishDiagnostic> Diagnostics)

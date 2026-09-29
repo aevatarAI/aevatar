@@ -94,7 +94,7 @@ public sealed class ExternalIdentityBindingRebuildTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task DuplicateCommit_SelfHealsWipedReadmodel_WithoutAppendingEvent()
+    public async Task DuplicateCommit_ReplacesBindingAfterReadmodelMiss()
     {
         await _agent.HandleCommitBinding(new CommitBindingCommand
         {
@@ -105,10 +105,9 @@ public sealed class ExternalIdentityBindingRebuildTests : IAsyncLifetime
         var committedVersion = _agent.EventSourcing!.CurrentVersion;
         _publications.Captured.Clear();
 
-        // A re-auth after a projection-store wipe re-dispatches CommitBindingCommand:
-        // the identity fact is unchanged (no event appended), but the actor re-emits its
-        // current state so the wiped readmodel row is rebuilt instead of dead-locking on
-        // the idempotent discard.
+        // A re-auth after a projection-store miss re-dispatches CommitBindingCommand.
+        // For the same NyxID owner, the actor adopts the newly issued binding and
+        // persists a replacement fact; the old binding is retained for retirement.
         await _agent.HandleCommitBinding(new CommitBindingCommand
         {
             ExternalSubject = Subject(),
@@ -116,12 +115,14 @@ public sealed class ExternalIdentityBindingRebuildTests : IAsyncLifetime
             OwnerScopeId = "owner-user-1",
         });
 
-        _agent.EventSourcing!.CurrentVersion.Should().Be(committedVersion);
+        _agent.EventSourcing!.CurrentVersion.Should().Be(committedVersion + 1);
         _publications.Captured.Should().ContainSingle();
-        _publications.Captured[0].Published.StateRoot
-            .Unpack<ExternalIdentityBindingState>().BindingId.Should().Be(
-                "bnd_first",
-                "self-heal re-emits the surviving binding, not the discarded incoming one");
+        var published = _publications.Captured[0].Published;
+        published.StateEvent.Version.Should().Be(committedVersion + 1);
+        published.StateEvent.EventData.Is(ExternalIdentityBindingReplacedEvent.Descriptor)
+            .Should().BeTrue("same-owner renewal is a committed replacement fact");
+        published.StateRoot.Unpack<ExternalIdentityBindingState>().BindingId.Should().Be("bnd_second");
+        _agent.State.PendingRetirementBindingIds.Should().ContainSingle("bnd_first");
     }
 
     [Fact]

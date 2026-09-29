@@ -185,6 +185,51 @@ public sealed class WorkflowFileRefLlmCallMiddlewareTests
     }
 
     [Fact]
+    public async Task AddWorkflowInfrastructure_ShouldDegradeMissingWorkflowMediaBeforeProviderInvocation()
+    {
+        var artifactRef = new ApplicationFileArtifactRef
+        {
+            FileId = "wf-file-missing-history",
+            ArtifactId = "workflow-file://wf-file-missing-history",
+            SourceKind = ApplicationFileArtifactSourceKind.ChatInput,
+            SourceMessageId = "om_missing_history",
+            SourceResourceKey = "img_missing_history",
+            FileName = "history.png",
+            MediaType = "image/png",
+            SizeBytes = 12,
+        };
+        var readPort = new MissingFileArtifactReadPort();
+        var services = new ServiceCollection();
+        services.AddSingleton<IFileArtifactReadPort>(readPort);
+        services.AddWorkflowInfrastructure();
+
+        await using var provider = services.BuildServiceProvider();
+        var context = new LLMCallContext
+        {
+            Request = BuildRequest(ToContentPart(artifactRef)),
+            Provider = new UnusedLlmProvider(),
+            IsStreaming = true,
+        };
+        ContentPart? providerPart = null;
+
+        await MiddlewarePipeline.RunLLMCallAsync(
+            provider.GetServices<ILLMCallMiddleware>().ToArray(),
+            context,
+            () =>
+            {
+                providerPart = context.Request.Messages.Single().ContentParts!.Single();
+                return Task.CompletedTask;
+            });
+
+        providerPart.Should().NotBeNull();
+        providerPart!.Kind.Should().Be(ContentPartKind.Text);
+        providerPart.Text.Should().Contain("Attachment unavailable");
+        providerPart.Text.Should().Contain("history.png");
+        providerPart.FileRef.Should().BeNull();
+        readPort.OpenReadCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task AddWorkflowInfrastructure_ShouldRejectOversizedWorkflowMediaBeforeProviderInvocation()
     {
         var artifactRef = new ApplicationFileArtifactRef
@@ -259,6 +304,24 @@ public sealed class WorkflowFileRefLlmCallMiddlewareTests
             OwnerRunId = fileRef.OwnerRunId,
             OwnerScopeId = fileRef.OwnerScopeId,
         };
+
+    private sealed class MissingFileArtifactReadPort : IFileArtifactReadPort
+    {
+        public int OpenReadCount { get; private set; }
+
+        public ValueTask<ApplicationFileArtifactRef> DescribeAsync(
+            ApplicationFileArtifactRef fileRef,
+            CancellationToken cancellationToken = default) =>
+            throw new FileNotFoundException("Workflow file descriptor was not found.");
+
+        public ValueTask<FileArtifactContent> OpenReadAsync(
+            ApplicationFileArtifactRef fileRef,
+            CancellationToken cancellationToken = default)
+        {
+            OpenReadCount++;
+            throw new FileNotFoundException("Workflow file descriptor was not found.");
+        }
+    }
 
     private sealed class StaticFileArtifactReadPort(
         ApplicationFileArtifactRef descriptor,

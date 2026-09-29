@@ -107,7 +107,9 @@ internal static class AgentRunReplyStepMappers
                 SkillName = source.SkillLoad.SkillName ?? string.Empty,
                 Loaded = source.SkillLoad.Loaded,
                 Error = source.SkillLoad.Error ?? string.Empty,
-                DisplayText = source.SkillLoad.DisplayText ?? string.Empty,
+                // The complete loaded skill is already persisted in AgentRunChatMessage.content.
+                // Keep the legacy field for wire compatibility without duplicating the body.
+                DisplayText = string.Empty,
             };
             if (source.SkillLoad.HttpStatus.HasValue)
                 target.SkillLoad.HttpStatus = source.SkillLoad.HttpStatus.Value;

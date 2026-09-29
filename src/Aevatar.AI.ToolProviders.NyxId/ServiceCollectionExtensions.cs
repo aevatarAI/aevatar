@@ -81,6 +81,7 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<NyxIdWorkflowAgentToolSource>();
         services.TryAddTransient<NyxIdConnectedServiceInventoryToolSource>();
         services.TryAddTransient<NyxIdConnectedServiceToolSource>();
+        services.TryAddTransient<NyxIdConnectLinksToolSource>();
         services.TryAddTransient<IWorkflowInputPreferenceContextProvider>(sp =>
             sp.GetService<IAgentToolExecutionPort>() is { } toolExecutionPort
                 ? new NyxIdWorkflowInputPreferenceContextProvider(

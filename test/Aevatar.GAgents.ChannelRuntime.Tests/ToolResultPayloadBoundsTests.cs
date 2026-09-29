@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -121,10 +122,51 @@ public sealed class ToolResultPayloadBoundsTests
         messages[0].ToolCallId.Should().Be("call-1");
     }
 
+    [Fact]
+    public void BoundResultMessages_ShouldLogOriginalAndEmittedBytes()
+    {
+        const int cap = 4 * 1024;
+        var logger = new RecordingLogger();
+        var messages = new List<AgentRunChatMessage>
+        {
+            ToolResultMessage("call-1", new string('x', 32 * 1024)),
+        };
+
+        ToolResultPayloadBounds.BoundResultMessages(
+            messages,
+            maxMessageBytes: cap,
+            maxTotalBytes: int.MaxValue,
+            logger: logger);
+
+        logger.Output.Should().Contain("tool_result_original_bytes=");
+        logger.Output.Should().Contain("tool_result_emitted_bytes=");
+        logger.Output.Should().Contain("tool_result_bounded=True");
+        logger.Output.Should().NotContain(new string('x', 128));
+    }
+
     private static AgentRunChatMessage ToolResultMessage(string callId, string content) => new()
     {
         Role = "tool",
         ToolCallId = callId,
         Content = content,
     };
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public string Output => string.Join('\n', Messages);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
+    }
 }

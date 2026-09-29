@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
@@ -251,7 +252,15 @@ public sealed class OrnnSkillClient
             }
 
             var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSkillJson>>(response, JsonOptions);
-            return envelope?.Data;
+            var skill = envelope?.Data;
+            _logger.LogInformation(
+                "Ornn skill response received: requested_skill={RequestedSkill} raw_response_bytes={RawResponseBytes} " +
+                "remote_file_count={RemoteFileCount} loaded_version={LoadedVersion}",
+                idOrName,
+                Encoding.UTF8.GetByteCount(response),
+                skill?.Files?.Count ?? 0,
+                skill?.Version ?? string.Empty);
+            return skill;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

@@ -1292,7 +1292,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return payload.OperationAdmission?.Clone();
     }
 
-    private static AgentRunToolStepResult BuildUnauthorizedToolStepResult(IReadOnlyList<ToolCall> toolCalls)
+    private AgentRunToolStepResult BuildUnauthorizedToolStepResult(IReadOnlyList<ToolCall> toolCalls)
     {
         var deniedResults = new List<ToolExecutionResult>(toolCalls.Count);
         foreach (var toolCall in toolCalls)
@@ -1310,7 +1310,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         return BuildToolStepResult(deniedResults);
     }
 
-    private static AgentRunToolStepResult BuildToolStepResult(
+    private AgentRunToolStepResult BuildToolStepResult(
         IReadOnlyList<ToolExecutionResult> results)
     {
         var toolStepResult = new AgentRunToolStepResult
@@ -1329,7 +1329,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 toolStepResult.ToolReceipts.Add(toolResult.Receipt.Clone());
         }
 
-        ToolResultPayloadBounds.BoundResultMessages(toolStepResult.ResultMessages);
+        ToolResultPayloadBounds.BoundResultMessages(toolStepResult.ResultMessages, logger: _logger);
         return toolStepResult;
     }
 
@@ -1807,14 +1807,17 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 control,
                 ct)
             .ConfigureAwait(false);
-        control = agentKeyOverlay.Control;
-        if (agentKeyOverlay.AgentKey is not null)
+        if (!hasSenderBinding)
         {
-            toolContext = ApplyChannelRegistrationAgentKeyToolCredential(toolContext, agentKeyOverlay.AgentKey);
-        }
-        else if (registrationAgentKeyMode)
-        {
-            toolContext = ClearNyxIdCredentials(toolContext);
+            control = agentKeyOverlay.Control;
+            if (agentKeyOverlay.AgentKey is not null)
+            {
+                toolContext = ApplyChannelRegistrationAgentKeyToolCredential(toolContext, agentKeyOverlay.AgentKey);
+            }
+            else if (registrationAgentKeyMode)
+            {
+                toolContext = ClearNyxIdCredentials(toolContext);
+            }
         }
 
         var ownerFallbackControl = control with { SenderNyxIdAccessToken = null };
@@ -1897,7 +1900,12 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 return control;
             }
 
-            return control with { SenderNyxIdAccessToken = accessToken };
+            return control with
+            {
+                NyxIdAccessToken = accessToken,
+                NyxIdOrgToken = accessToken,
+                SenderNyxIdAccessToken = accessToken,
+            };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -2001,33 +2009,38 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 requestControl,
                 ct)
             .ConfigureAwait(false);
-        requestControl = agentKeyOverlay.Control;
-        if (agentKeyOverlay.AgentKey is not null)
+        if (!hasSenderBinding)
         {
-            planToolContext = ApplyChannelRegistrationAgentKeyToolCredential(
-                planToolContext,
-                agentKeyOverlay.AgentKey);
-        }
-        else if (registrationAgentKeyMode)
-        {
-            planToolContext = ClearNyxIdCredentials(planToolContext);
+            requestControl = agentKeyOverlay.Control;
+            if (agentKeyOverlay.AgentKey is not null)
+            {
+                planToolContext = ApplyChannelRegistrationAgentKeyToolCredential(
+                    planToolContext,
+                    agentKeyOverlay.AgentKey);
+            }
+            else if (registrationAgentKeyMode)
+            {
+                planToolContext = ClearNyxIdCredentials(planToolContext);
+            }
         }
 
         requestControl = OverlayActivityUserToken(request, requestControl);
 
         var control = stepControl with
         {
-            NyxIdAccessToken = registrationAgentKeyMode
-                ? NormalizeOptional(requestControl.NyxIdAccessToken)
-                : NormalizeOptional(requestControl.NyxIdAccessToken) ??
-                               planToolContext.Credentials.NyxIdAccessToken ??
+            NyxIdAccessToken = NormalizeOptional(requestControl.NyxIdAccessToken) ??
+                               (registrationAgentKeyMode ? null : planToolContext.Credentials.NyxIdAccessToken) ??
                                (registrationAgentKeyMode ? null : stepControl.NyxIdAccessToken),
-            NyxIdOrgToken = registrationAgentKeyMode ? null : NormalizeOptional(requestControl.NyxIdOrgToken) ??
-                            planToolContext.Credentials.NyxIdOrgToken ??
-                            (registrationAgentKeyMode ? null : stepControl.NyxIdOrgToken),
-            SenderNyxIdAccessToken = registrationAgentKeyMode ? null : NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
-                                     planToolContext.Credentials.SenderNyxIdAccessToken ??
-                                     (registrationAgentKeyMode ? null : stepControl.SenderNyxIdAccessToken),
+            NyxIdOrgToken = hasSenderBinding
+                ? NormalizeOptional(requestControl.NyxIdOrgToken)
+                : registrationAgentKeyMode ? null : NormalizeOptional(requestControl.NyxIdOrgToken) ??
+                                             planToolContext.Credentials.NyxIdOrgToken ??
+                                             stepControl.NyxIdOrgToken,
+            SenderNyxIdAccessToken = hasSenderBinding
+                ? NormalizeOptional(requestControl.SenderNyxIdAccessToken)
+                : registrationAgentKeyMode ? null : NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
+                                             planToolContext.Credentials.SenderNyxIdAccessToken ??
+                                             stepControl.SenderNyxIdAccessToken,
         };
         var toolContext = control.ToToolContext(planToolContext);
         var activityUserToken = registrationAgentKeyMode || hasSenderBinding
@@ -2160,7 +2173,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             {
                 NyxIdAccessToken = agentKey,
                 NyxIdOrgToken = null,
-                SenderNyxIdAccessToken = null,
+                SenderNyxIdAccessToken = toolContext.Credentials.SenderNyxIdAccessToken,
                 SourceReadableNyxIdAccessToken = null,
                 NyxIdCredentialKind = AgentToolNyxIdCredentialKind.AgentKey,
                 NyxIdCredentialAuthority = AgentToolNyxIdCredentialAuthority.ToolExecutionContext,
@@ -2253,13 +2266,34 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         });
     }
 
-    private static ChatAttachmentInputContext BuildAttachmentInputContext(
+    private ChatAttachmentInputContext BuildAttachmentInputContext(
         NeedsLlmReplyEvent request,
         LLMControlContext control)
     {
-        var token = NormalizeOptional(control.NyxIdAccessToken)
-                    ?? NormalizeOptional(control.NyxIdOrgToken)
-                    ?? NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        var controlAccessToken = NormalizeOptional(control.NyxIdAccessToken);
+        var controlOrgToken = NormalizeOptional(control.NyxIdOrgToken);
+        var activityUserToken = NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
+        var token = controlAccessToken ?? controlOrgToken ?? activityUserToken;
+        var selectedCredentialSource = controlAccessToken is not null
+            ? "control_access_token"
+            : controlOrgToken is not null
+                ? "control_org_token"
+                : activityUserToken is not null
+                    ? "activity_user_token"
+                    : "none";
+        var attachmentCount = request.Activity?.Content?.Attachments?.Count ?? 0;
+        var recentAttachmentCount = request.RecentAttachmentActivities.Sum(static entry =>
+            entry.Activity?.Content?.Attachments?.Count ?? 0);
+        _logger.LogInformation(
+            "Attachment input credential facts selected: correlation={CorrelationId}, credentialSourceMode={CredentialSourceMode}, selectedCredentialSource={SelectedCredentialSource}, hasControlAccessToken={HasControlAccessToken}, hasControlOrgToken={HasControlOrgToken}, hasActivityUserToken={HasActivityUserToken}, attachmentCount={AttachmentCount}, recentAttachmentCount={RecentAttachmentCount}",
+            request.CorrelationId,
+            request.ChannelRuntimeConfig?.CredentialSourceMode,
+            selectedCredentialSource,
+            controlAccessToken is not null,
+            controlOrgToken is not null,
+            activityUserToken is not null,
+            attachmentCount,
+            recentAttachmentCount);
         return new ChatAttachmentInputContext(
             request.RecentAttachmentActivities.Select(entry => entry.Clone()).ToArray(),
             token,

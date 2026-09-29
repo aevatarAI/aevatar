@@ -13,6 +13,25 @@ public sealed record AgentToolTerminalOutcome(
     string ResultJson,
     AgentToolReceipt? Receipt = null);
 
+public interface IAgentToolLiveResultMapper
+{
+    string? ResolveLiveResultJson(
+        string argumentsJson,
+        string terminalResultJson,
+        AgentToolReceipt receipt);
+}
+
+public enum AgentToolNyxIdCredentialRequirement
+{
+    Default = 0,
+    SenderBearer = 1,
+}
+
+public interface IAgentToolNyxIdCredentialRequirementOwner
+{
+    AgentToolNyxIdCredentialRequirement NyxIdCredentialRequirement { get; }
+}
+
 public enum AgentToolPendingOperationStatus
 {
     Unspecified = 0,

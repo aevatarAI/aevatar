@@ -4,6 +4,8 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.ToolProviders.Skills;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.Ornn;
 
@@ -13,9 +15,16 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
 {
     private readonly OrnnSkillClient _client;
+    private readonly ILogger<OrnnRemoteSkillFetcher> _logger;
     private static readonly char[] PathSeparators = ['/', '\\'];
 
-    public OrnnRemoteSkillFetcher(OrnnSkillClient client) => _client = client;
+    public OrnnRemoteSkillFetcher(
+        OrnnSkillClient client,
+        ILogger<OrnnRemoteSkillFetcher>? logger = null)
+    {
+        _client = client ?? throw new ArgumentNullException(nameof(client));
+        _logger = logger ?? NullLogger<OrnnRemoteSkillFetcher>.Instance;
+    }
 
     public async Task<SkillDefinition?> FetchSkillAsync(
         string accessToken, string nameOrId, CancellationToken ct = default)
@@ -58,10 +67,29 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
             parsed.ScriptEntry,
             extraction.RemainingFiles);
 
+        var remainingFiles = scriptExtraction.RemainingFiles;
+        var summary = SkillPayloadDiagnostics.Summarize(remainingFiles);
+        _logger.LogInformation(
+            "Remote skill payload parsed: skill_name={SkillName} loaded_version={LoadedVersion} " +
+            "associated_file_count={AssociatedFileCount} associated_file_bytes={AssociatedFileBytes} " +
+            "empty_file_count={EmptyFileCount} root_skill_bytes={RootSkillBytes} " +
+            "largest_file_bytes={LargestFileBytes} largest_file_path={LargestFilePath} " +
+            "file_tree_sha256={FileTreeSha256}",
+            parsed.Name ?? skill.Name ?? nameOrId,
+            skill.Version ?? string.Empty,
+            summary.FileCount,
+            summary.TotalFileBytes,
+            summary.EmptyFileCount,
+            summary.RootSkillBytes,
+            summary.LargestFileBytes,
+            summary.LargestFilePath,
+            summary.FileTreeSha256);
+
         return new SkillDefinition
         {
             Name = parsed.Name ?? skill.Name ?? nameOrId,
             Description = parsed.Description ?? skill.Description ?? "",
+            Version = skill.Version,
             Instructions = parsed.Body,
             Source = SkillSource.Remote,
             RemoteId = nameOrId,
@@ -69,7 +97,7 @@ public sealed class OrnnRemoteSkillFetcher : IRemoteSkillFetcher
             WhenToUse = parsed.WhenToUse,
             IsModelInvocable = parsed.IsModelInvocable,
             IsUserInvocable = parsed.IsUserInvocable,
-            AssociatedFiles = scriptExtraction.RemainingFiles,
+            AssociatedFiles = remainingFiles,
             Workflows = workflows,
             Scripts = scriptExtraction.Scripts,
         };

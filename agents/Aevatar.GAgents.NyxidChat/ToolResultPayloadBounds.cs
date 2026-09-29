@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -40,11 +41,14 @@ internal static class ToolResultPayloadBounds
     internal static void BoundResultMessages(
         IList<AgentRunChatMessage> messages,
         int maxMessageBytes = DefaultMaxToolResultMessageBytes,
-        int maxTotalBytes = DefaultMaxTotalToolResultBytes)
+        int maxTotalBytes = DefaultMaxTotalToolResultBytes,
+        ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(messages);
 
+        var originalBytes = messages.Sum(static message => (long)message.CalculateSize());
         long runningTotal = 0;
+        var boundedMessageCount = 0;
         for (var i = 0; i < messages.Count; i++)
         {
             var remaining = maxTotalBytes - runningTotal;
@@ -53,9 +57,21 @@ internal static class ToolResultPayloadBounds
                 : (int)Math.Min(maxMessageBytes, remaining);
 
             var bounded = BoundMessage(messages[i], cap);
+            if (!ReferenceEquals(bounded, messages[i]))
+                boundedMessageCount++;
             messages[i] = bounded;
             runningTotal += bounded.CalculateSize();
         }
+
+        logger?.LogInformation(
+            "Tool result payload boundary: tool_result_original_bytes={ToolResultOriginalBytes} " +
+            "tool_result_emitted_bytes={ToolResultEmittedBytes} tool_result_bounded={ToolResultBounded} " +
+            "tool_result_message_count={ToolResultMessageCount} tool_result_bounded_message_count={ToolResultBoundedMessageCount}",
+            originalBytes,
+            runningTotal,
+            boundedMessageCount > 0,
+            messages.Count,
+            boundedMessageCount);
     }
 
     private static AgentRunChatMessage BoundMessage(AgentRunChatMessage message, int maxBytes)

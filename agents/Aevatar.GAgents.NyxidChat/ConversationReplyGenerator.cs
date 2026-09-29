@@ -106,6 +106,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly IAgentToolDiscoveryService _toolDiscoveryService;
     private readonly ContentArtifactConversationPromptLayerMaterializer? _contentArtifactPromptLayerMaterializer;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
+    private readonly ILogger<UseSkillTool> _useSkillLogger;
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
     // slash silently consumed.
@@ -151,7 +152,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null,
         IEnumerable<IAgentToolSource>? nyxIdChatToolSources = null,
         IAgentToolDiscoveryService? toolDiscoveryService = null,
-        IContentArtifactQueryPort? contentArtifactQueryPort = null)
+        IContentArtifactQueryPort? contentArtifactQueryPort = null,
+        ILogger<UseSkillTool>? useSkillLogger = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -177,6 +179,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             ? null
             : new ContentArtifactConversationPromptLayerMaterializer(contentArtifactQueryPort);
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
+        _useSkillLogger = useSkillLogger ?? NullLogger<UseSkillTool>.Instance;
     }
 
     public async Task<ConversationReplyResult> GenerateReplyAsync(
@@ -531,7 +534,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             tools.Register(new UseSkillTool(
                 _localSkillCatalog ?? new LocalSkillCatalog(),
                 _remoteSkillFetcher,
-                remoteAccessTokenResolver: _remoteSkillAccessTokenResolver));
+                remoteAccessTokenResolver: _remoteSkillAccessTokenResolver,
+                logger: _useSkillLogger));
         }
 
         return tools;
@@ -1076,6 +1080,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
+                _logger.LogWarning(
+                    "Lark image attachment ingested for chat LLM input: activityId={ActivityId} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind} fileId={FileId} artifactId={ArtifactId} ownerRunId={OwnerRunId} ownerScopeId={OwnerScopeId} sourceKind={SourceKind} sizeBytes={SizeBytes}",
+                    activity.Id,
+                    messageId,
+                    resourceKey,
+                    resourceKind,
+                    ingressResult.FileRef.FileId,
+                    ingressResult.FileRef.ArtifactId,
+                    ingressResult.FileRef.OwnerRunId,
+                    ingressResult.FileRef.OwnerScopeId,
+                    ingressResult.FileRef.SourceKind,
+                    ingressResult.FileRef.SizeBytes);
                 parts.Add(ContentPart.ImageFileRefPart(
                     ToChatFileRef(ingressResult.FileRef),
                     mediaType,

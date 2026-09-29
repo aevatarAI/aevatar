@@ -1033,6 +1033,152 @@ public sealed class ConversationGAgentDedupTests
     }
 
     [Fact]
+    public async Task ActivateAsync_WhenAgedTelegramRequestAlreadyHandedOff_KeepsPendingAndProcessesLateReady()
+    {
+        const string actorId = "conv-telegram-handoff-aged";
+        const string correlationId = "corr-telegram-handoff-aged";
+        const string runId = "run-telegram-handoff-aged";
+        var store = new InMemoryEventStore();
+        var requestedAt = DateTimeOffset.UtcNow.AddMinutes(-10).ToUnixTimeMilliseconds();
+        var activity = CreateTelegramRelayActivity(correlationId, "telegram-msg-aged");
+        var request = CreateNeedsLlmReply(activity, requestedAtUnixMs: requestedAt);
+        request.RunId = runId;
+
+        await AppendStateEventAsync(store, actorId, request, 1);
+        await AppendStateEventAsync(
+            store,
+            actorId,
+            new ConversationReplyLifecycleChangedEvent
+            {
+                CorrelationId = correlationId,
+                Mode = ConversationReplyLifecycleMode.NyxRelayText,
+                Phase = ConversationReplyLifecyclePhase.TextIdle,
+                ChangedAtUnixMs = requestedAt + 1,
+                NyxRelayTextDeliveryStrategy = NyxRelayTextDeliveryStrategy.AppendMessages,
+                AppendNextSegmentIndex = 1,
+                AppendMaxSegmentLength = 4096,
+                AppendDeliveryDisposition = NyxRelayAppendDeliveryDisposition.NotSent,
+                AppendProgressState = NyxRelayAppendProgressState.Skipped,
+                AppendLlmRunDispatched = true,
+            },
+            2);
+
+        var runner = new RecordingTurnRunner
+        {
+            LlmReplyResultFactory = reply => ConversationTurnResult.Sent(
+                "late-ready-delivery",
+                reply.Outbound?.Clone() ?? new MessageContent { Text = "late reply" },
+                "bot",
+                reply.Activity?.OutboundDelivery?.Clone()),
+        };
+        var dispatcher = new RecordingRunDispatcher();
+        var (agent, _) = await CreateAgentAsync(runner, actorId, dispatcher, store: store);
+
+        agent.State.PendingLlmReplyRequests.ShouldHaveSingleItem().CorrelationId.ShouldBe(correlationId);
+        dispatcher.Dispatched.ShouldBeEmpty();
+
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = correlationId,
+            RegistrationId = "reg-1",
+            RunId = runId,
+            SourceActorId = "agent-run",
+            Activity = activity,
+            Outbound = new MessageContent { Text = "late reply" },
+            TerminalState = LlmReplyTerminalState.Completed,
+            ReplyToken = "late-reply-token",
+            ReplyTokenExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds(),
+        });
+
+        runner.LlmReplyCount.ShouldBe(1);
+        agent.State.PendingLlmReplyRequests.ShouldBeEmpty();
+        agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Delivered);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenAgedRequestWasNeverHandedOff_SendsVisibleFailureFallbackAndReapsPending()
+    {
+        const string actorId = "conv-stale-fallback";
+        const string correlationId = "corr-stale-fallback";
+        var store = new InMemoryEventStore();
+        var activity = CreateActivity(correlationId, "conv:slack:C1");
+        var request = CreateNeedsLlmReply(
+            activity,
+            requestedAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(-10).ToUnixTimeMilliseconds());
+        request.RunId = "run-stale-fallback";
+        await AppendStateEventAsync(store, actorId, request, 1);
+
+        var runner = new RecordingTurnRunner
+        {
+            LlmReplyResultFactory = reply => ConversationTurnResult.Sent(
+                "fallback-delivery",
+                reply.Outbound?.Clone() ?? new MessageContent(),
+                "bot",
+                reply.Activity?.OutboundDelivery?.Clone()),
+        };
+        var dispatcher = new RecordingRunDispatcher();
+        var (agent, eventStore) = await CreateAgentAsync(runner, actorId, dispatcher, store: store);
+
+        runner.LlmReplyCount.ShouldBe(1);
+        dispatcher.Dispatched.ShouldBeEmpty();
+        agent.State.PendingLlmReplyRequests.ShouldBeEmpty();
+        agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Delivered);
+
+        var completed = (await eventStore.GetEventsAsync(actorId))
+            .Where(e => e.EventData.Is(ConversationTurnCompletedEvent.Descriptor))
+            .Select(e => e.EventData.Unpack<ConversationTurnCompletedEvent>())
+            .ShouldHaveSingleItem();
+        completed.Outbound.Text.ShouldContain("try again");
+    }
+
+    [Fact]
+    public async Task HandleLlmReplyReadyAsync_AfterStaleFallbackFailure_AllowsLateReadyRecovery()
+    {
+        const string actorId = "conv-stale-late-recovery";
+        const string correlationId = "corr-stale-late-recovery";
+        var store = new InMemoryEventStore();
+        var activity = CreateActivity(correlationId, "conv:slack:C1");
+        var request = CreateNeedsLlmReply(
+            activity,
+            requestedAtUnixMs: DateTimeOffset.UtcNow.AddMinutes(-10).ToUnixTimeMilliseconds());
+        request.RunId = "run-stale-late-recovery";
+        await AppendStateEventAsync(store, actorId, request, 1);
+
+        var runner = new RecordingTurnRunner
+        {
+            LlmReplyResultFactory = _ => ConversationTurnResult.PermanentFailure(
+                "fallback_delivery_failed",
+                "fallback delivery failed"),
+        };
+        var (agent, eventStore) = await CreateAgentAsync(runner, actorId, store: store);
+
+        runner.LlmReplyCount.ShouldBe(1);
+        agent.State.ProcessedCommandIds.ShouldContain("llm:" + correlationId);
+        agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Failed);
+
+        runner.LlmReplyResultFactory = reply => ConversationTurnResult.Sent(
+            "late-recovery-delivery",
+            reply.Outbound?.Clone() ?? new MessageContent { Text = "recovered" },
+            "bot",
+            reply.Activity?.OutboundDelivery?.Clone());
+        await agent.HandleLlmReplyReadyAsync(new LlmReplyReadyEvent
+        {
+            CorrelationId = correlationId,
+            RegistrationId = "reg-1",
+            RunId = request.RunId,
+            SourceActorId = "agent-run",
+            Activity = activity,
+            Outbound = new MessageContent { Text = "recovered" },
+            TerminalState = LlmReplyTerminalState.Completed,
+        });
+
+        runner.LlmReplyCount.ShouldBe(2);
+        agent.State.LastReplyDelivery.OutcomeCase.ShouldBe(ReplyDeliveryStatus.OutcomeOneofCase.Delivered);
+        (await eventStore.GetEventsAsync(actorId)).Count(e => e.EventData.Is(ConversationTurnCompletedEvent.Descriptor))
+            .ShouldBe(1);
+    }
+
+    [Fact]
     public async Task HandleLlmReplyReadyAsync_WhenDeliverySucceeds_UpdatesLastReplyDeliveryState()
     {
         var runner = new RecordingTurnRunner
@@ -2881,6 +3027,28 @@ public sealed class ConversationGAgentDedupTests
                 Bot = new BotInstanceId { Value = "lark-bot" },
                 Scope = ConversationScope.Group,
                 CanonicalKey = "conv:lark:grp",
+            },
+            Content = new MessageContent { Text = "user question" },
+            OutboundDelivery = new OutboundDeliveryContext
+            {
+                ReplyMessageId = replyMessageId,
+                CorrelationId = correlationId,
+            },
+        };
+
+    private static ChatActivity CreateTelegramRelayActivity(string correlationId, string replyMessageId) =>
+        new()
+        {
+            Id = correlationId,
+            Type = ActivityType.Message,
+            ChannelId = new ChannelId { Value = "telegram" },
+            Bot = new BotInstanceId { Value = "telegram-bot" },
+            Conversation = new ConversationReference
+            {
+                Channel = new ChannelId { Value = "telegram" },
+                Bot = new BotInstanceId { Value = "telegram-bot" },
+                Scope = ConversationScope.DirectMessage,
+                CanonicalKey = "conv:telegram:dm",
             },
             Content = new MessageContent { Text = "user question" },
             OutboundDelivery = new OutboundDeliveryContext
