@@ -223,21 +223,28 @@ does not request full runtime configuration or alter bot resources.
 
 The detail page displays the registration's saved `authorization_mode` and
 `service_ids` from `GET /api/channels/registrations`. For an explicit allowlist,
-only those exact UserService IDs are shown. One account inventory read resolves
-their labels and slugs; the current session's selectable grants and service
-activity do not hide saved channel authorizations or add other services.
+only services matching those exact UserService IDs in a successful account
+inventory read are shown. That read resolves their labels and slugs; the current
+session's selectable grants and service activity do not hide existing saved
+channel authorizations or add other services. Services absent from the inventory,
+including deleted services, are omitted rather than shown as raw ID labels.
 Only safe ID, label and slug fields enter the service-name query cache.
 
 Services appear as compact labels arranged horizontally, wrapping when the
 available width is filled. Each service shows its resolved display name once;
 the slug is not repeated on a second line. Long names wrap within their label.
 
-Missing service names retain their saved IDs. A failed name lookup preserves
-other details and the saved authorization list, shows a safe toast, and offers
-a manual retry of the names alone. Explicit empty authorization shows no
-services authorized; NyxID default authorization and unavailable or legacy
-authorization details have distinct messages and do not query the inventory.
-No automatic refresh or registration change is introduced by this display.
+The initial name lookup shows inline loading without flashing raw IDs. If every
+saved ID is absent after a successful inventory read, show No services to display;
+this does not claim that the registration's saved authorization was revoked.
+A failed name lookup preserves other details and the saved authorization list,
+using saved IDs for unresolved names, shows a safe toast, and offers a manual
+retry of the names alone. Stale cached inventory must not hide unresolved saved
+IDs after a failed refresh. A successful retry applies the current inventory
+filter. Explicit empty authorization shows no services authorized; NyxID default
+authorization and unavailable or legacy authorization details have distinct
+messages and do not query the inventory. No automatic refresh or registration
+change is introduced by this display.
 
 ## API and ownership
 

@@ -142,6 +142,7 @@ export default {
   'channels.services.title': '已授权服务',
   'channels.services.loading': '正在加载服务名称',
   'channels.services.empty': '未授权任何服务。',
+  'channels.services.noneVisible': '暂无可显示的服务。',
   'channels.services.default': '使用 NyxID 默认授权，未列出具体服务。',
   'channels.services.unavailable': '此渠道的授权详情暂不可用。',
   'channels.services.namesError': '无法加载服务名称，请重试。',

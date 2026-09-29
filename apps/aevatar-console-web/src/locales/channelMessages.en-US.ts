@@ -158,6 +158,7 @@ export default {
   'channels.services.title': 'Authorized services',
   'channels.services.loading': 'Loading service names',
   'channels.services.empty': 'No services authorized.',
+  'channels.services.noneVisible': 'No services to display.',
   'channels.services.default':
     'Uses NyxID default authorization; individual services are not listed.',
   'channels.services.unavailable':
