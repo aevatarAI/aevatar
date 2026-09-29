@@ -4,7 +4,10 @@ import * as React from 'react';
 import { authFetch } from '@/shared/auth/fetch';
 import { persistAuthSession } from '@/shared/auth/session';
 import { createNyxIDServiceSession } from '../../../../tests/fixtures/nyxidServiceSession';
-import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
+import {
+  createTestQueryClient,
+  renderWithQueryClient,
+} from '../../../../tests/reactQueryTestUtils';
 import ChannelAuthorizedServices from './ChannelAuthorizedServices';
 import ChannelDetailsPage from './ChannelDetailsPage';
 
@@ -82,7 +85,7 @@ beforeEach(() => {
   });
 });
 
-it('shows saved authorizations by exact ID, including services outside current grants, without automatic refresh', async () => {
+it('shows existing saved services by exact ID, including inactive services outside current grants, while hiding deleted services without automatic refresh', async () => {
   jest.useFakeTimers();
   try {
     const view = renderWithQueryClient(
@@ -96,7 +99,7 @@ it('shows saved authorizations by exact ID, including services outside current g
     expect(screen.getByText('Chrono Public')).toBeInTheDocument();
     expect(screen.queryByText('chrono-llm-public')).not.toBeInTheDocument();
     expect(screen.getAllByText('ornn-api')).toHaveLength(1);
-    expect(screen.getByText('us-deleted')).toBeInTheDocument();
+    expect(screen.queryByText('us-deleted')).not.toBeInTheDocument();
     expect(
       screen.queryByText('Not authorized for this channel'),
     ).not.toBeInTheDocument();
@@ -152,14 +155,89 @@ it('keeps saved IDs and other details on name lookup failure, then retries only 
     await screen.findByText('Could not load service names. Please try again.'),
   ).toBeInTheDocument();
   expect(screen.getByText('us-work')).toBeInTheDocument();
+  expect(screen.getByText('us-deleted')).toBeInTheDocument();
   expect(screen.getByText('review-skill')).toBeInTheDocument();
   expect(document.body).not.toHaveTextContent('TEST_ONLY_SECRET');
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
   expect(await screen.findByText('GitHub work')).toBeInTheDocument();
+  expect(screen.queryByText('us-work')).not.toBeInTheDocument();
+  expect(screen.queryByText('us-deleted')).not.toBeInTheDocument();
   expect(inventoryReads).toBe(2);
   expect(
     fetchMock.mock.calls.filter(([input]) => input === detailPath),
   ).toHaveLength(1);
+});
+
+it('waits for service names without flashing IDs or an empty state', async () => {
+  let resolveInventory!: (value: Response) => void;
+  fetchMock.mockReturnValueOnce(
+    new Promise<Response>((resolve) => {
+      resolveInventory = resolve;
+    }),
+  );
+  renderWithQueryClient(
+    <ChannelAuthorizedServices
+      scopeId="scope-alpha"
+      authorization={{
+        kind: 'explicit',
+        serviceIds: ['us-work', 'us-deleted'],
+      }}
+    />,
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Loading service names');
+  expect(screen.queryByText('us-work')).not.toBeInTheDocument();
+  expect(screen.queryByText('us-deleted')).not.toBeInTheDocument();
+  expect(screen.queryByText('No services authorized.')).not.toBeInTheDocument();
+  expect(screen.queryByText('No services to display.')).not.toBeInTheDocument();
+
+  await act(async () => resolveInventory(response(inventory)));
+  expect(await screen.findByText('GitHub work')).toBeInTheDocument();
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.queryByText('us-deleted')).not.toBeInTheDocument();
+});
+
+it('shows no services to display when every saved service is absent, without claiming authorization was revoked', async () => {
+  fetchMock.mockResolvedValueOnce(response({ services: [] }));
+  renderWithQueryClient(
+    <ChannelAuthorizedServices
+      scopeId="scope-alpha"
+      authorization={{ kind: 'explicit', serviceIds: ['us-deleted'] }}
+    />,
+  );
+  expect(
+    await screen.findByText('No services to display.'),
+  ).toBeInTheDocument();
+  expect(screen.queryByText('us-deleted')).not.toBeInTheDocument();
+  expect(screen.queryByRole('list')).not.toBeInTheDocument();
+  expect(screen.queryByText('No services authorized.')).not.toBeInTheDocument();
+});
+
+it('preserves unresolved saved services when refreshing cached names fails', async () => {
+  const queryClient = createTestQueryClient();
+  queryClient.setQueryData(
+    ['channels', 'scope-alpha', 'service-identities'],
+    [{ id: 'us-work', label: 'GitHub work', slug: 'api-github' }],
+  );
+  fetchMock.mockResolvedValueOnce(response({}, 503));
+  renderWithQueryClient(
+    <ChannelAuthorizedServices
+      scopeId="scope-alpha"
+      authorization={{
+        kind: 'explicit',
+        serviceIds: ['us-work', 'us-model'],
+      }}
+    />,
+    queryClient,
+  );
+  expect(
+    await screen.findByRole('button', { name: 'Try again' }),
+  ).toBeEnabled();
+  expect(screen.getByText('GitHub work')).toBeInTheDocument();
+  expect(screen.getByText('us-model')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  expect(await screen.findByText('Chrono Public')).toBeInTheDocument();
+  expect(screen.queryByText('us-model')).not.toBeInTheDocument();
 });
 
 it('keeps empty, default and unavailable authorization distinct without querying current service choices', () => {

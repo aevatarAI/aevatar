@@ -65,28 +65,40 @@ export default function ChannelAuthorizedServices({
     return (
       <span>{t('channels.services.empty', 'No services authorized.')}</span>
     );
+  if (names.isPending)
+    return (
+      <AevatarLoadingDots
+        ariaLabel={t('channels.services.loading', 'Loading service names')}
+        size="small"
+      />
+    );
+
+  const displayedServices = serviceIds
+    .map((id) => ({
+      id,
+      service: names.data?.find((item) => item.id === id),
+    }))
+    // Only a successful inventory read can establish that a service is absent.
+    .filter(({ service }) => service || !names.isSuccess);
+  if (!displayedServices.length)
+    return (
+      <span>
+        {t('channels.services.noneVisible', 'No services to display.')}
+      </span>
+    );
 
   return (
     <div className="channels__authorized-services">
-      {names.isPending ? (
-        <AevatarLoadingDots
-          ariaLabel={t('channels.services.loading', 'Loading service names')}
-          size="small"
-        />
-      ) : null}
       <ul>
-        {serviceIds.map((id) => {
-          const service = names.data?.find((item) => item.id === id);
-          return (
-            <li key={id}>
-              {service ? (
-                <strong>{service.label}</strong>
-              ) : (
-                <span className="channels__identifier">{id}</span>
-              )}
-            </li>
-          );
-        })}
+        {displayedServices.map(({ id, service }) => (
+          <li key={id}>
+            {service ? (
+              <strong>{service.label}</strong>
+            ) : (
+              <span className="channels__identifier">{id}</span>
+            )}
+          </li>
+        ))}
       </ul>
       {names.isError ? (
         <Button loading={names.isFetching} onClick={() => void names.refetch()}>
