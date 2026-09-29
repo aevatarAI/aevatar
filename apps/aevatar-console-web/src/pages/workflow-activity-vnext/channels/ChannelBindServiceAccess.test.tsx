@@ -3,8 +3,12 @@ import * as React from 'react';
 import { authFetch } from '@/shared/auth/fetch';
 import { persistAuthSession } from '@/shared/auth/session';
 import { createNyxIDServiceSession } from '../../../../tests/fixtures/nyxidServiceSession';
-import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
+import {
+  createTestQueryClient,
+  renderWithQueryClient,
+} from '../../../../tests/reactQueryTestUtils';
 import WorkflowActivityVNextPage from '../index';
+import { channelKeys } from './queries';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
 jest.mock('@/shared/auth/config', () => ({
@@ -133,12 +137,12 @@ beforeEach(() => {
   });
 });
 
-it('binds with active services outside login consent only after explicit selection and confirms the observed result', async () => {
+it('preselects requested active services outside login consent and binds only after confirmation', async () => {
   grant([]);
   const { queryClient } = mount();
   const firecrawl = await screen.findByRole('checkbox', { name: /Firecrawl/ });
   expect(firecrawl).toBeEnabled();
-  expect(firecrawl).not.toBeChecked();
+  expect(firecrawl).toBeChecked();
   expect(screen.getByRole('checkbox', { name: /Lark Bot API/ })).toBeEnabled();
   expect(
     screen.queryByRole('button', { name: /Manage service access/ }),
@@ -147,7 +151,7 @@ it('binds with active services outside login consent only after explicit selecti
   await screen.findByText('linked-default');
   await chooseSupport();
   fireEvent.click(screen.getByRole('checkbox', { name: /GitHub/ }));
-  fireEvent.click(firecrawl);
+  fireEvent.click(screen.getByRole('checkbox', { name: /Lark Bot API/ }));
   expect(writes()).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: 'Bind bot' }));
   await screen.findByText('Confirming your changes...');
@@ -190,4 +194,81 @@ it('binds with active services outside login consent only after explicit selecti
   expect(window.location.pathname).toBe(
     '/scopes/scope-alpha/channels/reg-alpha',
   );
+});
+
+it('preserves deselection across inventory refreshes and URL changes in the same form', async () => {
+  const { queryClient } = mount();
+  const firecrawl = await screen.findByRole('checkbox', { name: /Firecrawl/ });
+  expect(firecrawl).toBeChecked();
+  fireEvent.click(firecrawl);
+  await act(async () => {
+    // A new URL hint must not select an additional service after entry.
+    window.history.replaceState(
+      {},
+      '',
+      `${bindHref().split('#')[0]}&requiredServiceId=us-github`,
+    );
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    await queryClient.invalidateQueries({
+      queryKey: channelKeys.services('scope-alpha'),
+    });
+  });
+  expect(screen.getByRole('checkbox', { name: /Firecrawl/ })).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /GitHub/ })).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /Lark Bot API/ })).toBeChecked();
+  expect(writes()).toHaveLength(0);
+});
+
+it('initializes a newly entered bot independently of the previous bot choices', async () => {
+  mount();
+  const firecrawl = await screen.findByRole('checkbox', { name: /Firecrawl/ });
+  fireEvent.click(firecrawl);
+  expect(firecrawl).not.toBeChecked();
+  await act(async () => {
+    window.history.replaceState({}, '', bindHref('bot-beta'));
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await waitFor(() =>
+    expect(screen.getByRole('checkbox', { name: /Firecrawl/ })).toBeChecked(),
+  );
+  expect(writes()).toHaveLength(0);
+});
+
+it('keeps manual choices made from cached inventory while the first fresh response is pending', async () => {
+  const normalFetch = fetchMock.getMockImplementation();
+  if (!normalFetch) throw new Error('Missing request fixture');
+  let complete!: (value: Response) => void;
+  const pending = new Promise<Response>((resolve) => {
+    complete = resolve;
+  });
+  fetchMock.mockImplementation((input, init) =>
+    String(input).endsWith('/user-services')
+      ? pending
+      : normalFetch(input, init),
+  );
+  const queryClient = createTestQueryClient();
+  queryClient.setQueryData(
+    channelKeys.services('scope-alpha'),
+    inventory.map((item) => ({
+      id: item.id,
+      slug: item.slug,
+      label: item.label,
+      active: true,
+      allowed: true,
+      source: 'personal',
+      organizationName: null,
+    })),
+  );
+  window.history.replaceState({}, '', bindHref());
+  renderWithQueryClient(<WorkflowActivityVNextPage />, queryClient);
+  fireEvent.click(await screen.findByRole('checkbox', { name: /GitHub/ }));
+  await act(async () => {
+    complete(response({ services: inventory }));
+  });
+  expect(screen.getByRole('checkbox', { name: /GitHub/ })).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /Firecrawl/ })).not.toBeChecked();
+  expect(
+    screen.getByRole('checkbox', { name: /Lark Bot API/ }),
+  ).not.toBeChecked();
+  expect(writes()).toHaveLength(0);
 });

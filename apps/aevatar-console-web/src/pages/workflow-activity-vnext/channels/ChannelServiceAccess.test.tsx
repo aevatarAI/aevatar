@@ -1,4 +1,4 @@
-import { act, fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import * as React from 'react';
 import { authFetch } from '@/shared/auth/fetch';
 import { persistAuthSession } from '@/shared/auth/session';
@@ -109,19 +109,19 @@ beforeEach(() => {
   });
 });
 
-it('lets Edit select active services omitted at login and saves exact IDs without an access review', async () => {
+it('preselects requested exact IDs on Edit without changing saved services until Save', async () => {
   grant([]);
   mount(
     `${editHref}&requiredServiceId=us-firecrawl&requiredServiceId=unknown-service`,
   );
   const firecrawl = await screen.findByRole('checkbox', { name: /^Firecrawl/ });
   expect(firecrawl).toBeEnabled();
-  expect(firecrawl).not.toBeChecked();
+  expect(firecrawl).toBeChecked();
   expect(
     screen.getByRole('checkbox', { name: /Other Firecrawl account/ }),
   ).not.toBeChecked();
   expect(screen.getByRole('checkbox', { name: /GitHub/ })).toBeChecked();
-  expect(screen.getByText('3 selected')).toBeInTheDocument();
+  expect(screen.getByText('5 selected')).toBeInTheDocument();
   expect(screen.getByText('Service not found')).toBeInTheDocument();
   expect(
     screen.queryByRole('button', { name: /Manage service access/ }),
@@ -130,7 +130,7 @@ it('lets Edit select active services omitted at login and saves exact IDs withou
     screen.queryByText(/choose Customize under Service access/),
   ).not.toBeInTheDocument();
   expect(writes()).toHaveLength(0);
-  fireEvent.click(firecrawl);
+  fireEvent.click(screen.getByRole('checkbox', { name: /Lark Bot API/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
   await screen.findByText('Confirming your changes...');
   expect(writes()).toHaveLength(1);
@@ -144,7 +144,7 @@ it('lets Edit select active services omitted at login and saves exact IDs withou
 });
 
 it('preserves edits during failed inventory refresh, then removes inactive choices without reselecting them on reactivation', async () => {
-  const { queryClient } = mount();
+  const { queryClient } = mount(editHref.split('?')[0]);
   fireEvent.change(await screen.findByLabelText('Label'), {
     target: { value: 'Edited label' },
   });
@@ -189,7 +189,9 @@ it('preserves edits during failed inventory refresh, then removes inactive choic
       queryKey: channelKeys.services('scope-alpha'),
     });
   });
-  expect(screen.getByRole('checkbox', { name: /GitHub/ })).not.toBeChecked();
+  expect(
+    await screen.findByRole('checkbox', { name: /GitHub/ }),
+  ).not.toBeChecked();
   expect(screen.getByText('2 selected')).toBeInTheDocument();
   const leaving = new Event('beforeunload', { cancelable: true });
   window.dispatchEvent(leaving);
@@ -227,7 +229,7 @@ it('removes saved missing and inactive services while preserving active selectio
       return Promise.resolve(response(saved));
     return normalFetch(input, init);
   });
-  mount();
+  mount(`${editHref.split('?')[0]}?requiredServiceId=us-firecrawl`);
   await screen.findByText('Requested services unavailable');
   expect(screen.getByText('Firecrawl', { exact: true })).toBeInTheDocument();
   expect(
@@ -243,4 +245,72 @@ it('removes saved missing and inactive services while preserving active selectio
     'us-llm',
     'us-ornn',
   ]);
+});
+
+it('waits for the first successful inventory and only preselects active account-available exact IDs', async () => {
+  const normalFetch = fetchMock.getMockImplementation();
+  if (!normalFetch) throw new Error('Missing request fixture');
+  let loaded = false;
+  fetchMock.mockImplementation((input, init) => {
+    if (String(input).endsWith('/user-services')) {
+      if (!loaded)
+        return Promise.resolve({ ok: false, status: 503 } as Response);
+      return Promise.resolve(
+        response({
+          services: inventory.map((item) =>
+            item.id === 'us-firecrawl'
+              ? { ...item, is_active: false }
+              : item.id === 'us-lark'
+                ? {
+                    ...item,
+                    credential_source: {
+                      type: 'org',
+                      allowed: false,
+                      org_name: 'Example',
+                    },
+                  }
+                : item,
+          ),
+        }),
+      );
+    }
+    return normalFetch(input, init);
+  });
+  const { queryClient } = mount(
+    `${editHref}&requiredServiceId=us-firecrawl-other&requiredServiceId=unknown`,
+  );
+  await screen.findByText(
+    'Could not load your services. Try again before saving.',
+  );
+  expect(screen.getByText('3 selected')).toBeInTheDocument();
+  loaded = true;
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  const other = await screen.findByRole('checkbox', {
+    name: /Other Firecrawl account/,
+  });
+  await waitFor(() => expect(other).toBeChecked());
+  expect(
+    screen.queryByRole('checkbox', { name: /^Firecrawl/ }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('checkbox', { name: /Lark Bot API/ }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText('4 selected')).toBeInTheDocument();
+  expect(
+    screen.getByText('Requested services unavailable'),
+  ).toBeInTheDocument();
+  fetchMock.mockImplementation(normalFetch);
+  await act(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: channelKeys.services('scope-alpha'),
+    });
+  });
+  expect(
+    await screen.findByRole('checkbox', { name: /^Firecrawl/ }),
+  ).not.toBeChecked();
+  expect(
+    screen.getByRole('checkbox', { name: /Lark Bot API/ }),
+  ).not.toBeChecked();
+  expect(other).toBeChecked();
+  expect(writes()).toHaveLength(0);
 });

@@ -25,7 +25,7 @@ health, and the server revalidates each submitted selection.
 ## Link hints and user path
 
 Repeated `requiredServiceId` parameters on the canonical Bind or Edit URL remain
-advisory hints for exact UserService IDs:
+initial selection hints for exact UserService IDs:
 
 ```text
 /scopes/:scopeId/channels/:registrationId/edit?requiredServiceId=:userServiceId
@@ -33,11 +33,24 @@ advisory hints for exact UserService IDs:
 ```
 
 The editor trims and deduplicates hints, accepts at most 20 nonempty values of at
-most 128 characters, and ignores invalid values. Hints neither select services
-nor add channel requirements. Active matching instances are marked Requested;
-a same-slug instance never substitutes for the requested ID. Missing or inactive
-hints get an availability notice with unresolved IDs behind a details disclosure.
-There are no instructions to customize login consent.
+most 128 characters, and ignores invalid values. On first entry to Bind or Edit,
+the first successfully refreshed account inventory preselects active, available
+exact matches alongside saved selections and built-in required services. Matches
+retain their Requested label. A same-slug instance never substitutes for the
+requested ID; unavailable, missing and account-denied entries are not selected.
+Their existing availability notice remains, with unresolved IDs behind details.
+
+Initialization runs once per entered channel form. Failed initial inventory loads
+can retry before initialization. Later inventory refreshes, newly available
+services, query-parameter changes and rerenders do not apply defaults again.
+Users can deselect optional Requested services; manual changes made while cached
+inventory is refreshing also take precedence over initialization. Opening another
+bot or registration starts a new form with its own initial URL hints. Reopening
+or fully reloading the page starts a new entry and applies the URL defaults again.
+
+URL hints do not add mandatory requirements, authorize credentials or save a
+channel. Bind bot or Save changes is still required. There are no instructions
+to customize login consent.
 
 Users search and select services, then explicitly click Bind bot or Save changes.
 Skill service suggestions are withdrawn; selecting a Skill does not trigger
@@ -56,7 +69,8 @@ when the submitted configuration is observed, not when a command is accepted.
 
 Keep the compact Channels form, search, selected count, typography and design
 tokens. Route integration tests cover Bind and Edit with empty login grants,
-exact-instance selection, explicit submission, Bind observation, inactive/deleted
+initial exact-instance selection, one-time defaults, manual deselection, refresh
+and route isolation, explicit submission, Bind observation, inactive/deleted
 cleanup, failed-refresh preservation and reactivation. Adapter tests cover account
 inventory, organization availability, authentication rejection and token refresh.
 Full frontend typecheck, suite and production build are delegated to GitHub CI.
