@@ -53,11 +53,17 @@ details disclosure; unavailable services are not presented as selectable.
    only unresolved access needs warrant a separate notice and service list.
 6. The user selects services and clicks **Save changes** or **Bind bot** explicitly.
    Both actions follow the channel's existing accepted-to-observed confirmation.
-   Access review itself never saves or binds the channel. Selected services that are no longer available
-   must be reauthorized or deselected before saving.
+   Access review itself never saves or binds the channel. After a successful access
+   refresh, deleted, inactive or unauthorized services disappear from the selection
+   list and are removed from the draft, selected count and next submission. There
+   are no Unavailable placeholder rows or manual-deselection warnings. Later
+   reauthorization makes a service selectable again without restoring its old
+   selection. Pending or failed access requests never erase draft choices.
+   Required built-in services still block submission when unavailable. A missing
+   service explicitly requested by the URL remains in the separate access notice.
 
 Both routes reuse `ChannelConfigurationPage`, `ChannelServicePicker` and
-`ChannelServiceAccessNotice`, including loading, retry and revoked-selection
+`ChannelServiceAccessNotice`, including loading, retry and revoked-selection cleanup
 behavior. Bind needs no saved channel registration to review access.
 
 The temporary draft is keyed by account subject, scope and a typed target:
@@ -111,7 +117,8 @@ authorization, explicit selection/save, draft restoration, cancellation,
 redirect/storage failure and account isolation. Existing adapter and callback
 tests protect grant validation and the shared return flow. Browser history
 restoration coverage verifies fresh grants, temporary draft cleanup and the
-requirement to resolve revoked selections before saving. Bind route coverage
+removal of revoked selections from the list, count and submission, while failed
+refreshes preserve the draft. Bind route coverage
 also verifies the complete return URL, explicit binding after refreshed grants,
 accepted-versus-observed completion, restored skill overrides and clearing, and
 isolation across bots and edit registrations. Full frontend
