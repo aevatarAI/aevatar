@@ -6,8 +6,14 @@ Issue: https://github.com/aevatarAI/aevatar/issues/3678
 
 The console calls `GET /api/skills/service-recommendations?skillName=...` on
 Mainnet. The backend owns Skill resolution, service discovery and evidence.
-See the [backend contract](../../../../../docs/contracts/skill-service-recommendations.md)
+See the [backend contract](https://github.com/aevatarAI/aevatar/blob/3da66b8813c03a7b1d87616889dd3ff343dcde1a/docs/contracts/skill-service-recommendations.md)
 for the response, source contracts, layering and limitations.
+
+The backend is delivered in [PR #3683](https://github.com/aevatarAI/aevatar/pull/3683)
+against `feature/integrate`. This console change is delivered separately in
+[PR #3679](https://github.com/aevatarAI/aevatar/pull/3679) against
+`feat/2026-08-04_workflow-activity-vnext`. The backend endpoint must be merged
+and deployed for recommendations to become available.
 
 The browser does not fetch `SKILL.md`, load the catalog for inference, or match
 service names against Skill content. Its API adapter validates the selected
