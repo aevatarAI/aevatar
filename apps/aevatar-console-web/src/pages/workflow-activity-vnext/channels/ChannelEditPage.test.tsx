@@ -99,14 +99,6 @@ const selectedServiceIds = [
   'user-service-ornn',
 ];
 function catalogue(input: RequestInfo | URL, services = serviceCatalogue) {
-  if (String(input).startsWith('/api/skills/service-recommendations?'))
-    return response({
-      skillName: new URL(
-        String(input),
-        'https://console.test',
-      ).searchParams.get('skillName'),
-      suggestions: [],
-    });
   if (String(input).includes('/skill-search'))
     return response({
       data: {

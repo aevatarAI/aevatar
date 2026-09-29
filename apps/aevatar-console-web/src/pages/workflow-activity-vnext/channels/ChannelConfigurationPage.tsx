@@ -30,7 +30,6 @@ import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
 import ChannelServiceAccessNotice from './ChannelServiceAccessNotice';
 import ChannelServicePicker from './ChannelServicePicker';
 import ChannelSkillField from './ChannelSkillField';
-import ChannelSkillServices from './ChannelSkillServices';
 import { channelConnectionCss } from './connectionStyles';
 import {
   ChannelBadge,
@@ -602,21 +601,6 @@ function ConfigurationForm({
           retry={() => void services.refetch()}
           editing={editing}
           replacesDefaults={baseline?.authorizationMode === 'nyxid_default'}
-          suggestions={
-            <ChannelSkillServices
-              scopeId={scopeId}
-              skillName={skillName ?? ''}
-              services={availableServices}
-              selectedIds={serviceIds}
-              checkingAccess={services.isFetching || services.isPending}
-              accessFailed={services.isError}
-              disabled={busy}
-              onSelect={(id) =>
-                setServiceIds((ids) => [...new Set([...ids, id])])
-              }
-              refreshAccess={() => void services.refetch()}
-            />
-          }
         />
         {failure ? (
           <p role="alert" className="channels__form-error">

@@ -91,14 +91,7 @@ beforeEach(() => {
       return response(linkedSkill());
     if (String(input).endsWith(`/skills/${secondSkillId}`))
       return response(linkedSkill(secondSkillId));
-    if (String(input).startsWith('/api/skills/service-recommendations?'))
-      return response({
-        skillName: new URL(
-          String(input),
-          'https://console.test',
-        ).searchParams.get('skillName'),
-        suggestions: [],
-      });
+
     if (String(input).endsWith('/user-services'))
       return response({
         services: [
@@ -151,6 +144,18 @@ it('resolves the exact ID outside the search results, then explicitly binds its 
     expect(selectedSkill()).toHaveTextContent('booking-capacity-renamed'),
   );
   await waitFor(() => expect(bind).toBeEnabled());
+  expect(screen.queryByText(/^Suggested for /)).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: 'Refresh suggestions' }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('link', { name: 'Manage connections in NyxID ↗' }),
+  ).not.toBeInTheDocument();
+  expect(
+    fetchMock.mock.calls.some(([input]) =>
+      String(input).includes('/api/skills/service-recommendations'),
+    ),
+  ).toBe(false);
   expect(writes()).toHaveLength(0);
   fireEvent.click(bind);
   await screen.findByRole('alert');
@@ -222,6 +227,18 @@ it('ignores the URL default when editing a saved registration', async () => {
   renderWithQueryClient(<WorkflowActivityVNextPage />);
   await screen.findByRole('combobox');
   expect(selectedSkill()).toHaveTextContent('saved-support');
+  expect(screen.queryByText(/^Suggested for /)).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: 'Refresh suggestions' }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('link', { name: 'Manage connections in NyxID ↗' }),
+  ).not.toBeInTheDocument();
+  expect(
+    fetchMock.mock.calls.some(([input]) =>
+      String(input).includes('/api/skills/service-recommendations'),
+    ),
+  ).toBe(false);
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
   expect(detailReads()).toHaveLength(0);
   expect(writes()).toHaveLength(0);

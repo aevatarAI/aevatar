@@ -40,7 +40,8 @@ hints get an availability notice with unresolved IDs behind a details disclosure
 There are no instructions to customize login consent.
 
 Users search and select services, then explicitly click Bind bot or Save changes.
-The optional Skill's backend suggestions use this same inventory boundary.
+Skill service suggestions are withdrawn; selecting a Skill does not trigger
+service discovery or display a recommendation panel.
 Required built-in services retain their existing selection and validation rules.
 A successful inventory refresh removes missing, inactive or account-denied
 selections from the draft, selected count and next submission. Active services
