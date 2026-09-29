@@ -84,6 +84,8 @@ public sealed class WorkflowDeliveryConnectionSlotOptions
 
     public string ServiceSlug { get; set; } = string.Empty;
 
+    public string YamlPointer { get; set; } = string.Empty;
+
     public bool Required { get; set; }
 }
 
