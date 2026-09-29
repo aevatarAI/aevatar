@@ -1108,38 +1108,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         }
     }
 
-    private static NyxIdConnectedServiceRawRequest? ParseRawRequest(JsonElement root)
-    {
-        var method = ReadRequiredString(root, "method");
-        var relativePath = ReadRequiredString(root, "relative_path");
-        if (method is null || relativePath is null)
-            return null;
-
-        var runtimeArguments = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        if (root.TryGetProperty("query", out var query))
-        {
-            if (query.ValueKind != JsonValueKind.Object)
-                return null;
-            runtimeArguments["query"] = query;
-        }
-        if (root.TryGetProperty("headers", out var headers))
-        {
-            if (headers.ValueKind != JsonValueKind.Object)
-                return null;
-            runtimeArguments["headers"] = headers;
-        }
-        if (root.TryGetProperty("body", out var body))
-        {
-            if (body.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
-                return null;
-            runtimeArguments["body"] = body;
-        }
-
-        return new NyxIdConnectedServiceRawRequest(
-            method,
-            relativePath,
-            JsonSerializer.Serialize(runtimeArguments));
-    }
+    private static NyxIdConnectedServiceRawRequest? ParseRawRequest(JsonElement root) =>
+        TryReadAuthoredRequest(root, out var method, out var relativePath, out var requestArgumentsJson)
+            ? new NyxIdConnectedServiceRawRequest(method, relativePath, requestArgumentsJson)
+            : null;
 
     private static NyxIdConnectedServiceDocumentRequest? ParseDocumentRequest(JsonElement documentRequest)
     {
@@ -1151,40 +1123,58 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 return null;
         }
 
-        var method = ReadRequiredString(documentRequest, "method");
-        var relativePath = ReadRequiredString(documentRequest, "relative_path");
-        if (method is null || relativePath is null ||
-            !documentRequest.TryGetProperty("skill_ref", out var skillRefElement) ||
-            !TryReadDocumentSkillRef(skillRefElement, out var skillRef))
+        if (!documentRequest.TryGetProperty("skill_ref", out var skillRefElement) ||
+            !TryReadDocumentSkillRef(skillRefElement, out var skillRef) ||
+            !TryReadAuthoredRequest(
+                documentRequest,
+                out var method,
+                out var relativePath,
+                out var requestArgumentsJson))
         {
             return null;
-        }
-
-        var runtimeArguments = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        if (documentRequest.TryGetProperty("query", out var query))
-        {
-            if (query.ValueKind != JsonValueKind.Object)
-                return null;
-            runtimeArguments["query"] = query;
-        }
-        if (documentRequest.TryGetProperty("headers", out var headers))
-        {
-            if (headers.ValueKind != JsonValueKind.Object)
-                return null;
-            runtimeArguments["headers"] = headers;
-        }
-        if (documentRequest.TryGetProperty("body", out var body))
-        {
-            if (body.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
-                return null;
-            runtimeArguments["body"] = body;
         }
 
         return new NyxIdConnectedServiceDocumentRequest(
             method,
             relativePath,
-            JsonSerializer.Serialize(runtimeArguments),
+            requestArgumentsJson,
             skillRef);
+    }
+
+    private static bool TryReadAuthoredRequest(
+        JsonElement root,
+        out string method,
+        out string relativePath,
+        out string requestArgumentsJson)
+    {
+        method = ReadRequiredString(root, "method") ?? string.Empty;
+        relativePath = ReadRequiredString(root, "relative_path") ?? string.Empty;
+        requestArgumentsJson = string.Empty;
+        if (method.Length == 0 || relativePath.Length == 0)
+            return false;
+
+        var runtimeArguments = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        if (root.TryGetProperty("query", out var query))
+        {
+            if (query.ValueKind != JsonValueKind.Object)
+                return false;
+            runtimeArguments["query"] = query;
+        }
+        if (root.TryGetProperty("headers", out var headers))
+        {
+            if (headers.ValueKind != JsonValueKind.Object)
+                return false;
+            runtimeArguments["headers"] = headers;
+        }
+        if (root.TryGetProperty("body", out var body))
+        {
+            if (body.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
+                return false;
+            runtimeArguments["body"] = body;
+        }
+
+        requestArgumentsJson = JsonSerializer.Serialize(runtimeArguments);
+        return true;
     }
 
     private static bool TryReadDocumentSkillRef(JsonElement root, out NyxIdRecommendedSkillRef skillRef)
