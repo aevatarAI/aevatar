@@ -78,7 +78,10 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             string.Join(',', runtimeConfig.ToolSetRefs),
             sources.Count);
 
-        var discoveryToolContext = WithRuntimeConnectedServicesContext(runtimeConfig, toolContext);
+        var senderOwnsServiceAuthority = UsesSenderServiceAuthority(toolContext);
+        var discoveryToolContext = senderOwnsServiceAuthority
+            ? toolContext
+            : WithRuntimeConnectedServicesContext(runtimeConfig, toolContext);
         var availableTools = sources.Count == 0
             ? new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase)
             : await DiscoverToolsAsync(sources, discoveryToolContext, diagnostics, ct).ConfigureAwait(false);
@@ -103,14 +106,16 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             }
         }
 
-        var connectedNames = SelectConnectedOperationNames(runtimeConfig, availableTools, toolContext)
+        var connectedNames = SelectConnectedOperationNames(
+                runtimeConfig, availableTools, toolContext, senderOwnsServiceAuthority)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         LogConnectedServiceSelection(
             runtimeConfig,
             availableTools,
             toolContext,
             selectorSlugs,
-            connectedNames);
+            connectedNames,
+            senderOwnsServiceAuthority);
         selectedNames.UnionWith(connectedNames);
         var selectedTools = availableTools
             .Where(pair => selectedNames.Contains(pair.Key))
@@ -158,6 +163,16 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             new PromptLayerBounds(8 * 1024, 2 * 1024));
     }
 
+    // Registration selectors describe the Agent Key's services, not the bound sender's grant.
+    // Only a selected sender bearer may use its own discovered operations independently.
+    private static bool UsesSenderServiceAuthority(AgentToolExecutionContext context) =>
+        !string.IsNullOrWhiteSpace(context.SenderBinding.BindingId) &&
+        context.CredentialSource == AgentToolCredentialSource.BearerToken &&
+        context.DurableNyxIdCredential is null &&
+        context.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.SourceReadableUserBearer &&
+        context.Credentials.NyxIdCredentialAuthority == AgentToolNyxIdCredentialAuthority.ToolExecutionContext &&
+        !string.IsNullOrWhiteSpace(context.Credentials.NyxIdAccessToken);
+
     private static AgentToolExecutionContext WithRuntimeConnectedServicesContext(
         ChannelRuntimeConfigProof runtimeConfig,
         AgentToolExecutionContext toolContext)
@@ -186,7 +201,8 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
         IReadOnlyDictionary<string, IAgentTool> availableTools,
         AgentToolExecutionContext toolContext,
         IReadOnlyList<string> selectorSlugs,
-        IReadOnlySet<string> connectedNames)
+        IReadOnlySet<string> connectedNames,
+        bool senderOwnsServiceAuthority)
     {
         var connectedOperationCount = 0;
         var visibilityRejectedCount = 0;
@@ -221,20 +237,23 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
                 continue;
             }
 
-            var matchedSelector = endpointFilters.FirstOrDefault(selector =>
-                MatchesServiceSlug(owner.OperationAdmission, selector.ServiceSlug!));
-            if (matchedSelector is null)
+            if (!senderOwnsServiceAuthority)
             {
-                slugRejectedCount++;
-                continue;
-            }
+                var matchedSelector = endpointFilters.FirstOrDefault(selector =>
+                    MatchesServiceSlug(owner.OperationAdmission, selector.ServiceSlug!));
+                if (matchedSelector is null)
+                {
+                    slugRejectedCount++;
+                    continue;
+                }
 
-            if (matchedSelector.Endpoints.Count > 0 &&
-                (owner.OperationAdmission.Identity is not AgentToolOperationIdentity.PublishedEndpoint published ||
-                 !matchedSelector.Endpoints.Contains(published.EndpointId)))
-            {
-                endpointRejectedCount++;
-                continue;
+                if (matchedSelector.Endpoints.Count > 0 &&
+                    (owner.OperationAdmission.Identity is not AgentToolOperationIdentity.PublishedEndpoint published ||
+                     !matchedSelector.Endpoints.Contains(published.EndpointId)))
+                {
+                    endpointRejectedCount++;
+                    continue;
+                }
             }
 
             eligibleCandidateCount++;
@@ -243,7 +262,7 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
         }
 
         _logger.LogInformation(
-            "Channel runtime connected-service selection completed. registration={RegistrationId} configRevision={ConfigRevision} selectorCount={SelectorCount} selectorSlugs={SelectorSlugs} availableToolCount={AvailableToolCount} connectedOperationCount={ConnectedOperationCount} connectedOperationSlugs={ConnectedOperationSlugs} visibilityRejectedCount={VisibilityRejectedCount} slugRejectedCount={SlugRejectedCount} endpointRejectedCount={EndpointRejectedCount} eligibleConnectedCandidateCount={EligibleConnectedCandidateCount} selectedConnectedToolCount={SelectedConnectedToolCount} selectedConnectedSlugs={SelectedConnectedSlugs} visibilityRestricted={VisibilityRestricted} visibilityAllowedToolCount={VisibilityAllowedToolCount}",
+            "Channel runtime connected-service selection completed. registration={RegistrationId} configRevision={ConfigRevision} selectorCount={SelectorCount} selectorSlugs={SelectorSlugs} availableToolCount={AvailableToolCount} connectedOperationCount={ConnectedOperationCount} connectedOperationSlugs={ConnectedOperationSlugs} visibilityRejectedCount={VisibilityRejectedCount} slugRejectedCount={SlugRejectedCount} endpointRejectedCount={EndpointRejectedCount} eligibleConnectedCandidateCount={EligibleConnectedCandidateCount} selectedConnectedToolCount={SelectedConnectedToolCount} selectedConnectedSlugs={SelectedConnectedSlugs} visibilityRestricted={VisibilityRestricted} visibilityAllowedToolCount={VisibilityAllowedToolCount} senderOwnsServiceAuthority={SenderOwnsServiceAuthority}",
             runtimeConfig.RegistrationId,
             runtimeConfig.ConfigRevision,
             runtimeConfig.NyxidServiceSelectors.Count,
@@ -258,7 +277,8 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             connectedNames.Count,
             string.Join(',', selectedConnectedSlugs.Where(static slug => !string.IsNullOrWhiteSpace(slug)).Order(StringComparer.OrdinalIgnoreCase)),
             toolContext.ToolVisibility.IsRestricted,
-            toolContext.ToolVisibility.AllowedToolNames?.Count ?? -1);
+            toolContext.ToolVisibility.AllowedToolNames?.Count ?? -1,
+            senderOwnsServiceAuthority);
     }
 
     private static string AddRuntimeSelectors(
@@ -425,11 +445,13 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
     private static IEnumerable<string> SelectConnectedOperationNames(
         ChannelRuntimeConfigProof runtimeConfig,
         IReadOnlyDictionary<string, IAgentTool> availableTools,
-        AgentToolExecutionContext toolContext)
+        AgentToolExecutionContext toolContext,
+        bool senderOwnsServiceAuthority)
     {
-        if (runtimeConfig.NyxidServiceSelectors.Count == 0)
+        if (senderOwnsServiceAuthority || runtimeConfig.NyxidServiceSelectors.Count == 0)
         {
-            if (runtimeConfig.AuthorizationMode != ChannelRegistrationAuthorizationMode.NyxidDefault)
+            if (!senderOwnsServiceAuthority &&
+                runtimeConfig.AuthorizationMode != ChannelRegistrationAuthorizationMode.NyxidDefault)
                 yield break;
 
             foreach (var pair in availableTools)

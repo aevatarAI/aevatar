@@ -363,15 +363,22 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Theory]
-    [InlineData(true, true, true, false)]
-    [InlineData(true, true, false, true)]
-    [InlineData(true, false, false, true)]
-    [InlineData(false, false, false, true)]
+    [InlineData(true, true, true, false, "api-google-workspace")]
+    [InlineData(true, true, false, true, "api-google-workspace")]
+    [InlineData(true, false, false, true, "api-google-workspace")]
+    [InlineData(false, false, false, true, "api-google-workspace")]
+    [InlineData(true, true, true, false, "ornn-api")]
+    [InlineData(true, true, true, false, null)]
+    [InlineData(true, true, false, true, "ornn-api")]
+    [InlineData(true, false, false, true, "ornn-api")]
+    [InlineData(false, false, false, true, "ornn-api")]
+    [InlineData(false, false, false, true, null)]
     public async Task BuildInitialStepState_WhenChannelRuntimeConfigUsesRegistrationAgentKey_ShouldSeparateLlmAndToolAuthority(
         bool senderBound,
         bool senderTokenAvailable,
         bool senderHasGoogle,
-        bool registrationHasGoogle)
+        bool registrationHasGoogle,
+        string? registrationServiceSlug)
     {
         var secretVault = new InMemorySecretVault();
         var stored = await secretVault.PutAsync(new StoreSecretRequest(
@@ -392,7 +399,9 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var expectedLlmToken = senderBound ? "sender-llm-token" : "channel-agent-key-token";
         string? expectedServiceId = senderBound
             ? senderTokenAvailable && senderHasGoogle ? "sender-google" : null
-            : registrationHasGoogle ? "registration-google" : null;
+            : registrationHasGoogle && registrationServiceSlug == "api-google-workspace"
+                ? "registration-google"
+                : null;
         string[] expectedServiceIds = expectedServiceId is null ? [] : [expectedServiceId];
         var request = fixture.Request.Clone();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
@@ -438,10 +447,14 @@ public sealed class AgentRunReplyGenerationExecutorTests
             InstructionsDigest = "sha256:instructions",
             Instructions = "Only answer booking capacity questions.",
             CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+            AuthorizationMode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
         };
         request.ChannelRuntimeConfig.ToolSetRefs.Add("channel.reply.default");
-        request.ChannelRuntimeConfig.NyxidServiceSelectors.Add(
-            new ChannelBotRuntimeNyxIdServiceSelector { ServiceSlug = "api-google-workspace" });
+        if (registrationServiceSlug is not null)
+        {
+            request.ChannelRuntimeConfig.NyxidServiceSelectors.Add(
+                new ChannelBotRuntimeNyxIdServiceSelector { ServiceSlug = registrationServiceSlug });
+        }
 
         var state = await fixture.Executor.BuildInitialStepStateAsync(
             new AgentRunReplyGenerationExecutionRequest("run-1", "channel-agent-run:run-1", 1, request),
@@ -811,6 +824,83 @@ public sealed class AgentRunReplyGenerationExecutorTests
         selector.GetProperty("service_slug").GetString().Should().Be("api-google-workspace");
         selector.GetProperty("endpoint_names").EnumerateArray().Select(static element => element.GetString())
             .Should().BeEquivalentTo("calendar_create_event");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChannelRuntimeCatalog_WhenSenderOwnsServiceAuthority_ShouldPreserveSenderDiscoveryAndToolVisibility(
+        bool hasRegistrationSelectors)
+    {
+        var routeTool = new CountingTool("route_tool");
+        var calendarOperation = new ConnectedOperationTool(
+            "calendar_create_event", "api-google-workspace", "calendar_create_event");
+        var hiddenOperation = new ConnectedOperationTool("mail_send", "api-google-workspace", "mail_send");
+        IAgentTool[] tools = [routeTool, calendarOperation, hiddenOperation];
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.default", new StaticToolSource(tools));
+        var discoveryService = new RecordingDiscoveryService(tools);
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(registry, discoveryService);
+        var runtimeConfig = new ChannelRuntimeConfigProof
+        {
+            ToolSetRefs = { "channel.reply.default" },
+            AuthorizationMode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
+            CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+        };
+        if (hasRegistrationSelectors)
+        {
+            runtimeConfig.NyxidServiceSelectors.Add(new ChannelBotRuntimeNyxIdServiceSelector
+            {
+                ServiceSlug = "api-google-workspace",
+                EndpointNames = { "mail_send" },
+            });
+        }
+        var runtimeConfigBefore = runtimeConfig.Clone();
+        var toolContext = ChannelConnectedServiceCredentialPolicy.Apply(
+            AgentToolExecutionContext.Empty with
+            {
+                SenderBinding = new AgentToolSenderBindingContext("binding-sender"),
+                ConnectedServices = new AgentToolConnectedServicesContext("""{"existing":"value"}"""),
+                ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["route_tool", "calendar_create_event"]),
+            },
+            "sender-token",
+            registrationAgentKey: null);
+
+        var catalog = await materializer.MaterializeAsync(runtimeConfig, [], toolContext, CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool", "calendar_create_event");
+        catalog.Proof.ToolDescriptors.Single(descriptor => descriptor.Name == "calendar_create_event")
+            .Origin.Should().Be(AgentTurnToolOrigin.ConnectedService);
+        discoveryService.Contexts.Should().ContainSingle().Which.ConnectedServices
+            .Should().Be(toolContext.ConnectedServices);
+        runtimeConfig.Should().Be(runtimeConfigBefore);
+    }
+
+    [Fact]
+    public async Task ChannelRuntimeCatalog_WhenAgentKeyContextRetainsSenderBinding_ShouldKeepRegistrationSelectors()
+    {
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("channel.reply.default", new StaticToolSource(
+            [new ConnectedOperationTool("calendar_list", "api-google-workspace", "calendar_list")]));
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(registry);
+        var context = ChannelConnectedServiceCredentialPolicy.Apply(
+            AgentToolExecutionContext.Empty, senderToken: null, registrationAgentKey: "registration-key") with
+        {
+            SenderBinding = new AgentToolSenderBindingContext("binding-sender"),
+        };
+
+        var catalog = await materializer.MaterializeAsync(
+            new ChannelRuntimeConfigProof
+            {
+                ToolSetRefs = { "channel.reply.default" },
+                AuthorizationMode = ChannelRegistrationAuthorizationMode.ExplicitServiceAllowlist,
+                NyxidServiceSelectors = { new ChannelBotRuntimeNyxIdServiceSelector { ServiceSlug = "ornn-api" } },
+            },
+            [],
+            context,
+            CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
     }
 
     [Fact]

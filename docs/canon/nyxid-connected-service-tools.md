@@ -196,6 +196,8 @@ Channel registration 采用 `registration_agent_key` 时，外层工具准入使
 
 Channel connected-service 的授权主体在进入 discovery 前一次性确定：存在 verified `SenderBinding.BindingId` 时，inventory、OpenAPI/catalog discovery、operation admission 和 proxy execution 全部使用该 sender 的 request-local bearer；binding token exchange 失败或 binding 在请求期间变化时 fail closed，不降级到 registration Agent Key 或 bot-owner token。只有明确不存在 sender binding 时，Channel registration 的 Agent Key 才能作为业务 connected-service 的执行凭据。LLM provider credential 与这条业务服务凭据链路独立解析，不能通过 `LLMControlContext` 回填覆盖已选定的 sender authority。
 
+Registration 的 Service ID 白名单及其派生的 runtime Service/endpoint selectors 只约束 registration authority。Channel 已选定 sender bearer 时，目录物化不向 discovery 注入 registration selectors，也不以它们过滤 sender 已发现的操作；registration 为显式空白名单时亦如此。该分支必须同时具有 sender binding、有效的 `BearerToken / SourceReadableUserBearer / ToolExecutionContext` 凭据上下文，且没有 registration durable credential；仅存在 binding 不构成绕过 selectors 的依据。Sender 自身的 NyxID grant、exact inventory/catalog 交集、tool-set、tool visibility、catalog budget、operation admission 与执行授权仍然生效。Agent Key 路径继续执行原有 registration selectors、白名单和 grant 校验。
+
 内部准入拒绝的 `credential_denied` 回执映射为 `Denied / NYXID_SERVICE_INVENTORY_CREDENTIAL_DENIED`，只返回固定的安全文案，要求修正凭据配置后再重试；普通 inventory 不可用仍返回 `NYXID_SERVICE_INVENTORY_FAILED`。wrapper 日志保留 request ID、call ID、typed failure stage 和 error code，不记录 token 或外部原始错误正文。回归验证必须让外层 inventory 与内部 reader 都经过真实 `AdmittedAgentToolExecutor`，同时检查发送者 HTTP Authorization、两个调用的独立审计记录以及外层上下文未被改变。
 
 ### Channel registrations and Agent Key route semantics
