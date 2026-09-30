@@ -1,0 +1,52 @@
+name: resume_screening_review
+description: >-
+  Compare a supplied resume with explicit role criteria, produce an evidence-linked screening note, and require human review before marking the candidate for follow-up. Use this starter when the run input contains a job description, required and preferred criteria, and resume text that a recruiter is authorized to review. It does not make an autonomous hiring decision.
+roles:
+  - id: resume_screener
+    name: Resume Screener
+    system_prompt: >-
+      Compare only job-relevant evidence in the supplied resume with the supplied criteria. Do not infer protected characteristics, personality, culture fit, health, family status, age, ethnicity, religion, gender, or other sensitive attributes. Cite the resume evidence behind each match or gap, distinguish missing information from negative evidence, and recommend questions for a human recruiter. Return concise Markdown.
+    temperature: 0.1
+    max_tokens: 1600
+    allowed_tools: []
+steps:
+  - id: screen_resume
+    type: llm_call
+    target_role: resume_screener
+    parameters:
+      prompt_prefix: >-
+        Screen the following role criteria and resume. Keep the assessment job-related, evidence-linked, and suitable for human review:
+    next: review_screening
+
+  - id: review_screening
+    type: human_approval
+    parameters:
+      prompt: Mark this screening note as reviewed for recruiter follow-up?
+      on_reject: skip
+      timeout_seconds: "3600"
+      timeout_default_decision: reject
+    branches:
+      "true": record_reviewed_screening
+      "false": record_unreviewed_screening
+
+  - id: record_reviewed_screening
+    type: assign
+    parameters:
+      target: resume_screening_result
+      value: >-
+        REVIEWED FOR HUMAN FOLLOW-UP. This is not a hiring decision. Original screening note: ${steps.screen_resume.output} Review response: ${input}
+    next: finish_resume_screening
+
+  - id: record_unreviewed_screening
+    type: assign
+    parameters:
+      target: resume_screening_result
+      value: >-
+        NOT CLEARED FOR FOLLOW-UP. A recruiter must revise or re-review this note. Screening note: ${input}
+    next: finish_resume_screening
+
+  - id: finish_resume_screening
+    type: assign
+    parameters:
+      target: resume_screening_result
+      value: "$input"

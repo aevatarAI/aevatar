@@ -1,0 +1,48 @@
+name: meeting_follow_up
+description: >-
+  Convert supplied meeting notes into decisions, action items, owners, due dates, unresolved questions, and a concise follow-up draft, then check the result against the notes. Use this starter when the run input contains meeting notes or a transcript and any known attendee, project, and date context needed to interpret relative commitments. It does not send messages or create tasks.
+roles:
+  - id: follow_up_writer
+    name: Follow-up Writer
+    system_prompt: >-
+      Extract only explicit decisions, action items, owners, due dates, risks, and open questions from the supplied notes. Mark owners or dates as unassigned when they are not stated, preserve uncertainty, and do not invent commitments. Then draft a concise follow-up message. Return Markdown.
+    temperature: 0.1
+    max_tokens: 1600
+    allowed_tools: []
+  - id: notes_auditor
+    name: Notes Auditor
+    system_prompt: >-
+      Audit a meeting follow-up against the evidence quoted in it. Remove invented decisions, owners, and dates; make ambiguity explicit; preserve actionable structure; and append a short list of items that still need confirmation. Do not claim that any task or message was created. Return the complete revised follow-up.
+    temperature: 0.1
+    max_tokens: 1600
+    allowed_tools: []
+steps:
+  - id: capture_meeting_source
+    type: assign
+    parameters:
+      target: meeting_source
+      value: "$input"
+    next: draft_follow_up
+
+  - id: draft_follow_up
+    type: llm_call
+    target_role: follow_up_writer
+    parameters:
+      prompt_prefix: >-
+        Produce a structured follow-up from these meeting notes and context:
+    next: audit_follow_up
+
+  - id: audit_follow_up
+    type: llm_call
+    target_role: notes_auditor
+    parameters:
+      prompt_prefix: >-
+        Audit this meeting follow-up against the original notes below for invented commitments and return a corrected final version. Original notes: ${meeting_source}
+    next: record_meeting_follow_up
+
+  - id: record_meeting_follow_up
+    type: assign
+    parameters:
+      target: meeting_follow_up_result
+      value: >-
+        FOLLOW-UP READY FOR HUMAN REVIEW. Nothing was sent and no task was created. ${steps.audit_follow_up.output}

@@ -1,0 +1,41 @@
+name: support_triage
+description: >-
+  Classify a supplied support request, identify urgency and routing evidence, and draft a response for an operator. Use this starter when the run input contains the customer request plus any known account, product, severity, and service-level context needed for triage. It does not send messages, modify tickets, or claim that an issue has been resolved.
+roles:
+  - id: support_triager
+    name: Support Triager
+    system_prompt: >-
+      Triage the supplied support request using only available evidence. Return concise Markdown with issue summary, category, impact, urgency, missing diagnostics, recommended owner, escalation reason if any, and the next best questions. Never invent account state, incident status, or service-level commitments.
+    temperature: 0.1
+    max_tokens: 1200
+    allowed_tools: []
+  - id: response_drafter
+    name: Response Drafter
+    system_prompt: >-
+      Draft a short operator-reviewable response from a support triage note. Acknowledge the issue, ask only necessary questions, state the next step without making unsupported promises, and do not say that the message was sent or the issue was resolved. Return the response followed by a one-line internal routing note.
+    temperature: 0.2
+    max_tokens: 900
+    allowed_tools: []
+steps:
+  - id: triage_request
+    type: llm_call
+    target_role: support_triager
+    parameters:
+      prompt_prefix: >-
+        Triage this support request and its available context:
+    next: draft_operator_response
+
+  - id: draft_operator_response
+    type: llm_call
+    target_role: response_drafter
+    parameters:
+      prompt_prefix: >-
+        Draft an operator-reviewable response from this triage note:
+    next: record_support_triage
+
+  - id: record_support_triage
+    type: assign
+    parameters:
+      target: support_triage_result
+      value: >-
+        SUPPORT TRIAGE READY FOR OPERATOR REVIEW. Nothing was sent and no ticket was changed. ${steps.draft_operator_response.output}
