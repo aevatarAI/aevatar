@@ -118,6 +118,27 @@ public sealed class NyxIdConnectLinksTool :
         receipt.Status == AgentToolReceiptStatus.Success ? terminalResultJson ?? string.Empty : null;
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        => (await ExecuteWithOutcomeAsync(AgentToolRequestContext.Current?.Request.CallId ?? string.Empty,
+            Name, argumentsJson, ct).ConfigureAwait(false)).ResultJson;
+
+    public async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeAsync(
+        string callId, string toolName, string argumentsJson, CancellationToken ct = default)
+    {
+        var context = AgentToolRequestContext.Current;
+        var isChannel = context?.Channel.Continuation is not null ||
+                        !string.IsNullOrWhiteSpace(context?.Channel.BotRegistrationId);
+        var parsed = ActionParser.Parse(argumentsJson);
+        if (isChannel && parsed.IsValid && parsed.Action == NyxIdConnectLinksAction.Create)
+        {
+            var args = ToolArgs.Parse(argumentsJson);
+            if (args.HasParseError)
+                return new(JsonSerializer.Serialize(new { error = "invalid_arguments", message = args.ParseError }, SerializerOptions));
+            return await CreateChannelAsync(context!, callId, toolName, args, ct).ConfigureAwait(false);
+        }
+        return new(await ExecuteDirectAsync(argumentsJson, ct).ConfigureAwait(false));
+    }
+
+    private async Task<string> ExecuteDirectAsync(string argumentsJson, CancellationToken ct)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
         var context = AgentToolRequestContext.Current;
@@ -137,9 +158,6 @@ public sealed class NyxIdConnectLinksTool :
             return JsonSerializer.Serialize(new { error = "invalid_arguments", message = args.ParseError }, SerializerOptions);
 
         var id = args.Str("id");
-        if (parsed.Action == NyxIdConnectLinksAction.Create && isChannel)
-            return await CreateChannelAsync(context!, args, ct).ConfigureAwait(false);
-
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"sender_authorization_unavailable"}""";
 
@@ -156,14 +174,15 @@ public sealed class NyxIdConnectLinksTool :
         };
     }
 
-    private async Task<string> CreateChannelAsync(AgentToolExecutionContext context, ToolArgs args, CancellationToken ct)
+    private async Task<AgentToolTerminalOutcome> CreateChannelAsync(AgentToolExecutionContext context,
+        string callId, string toolName, ToolArgs args, CancellationToken ct)
     {
         if (_continuationPort is null)
-            return """{"error":"channel_continuation_unavailable"}""";
+            return new("""{"error":"channel_continuation_unavailable"}""");
 
         var catalogSlug = NormalizeOptional(args.Str("service_slug") ?? args.Str("slug"));
         if (catalogSlug is null)
-            return """{"error":"invalid_arguments","message":"'service_slug' is required."}""";
+            return new("""{"error":"invalid_arguments","message":"'service_slug' is required."}""");
 
         // Channel routing, callback URL, and creator identity are runtime-owned. In particular,
         // a model-provided callback_url or target_org_id cannot redirect this continuation.
@@ -172,14 +191,22 @@ public sealed class NyxIdConnectLinksTool :
             NormalizeOptional(args.Str("label")),
             NormalizeOptional(args.Str("requested_by")),
             args.Int("expires_in")), ct).ConfigureAwait(false);
-        return result.Accepted && result.ErrorCode is null
-            ? JsonSerializer.Serialize(new
-            {
-                status = "accepted",
-                callback_id = result.CallbackId,
-                message = "The connection request was accepted. The link will arrive in this conversation after it has been created. Do not invent a link or claim that the service is connected.",
-            }, SerializerOptions)
-            : JsonSerializer.Serialize(new { error = result.ErrorCode }, SerializerOptions);
+        if (!result.Accepted || result.ErrorCode is not null)
+            return new(JsonSerializer.Serialize(new { error = result.ErrorCode ?? "channel_continuation_rejected" }, SerializerOptions));
+        if (string.IsNullOrWhiteSpace(result.CallbackId) || string.IsNullOrWhiteSpace(result.OperationActorId))
+            return new("""{"error":"channel_continuation_receipt_invalid"}""");
+
+        // Accepted registration is not a created link. The run actor consumes this
+        // typed marker before the next model step and waits for the real tool result.
+        var accepted = JsonSerializer.Serialize(new { status = "accepted", callback_id = result.CallbackId }, SerializerOptions);
+        return new(accepted, new AgentToolReceipt
+        {
+            CallId = callId, ToolName = toolName, Status = AgentToolReceiptStatus.Success,
+            MutationStage = AgentToolReceiptMutationStage.Accepted,
+            SubjectKind = "external_callback", SubjectId = result.CallbackId, ResultJson = accepted,
+            ChannelConnectLinkPending = new ChannelConnectLinkPendingReceipt
+            { CallbackId = result.CallbackId, OperationActorId = result.OperationActorId },
+        });
     }
 
     private async Task<string> CreateAsync(string token, ToolArgs args, CancellationToken ct)

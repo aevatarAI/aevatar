@@ -37,6 +37,9 @@ message ExternalCallbackState {
   // deadline after the external operation expires.
   int64 delivery_deadline_at_unix_ms = 20;
   string delivery_failure_code = 21;
+  bool tool_result_requested = 22;
+  bool tool_result_consumed = 23;
+  aevatar.gagents.channel.abstractions.ConnectLinkCreationResult tool_result = 24;
 }
 
 message ExternalCallbackSnapshot {

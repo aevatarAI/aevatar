@@ -17,12 +17,12 @@ public sealed partial class ChannelConversationTurnRunner
         if (registration is not { Tombstoned: false } ||
             !IsCallbackOriginRegistrationMatch(link.Origin, registration, runtimeContext.ConversationActorId))
             return ConversationTurnResult.PermanentFailure("callback_origin_unavailable", "The original Channel registration is unavailable.");
+        if (link.Kind != ExternalCallbackKind.Oauth)
+            return ConversationTurnResult.PermanentFailure("connect_link_requires_tool_result", "Connect Link creation must resume its originating tool call.");
         var activity = link.Origin.OriginalActivity.Clone();
         if (activity.OutboundDelivery is not null)
             activity.OutboundDelivery.CorrelationId = link.CallbackId;
-        var text = link.Kind == ExternalCallbackKind.Oauth
-            ? $"请打开以下链接完成 NyxID 授权，完成后我会在当前会话继续：\n{link.ConnectUrl}"
-            : $"请打开以下链接完成服务连接，完成后我会在当前会话继续：\n{link.ConnectUrl}";
+        var text = $"请打开以下链接完成 NyxID 授权，完成后我会在当前会话继续：\n{link.ConnectUrl}";
         return await SendReplyAsync(new MessageContent { Text = text }, link.CallbackId,
             activity.Conversation, ToInboundMessage(activity), registration,
             runtimeContext with { UseRegistrationOutbound = true }, ct);

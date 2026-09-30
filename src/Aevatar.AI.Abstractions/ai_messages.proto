@@ -394,6 +394,16 @@ message AgentToolChannelContinuationContext {
   string nyx_lark_union_id = 24;
   string nyx_lark_chat_id = 25;
   string outbound_correlation_id = 26;
+  // Stamped by the AgentRun executor, never supplied by the skill or model.
+  AgentToolChannelRunContext tool_run = 27;
+}
+
+message AgentToolChannelRunContext {
+  string actor_id = 1;
+  string run_id = 2;
+  int32 attempt = 3;
+  // Index of the completed tool-step result that will own this continuation.
+  int32 step_index = 4;
 }
 
 message AgentToolChannelSenderAuthorization {
@@ -573,6 +583,13 @@ message AgentToolReceipt {
   NyxIdApprovalTerminalOutcome nyx_id_approval_terminal_outcome = 22;
   NyxIdExactServiceApprovalAuthority exact_service_approval = 23;
   AgentToolFailureOutcome failure_outcome = 24;
+  // Registration accepted, but the exact tool call still awaits its real URL.
+  ChannelConnectLinkPendingReceipt channel_connect_link_pending = 25;
+}
+
+message ChannelConnectLinkPendingReceipt {
+  string callback_id = 1;
+  string operation_actor_id = 2;
 }
 
 enum AgentToolCancellationAuditOutcomeKind {

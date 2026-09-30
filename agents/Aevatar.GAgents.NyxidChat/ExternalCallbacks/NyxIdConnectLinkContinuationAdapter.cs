@@ -23,6 +23,10 @@ public sealed class NyxIdConnectLinkContinuationAdapter(
             return new(ErrorCode: "original_sender_authorization_missing");
         if (!MatchesOriginalSender(context, origin, authorization!))
             return new(ErrorCode: "original_sender_authorization_mismatch");
+        var toolRun = origin.ToolRun;
+        if (toolRun is null || string.IsNullOrWhiteSpace(toolRun.ActorId) || string.IsNullOrWhiteSpace(toolRun.RunId) ||
+            toolRun.Attempt <= 0 || toolRun.StepIndex <= 0 || string.IsNullOrWhiteSpace(context.Request.CallId))
+            return new(ErrorCode: "channel_tool_continuation_missing");
         if (string.IsNullOrWhiteSpace(request.CatalogServiceSlug))
             return new(ErrorCode: "catalog_service_slug_required");
 
@@ -31,6 +35,12 @@ public sealed class NyxIdConnectLinkContinuationAdapter(
         var registration = await callbacks.AdmitAsync(new ExternalCallbackRegistration
         {
             CallbackId = Guid.NewGuid().ToString("N"), Kind = ExternalCallbackKind.ConnectLink,
+            LinkDeliveryMode = ExternalCallbackLinkDeliveryMode.Tool,
+            ToolContinuation = new ConnectLinkToolContinuationTarget
+            {
+                ActorId = toolRun.ActorId, RunId = toolRun.RunId, Attempt = toolRun.Attempt,
+                StepIndex = toolRun.StepIndex, CallId = context.Request.CallId,
+            },
             Origin = CreateOrigin(context, origin), Authorization = authorization,
             RequestedCatalogServiceSlug = request.CatalogServiceSlug.Trim(),
             ExpiresAtUnixMs = timeProvider.GetUtcNow().AddSeconds(ttlSeconds).ToUnixTimeMilliseconds(),
@@ -42,8 +52,9 @@ public sealed class NyxIdConnectLinkContinuationAdapter(
             },
         }, ct).ConfigureAwait(false);
         // This tool executes inside an actor turn: acceptance cannot wait for another actor's
-        // commit or HTTP create. The operation authority delivers the committed URL separately.
-        return new(registration.CallbackId, Accepted: true);
+        // commit or HTTP create. The original AgentRun consumes the typed pending receipt
+        // and receives the actual URL through its durable tool-result continuation.
+        return new(registration.CallbackId, Accepted: true, OperationActorId: registration.OperationActorId);
     }
 
     private static CallbackAuthorizationReference? Authorization(AgentToolChannelContinuationContext origin)
@@ -71,7 +82,7 @@ public sealed class NyxIdConnectLinkContinuationAdapter(
     {
         ConversationActorId = origin.ConversationActorId,
         ChannelRegistrationId = origin.ChannelRegistrationId,
-        ActionId = context.Request.CallId ?? context.Request.RequestId ?? origin.OriginalActivityId,
+        ActionId = context.Request.CallId!,
         OriginalActivity = new ChatActivity
         {
             Id = origin.OriginalActivityId, Type = ActivityType.Message,

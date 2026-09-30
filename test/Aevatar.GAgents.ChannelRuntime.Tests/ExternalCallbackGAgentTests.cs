@@ -12,7 +12,7 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-public sealed class ExternalCallbackGAgentTests
+public sealed partial class ExternalCallbackGAgentTests
 {
     [Fact]
     public async Task CallerDeliveredOAuth_DoesNotRepublishLink_AndStillCompletesAfterBindingDecision()
@@ -729,6 +729,7 @@ public sealed class ExternalCallbackGAgentTests
             Registration = new()
             {
                 CallbackId = "cb-a", OperationActorId = "opaque-operation-a", Kind = kind, LinkDeliveryMode = linkDeliveryMode,
+                ToolContinuation = linkDeliveryMode == ExternalCallbackLinkDeliveryMode.Tool ? ToolTarget() : null,
                 ExpiresAtUnixMs = expiresAtUnixMs ?? Clock.GetUtcNow().AddDays(1).ToUnixTimeMilliseconds(),
                 RequestedCatalogServiceSlug = "google", OauthAuthorizeUrl = "https://nyxid.test/authorize?state=signed", ConnectLinkRequest = new() { ExpiresInSeconds = 3600 },
                 Authorization = new() { ExternalSubject = new() { Platform = "lark", Tenant = "tenant-a", ExternalUserId = "sender-a" }, BindingId = "sender-binding", OwnerScopeId = "owner-a" },
@@ -772,10 +773,10 @@ public sealed class ExternalCallbackGAgentTests
             await Agent.HandleRetryAsync(new() { CallbackId = "cb-a", Generation = Agent.State.TimerGeneration });
         }
         public Task FireScheduledAsync() => Agent.HandleEventAsync(Scheduler.ConsumeNext());
-        public Task DeliverAsync(IMessage message) => Agent.HandleEventAsync(new EventEnvelope
+        public Task DeliverAsync(IMessage message, string publisher = "opaque-conversation-a") => Agent.HandleEventAsync(new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"), Payload = Google.Protobuf.WellKnownTypes.Any.Pack(message),
-            Route = new EnvelopeRoute { PublisherActorId = "opaque-conversation-a", Direct = new DirectRoute { TargetActorId = Agent.Id } },
+            Route = new EnvelopeRoute { PublisherActorId = publisher, Direct = new DirectRoute { TargetActorId = Agent.Id } },
         });
         public OAuthContinuationSubmission Submission() => new() { CallbackId = "cb-a", ExternalSubject = Agent.State.Registration.Authorization.ExternalSubject.Clone(), AuthorizationCode = "one-use-code", PkceVerifier = "verifier", ExpiresAtUnixMs = Agent.State.Registration.ExpiresAtUnixMs };
         public OAuthBindingOutcome Outcome(bool succeeded) => new() { CallbackId = "cb-a", BindingId = "binding-verified", OwnerScopeId = "owner-a", ExternalSubject = Agent.State.Registration.Authorization.ExternalSubject.Clone(), Succeeded = succeeded };
@@ -832,11 +833,14 @@ public sealed class ExternalCallbackGAgentTests
     }
     private sealed class CreationPort(FakeClock clock) : IConnectLinkCreationPort
     {
+        public string? FailureCode { get; set; }
         public Action? BeforeCreate { get; set; }
         public int Calls { get; private set; }
         public Task<ConnectLinkCreationResult> CreateAsync(ExternalCallbackRegistration registration, CancellationToken ct = default)
         {
             Calls++; BeforeCreate?.Invoke();
+            if (FailureCode is not null) return Task.FromResult(new ConnectLinkCreationResult
+            { FailureCode = FailureCode, FailureOutcome = ConnectLinkCreationFailureOutcome.NotCreated });
             return Task.FromResult(new ConnectLinkCreationResult { ExternalRequestId = "link-exact", ConnectUrl = "https://nyxid.test/connect/link-exact", ExpiresAtUnixMs = clock.GetUtcNow().AddHours(1).ToUnixTimeMilliseconds() });
         }
     }

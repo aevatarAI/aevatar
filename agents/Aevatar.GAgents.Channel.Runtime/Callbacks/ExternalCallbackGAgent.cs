@@ -12,7 +12,7 @@ namespace Aevatar.GAgents.Channel.Runtime;
 
 /// <summary>One external operation, one durable authority. HTTP returns never decide success.</summary>
 [GAgent("channel.runtime.external-callback")]
-public sealed class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
+public sealed partial class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
 {
     public const int MaxVerificationAttempts = 12;
     public static readonly TimeSpan RetryInterval = TimeSpan.FromMinutes(1);
@@ -31,7 +31,11 @@ public sealed class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
         await base.OnActivateAsync(ct);
         // Recover the saved lease without inventing state on a callback thread.
         if (State.Registration is not null && (!Consumed || State.AbandonPending))
+        {
             await ArmAsync(ct);
+            if (ToolDelivery)
+                await SendToAsync(Id, new ExternalCallbackStartRequested { CallbackId = State.Registration.CallbackId }, ct);
+        }
     }
 
     [EventHandler]
@@ -72,9 +76,19 @@ public sealed class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleStartAsync(ExternalCallbackStartRequested command)
     {
-        if (!Matches(command.CallbackId) || Terminal || Consumed) return;
+        if (!Matches(command.CallbackId) || Consumed) return;
+        if (ToolDelivery && State.ToolResult is not null)
+        {
+            if (Terminal) await DeliverAsync();
+            else await DeliverLinkAsync();
+            return;
+        }
+        if (Terminal) return;
         if (Now >= State.Registration.ExpiresAtUnixMs)
         { await CompleteAsync(CallbackResult.Expired, "expired"); return; }
+        // Do not create an external side effect until the originating run has
+        // durably recorded the exact pending tool call and declared it ready.
+        if (ToolDelivery && !State.ToolResultRequested) return;
         if (State.LinkUrl.Length > 0) { await DeliverLinkAsync(); return; }
         if (State.Registration.Kind == ExternalCallbackKind.Oauth)
         {
@@ -107,12 +121,19 @@ public sealed class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
         if (!string.IsNullOrEmpty(created.FailureCode) || string.IsNullOrWhiteSpace(created.ExternalRequestId) ||
             !Uri.TryCreate(created.ConnectUrl, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http") ||
             created.ExpiresAtUnixMs <= Now)
-        { await CompleteAsync(CallbackResult.Failed, "connect_link_creation_failed"); return; }
+        { await CompleteAsync(CallbackResult.Failed, string.IsNullOrWhiteSpace(created.FailureCode)
+            ? "connect_link_creation_unconfirmed" : created.FailureCode,
+            creationFailureOutcome: created.FailureOutcome); return; }
         var linked = State.Clone();
         linked.Registration.ExternalRequestId = created.ExternalRequestId;
         linked.Registration.ExpiresAtUnixMs = Math.Min(linked.Registration.ExpiresAtUnixMs, created.ExpiresAtUnixMs);
         linked.DeliveryDeadlineAtUnixMs = linked.Registration.ExpiresAtUnixMs + (long)DeliveryGrace.TotalMilliseconds;
         linked.LinkUrl = created.ConnectUrl;
+        if (ToolDelivery)
+        {
+            linked.ToolResult = created.Clone();
+            linked.ToolResult.ExpiresAtUnixMs = linked.Registration.ExpiresAtUnixMs;
+        }
         await SaveAsync(linked);
         await DeliverLinkAsync();
     }
@@ -120,7 +141,7 @@ public sealed class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
     [EventHandler]
     public async Task HandleLinkPresentedAsync(ExternalCallbackLinkPresented presented)
     {
-        if (!Matches(presented.CallbackId) || State.Registration.LinkDeliveryMode == ExternalCallbackLinkDeliveryMode.Caller ||
+        if (!Matches(presented.CallbackId) || ToolDelivery || State.Registration.LinkDeliveryMode == ExternalCallbackLinkDeliveryMode.Caller ||
             State.LinkPresented || presented.ContextRevision != 1 || State.LinkUrl.Length == 0)
             return;
         var state = State.Clone(); state.LinkPresented = true;
@@ -323,7 +344,8 @@ public sealed class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
     [EventHandler]
     public async Task HandleConsumedAsync(CallbackCompletionConsumed consumed)
     {
-        if (!Matches(consumed.CallbackId) || !Terminal || Consumed || consumed.Result != State.Result || !State.CompletionContextAccepted)
+        if (!Matches(consumed.CallbackId) || !Terminal || Consumed || consumed.Result != State.Result || !State.CompletionContextAccepted ||
+            (ToolDelivery && !State.ToolResultConsumed))
             return;
         var state = State.Clone();
         state.ConsumedAtUnixMs = Now;
@@ -459,12 +481,21 @@ public sealed class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
             await ArmAsync();
     }
 
-    private async Task CompleteAsync(CallbackResult result, string failureCode, ExternalCallbackVerifiedReferences? references = null)
+    private async Task CompleteAsync(CallbackResult result, string failureCode, ExternalCallbackVerifiedReferences? references = null,
+        ConnectLinkCreationFailureOutcome creationFailureOutcome = ConnectLinkCreationFailureOutcome.Unspecified)
     {
         if (Terminal) return;
         var state = State.Clone();
         state.Result = result;
         state.FailureCode = failureCode ?? "";
+        if (ToolDelivery && state.ToolResult is null)
+            state.ToolResult = new ConnectLinkCreationResult
+            {
+                FailureCode = string.IsNullOrWhiteSpace(failureCode) ? "connect_link_creation_unconfirmed" : failureCode,
+                FailureOutcome = creationFailureOutcome != ConnectLinkCreationFailureOutcome.Unspecified
+                    ? creationFailureOutcome
+                    : state.LinkCreationStarted ? ConnectLinkCreationFailureOutcome.Uncertain : ConnectLinkCreationFailureOutcome.NotCreated,
+            };
         state.VerifiedReferences = references?.Clone();
         state.AbandonPending = result != CallbackResult.Succeeded &&
             state.OauthPhase is ExternalCallbackAuthorizationPhase.Prepared or ExternalCallbackAuthorizationPhase.BindingPending &&
@@ -506,7 +537,8 @@ public sealed class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
             VerifiedReferences = State.VerifiedReferences?.Clone(), ContextRevision = State.ContextRevision,
         });
 
-    private Task DeliverLinkAsync() => Terminal || State.LinkPresented || State.LinkUrl.Length == 0
+    private Task DeliverLinkAsync() => ToolDelivery ? DeliverToolResultAsync()
+        : Terminal || State.LinkPresented || State.LinkUrl.Length == 0
         ? Task.CompletedTask
         : !State.LinkContextAccepted ? DeliverContextAsync()
         : State.Registration.LinkDeliveryMode == ExternalCallbackLinkDeliveryMode.Caller ? Task.CompletedTask
@@ -517,7 +549,10 @@ public sealed class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
             Kind = State.Registration.Kind, ContextRevision = 1,
         });
 
-    private Task DeliverAsync() => Consumed ? Task.CompletedTask : !State.CompletionContextAccepted
+    private Task DeliverAsync() => Consumed ? Task.CompletedTask
+        : ToolDelivery && !State.ToolResultConsumed ? DeliverToolResultAsync()
+        : ToolDelivery && State.ToolResult?.FailureCode.Length > 0 ? Task.CompletedTask
+        : !State.CompletionContextAccepted
         ? DeliverContextAsync()
         : SendToAsync(State.Registration.Origin.ConversationActorId,
             new CallbackCompleted { CallbackId = State.Registration.CallbackId, Result = State.Result });
@@ -551,7 +586,8 @@ public sealed class ExternalCallbackGAgent : GAgentBase<ExternalCallbackState>
     private bool ValidRegistration(ExternalCallbackRegistration? value) => value is not null &&
         !string.IsNullOrWhiteSpace(value.CallbackId) && value.Kind is ExternalCallbackKind.Oauth or ExternalCallbackKind.ConnectLink &&
         (value.LinkDeliveryMode is ExternalCallbackLinkDeliveryMode.Unspecified or ExternalCallbackLinkDeliveryMode.Conversation ||
-         value.LinkDeliveryMode == ExternalCallbackLinkDeliveryMode.Caller && value.Kind == ExternalCallbackKind.Oauth) &&
+         value.LinkDeliveryMode == ExternalCallbackLinkDeliveryMode.Caller && value.Kind == ExternalCallbackKind.Oauth ||
+         value.LinkDeliveryMode == ExternalCallbackLinkDeliveryMode.Tool && ValidToolContinuation(value)) &&
         value.ExpiresAtUnixMs > 0 && value.Origin?.OriginalActivity is not null &&
         !string.IsNullOrWhiteSpace(value.Origin.ConversationActorId) && !string.IsNullOrWhiteSpace(value.Origin.ChannelRegistrationId) &&
         !string.IsNullOrWhiteSpace(value.Origin.ActionId) && value.Authorization?.ExternalSubject is not null &&

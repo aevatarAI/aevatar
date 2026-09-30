@@ -20,6 +20,8 @@ enum ExternalCallbackLinkDeliveryMode {
   // OAuth only: the broker returns the link for the original private reply.
   // This is delivery responsibility, not proof of a successful Channel send.
   EXTERNAL_CALLBACK_LINK_DELIVERY_MODE_CALLER = 2;
+  // Connect Link creation resumes the originating tool call; the skill replies.
+  EXTERNAL_CALLBACK_LINK_DELIVERY_MODE_TOOL = 3;
 }
 
 enum CallbackResult {
@@ -71,6 +73,46 @@ message ExternalCallbackRegistration {
   string oauth_authorize_url = 9;
   ConnectLinkCreationRequest connect_link_request = 10;
   ExternalCallbackLinkDeliveryMode link_delivery_mode = 11;
+  ConnectLinkToolContinuationTarget tool_continuation = 12;
+}
+
+// Pinned by the trusted tool executor before admitting external creation.
+message ConnectLinkToolContinuationTarget {
+  string actor_id = 1;
+  string run_id = 2;
+  int32 attempt = 3;
+  int32 step_index = 4;
+  string call_id = 5;
+}
+
+// The originating run has committed the pending call and can now receive it.
+message ConnectLinkToolResultRequested {
+  string callback_id = 1;
+  string operation_actor_id = 2;
+  ConnectLinkToolContinuationTarget target = 3;
+}
+
+message ConnectLinkToolResultProduced {
+  string callback_id = 1;
+  string operation_actor_id = 2;
+  ConnectLinkToolContinuationTarget target = 3;
+  ConnectLinkCreationResult result = 4;
+}
+
+// Receipt of a persisted tool result, not a claim of user-visible delivery.
+message ConnectLinkToolResultConsumed {
+  string callback_id = 1;
+  string operation_actor_id = 2;
+  ConnectLinkToolContinuationTarget target = 3;
+}
+
+// The original call can no longer adopt a creation result. This is a local
+// continuation outcome, never evidence that the external create failed.
+message ConnectLinkToolResultRejected {
+  string callback_id = 1;
+  string operation_actor_id = 2;
+  ConnectLinkToolContinuationTarget target = 3;
+  string failure_code = 4;
 }
 
 message ConnectLinkCreationRequest {
@@ -79,11 +121,18 @@ message ConnectLinkCreationRequest {
   int32 expires_in_seconds = 3;
 }
 
+enum ConnectLinkCreationFailureOutcome {
+  CONNECT_LINK_CREATION_FAILURE_OUTCOME_UNSPECIFIED = 0;
+  CONNECT_LINK_CREATION_FAILURE_OUTCOME_NOT_CREATED = 1;
+  CONNECT_LINK_CREATION_FAILURE_OUTCOME_UNCERTAIN = 2;
+}
+
 message ConnectLinkCreationResult {
   string external_request_id = 1;
   string connect_url = 2;
   int64 expires_at_unix_ms = 3;
   string failure_code = 4;
+  ConnectLinkCreationFailureOutcome failure_outcome = 5;
 }
 
 message ExternalCallbackLinkReady {

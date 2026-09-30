@@ -21,4 +21,5 @@ public sealed record ChannelConnectLinkCreateRequest(
 public sealed record ChannelConnectLinkCreateResult(
     string? CallbackId = null,
     bool Accepted = false,
-    string? ErrorCode = null);
+    string? ErrorCode = null,
+    string? OperationActorId = null);

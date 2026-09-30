@@ -75,7 +75,7 @@ public sealed partial class ChannelConversationTurnRunnerTests
         {
             "link" => await runner.RunExternalCallbackLinkAsync(new ExternalCallbackLinkReady
             {
-                CallbackId = "callback-relay", Origin = origin, Kind = ExternalCallbackKind.ConnectLink,
+                CallbackId = "callback-relay", Origin = origin, Kind = ExternalCallbackKind.Oauth,
                 ConnectUrl = "https://id.example.test/connect",
             }, context, CancellationToken.None),
             "resume" => await runner.RunExternalCallbackAsync(activity, origin, new CallbackAuthorizationReference(),

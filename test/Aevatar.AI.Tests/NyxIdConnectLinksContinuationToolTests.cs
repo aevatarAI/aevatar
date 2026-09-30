@@ -1,4 +1,5 @@
 using System.Net;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
@@ -9,6 +10,24 @@ namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdConnectLinksContinuationToolTests
 {
+    [Fact]
+    public async Task ChannelCreate_ReturnsTypedPendingReceipt_NotAnInstructionToSendAPlaceholder()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(new RejectHandler()), NullLogger<NyxIdApiClient>.Instance);
+        IAgentTool tool = new NyxIdConnectLinksTool(client, new ContinuationPort());
+        using var scope = AgentToolContextScope.Push(ChannelContext());
+
+        var outcome = await tool.ExecuteWithOutcomeAsync("call-original", tool.Name,
+            """{"service_slug":"google-workspace"}""");
+
+        outcome.Receipt.Should().NotBeNull();
+        outcome.Receipt!.ChannelConnectLinkPending.Should().Be(new ChannelConnectLinkPendingReceipt
+        { CallbackId = "callback-tracked", OperationActorId = "operation-tracked" });
+        outcome.Receipt.MutationStage.Should().Be(AgentToolReceiptMutationStage.Accepted);
+        outcome.ResultJson.Should().NotContain("will arrive");
+    }
+
     [Fact]
     public async Task ChannelCreate_WithoutContinuationPort_FailsClosedWithoutIssuingUntrackedLink()
     {
@@ -86,7 +105,8 @@ public sealed class NyxIdConnectLinksContinuationToolTests
         {
             Context = context;
             Request = request;
-            return Task.FromResult(new ChannelConnectLinkCreateResult("callback-tracked", Accepted: true));
+            return Task.FromResult(new ChannelConnectLinkCreateResult("callback-tracked", Accepted: true,
+                OperationActorId: "operation-tracked"));
         }
     }
 }

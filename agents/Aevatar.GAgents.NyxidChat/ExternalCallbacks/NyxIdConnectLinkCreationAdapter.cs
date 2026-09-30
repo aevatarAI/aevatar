@@ -23,9 +23,9 @@ public sealed class NyxIdConnectLinkCreationAdapter(
         ct.ThrowIfCancellationRequested();
         if (registration.Kind != ExternalCallbackKind.ConnectLink || registration.ConnectLinkRequest is null ||
             string.IsNullOrWhiteSpace(registration.RequestedCatalogServiceSlug))
-            return new() { FailureCode = "connect_link_registration_invalid" };
+            return new() { FailureCode = "connect_link_registration_invalid", FailureOutcome = ConnectLinkCreationFailureOutcome.NotCreated };
         if (!NyxIdConnectLinkVerifier.HasAuthorization(registration.Authorization))
-            return new() { FailureCode = "original_sender_authorization_missing" };
+            return new() { FailureCode = "original_sender_authorization_missing", FailureOutcome = ConnectLinkCreationFailureOutcome.NotCreated };
 
         CapabilityHandle capability;
         try
@@ -33,11 +33,11 @@ public sealed class NyxIdConnectLinkCreationAdapter(
             capability = await capabilityIssuer.IssueByBindingIdAsync(
                 registration.Authorization.ExternalSubject, registration.Authorization.BindingId, ct).ConfigureAwait(false);
         }
-        catch (BindingChangedException) { return new() { FailureCode = "original_binding_changed" }; }
-        catch (BindingRevokedException) { return new() { FailureCode = "original_binding_revoked" }; }
-        catch (BindingNotFoundException) { return new() { FailureCode = "original_binding_missing" }; }
+        catch (BindingChangedException) { return new() { FailureCode = "original_binding_changed", FailureOutcome = ConnectLinkCreationFailureOutcome.NotCreated }; }
+        catch (BindingRevokedException) { return new() { FailureCode = "original_binding_revoked", FailureOutcome = ConnectLinkCreationFailureOutcome.NotCreated }; }
+        catch (BindingNotFoundException) { return new() { FailureCode = "original_binding_missing", FailureOutcome = ConnectLinkCreationFailureOutcome.NotCreated }; }
         if (string.IsNullOrWhiteSpace(capability.AccessToken))
-            return new() { FailureCode = "original_sender_authorization_unavailable" };
+            return new() { FailureCode = "original_sender_authorization_unavailable", FailureOutcome = ConnectLinkCreationFailureOutcome.NotCreated };
 
         using var client = clientFactory.CreateClient();
         var request = registration.ConnectLinkRequest;
@@ -49,7 +49,7 @@ public sealed class NyxIdConnectLinkCreationAdapter(
             expires_in = Math.Clamp(request.ExpiresInSeconds, 60, 3600),
         }, JsonOptions), ct).ConfigureAwait(false);
         if (!TryReadCreatedLink(result, out var id, out var url, out var expiry) || expiry <= timeProvider.GetUtcNow())
-            return new() { FailureCode = "invalid_nyxid_connect_link_response" };
+            return new() { FailureCode = "invalid_nyxid_connect_link_response", FailureOutcome = ConnectLinkCreationFailureOutcome.Uncertain };
 
         return new ConnectLinkCreationResult
         {

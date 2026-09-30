@@ -65,6 +65,7 @@ public sealed class NyxIdConnectLinkCreationAdapterTests
         var result = await adapter.CreateAsync(Registration());
 
         result.FailureCode.Should().Be("invalid_nyxid_connect_link_response");
+        result.FailureOutcome.Should().Be(ConnectLinkCreationFailureOutcome.Uncertain);
         result.ConnectUrl.Should().BeEmpty();
         result.ExternalRequestId.Should().BeEmpty();
     }

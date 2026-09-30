@@ -51,7 +51,8 @@ public sealed class AgentToolReceiptWireContractTests
                 (21, "mutation_stage"),
                 (22, "nyx_id_approval_terminal_outcome"),
                 (23, "exact_service_approval"),
-                (24, "failure_outcome"));
+                (24, "failure_outcome"),
+                (25, "channel_connect_link_pending"));
         var receipt = new AgentToolReceipt
         {
             CallId = "call-uncertain",
@@ -60,6 +61,19 @@ public sealed class AgentToolReceiptWireContractTests
         };
         AgentToolReceipt.Parser.ParseFrom(receipt.ToByteArray()).FailureOutcome.Should()
             .Be(AgentToolFailureOutcome.OutcomeUncertain);
+        var pendingReceipt = new AgentToolReceipt
+        {
+            CallId = "call-connect-link",
+            Status = AgentToolReceiptStatus.Success,
+            MutationStage = AgentToolReceiptMutationStage.Accepted,
+            ChannelConnectLinkPending = new ChannelConnectLinkPendingReceipt
+            {
+                CallbackId = "callback-connect-link",
+                OperationActorId = "operation-connect-link",
+            },
+        };
+        AgentToolReceipt.Parser.ParseFrom(pendingReceipt.ToByteArray()).ChannelConnectLinkPending.Should()
+            .Be(pendingReceipt.ChannelConnectLinkPending);
         ((int)NyxIdApprovalTerminalOutcome.Unspecified).Should().Be(0);
         ((int)NyxIdApprovalTerminalOutcome.Rejected).Should().Be(1);
         ((int)NyxIdApprovalTerminalOutcome.Expired).Should().Be(2);

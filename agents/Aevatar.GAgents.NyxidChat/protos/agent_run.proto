@@ -8,6 +8,7 @@ import "chat_activity.proto";
 import "conversation_events.proto";
 import "channel_bot_registration.proto";
 import "delivery_ledger.proto";
+import "external_callback_contracts.proto";
 import "ai_messages.proto";
 import "workflow_execution_messages.proto";
 import "nyxid_chat_task.proto";
@@ -104,6 +105,49 @@ message AgentRunGAgentState {
   // Delayed callback runs use the originating conversation's persisted
   // registration outbound route, without a transient relay reply token.
   string external_callback_id = 34;
+  // Run-owned tool batches awaiting committed connect-link creation results.
+  // Completed batches retain exact result identities for duplicate acknowledgements.
+  repeated AgentRunConnectLinkBatch connect_link_batches = 35;
+}
+
+message AgentRunConnectLinkCall {
+  string callback_id = 1;
+  string operation_actor_id = 2;
+  string call_id = 3;
+  string tool_name = 4;
+  string arguments_sha256 = 5;
+  aevatar.gagents.channel.abstractions.ConnectLinkCreationResult result = 6;
+  // A local timeout or validation failure is not a provider-created result.
+  string local_failure_code = 7;
+}
+
+message AgentRunConnectLinkBatch {
+  string run_id = 1;
+  string correlation_id = 2;
+  int32 attempt = 3;
+  // The completed tool-step index, while GenerationStep remains at index - 1.
+  int32 step_index = 4;
+  // Sanitized original request, including encrypted runtime credential references.
+  aevatar.gagents.channel.runtime.NeedsLlmReplyEvent request = 5;
+  AgentRunToolStepResult tool_step_result = 6;
+  repeated AgentRunConnectLinkCall calls = 7;
+  int64 deadline_unix_ms = 8;
+  bool applied = 9;
+  // Committed with the completed batch, including a final-no-tools transition.
+  int32 resume_step_index = 10;
+  // The resumed generation has a fixed budget across later steps; retries never extend it.
+  int64 resume_deadline_unix_ms = 11;
+}
+
+message AgentRunConnectLinkBatchChanged {
+  AgentRunConnectLinkBatch batch = 1;
+}
+
+// Self/scheduler signal only; no credentials or provider response are carried.
+message AgentRunConnectLinkRecoveryRequested {
+  string run_id = 1;
+  int32 attempt = 2;
+  int32 step_index = 3;
 }
 
 enum AgentRunToolApprovalDecision {

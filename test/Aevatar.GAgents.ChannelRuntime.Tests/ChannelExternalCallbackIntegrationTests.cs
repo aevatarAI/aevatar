@@ -25,6 +25,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgents.NyxidChat.ExternalCallbacks;
 using FluentAssertions;
 using Google.Protobuf;
@@ -39,11 +40,40 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed partial class ChannelConversationTurnRunnerTests
 {
     [Fact]
+    public async Task ConnectLinkCreation_DoesNotSendAnIndependentRuntimeReply()
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var runtime = new CallbackIntegrationInbox();
+        var registration = BuildNewRegistrationEntry();
+        var vault = new InMemorySecretVault(clock);
+        var key = await vault.PutAsync(new StoreSecretRequest(CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            registration.ScopeId, registration.NyxAgentApiKeyId, "original-registration-agent-key", "callback-integration"));
+        registration.ChannelAgentKey.SecretReference = key.Reference.Clone();
+        registration.WorkflowResultDeliveryCredential = key.Reference.Clone();
+        var outbound = new RecordingJsonHandler("""{"message_id":"unexpected-runtime-reply"}""");
+        var external = new CallbackIntegrationNyxID(clock);
+        using var services = CreateCallbackIntegrationServices(clock, runtime, new CallbackIntegrationLLM(), external,
+            new NyxIdConnectLinkVerifierTests.Issuer(), registration, vault, outbound);
+        runtime.Services = services;
+        await runtime.CreateAsync<ConversationGAgent>("conversation-original");
+
+        var accepted = await services.GetRequiredService<IChannelConnectLinkContinuationPort>()
+            .CreateAsync(CallbackIntegrationContext(registration), new ChannelConnectLinkCreateRequest("google-workspace"));
+        accepted.Accepted.Should().BeTrue();
+        await runtime.DrainAsync();
+
+        var operation = runtime.Agents.OfType<ExternalCallbackGAgent>().Should().ContainSingle().Subject;
+        operation.State.LinkUrl.Should().BeEmpty("external creation waits for the originating run's durable pending call");
+        external.Requests.Should().BeEmpty();
+        outbound.Requests.Should().BeEmpty("the skill must receive the creation result and compose the only link reply");
+    }
+
+    [Fact]
     public async Task ConnectLinkTool_ToCommittedOperation_ToStreamedAgentRun_ToOriginalChannel()
     {
         var clock = new FakeTimeProvider(DateTimeOffset.UtcNow);
         var runtime = new CallbackIntegrationInbox();
-        var provider = new CallbackIntegrationLLM();
+        var provider = new CallbackIntegrationLLM { CreateLinkOnFirstRequest = true };
         var external = new CallbackIntegrationNyxID(clock);
         var issuer = new NyxIdConnectLinkVerifierTests.Issuer();
         var registration = BuildNewRegistrationEntry();
@@ -58,30 +88,36 @@ public sealed partial class ChannelConversationTurnRunnerTests
         runtime.Services = services;
         var conversation = (ConversationGAgent)(await runtime.CreateAsync<ConversationGAgent>("conversation-original")).Agent;
         var context = CallbackIntegrationContext(registration);
-        using var client = services.GetRequiredService<INyxIdApiClientFactory>().CreateClient();
-        var tool = new NyxIdConnectLinksTool(client, services.GetRequiredService<IChannelConnectLinkContinuationPort>());
-        string accepted;
-        using (AgentToolContextScope.Push(context))
-            accepted = await tool.ExecuteAsync("""{"service_slug":"google-workspace","label":"My Google","callback_url":"https://ignored.example","target_org_id":"wrong-owner"}""");
-
-        using var acceptedJson = JsonDocument.Parse(accepted);
-        var callbackId = acceptedJson.RootElement.GetProperty("callback_id").GetString()!;
-        acceptedJson.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+        var request = await BuildConnectLinkRunRequestAsync(services, clock, context, registration);
+        await services.GetRequiredService<IChannelLlmReplyRunDispatcher>().DispatchAsync(request, CancellationToken.None);
         external.Requests.Should().BeEmpty("admission only enqueues the operation; tools never await its commit");
         outbound.Requests.Should().BeEmpty();
         await runtime.DrainAsync();
 
-        var operation = runtime.Agents.OfType<ExternalCallbackGAgent>().Should().ContainSingle().Subject;
+        var initialRun = runtime.Agents.OfType<AgentRunGAgent>().Should().ContainSingle().Subject;
+        var operation = runtime.Agents.OfType<ExternalCallbackGAgent>().Should().ContainSingle(
+            "original run status={0}, error={1}, summary={2}, tools={3}", initialRun.State.Status,
+            initialRun.State.ErrorCode, initialRun.State.ErrorSummary,
+            string.Join(";", initialRun.State.GenerationStep?.ToolReceipts.Select(receipt => receipt.ResultJson) ?? [])).Subject;
+        var callbackId = operation.State.Registration.CallbackId;
         operation.State.Registration.ExternalRequestId.Should().Be("link-exact");
         operation.State.LinkUrl.Should().Be("https://nyx.example/connect/original-link-token");
         operation.State.Result.Should().Be(CallbackResult.Unspecified);
-        operation.State.LinkPresented.Should().BeTrue();
+        operation.State.LinkPresented.Should().BeFalse("the backend does not send the URL independently");
+        operation.State.ToolResultConsumed.Should().BeTrue();
         operation.State.Registration.Origin.OriginalActivity.Conversation.CanonicalKey.Should().Be("opaque-original-thread-route");
         operation.State.Registration.Origin.OriginalActivity.Conversation.Partition.Should().Be("thread-original");
         operation.State.Registration.Origin.OriginalActivity.Conversation.Scope.Should().Be(ConversationScope.Thread);
         operation.State.Registration.Authorization.BindingId.Should().Be("binding-original");
         operation.State.Registration.Authorization.OwnerScopeId.Should().Be("sender-owner");
         outbound.Requests.Should().ContainSingle().Which.Body.Should().Contain("original-link-token");
+        provider.Requests.Should().HaveCount(2, "the original run receives the real result before composing the only link reply");
+        var toolResult = provider.Requests[1].Messages.Single(message => message.Role == "tool");
+        toolResult.ToolCallId.Should().Be("original-tool-action");
+        toolResult.Content.Should().Contain("https://nyx.example/connect/original-link-token");
+        toolResult.Content.Should().NotContain("accepted");
+        var originalRun = runtime.Agents.OfType<AgentRunGAgent>().Should().ContainSingle().Subject;
+        originalRun.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff);
         var projected = await services.GetRequiredService<IExternalCallbackQueryPort>().FindAsync(callbackId, "link-exact");
         projected.Should().NotBeNull();
         projected!.StateVersion.Should().BeGreaterThan(0);
@@ -97,25 +133,26 @@ public sealed partial class ChannelConversationTurnRunnerTests
             services.GetRequiredService<IExternalCallbackCommandPort>(), CancellationToken.None);
         await endpoint.ExecuteAsync(callbackHttp);
         callbackHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
-        provider.Requests.Should().BeEmpty("the callback endpoint merely admits a verification hint");
+        provider.Requests.Should().HaveCount(2, "the callback endpoint merely admits a verification hint");
         await runtime.DrainAsync();
 
         operation.State.Result.Should().Be(CallbackResult.Succeeded);
         operation.State.VerifiedReferences.ConnectedServiceId.Should().Be("instance-exact");
         operation.State.ConsumedAtUnixMs.Should().BeGreaterThan(0);
         conversation.State.ExternalCallbackActions.Should().ContainSingle().Which.ResumeAdmitted.Should().BeTrue();
-        var run = runtime.Agents.OfType<AgentRunGAgent>().Should().ContainSingle().Subject;
+        var run = runtime.Agents.OfType<AgentRunGAgent>().Single(agent => agent.Id != originalRun.Id);
         run.State.Status.Should().Be(AgentRunStatus.ReplyHandedOff, "the resumed run must finish streaming, error={0}, drop={1}",
             run.State.ErrorCode, run.State.PendingDropNotificationReason);
         run.State.GenerationStep.ToolContext.Channel.Continuation.CanonicalConversationKey.Should().Be("opaque-original-thread-route");
         run.State.GenerationStep.ToolContext.Channel.Continuation.ConversationPartition.Should().Be("thread-original");
-        provider.Requests.Should().ContainSingle();
-        var prompt = string.Join("\n", provider.Requests[0].Messages.Select(message => message.Content));
+        provider.Requests.Should().HaveCount(3);
+        var prompt = string.Join("\n", provider.Requests[2].Messages.Select(message => message.Content));
         prompt.Should().Contain("Prepare my report after connecting Google");
         prompt.Should().Contain("instance-exact");
         prompt.Should().Contain("google-workspace-7");
         outbound.Requests.Should().HaveCount(2);
-        outbound.Requests.Should().OnlyContain(request => request.Authorization == "Bearer original-registration-agent-key");
+        outbound.Requests[0].Authorization.Should().Be("Bearer original-reply-token");
+        outbound.Requests[1].Authorization.Should().Be("Bearer original-registration-agent-key");
         outbound.Requests[1].Body.Should().Contain("original-relay-anchor");
         outbound.Requests[1].Body.Should().Contain("Google is connected; the original report action can continue.");
         external.Requests.Should().OnlyContain(request => request.Authorization == "Bearer freshly-minted-original-user");
@@ -125,7 +162,7 @@ public sealed partial class ChannelConversationTurnRunnerTests
         // A duplicate browser return redelivers protocol receipts without repeating the business turn.
         await services.GetRequiredService<IExternalCallbackCommandPort>().HintAsync(callbackId, "link-exact");
         await runtime.DrainAsync();
-        provider.Requests.Should().ContainSingle();
+        provider.Requests.Should().HaveCount(3);
         outbound.Requests.Should().HaveCount(2);
     }
 
@@ -135,8 +172,6 @@ public sealed partial class ChannelConversationTurnRunnerTests
         Action<IServiceCollection>? configure = null)
     {
         var documents = new InMemoryProjectionDocumentStore<ExternalCallbackCurrentStateDocument, string>(doc => doc.Id);
-        var generator = new NyxIdConversationReplyGenerator(provider,
-            new ConversationReplyGeneratorTests.StubBuiltInPromptFloorProvider("Respond to the original business request."));
         var relayOptions = new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions { StreamingRepliesEnabled = false };
         var services = new ServiceCollection()
             .AddLogging()
@@ -147,6 +182,7 @@ public sealed partial class ChannelConversationTurnRunnerTests
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .AddSingleton<IActorRuntimeCallbackScheduler, IdentityGAgentTestHarness.NoopCallbackScheduler>()
             .AddSingleton(vault)
+            .AddSingleton<IRuntimeSecretStore>(new InMemoryRuntimeSecretStore(new CallbackSecretClock(clock)))
             .AddSingleton<ICommittedStatePublicationHook>(new CallbackIntegrationProjectionFeed(documents))
             .AddSingleton<IExternalCallbackQueryPort>(new ExternalCallbackQueryPort(documents))
             .AddSingleton<IExternalCallbackCommandPort, ExternalCallbackCommandPort>()
@@ -155,11 +191,16 @@ public sealed partial class ChannelConversationTurnRunnerTests
             .AddSingleton<IConnectLinkCreationPort, NyxIdConnectLinkCreationAdapter>()
             .AddSingleton<IConnectLinkVerificationPort, NyxIdConnectLinkVerifier>()
             .AddSingleton<IChannelConnectLinkContinuationPort, NyxIdConnectLinkContinuationAdapter>()
-            .AddSingleton<IConversationReplyGenerator>(generator)
+            .AddSingleton<IChannelRuntimeToolCatalogMaterializer>(sp => new CallbackConnectToolCatalog(
+                sp.GetRequiredService<INyxIdApiClientFactory>(), sp.GetRequiredService<IChannelConnectLinkContinuationPort>()))
+            .AddSingleton<IConversationReplyGenerator>(sp => new NyxIdConversationReplyGenerator(provider,
+                new ConversationReplyGeneratorTests.StubBuiltInPromptFloorProvider("Respond to the original business request."),
+                toolExecutionPort: new CallbackToolExecutionPort()))
             .AddSingleton(relayOptions)
             .AddSingleton<IAgentRunReplyGenerationExecutorPort>(sp => new AgentRunReplyGenerationExecutor(runtime,
-                generator, null, relayOptions, NullLogger<AgentRunReplyGenerationExecutor>.Instance,
-                timeProvider: clock, secretVault: vault, connectedServiceCapabilityIssuer: issuer))
+                sp.GetRequiredService<IConversationReplyGenerator>(), null, relayOptions, NullLogger<AgentRunReplyGenerationExecutor>.Instance,
+                timeProvider: clock, secretVault: vault, connectedServiceCapabilityIssuer: issuer,
+                channelRuntimeCatalogMaterializer: sp.GetRequiredService<IChannelRuntimeToolCatalogMaterializer>()))
             .AddSingleton<IChannelLlmReplyRunDispatcher>(new AgentRunDispatcher(runtime, runtime,
                 NullLogger<AgentRunDispatcher>.Instance, clock))
             .AddSingleton<IConversationTurnRunner>(sp => CreateRunner(BuildRegistrationQueryPort(registration),
@@ -188,6 +229,8 @@ public sealed partial class ChannelConversationTurnRunnerTests
                     NyxAgentApiKeyId = registration.NyxAgentApiKeyId, NyxConversationId = "original-conversation-route",
                     NyxProviderSlug = registration.NyxProviderSlug, ReplyMessageId = "original-relay-anchor",
                     OutboundCorrelationId = "original-relay-correlation",
+                    ToolRun = new AgentToolChannelRunContext
+                    { ActorId = "original-run-actor", RunId = "original-run", Attempt = 1, StepIndex = 3 },
                     OriginalSenderAuthorization = new AgentToolChannelSenderAuthorization
                     {
                         BindingId = "binding-original", OwnerScopeId = "sender-owner", Platform = "lark",
@@ -196,6 +239,77 @@ public sealed partial class ChannelConversationTurnRunnerTests
                 },
             },
         };
+
+    private static async Task<NeedsLlmReplyEvent> BuildConnectLinkRunRequestAsync(IServiceProvider services, TimeProvider clock,
+        AgentToolExecutionContext context, ChannelBotRegistrationEntry registration)
+    {
+        var origin = context.Channel.Continuation!;
+        var replyToken = await services.GetRequiredService<IRuntimeSecretStore>().PutAsync(new StoreRuntimeSecretRequest(
+            ChannelRelayRuntimeSecretPurposes.ReplyToken, "original-run", "original-link-turn", "original-reply-token",
+            TimeSpan.FromMinutes(10), false, "callback integration"));
+        return new NeedsLlmReplyEvent
+        {
+            RunId = "original-run", CorrelationId = "original-link-turn", TargetActorId = "conversation-original",
+            RegistrationId = registration.Id, RequestedAtUnixMs = clock.GetUtcNow().ToUnixTimeMilliseconds(),
+            ReplyToken = "original-reply-token", ReplyTokenExpiresAtUnixMs = replyToken.Reference.ExpiresAtUnixMs,
+            RelayReplyTokenRef = replyToken.Reference.Clone(), ToolContext = context.ToPayload(),
+            ChannelRuntimeConfig = new ChannelRuntimeConfigProof
+            {
+                RegistrationId = registration.Id, ConfigRevision = 1, ConfigDigest = "callback-integration-config",
+                Instructions = "Show the actual connect_url once, then wait for the verified authorization callback.",
+                CredentialSourceMode = ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey,
+            },
+            Activity = new ChatActivity
+            {
+                Id = origin.OriginalActivityId, Type = ActivityType.Message,
+                ChannelId = ChannelId.From(origin.ChannelId), Bot = BotInstanceId.From(origin.BotId),
+                Conversation = new ConversationReference
+                {
+                    Channel = ChannelId.From(origin.ChannelId), Bot = BotInstanceId.From(origin.BotId),
+                    CanonicalKey = origin.CanonicalConversationKey, Partition = origin.ConversationPartition, Scope = ConversationScope.Thread,
+                },
+                From = new ParticipantRef { CanonicalId = origin.SenderId }, Content = new MessageContent { Text = origin.OriginalUserText },
+                OutboundDelivery = new OutboundDeliveryContext
+                { ReplyMessageId = origin.ReplyMessageId, CorrelationId = origin.OutboundCorrelationId },
+                TransportExtras = new TransportExtras
+                {
+                    NyxAgentApiKeyId = origin.NyxAgentApiKeyId, NyxConversationId = origin.NyxConversationId,
+                    NyxPlatform = origin.Platform, NyxProviderSlug = origin.NyxProviderSlug, NyxRegistrationScopeId = registration.ScopeId,
+                },
+            },
+        };
+    }
+
+    private sealed class CallbackSecretClock(TimeProvider clock) : IRuntimeSecretClock
+    {
+        public long UnixTimeMilliseconds => clock.GetUtcNow().ToUnixTimeMilliseconds();
+    }
+
+    private sealed class CallbackConnectToolCatalog(INyxIdApiClientFactory clients,
+        IChannelConnectLinkContinuationPort continuation) : IChannelRuntimeToolCatalogMaterializer
+    {
+        public Task<AgentTurnToolCatalog> MaterializeAsync(ChannelRuntimeConfigProof config,
+            IReadOnlyList<IAgentTool> registeredTools, AgentToolExecutionContext context, CancellationToken ct = default)
+        {
+            IAgentTool tool = new NyxIdConnectLinksTool(clients.CreateClient(), continuation);
+            return Task.FromResult(new AgentTurnToolCatalog([tool.Name], profilePromptLayer: null,
+                selectedSkillPromptLayer: null, selectedIntentId: null, candidateIntentId: null, exactTools: [tool]));
+        }
+    }
+
+    private sealed class CallbackToolExecutionPort : IAgentToolExecutionPort
+    {
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(AgentToolExecutionRequest request, CancellationToken ct = default)
+        {
+            using var context = AgentToolContextScope.Push(request.ExecutionContext);
+            var outcome = await request.Tool.ExecuteWithOutcomeAsync(request.ExecutionContext.Request.CallId!,
+                request.Tool.Name, request.ArgumentsJson, ct);
+            outcome.Receipt.Should().NotBeNull("the channel Connect Link tool returns a typed pending receipt");
+            return new AgentToolExecutionOutcome(AgentToolExecutionOutcomeKind.Executed, outcome.ResultJson, outcome.Receipt!,
+                IsMutation: true, FailureCode: string.Empty, SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None, TerminalInvoked: true, Retryable: false, AuditCompleted: true);
+        }
+    }
 
     /// <summary>Deterministic test inbox: enqueue-only transport, explicitly drained actor turns.</summary>
     private sealed class CallbackIntegrationInbox : IActorRuntime, IActorDispatchPort
@@ -309,6 +423,7 @@ public sealed partial class ChannelConversationTurnRunnerTests
     {
         public string Name => "callback-integration";
         public string Reply { get; init; } = "Google is connected; the original report action can continue.";
+        public bool CreateLinkOnFirstRequest { get; init; }
         public List<LLMRequest> Requests { get; } = [];
         public ILLMProvider GetProvider(string name) => this;
         public ILLMProvider GetDefault() => this;
@@ -316,10 +431,26 @@ public sealed partial class ChannelConversationTurnRunnerTests
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(LLMRequest request, [EnumeratorCancellation] CancellationToken ct = default)
         {
             Requests.Add(request);
-            var split = Reply.Length / 2;
-            yield return new LLMStreamChunk { DeltaContent = Reply[..split] };
+            if (CreateLinkOnFirstRequest && Requests.Count == 1)
+            {
+                yield return new LLMStreamChunk { DeltaToolCall = new ToolCall
+                {
+                    Id = "original-tool-action", Name = "nyxid_connect_links",
+                    ArgumentsJson = """{"service_slug":"google-workspace","label":"My Google","callback_url":"https://ignored.example","target_org_id":"wrong-owner"}""",
+                } };
+                yield return new LLMStreamChunk { IsLast = true };
+                yield break;
+            }
+            var reply = Reply;
+            if (CreateLinkOnFirstRequest && Requests.Count == 2)
+            {
+                using var result = JsonDocument.Parse(request.Messages.Single(message => message.Role == "tool").Content!);
+                reply = "请打开以下链接完成 Google Workspace 授权：" + result.RootElement.GetProperty("connect_url").GetString();
+            }
+            var split = reply.Length / 2;
+            yield return new LLMStreamChunk { DeltaContent = reply[..split] };
             await Task.CompletedTask;
-            yield return new LLMStreamChunk { DeltaContent = Reply[split..] };
+            yield return new LLMStreamChunk { DeltaContent = reply[split..] };
             yield return new LLMStreamChunk { IsLast = true };
         }
     }

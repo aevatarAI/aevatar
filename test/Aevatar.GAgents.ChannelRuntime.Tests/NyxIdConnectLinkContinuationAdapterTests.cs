@@ -20,6 +20,10 @@ public sealed class NyxIdConnectLinkContinuationAdapterTests
 
         result.Accepted.Should().BeTrue();
         result.CallbackId.Should().Be(commands.Registration!.CallbackId);
+        result.OperationActorId.Should().Be("operation-created");
+        commands.Registration.LinkDeliveryMode.Should().Be(ExternalCallbackLinkDeliveryMode.Tool);
+        commands.Registration.ToolContinuation.Should().Be(new ConnectLinkToolContinuationTarget
+        { ActorId = "run-actor-original", RunId = "run-original", Attempt = 1, StepIndex = 3, CallId = "tool-action-original" });
         commands.Registration.ConnectLinkRequest.Label.Should().Be("Personal Google");
         commands.Registration.ConnectLinkRequest.RequestedBy.Should().Be("assistant");
         commands.Registration.ConnectLinkRequest.ExpiresInSeconds.Should().Be(900);
@@ -49,6 +53,19 @@ public sealed class NyxIdConnectLinkContinuationAdapterTests
         commands.Registration.Origin.OriginalActivity.TransportExtras.NyxProviderSlug.Should().Be("telegram-bot-original");
         commands.Registration.Origin.OriginalActivity.TransportExtras.NyxLarkUnionId.Should().Be("union-original");
         commands.Registration.Origin.OriginalActivity.TransportExtras.NyxLarkChatId.Should().Be("lark-chat-original");
+    }
+
+    [Fact]
+    public async Task MissingToolRun_RejectsAdmissionInsteadOfCreatingAnIndependentReply()
+    {
+        var commands = new Commands();
+        var context = Context();
+        context.Channel.Continuation!.ToolRun = null;
+        var result = await new NyxIdConnectLinkContinuationAdapter(commands, TimeProvider.System)
+            .CreateAsync(context, new ChannelConnectLinkCreateRequest("google-workspace"));
+
+        result.ErrorCode.Should().Be("channel_tool_continuation_missing");
+        commands.Registration.Should().BeNull();
     }
 
     [Fact]
@@ -100,6 +117,8 @@ public sealed class NyxIdConnectLinkContinuationAdapterTests
                 DeliveryFallbackAddressId = "fallback-original", DeliveryFallbackAddressType = "union_id",
                 NyxLarkUnionId = "union-original", NyxLarkChatId = "lark-chat-original",
                 ReplyMessageId = "reply-original", OutboundCorrelationId = "correlation-original",
+                ToolRun = new AgentToolChannelRunContext
+                { ActorId = "run-actor-original", RunId = "run-original", Attempt = 1, StepIndex = 3 },
                 OriginalSenderAuthorization = new AgentToolChannelSenderAuthorization
                 {
                     OwnerScopeId = "user-original", NyxUserId = "user-original",

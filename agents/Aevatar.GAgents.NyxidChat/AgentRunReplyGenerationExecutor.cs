@@ -540,7 +540,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     var toolResults = await plan.StepExecutor.ExecuteAuthorizedToolStepAsync(
                             capturedToolCalls,
                             capturedTools,
-                            executionContext,
+                            StampChannelToolRun(executionContext, workItem, continuation.StepIndex + 1),
                             token,
                             approvalGrant)
                         .ConfigureAwait(false);
@@ -1096,7 +1096,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var toolResults = await plan.StepExecutor.ExecuteAuthorizedToolStepAsync(
                 toolCalls,
                 admittedTools,
-                executionToolContext,
+                StampChannelToolRun(executionToolContext, workItem, workItem.StepIndex + 1),
                 ct,
                 approvalGrant)
             .ConfigureAwait(false);
@@ -1104,6 +1104,24 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (TryTakeOutboundIntent(generator) is { } toolOutboundIntent)
             toolStepResult.OutboundIntent = toolOutboundIntent.Clone();
         return toolStepResult;
+    }
+
+    private static AgentToolExecutionContext StampChannelToolRun(
+        AgentToolExecutionContext context,
+        AgentRunReplyStepExecutionRequest workItem,
+        int completedToolStepIndex)
+    {
+        if (context.Channel.Continuation is not { } origin)
+            return context;
+        var continuation = origin.Clone();
+        continuation.ToolRun = new AgentToolChannelRunContext
+        {
+            ActorId = workItem.RunActorId,
+            RunId = workItem.RunId,
+            Attempt = workItem.Attempt,
+            StepIndex = completedToolStepIndex,
+        };
+        return context with { Channel = context.Channel with { Continuation = continuation } };
     }
 
     private static bool TryBuildApprovalGrant(

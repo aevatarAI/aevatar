@@ -99,6 +99,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             .On<AgentRunStartedEvent>(ApplyStarted)
             .On<AgentRunReplyGenerationRequestedEvent>(ApplyReplyGenerationRequested)
             .On<AgentRunReplyStepStateUpdatedEvent>(ApplyReplyStepStateUpdated)
+            .On<AgentRunConnectLinkBatchChanged>(ApplyConnectLinkBatchChanged)
             .On<AgentRunToolApprovalRequestedEvent>(ApplyToolApprovalRequested)
             .On<AgentRunToolApprovalNotificationDispatchedEvent>(ApplyToolApprovalNotificationDispatched)
             .On<AgentRunToolApprovalDecisionRecordedEvent>(ApplyToolApprovalDecisionRecorded)
@@ -214,6 +215,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         if (State.Status is AgentRunStatus.ReplyGenerationRequested)
         {
+            await EnqueueConnectLinkRecoveryAsync();
             _logger.LogInformation(
                 "Ignoring duplicate agent run start while reply generation is already requested: runId={RunId} correlation={CorrelationId}",
                 runId,
@@ -360,6 +362,12 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (!IsCurrentGenerationContinuation(command.RunId, command.CorrelationId, command.Attempt))
             return;
 
+        // A suspended connect-link tool owns its creation and resumed-model budgets.
+        if (HasPendingConnectLinkBatch() || IsStaleConnectLinkGenerationTimeout(command))
+        {
+            await EnqueueConnectLinkRecoveryAsync();
+            return;
+        }
         // Human approval deliberately suspends the generation loop. The original
         // generation timeout must not turn a healthy suspended run into a failure.
         if (State.PendingToolApproval is not null)
@@ -1002,6 +1010,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         ArgumentNullException.ThrowIfNull(command);
+        if (HasPendingConnectLinkBatch())
+            return;
         var hasResult = command.LlmStepResult is not null;
         if (hasResult)
         {
@@ -1177,6 +1187,9 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 return;
             }
 
+            if (await TrySuspendConnectLinkBatchAsync(command, toolStepResult))
+                return;
+
             workflowRunDelivery = TryResolveWorkflowRunDelivery(toolStepResult);
             await PersistStepStateAsync(ApplyToolStepResult(State.GenerationStep!, toolStepResult, command.StepIndex));
         }
@@ -1214,6 +1227,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         if (!hasResult)
         {
+            if (HasPendingConnectLinkBatch())
+                return;
             _logger.LogWarning(
                 "Agent run received tool step request. runId={RunId} correlation={CorrelationId} step={StepIndex} pendingToolCallCount={PendingToolCallCount} pendingAuthorizationCount={PendingAuthorizationCount}",
                 stepState.RunId,
@@ -2462,6 +2477,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             ReplyTokenExpiresAtUnixMs = request.ReplyTokenExpiresAtUnixMs,
             RunId = runId,
             UseSourceActivityDeliveryContext = State.ProducedUseSourceActivityDeliveryContext,
+            RelayReplyTokenRef = request.RelayReplyTokenRef?.Clone(),
+            RelayUserAccessTokenRef = request.RelayUserAccessTokenRef?.Clone(),
         };
         if (State.GenerationStep?.AgentProfileSnapshot is not null)
             ready.AgentProfile = State.GenerationStep.AgentProfileSnapshot.Clone();
@@ -2708,27 +2725,35 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
     }
 
-    private async Task ScheduleGenerationTimeoutAsync(NeedsLlmReplyEvent request, string runId, int attempt)
+    private async Task ScheduleGenerationTimeoutAsync(
+        NeedsLlmReplyEvent request, string runId, int attempt, long deadlineUnixMs = 0)
     {
         if (_callbackScheduler is null)
             return;
 
-        var fallbackTimeout = ResolveFallbackTimeout();
-        if (fallbackTimeout <= TimeSpan.Zero)
-            return;
+        var nowUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        if (deadlineUnixMs <= 0)
+        {
+            var fallbackTimeout = ResolveFallbackTimeout();
+            if (fallbackTimeout <= TimeSpan.Zero)
+                return;
+            deadlineUnixMs = nowUnixMs + (long)fallbackTimeout.TotalMilliseconds;
+        }
+        var delay = TimeSpan.FromMilliseconds(Math.Max(1,
+            deadlineUnixMs - nowUnixMs));
 
         try
         {
             await _callbackScheduler.ScheduleTimeoutAsync(
                 BuildTimeoutRequest(
                     BuildGenerationTimeoutCallbackId(runId, attempt),
-                    fallbackTimeout,
+                    delay,
                     new AgentRunReplyGenerationTimedOut
                     {
                         RunId = runId,
                         CorrelationId = request.CorrelationId,
                         TargetActorId = request.TargetActorId,
-                        TimedOutAtUnixMs = _timeProvider.GetUtcNow().Add(fallbackTimeout).ToUnixTimeMilliseconds(),
+                        TimedOutAtUnixMs = deadlineUnixMs,
                         Attempt = attempt,
                     }),
                 ct: CancellationToken.None);
