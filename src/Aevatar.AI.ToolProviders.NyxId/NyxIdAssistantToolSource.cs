@@ -51,13 +51,6 @@ public sealed class NyxIdAssistantToolSource : IAgentToolSource
             new NyxIdRequireServiceTool(_client),
             new NyxIdRequestKeyCreateTool(_client),
             new NyxIdRequestKeyRotateTool(_client),
-            new NyxIdProxyTool(
-                _client,
-                _logger,
-                _fileArtifactIngress,
-                _options.EffectiveProxyFileArtifactMaxBytes,
-                _options.ManagedWorkflowAdmissionMode,
-                _delegationTokenLease),
             ReadOnly(new NyxIdProfileTool(_client), ["consents"], "consents"),
             ReadOnly(new NyxIdMfaTool(_client), ["status"], "status"),
             ReadOnly(new NyxIdServicesTool(_client), ["list", "show"], "list", "id"),

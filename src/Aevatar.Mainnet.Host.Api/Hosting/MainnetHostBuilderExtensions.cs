@@ -621,14 +621,13 @@ public static class MainnetHostBuilderExtensions
                 [
                     ToolSetNames.WorkspaceDefault,
                     ToolSetNames.SkillAuthoring,
-                    ToolSetNames.NyxIdConnectedServices,
                     ToolSetNames.NyxIdConnectLinks,
                 ],
                 [
                     static sp => sp.GetRequiredService<
                         ChannelNyxIdConnectedServiceInventoryToolSource>(),
                 ],
-                "Channel reply runtime with skill authoring, sender inventory, and admitted connected-service operations.");
+                "Channel reply runtime with skill authoring, sender inventory, and fixed NyxID connected-service tools.");
             options.AddToolSet(
                 ToolSetNames.LarkSelfNotify,
                 [ToolSetNames.WorkspaceDefault, ToolSetNames.ChannelLark],
@@ -682,7 +681,7 @@ public static class MainnetHostBuilderExtensions
                 ToolSetNames.NyxIdChatDefault,
                 [
                     CreateToolSource<NyxIdAssistantToolSource>,
-                    CreateToolSource<NyxIdConnectedServiceToolSource>,
+                    CreateToolSource<NyxIdConnectedServiceInventoryToolSource>,
                     CreateToolSource<WebSearchAgentToolSource>,
                     CreateToolSource<AskUserAgentToolSource>,
                     CreateToolSource<ConditionEvaluateAgentToolSource>,

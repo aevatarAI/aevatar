@@ -38,8 +38,8 @@ public sealed class BuiltInPromptFloorProviderTests
     [InlineData("grant the requester access BEFORE you return the link")]
     [InlineData("organization-scoped sharing mechanism")]
     [InlineData("provider-specific typed sharing tool")]
-    [InlineData("use_skill(skill=\"nyxid-service-discovery\")")]
-    [InlineData("then call `nyxid_service_inventory`")]
+    [InlineData("call it first and treat its typed result as the authority for the current caller")]
+    [InlineData("then call `nyxid_service_inventory` again")]
     [InlineData("temporary read failure")]
     [InlineData("binding is explicitly missing or revoked")]
     [InlineData("ornn_search_skills")]
@@ -55,29 +55,36 @@ public sealed class BuiltInPromptFloorProviderTests
     }
 
     [Fact]
-    public void Floor_LoadsNyxIdDiscoverySkillBeforeReadingSenderInventory()
+    public void Floor_UsesInventoryFirstForConnectedServiceInspection()
     {
         var floor = FloorContent();
-        var skillCall = floor.IndexOf(
-            "first call `use_skill(skill=\"nyxid-service-discovery\")`",
-            StringComparison.Ordinal);
         var inventoryCall = floor.IndexOf(
-            "then call `nyxid_service_inventory`",
+            "call it first and treat its typed result as the authority for the current caller",
+            StringComparison.Ordinal);
+        var ensureCall = floor.IndexOf(
+            "call it once with the exact `user_service_id` or `service_slug` from inventory",
+            StringComparison.Ordinal);
+        var refreshedInventory = floor.IndexOf(
+            "then call `nyxid_service_inventory` again",
+            StringComparison.Ordinal);
+        var loadRecommendedSkill = floor.IndexOf(
+            "you must call `nyxid_load_recommended_skill` before any final answer",
             StringComparison.Ordinal);
 
-        skillCall.Should().BeGreaterThanOrEqualTo(0);
-        inventoryCall.Should().BeGreaterThan(skillCall);
+        inventoryCall.Should().BeGreaterThanOrEqualTo(0);
+        ensureCall.Should().BeGreaterThan(inventoryCall);
+        refreshedInventory.Should().BeGreaterThan(ensureCall);
+        loadRecommendedSkill.Should().BeGreaterThan(refreshedInventory);
         floor.Should().Contain("inventory read present in the final request's tool schemas");
         floor.Should().Contain("When `nyxid_service_inventory` is present");
         floor.Should().Contain("When `nyxid_service_inventory` is absent");
         floor.Should().Contain("such as `nyxid_services`");
-        floor.Should().Contain("route the read through the catalog/service-inspection path");
-        floor.Should().Contain("establishes current sender-specific service facts");
+        floor.Should().Contain("establishes current caller-specific service facts");
         floor.Should().Contain("execution tools only run supplied work and cannot establish that inventory");
-        floor.Should().Contain("typed inventory result as the authority for the current sender");
+        floor.Should().Contain("copying the exact `user_service_id`, `source`, `skill_id`, `literal_version`, and `manifest_digest`");
+        floor.Should().NotContain("first call `use_skill(skill=\"nyxid-service-discovery\")`");
         floor.Should().NotContain("Do not call `code_execute`");
         floor.Should().NotContain("typed-tool exception");
-        floor.Should().NotContain("call `nyxid_service_inventory` directly");
         floor.Should().NotContain("Do not call `use_skill`");
     }
 

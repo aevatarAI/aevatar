@@ -1,3 +1,4 @@
+using System.Net;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using FluentAssertions;
@@ -107,6 +108,39 @@ public sealed class OrnnPublishRoundTripContractTests
 
         result.Package.Should().BeNull();
         result.Validation.Diagnostics.Should().Contain(x => x.Code == "invalid_path");
+    }
+
+    [Fact]
+    public async Task PublishAsync_WhenFormatValidatorProxyFails_ShouldReportUnavailableInsteadOfInvalidFormat()
+    {
+        var request = new OrnnSkillPublishRequest
+        {
+            Name = "approval-skill",
+            Description = "Approval skill",
+            Version = "1.0",
+            Category = "plain",
+            InstructionsMarkdown = "Run approval.",
+        };
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            """{ "error": true, "status": 403 }""",
+            HttpStatusCode.Forbidden);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(handler));
+        var ornnOptions = new OrnnOptions { NyxIdSlug = "ornn" };
+        var service = new OrnnSkillPublishingService(
+            new OrnnSkillPublishValidationPipeline(),
+            new OrnnSkillPackageBuilder(),
+            new OrnnSkillPackageFormatValidator(ornnOptions, nyxClient),
+            new OrnnSkillClient(ornnOptions, nyxClient));
+
+        var result = await service.PublishAsync("token", request, CancellationToken.None);
+
+        result.Status.Should().Be("format_validation_unavailable");
+        result.Error.Should().Contain("status=403");
+        result.FormatViolations.Should().BeEmpty();
+        handler.Requests.Should().ContainSingle(requestRecord =>
+            requestRecord.RequestUri!.AbsolutePath.EndsWith("/api/v1/skill-format/validate", StringComparison.Ordinal));
     }
 
     private static OrnnSkillClient CreateClient(OrnnTestHttpMessageHandler handler)
