@@ -22,5 +22,6 @@
     <Protobuf Include="CodexExecution\codex_execution.proto" GrpcServices="None" />
     <Protobuf Include="ToolProviders\agent_tool_admission.proto" GrpcServices="None" />
     <Protobuf Include="llm_selection.proto" GrpcServices="None" />
+    <Protobuf Include="Skills\skill_service_recommendations.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>

@@ -1,5 +1,7 @@
+using Aevatar.AI.Abstractions.Skills;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.Skills;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
@@ -68,6 +70,8 @@ public static class ServiceCollectionExtensions
                 sp.GetService<ILogger<OrnnSkillClient>>());
         });
         services.TryAddSingleton<OrnnExactRemoteSkillFetcher>();
+        services.TryAddSingleton<ISkillServiceDiscoverySource, OrnnSkillServiceDiscoverySource>();
+        services.TryAddSingleton<ISkillServiceRecommendationService, SkillServiceRecommendationService>();
         services.TryAddSingleton<IExactRemoteSkillFetcher>(sp =>
             sp.GetRequiredService<OrnnExactRemoteSkillFetcher>());
         return services;
