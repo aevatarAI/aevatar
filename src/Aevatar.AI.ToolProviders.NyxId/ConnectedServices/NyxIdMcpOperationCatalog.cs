@@ -26,13 +26,16 @@ internal sealed record NyxIdMcpEndpoint(
     string? RequestBodyMediaType,
     IReadOnlyList<string> ResponseMediaTypes,
     bool? BinaryArtifact,
-    string? PublishedOperationDigest = null)
+    string? PublishedOperationDigest = null,
+    NyxIdOperationExecutionPolicy? PublishedExecutionPolicy = null)
 {
     public bool IsReadOnly => Method is "GET" or "HEAD" or "OPTIONS";
 
     public bool IsDestructive => Method == "DELETE";
 
-    public NyxIdOperationExecutionPolicy ExecutionPolicy
+    public NyxIdOperationExecutionPolicy ExecutionPolicy => PublishedExecutionPolicy ?? DefaultExecutionPolicy;
+
+    private NyxIdOperationExecutionPolicy DefaultExecutionPolicy
     {
         get
         {
@@ -354,6 +357,9 @@ internal static class NyxIdMcpOperationCatalog
         var response = ParseResponse(entry, serviceId, endpointId, method, issues);
         if (!response.Supported)
             return null;
+        var executionPolicy = ParseExecutionPolicy(entry, method, serviceId, endpointId, issues);
+        if (executionPolicy.Supported is false)
+            return null;
 
         return new NyxIdMcpEndpoint(
             endpointId,
@@ -368,8 +374,125 @@ internal static class NyxIdMcpOperationCatalog
             response.BinaryArtifact,
             IsCatalogDigest(ExactString(entry, "operation_digest"))
                 ? ExactString(entry, "operation_digest")
-                : null);
+                : null,
+            executionPolicy.Policy);
     }
+
+    private static (bool Supported, NyxIdOperationExecutionPolicy? Policy) ParseExecutionPolicy(
+        JsonElement endpoint,
+        string method,
+        string serviceId,
+        string endpointId,
+        ICollection<NyxIdMcpCatalogIssue> issues)
+    {
+        if (!endpoint.TryGetProperty("execution_policy", out var value) || value.ValueKind == JsonValueKind.Null)
+            return (true, null);
+        if (value.ValueKind != JsonValueKind.Object ||
+            !TryMapRisk(ExactString(value, "risk"), out var risk) ||
+            !TryMapApproval(ExactString(value, "approval"), out var approval) ||
+            !TryMapEnforcementOwner(ExactString(value, "enforcement_owner"), out var enforcementOwner) ||
+            !value.TryGetProperty("allowed_execution_modes", out var modesElement) ||
+            modesElement.ValueKind != JsonValueKind.Array)
+        {
+            return UnsupportedExecutionPolicy(issues, serviceId, endpointId);
+        }
+
+        var modes = new List<ExternalCapabilityExecutionMode>();
+        foreach (var modeElement in modesElement.EnumerateArray())
+        {
+            if (modeElement.ValueKind != JsonValueKind.String ||
+                !TryMapExecutionMode(modeElement.GetString(), out var mode))
+            {
+                return UnsupportedExecutionPolicy(issues, serviceId, endpointId);
+            }
+            modes.Add(mode);
+        }
+        if (modes.Count == 0 || risk != ExpectedRisk(method))
+            return UnsupportedExecutionPolicy(issues, serviceId, endpointId);
+
+        var policy = new NyxIdOperationExecutionPolicy
+        {
+            Risk = risk,
+            Approval = approval,
+            EnforcementOwner = enforcementOwner,
+        };
+        policy.AllowedExecutionModes.AddRange(modes.Distinct());
+        return (true, policy);
+    }
+
+    private static (bool Supported, NyxIdOperationExecutionPolicy? Policy) UnsupportedExecutionPolicy(
+        ICollection<NyxIdMcpCatalogIssue> issues,
+        string serviceId,
+        string endpointId)
+    {
+        issues.Add(new NyxIdMcpCatalogIssue(
+            ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema,
+            "The endpoint execution policy is outside the supported workflow contract subset.",
+            serviceId,
+            endpointId));
+        return (false, null);
+    }
+
+    private static NyxIdOperationRisk ExpectedRisk(string method) => method switch
+    {
+        "GET" or "HEAD" or "OPTIONS" => NyxIdOperationRisk.ReadOnly,
+        "DELETE" => NyxIdOperationRisk.Destructive,
+        _ => NyxIdOperationRisk.Write,
+    };
+
+    private static bool TryMapRisk(string? value, out NyxIdOperationRisk risk)
+    {
+        risk = NormalizeEnumToken(value) switch
+        {
+            "read_only" or "nyx_id_operation_risk_read_only" => NyxIdOperationRisk.ReadOnly,
+            "write" or "nyx_id_operation_risk_write" => NyxIdOperationRisk.Write,
+            "destructive" or "nyx_id_operation_risk_destructive" => NyxIdOperationRisk.Destructive,
+            _ => NyxIdOperationRisk.Unspecified,
+        };
+        return risk != NyxIdOperationRisk.Unspecified;
+    }
+
+    private static bool TryMapApproval(string? value, out NyxIdOperationApproval approval)
+    {
+        approval = NormalizeEnumToken(value) switch
+        {
+            "none" or "nyx_id_operation_approval_none" => NyxIdOperationApproval.None,
+            "required" or "nyx_id_operation_approval_required" => NyxIdOperationApproval.Required,
+            _ => NyxIdOperationApproval.Unspecified,
+        };
+        return approval != NyxIdOperationApproval.Unspecified;
+    }
+
+    private static bool TryMapEnforcementOwner(string? value, out NyxIdOperationEnforcementOwner enforcementOwner)
+    {
+        enforcementOwner = NormalizeEnumToken(value) switch
+        {
+            "aevatar" or "nyx_id_operation_enforcement_owner_aevatar" =>
+                NyxIdOperationEnforcementOwner.Aevatar,
+            "nyx_id" or "nyxid" or "nyx_id_operation_enforcement_owner_nyx_id" =>
+                NyxIdOperationEnforcementOwner.NyxId,
+            _ => NyxIdOperationEnforcementOwner.Unspecified,
+        };
+        return enforcementOwner != NyxIdOperationEnforcementOwner.Unspecified;
+    }
+
+    private static bool TryMapExecutionMode(string? value, out ExternalCapabilityExecutionMode mode)
+    {
+        mode = NormalizeEnumToken(value) switch
+        {
+            "interactive" or "external_capability_execution_mode_interactive" =>
+                ExternalCapabilityExecutionMode.Interactive,
+            "durable" or "external_capability_execution_mode_durable" =>
+                ExternalCapabilityExecutionMode.Durable,
+            _ => ExternalCapabilityExecutionMode.Unspecified,
+        };
+        return mode != ExternalCapabilityExecutionMode.Unspecified;
+    }
+
+    private static string NormalizeEnumToken(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim().ToLowerInvariant();
 
     private static IReadOnlyList<ConnectedServiceToolParameter>? ParseParameters(
         JsonElement endpoint,

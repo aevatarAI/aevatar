@@ -247,7 +247,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
         CancellationToken ct = default)
     {
         var admission = AgentToolRequestContext.Current?.OperationAdmission;
-        if (admission?.ExecutionPolicy.Risk != AgentToolOperationRisk.Write ||
+        if (admission?.ExecutionPolicy.Risk is not
+                (AgentToolOperationRisk.Write or AgentToolOperationRisk.Destructive) ||
             admission.ExecutionPolicy.Approval is not
                 (AgentToolOperationApproval.None or AgentToolOperationApproval.Required))
         {

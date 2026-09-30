@@ -58,7 +58,9 @@ internal static class NyxIdConnectedServiceExposurePolicy
     public static bool Allows(AgentToolOperationAdmission admission)
     {
         var policy = admission.ExecutionPolicy;
-        if (admission.Identity is not AgentToolOperationIdentity.PublishedEndpoint ||
+        if (admission.Identity is not
+                (AgentToolOperationIdentity.PublishedEndpoint or AgentToolOperationIdentity.AuthoredRequest) ||
+            admission.Identity is AgentToolOperationIdentity.PublishedEndpoint &&
             string.IsNullOrWhiteSpace(admission.CatalogDigest) ||
             policy.EnforcementOwner != AgentToolOperationEnforcementOwner.Aevatar ||
             !policy.AllowedExecutionModes.Contains(AgentToolOperationExecutionMode.Interactive))
@@ -74,7 +76,9 @@ internal static class NyxIdConnectedServiceExposurePolicy
             AgentToolOperationRisk.Write =>
                 admission.HttpMethod is "POST" or "PUT" or "PATCH" &&
                 policy.Approval is AgentToolOperationApproval.None or AgentToolOperationApproval.Required,
-            AgentToolOperationRisk.Destructive => false,
+            AgentToolOperationRisk.Destructive =>
+                admission.HttpMethod == "DELETE" &&
+                policy.Approval is AgentToolOperationApproval.None or AgentToolOperationApproval.Required,
             _ => false,
         };
     }
@@ -84,8 +88,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     IAgentTool,
     IAgentToolOperationAdmissionOwner
 {
-    private const int MaxReadSourceBytes = 256 * 1024;
-    private const int MaxReadProjectionBytes = 256 * 1024;
+    private const int DefaultMaxReadSourceBytes = 256 * 1024;
+    private const int DefaultMaxReadProjectionBytes = 256 * 1024;
     private const int MaxSafeLabelLength = 80;
     private const string ProxyResponseTooLargeErrorCode = "NYXID_PROXY_RESPONSE_TOO_LARGE";
     private const string ReadTooLargeErrorCode = "NYXID_CONNECTED_SERVICE_READ_TOO_LARGE";
@@ -105,6 +109,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     private readonly string _operationLabel;
     private readonly NyxIdServiceAccessTokenSource _accessTokenSource;
     private readonly NyxIdConnectedServiceReadBackPlan? _readBackPlan;
+    private readonly int _maxReadSourceBytes;
+    private readonly int _maxReadProjectionBytes;
 
     public NyxIdConnectedServiceOperationTool(
         NyxIdProxyTool proxy,
@@ -114,7 +120,9 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         string connectionLabel,
         string? readinessCapabilityId,
         NyxIdServiceAccessTokenSource accessTokenSource,
-        NyxIdConnectedServiceReadBackPlan? readBackPlan = null)
+        NyxIdConnectedServiceReadBackPlan? readBackPlan = null,
+        int maxReadSourceBytes = DefaultMaxReadSourceBytes,
+        int maxReadProjectionBytes = DefaultMaxReadProjectionBytes)
     {
         _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
         OperationAdmission = admission ?? throw new ArgumentNullException(nameof(admission));
@@ -126,6 +134,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         _operationLabel = NormalizeModelLabel(operationLabel, "Operation", selectorSecrets);
         _accessTokenSource = accessTokenSource;
         _readBackPlan = readBackPlan;
+        _maxReadSourceBytes = maxReadSourceBytes;
+        _maxReadProjectionBytes = maxReadProjectionBytes;
         Name = BuildOpaqueName(admission);
         ParametersSchema = NyxIdConnectedServiceOperationSchema.Build(admission);
         Presentation = BuildPresentation(
@@ -144,12 +154,18 @@ internal sealed class NyxIdConnectedServiceOperationTool :
 
     public ToolPresentationDescriptor Presentation { get; }
 
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+    public ToolApprovalMode ApprovalMode => RequiresOperationApproval
+        ? ToolApprovalMode.AlwaysRequire
+        : ToolApprovalMode.NeverRequire;
 
     public bool IsReadOnly =>
         OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.ReadOnly;
 
-    public bool IsDestructive => false;
+    private bool RequiresOperationApproval =>
+        OperationAdmission.ExecutionPolicy.Approval == AgentToolOperationApproval.Required;
+
+    public bool IsDestructive =>
+        OperationAdmission.ExecutionPolicy.Risk == AgentToolOperationRisk.Destructive;
 
     public string SideEffectKind => IsReadOnly ? string.Empty : "connected_service_operation";
 
@@ -187,10 +203,12 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         };
     }
 
+    public bool? RequiresApproval(string argumentsJson) => RequiresOperationApproval;
+
     public AgentToolCallSafety GetCallSafety(string argumentsJson) => new(
-        RequiresApproval: false,
+        RequiresApproval: RequiresOperationApproval,
         IsReadOnly,
-        IsDestructive: false);
+        IsDestructive);
 
     public AgentToolOperationAdmission ResolveOperationAdmission(string argumentsJson) =>
         _readBackPlan?.TryFreeze(argumentsJson, out var readBack) == true
@@ -222,10 +240,11 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             NyxIdAccessToken = executionToken,
             SourceReadableNyxIdAccessToken = sourceReadableToken,
         };
+        var operationAdmission = ResolveOperationAdmission(argumentsJson);
         using var scope = AgentToolContextScope.Push(current with
         {
             Credentials = credentials,
-            OperationAdmission = OperationAdmission,
+            OperationAdmission = operationAdmission,
         });
 
         var outcome = IsReadOnly
@@ -233,7 +252,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
                 callId,
                 toolName,
                 argumentsJson,
-                MaxReadSourceBytes,
+                _maxReadSourceBytes,
                 ct)
             : await _proxy.ExecuteAdmittedEffectWithOutcomeAsync(
                 callId,
@@ -257,7 +276,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         AgentToolReceipt? sourceReceipt)
     {
         var sourceBytes = Encoding.UTF8.GetByteCount(sourceResult ?? string.Empty);
-        if (sourceBytes > MaxReadSourceBytes ||
+        if (sourceBytes > _maxReadSourceBytes ||
             string.Equals(
                 sourceReceipt?.ErrorCode,
                 ProxyResponseTooLargeErrorCode,
@@ -295,7 +314,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         }
 
         var projection = BuildReadProjection("succeeded", data, null, null);
-        if (Encoding.UTF8.GetByteCount(projection) > MaxReadProjectionBytes)
+        if (Encoding.UTF8.GetByteCount(projection) > _maxReadProjectionBytes)
             return BuildReadTooLargeOutcome(callId, toolName);
 
         var successReceipt = sourceReceipt.Clone();
@@ -328,7 +347,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             ReadTooLargeErrorCode,
             ReadTooLargeErrorMessage,
             BuildReadRetryHints(includeQueryParameters: true));
-        if (Encoding.UTF8.GetByteCount(result) <= MaxReadProjectionBytes)
+        if (Encoding.UTF8.GetByteCount(result) <= _maxReadProjectionBytes)
             return result;
 
         result = BuildReadProjection(
@@ -337,7 +356,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             ReadTooLargeErrorCode,
             ReadTooLargeErrorMessage,
             BuildReadRetryHints(includeQueryParameters: false));
-        return Encoding.UTF8.GetByteCount(result) <= MaxReadProjectionBytes
+        return Encoding.UTF8.GetByteCount(result) <= _maxReadProjectionBytes
             ? result
             : BuildReadProjection(
                 "retry_required",

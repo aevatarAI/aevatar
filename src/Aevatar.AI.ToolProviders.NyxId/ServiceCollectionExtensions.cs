@@ -152,6 +152,21 @@ public static class ServiceCollectionExtensions
         var configuredInternalFallbackTimeout = FirstConfiguredValue(
             configuration,
             NyxIdTransportFallbackPolicy.TimeoutSecondsConfigurationKey);
+        var configuredClientId = FirstConfiguredValue(
+            configuration,
+            "Aevatar:NyxId:ClientId");
+        var configuredClientSecret = FirstConfiguredValue(
+            configuration,
+            "Aevatar:NyxId:ClientSecret");
+        var configuredClientCredentialsScope = FirstConfiguredValue(
+            configuration,
+            "Aevatar:NyxId:ClientCredentialsScope");
+        var configuredLocalAgentKeyInventoryFallback = FirstConfiguredValue(
+            configuration,
+            "Aevatar:NyxId:EnableLocalAgentKeyInventoryFallback");
+        var configuredLocalAgentKeyInventoryFallbackJson = FirstConfiguredValue(
+            configuration,
+            "Aevatar:NyxId:LocalAgentKeyInventoryFallbackJson");
 
         if (configuredInternalApiBaseUrl is not null)
         {
@@ -177,6 +192,16 @@ public static class ServiceCollectionExtensions
                 options.PublicTransportFallbackBaseUrl = null;
             }
         }
+        if (configuredClientId is not null)
+            options.ClientId = configuredClientId;
+        if (configuredClientSecret is not null)
+            options.ClientSecret = configuredClientSecret;
+        if (configuredClientCredentialsScope is not null)
+            options.ClientCredentialsScope = configuredClientCredentialsScope;
+        if (bool.TryParse(configuredLocalAgentKeyInventoryFallback, out var localAgentKeyInventoryFallback))
+            options.EnableLocalAgentKeyInventoryFallback = localAgentKeyInventoryFallback;
+        if (configuredLocalAgentKeyInventoryFallbackJson is not null)
+            options.LocalAgentKeyInventoryFallbackJson = configuredLocalAgentKeyInventoryFallbackJson;
         if (int.TryParse(configuredInternalFallbackTimeout, out var internalFallbackTimeoutSeconds) &&
             internalFallbackTimeoutSeconds > 0)
         {
@@ -208,6 +233,12 @@ public static class ServiceCollectionExtensions
                 });
             services.AddSingleton<NyxIdApiAccessRegistrationMarker>();
         }
+        services.AddHttpClient<NyxIdClientCredentialsTokenSource>();
+        services.TryAddSingleton<INyxIdClientCredentialsTokenSource>(provider =>
+            provider.GetRequiredService<NyxIdClientCredentialsTokenSource>());
+        services.TryAddSingleton<NyxIdRecommendedSkillRefPersistenceService>();
+        services.TryAddSingleton<INyxIdRecommendedSkillRefCreator>(
+            EmptyNyxIdRecommendedSkillRefCreator.Instance);
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<NyxIdDelegationTokenLease>();

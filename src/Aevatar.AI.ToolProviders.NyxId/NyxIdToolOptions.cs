@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.Configuration;
 using Google.Protobuf.WellKnownTypes;
 
@@ -82,10 +83,6 @@ public sealed class NyxIdAssistantReadBackPagination
     public int MaxPages { get; set; }
 }
 
-/// <summary>
-/// Server-owned exact effect-to-read contract. Endpoint identities and argument mappings are
-/// configuration facts; the model supplies values only through the admitted effect schema.
-/// </summary>
 public sealed class NyxIdAssistantOperationReadBackBinding
 {
     public string CatalogServiceSlug { get; set; } = string.Empty;
@@ -183,6 +180,15 @@ public sealed class NyxIdToolOptions
     /// </summary>
     public string? PublicTransportFallbackBaseUrl { get; set; }
 
+    /// <summary>Operator-owned NyxID OAuth client identity.</summary>
+    public string? ClientId { get; set; }
+
+    /// <summary>Operator-owned NyxID OAuth client secret. Never expose this through tools.</summary>
+    public string? ClientSecret { get; set; }
+
+    /// <summary>Optional OAuth scope for server-owned NyxID client-credentials token exchange.</summary>
+    public string? ClientCredentialsScope { get; set; }
+
     /// <summary>
     /// Maximum time to wait for response headers from an explicitly configured internal transport
     /// before replaying a safe request once against <see cref="PublicTransportFallbackBaseUrl"/>.
@@ -228,6 +234,15 @@ public sealed class NyxIdToolOptions
     /// depend on this rollout gate.
     /// </summary>
     public bool EnableAssistantConnectedServiceEffects { get; set; }
+
+    /// <summary>
+    /// Local relay-test escape hatch for transient NyxID Agent Key inventory transport failures.
+    /// Disabled by default; when enabled, the JSON must use the same /api/v1/keys response shape
+    /// returned by NyxID and is only used for registration Agent Key inventory reads.
+    /// </summary>
+    public bool EnableLocalAgentKeyInventoryFallback { get; set; }
+
+    public string? LocalAgentKeyInventoryFallbackJson { get; set; }
 
     /// <summary>
     /// Server-owned bindings from NyxID catalog service identity to the closed assistant

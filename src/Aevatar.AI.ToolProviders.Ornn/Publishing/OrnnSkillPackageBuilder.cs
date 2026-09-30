@@ -101,6 +101,8 @@ public sealed class OrnnSkillPackageBuilder
         builder.AppendLine($"description: {YamlQuote(request.Description)}");
         builder.AppendLine("metadata:");
         builder.AppendLine($"  category: {request.Category}");
+        if (!string.IsNullOrWhiteSpace(request.Visibility))
+            builder.AppendLine($"  visibility: {request.Visibility}");
         AppendArray(builder, "tag", request.Tags, indent: "  ");
         if (!string.IsNullOrWhiteSpace(request.OutputType))
             builder.AppendLine($"  output-type: {request.OutputType}");

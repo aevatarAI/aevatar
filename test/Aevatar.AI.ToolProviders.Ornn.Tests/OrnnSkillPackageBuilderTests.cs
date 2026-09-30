@@ -13,6 +13,7 @@ public sealed class OrnnSkillPackageBuilderTests
             Tags = ["agent-tools"],
             RuntimeDependencies = ["dotnet"],
             RuntimeEnvVars = ["API_KEY"],
+            Visibility = "public",
         };
 
         var (package, validation) = new OrnnSkillPackageBuilder().Build(request);
@@ -23,6 +24,7 @@ public sealed class OrnnSkillPackageBuilderTests
         package.Files["runtime-skill/SKILL.md"].Should().Contain("""
             metadata:
               category: runtime-based
+              visibility: public
               tag:
                 - "agent-tools"
               output-type: text
