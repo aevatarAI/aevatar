@@ -202,7 +202,8 @@ public sealed record OrnnSkillPublishingResult(
     string? Version,
     string? SkillHash,
     int PackageBytes,
-    string RawResponse)
+    string RawResponse,
+    OrnnSkillMutationFailure? Failure)
 {
     public bool IsSuccess => string.Equals(Status, "success", StringComparison.Ordinal);
 
@@ -212,17 +213,20 @@ public sealed record OrnnSkillPublishingResult(
         string? skillHash,
         int packageBytes,
         string rawResponse) =>
-        new("success", null, [], [], guid, version, skillHash, packageBytes, rawResponse);
+        new("success", null, [], [], guid, version, skillHash, packageBytes, rawResponse, null);
 
     public static OrnnSkillPublishingResult Failed(string status, string error) =>
-        new(status, error, [], [], null, null, null, 0, string.Empty);
+        new(status, error, [], [], null, null, null, 0, string.Empty, null);
+
+    public static OrnnSkillPublishingResult Failed(OrnnSkillMutationFailure failure) =>
+        new("error", failure.Message, [], [], null, null, null, 0, string.Empty, failure);
 
     public static OrnnSkillPublishingResult ValidationFailed(
         IReadOnlyList<OrnnSkillPublishDiagnostic> diagnostics) =>
-        new("validation_error", null, diagnostics, [], null, null, null, 0, string.Empty);
+        new("validation_error", null, diagnostics, [], null, null, null, 0, string.Empty, null);
 
     public static OrnnSkillPublishingResult FormatValidationFailed(
         IReadOnlyList<OrnnSkillPackageFormatViolation> violations,
         string? error) =>
-        new("format_validation_error", error, [], violations, null, null, null, 0, string.Empty);
+        new("format_validation_error", error, [], violations, null, null, null, 0, string.Empty, null);
 }

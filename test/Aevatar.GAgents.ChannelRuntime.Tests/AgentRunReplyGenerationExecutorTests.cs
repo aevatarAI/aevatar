@@ -395,14 +395,15 @@ public sealed class AgentRunReplyGenerationExecutorTests
             nyxIdOptions, nyxIdClient, new NyxIdServiceInstanceClient(nyxIdClient));
         var fixture = CreateProfiledChannelExecutor(secretVault: secretVault, connectedServiceSource: source);
         var senderToken = senderTokenAvailable ? "bound-sender-token" : null;
-        var expectedToolToken = senderBound ? senderToken : "channel-agent-key-token";
+        var expectedToolToken = senderBound ? "sender-llm-token" : "channel-agent-key-token";
         var expectedLlmToken = senderBound ? "sender-llm-token" : "channel-agent-key-token";
-        string? expectedServiceId = senderBound
-            ? senderTokenAvailable && senderHasGoogle ? "sender-google" : null
-            : registrationHasGoogle && registrationServiceSlug == "api-google-workspace"
-                ? "registration-google"
-                : null;
-        string[] expectedServiceIds = expectedServiceId is null ? [] : [expectedServiceId];
+        string[] expectedServiceIds = [];
+        var expectedCredentialKind = senderBound
+            ? AgentToolNyxIdCredentialKind.Unspecified
+            : AgentToolNyxIdCredentialKind.AgentKey;
+        var expectedCredentialAuthority = senderBound
+            ? AgentToolNyxIdCredentialAuthority.Unspecified
+            : AgentToolNyxIdCredentialAuthority.ToolExecutionContext;
         var request = fixture.Request.Clone();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
         {
@@ -473,22 +474,28 @@ public sealed class AgentRunReplyGenerationExecutorTests
         persistedToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
         persistedToolContext.Credentials.SenderNyxIdAccessToken.Should()
             .Be(senderToken);
-        persistedToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be(senderToken);
-        persistedToolContext.Credentials.NyxIdCredentialKind.Should().Be(senderBound
-            ? AgentToolNyxIdCredentialKind.SourceReadableUserBearer
-            : AgentToolNyxIdCredentialKind.AgentKey);
+        persistedToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeNull();
+        persistedToolContext.Credentials.NyxIdCredentialKind.Should().Be(expectedCredentialKind);
         persistedToolContext.Credentials.NyxIdCredentialAuthority.Should()
-            .Be(AgentToolNyxIdCredentialAuthority.ToolExecutionContext);
-        persistedToolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
-        persistedToolContext.DurableNyxIdCredential.Should().NotBeNull();
-        persistedToolContext.DurableNyxIdCredential!.Ref.Should().Be(stored.Reference.Ref);
-        persistedToolContext.DurableNyxIdCredential.Purpose.Should().Be(
-            CredentialSecretPurposes.ChannelNyxIdAgentKey);
-        persistedToolContext.DurableNyxIdCredential.OwnerScopeKey.Should().Be("scope-channel-alpha");
-        persistedToolContext.DurableNyxIdCredential.SubjectId.Should().Be("agent-key-channel-alpha");
-        persistedToolContext.DurableNyxIdCredential.SourceKind.Should()
-            .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
-        persistedToolContext.DurableNyxIdCredential.SecretReference.Should().Be(stored.Reference);
+            .Be(expectedCredentialAuthority);
+        if (senderBound)
+        {
+            persistedToolContext.CredentialSource.Should().Be(AgentToolCredentialSource.Unspecified);
+            persistedToolContext.DurableNyxIdCredential.Should().BeNull();
+        }
+        else
+        {
+            persistedToolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+            persistedToolContext.DurableNyxIdCredential.Should().NotBeNull();
+            persistedToolContext.DurableNyxIdCredential!.Ref.Should().Be(stored.Reference.Ref);
+            persistedToolContext.DurableNyxIdCredential.Purpose.Should().Be(
+                CredentialSecretPurposes.ChannelNyxIdAgentKey);
+            persistedToolContext.DurableNyxIdCredential.OwnerScopeKey.Should().Be("scope-channel-alpha");
+            persistedToolContext.DurableNyxIdCredential.SubjectId.Should().Be("agent-key-channel-alpha");
+            persistedToolContext.DurableNyxIdCredential.SourceKind.Should()
+                .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
+            persistedToolContext.DurableNyxIdCredential.SecretReference.Should().Be(stored.Reference);
+        }
 
         handler.Requests.Clear();
         var persistedState = AgentRunReplyStepCredentials.StripRuntimeCredentials(state);
@@ -519,20 +526,6 @@ public sealed class AgentRunReplyGenerationExecutorTests
         {
             handler.Requests.Should().Contain(entry => entry.Path == "/api/v1/keys");
             handler.Requests.Should().OnlyContain(entry => entry.Token == expectedToolToken);
-        }
-        if (expectedServiceId is not null)
-        {
-            var googleTool = googleTools.Should().ContainSingle().Subject;
-            var admission = ((IAgentToolOperationAdmissionOwner)googleTool).OperationAdmission;
-            admission.HttpMethod.Should().Be("GET");
-            admission.PathTemplate.Should().Be("/calendar/v3/users/me/calendarList");
-            using var scope = AgentToolContextScope.Push(providerRequest.ToolContext);
-            var outcome = await googleTool.ExecuteWithOutcomeAsync("call-calendar", googleTool.Name, "{}");
-            outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
-            var proxyRequest = handler.Requests.Should().ContainSingle(entry =>
-                entry.Path == "/api/v1/proxy/s/api-google-workspace/calendar/v3/users/me/calendarList").Subject;
-            proxyRequest.Token.Should().Be(expectedToolToken);
-            proxyRequest.Query.Should().Contain("_nyxid_via=" + expectedServiceId);
         }
         fixture.ProfileResolver.ReceivedCalls().Should().BeEmpty();
         fixture.ProfilePlanner.ReceivedCalls().Should().BeEmpty();
@@ -814,7 +807,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ChannelRuntimeCatalog_WhenSenderOwnsServiceAuthority_ShouldPreserveSenderDiscoveryAndToolVisibility(
+    public async Task ChannelRuntimeCatalog_WhenSenderOwnsServiceAuthority_ShouldPreserveDiscoveryContextWithoutExposingConnectedOperations(
         bool hasRegistrationSelectors)
     {
         var routeTool = new CountingTool("route_tool");
@@ -853,9 +846,11 @@ public sealed class AgentRunReplyGenerationExecutorTests
 
         var catalog = await materializer.MaterializeAsync(runtimeConfig, [], toolContext, CancellationToken.None);
 
-        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool", "calendar_create_event");
-        catalog.Proof.ToolDescriptors.Single(descriptor => descriptor.Name == "calendar_create_event")
-            .Origin.Should().Be(AgentTurnToolOrigin.ConnectedService);
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("route_tool");
+        catalog.Proof.ToolDescriptors.Select(static descriptor => descriptor.Name)
+            .Should().BeEquivalentTo("route_tool");
+        catalog.Proof.ToolDescriptors.Should().NotContain(static descriptor =>
+            descriptor.Name == "calendar_create_event" || descriptor.Name == "mail_send");
         discoveryService.Contexts.Should().ContainSingle().Which.ConnectedServices
             .Should().Be(toolContext.ConnectedServices);
         runtimeConfig.Should().Be(runtimeConfigBefore);
