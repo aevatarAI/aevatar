@@ -25,8 +25,13 @@ public sealed class NyxIdConnectLinksTool :
     defaultActionName: "create");
 
     private readonly NyxIdApiClient _client;
+    private readonly IChannelConnectLinkContinuationPort? _continuationPort;
 
-    public NyxIdConnectLinksTool(NyxIdApiClient client) => _client = client;
+    public NyxIdConnectLinksTool(NyxIdApiClient client, IChannelConnectLinkContinuationPort? continuationPort = null)
+    {
+        _client = client;
+        _continuationPort = continuationPort;
+    }
 
     public string Name => "nyxid_connect_links";
 
@@ -115,7 +120,10 @@ public sealed class NyxIdConnectLinksTool :
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.NyxIdAccessToken;
-        if (string.IsNullOrWhiteSpace(token))
+        var context = AgentToolRequestContext.Current;
+        var isChannel = context?.Channel.Continuation is not null ||
+                        !string.IsNullOrWhiteSpace(context?.Channel.BotRegistrationId);
+        if (string.IsNullOrWhiteSpace(token) && !isChannel)
         {
             return """{"error":"No NyxID access token available. User must be authenticated or the channel registration must provide an agent key."}""";
         }
@@ -129,6 +137,12 @@ public sealed class NyxIdConnectLinksTool :
             return JsonSerializer.Serialize(new { error = "invalid_arguments", message = args.ParseError }, SerializerOptions);
 
         var id = args.Str("id");
+        if (parsed.Action == NyxIdConnectLinksAction.Create && isChannel)
+            return await CreateChannelAsync(context!, args, ct).ConfigureAwait(false);
+
+        if (string.IsNullOrWhiteSpace(token))
+            return """{"error":"sender_authorization_unavailable"}""";
+
         return parsed.Action switch
         {
             NyxIdConnectLinksAction.Create => await CreateAsync(token, args, ct),
@@ -140,6 +154,32 @@ public sealed class NyxIdConnectLinksTool :
                 JsonSerializer.Serialize(new { error = "invalid_arguments", message = "'id' is required." }, SerializerOptions),
             _ => NyxIdClosedActionParser<NyxIdConnectLinksAction>.InvalidActionJson,
         };
+    }
+
+    private async Task<string> CreateChannelAsync(AgentToolExecutionContext context, ToolArgs args, CancellationToken ct)
+    {
+        if (_continuationPort is null)
+            return """{"error":"channel_continuation_unavailable"}""";
+
+        var catalogSlug = NormalizeOptional(args.Str("service_slug") ?? args.Str("slug"));
+        if (catalogSlug is null)
+            return """{"error":"invalid_arguments","message":"'service_slug' is required."}""";
+
+        // Channel routing, callback URL, and creator identity are runtime-owned. In particular,
+        // a model-provided callback_url or target_org_id cannot redirect this continuation.
+        var result = await _continuationPort.CreateAsync(context, new ChannelConnectLinkCreateRequest(
+            catalogSlug,
+            NormalizeOptional(args.Str("label")),
+            NormalizeOptional(args.Str("requested_by")),
+            args.Int("expires_in")), ct).ConfigureAwait(false);
+        return result.Accepted && result.ErrorCode is null
+            ? JsonSerializer.Serialize(new
+            {
+                status = "accepted",
+                callback_id = result.CallbackId,
+                message = "The connection request was accepted. The link will arrive in this conversation after it has been created. Do not invent a link or claim that the service is connected.",
+            }, SerializerOptions)
+            : JsonSerializer.Serialize(new { error = result.ErrorCode }, SerializerOptions);
     }
 
     private async Task<string> CreateAsync(string token, ToolArgs args, CancellationToken ct)

@@ -48,11 +48,20 @@ public sealed class StateTokenCodec
         CancellationToken ct = default) =>
         EncodeAsync(correlationId, externalSubject, pkceVerifier, expectedBindingHash: null, ct);
 
+    public Task<string> EncodeAsync(
+        string correlationId,
+        ExternalSubjectRef externalSubject,
+        string pkceVerifier,
+        string? expectedBindingHash,
+        CancellationToken ct = default) =>
+        EncodeAsync(correlationId, externalSubject, pkceVerifier, expectedBindingHash, false, ct);
+
     public async Task<string> EncodeAsync(
         string correlationId,
         ExternalSubjectRef externalSubject,
         string pkceVerifier,
         string? expectedBindingHash,
+        bool continuationRequested,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
@@ -74,6 +83,7 @@ public sealed class StateTokenCodec
             PkceVerifier = pkceVerifier,
             ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt),
             ExpectedBindingHash = expectedBindingHash ?? string.Empty,
+            ContinuationRequested = continuationRequested,
         };
 
         // Encode with the snapshot's current kid (defaults to v1 on first

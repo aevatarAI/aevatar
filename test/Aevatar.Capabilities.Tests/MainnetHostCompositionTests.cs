@@ -57,6 +57,7 @@ using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgents.Channel.Identity;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Broker;
@@ -65,6 +66,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.NyxidChat.ExternalCallbacks;
 using Aevatar.GAgents.StatusDashboard;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
@@ -110,6 +112,32 @@ namespace Aevatar.Capabilities.Tests;
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
+    [Fact]
+    public void ExternalCallbacks_ShouldResolveRealAdaptersProjectionAndIndependentGetRoute()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var runtimeProvider = new EnvironmentVariableScope("AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var secretStoreBackend = new EnvironmentVariableScope("AEVATAR_ActorRuntime__SecretStoreBackend", "InMemory");
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        using var app = builder.Build();
+        app.Services.GetRequiredService<IExternalCallbackCommandPort>().Should().BeOfType<ExternalCallbackCommandPort>();
+        app.Services.GetRequiredService<IOAuthContinuationExecutionPort>().Should().BeOfType<OAuthContinuationExecutionPort>();
+        app.Services.GetRequiredService<IConnectLinkCreationPort>().Should().BeOfType<NyxIdConnectLinkCreationAdapter>();
+        app.Services.GetRequiredService<IConnectLinkVerificationPort>().Should().BeOfType<NyxIdConnectLinkVerifier>();
+        app.Services.GetRequiredService<IChannelConnectLinkContinuationPort>().Should().BeOfType<NyxIdConnectLinkContinuationAdapter>();
+        app.Services.GetRequiredService<IProjectionDocumentReader<ExternalCallbackCurrentStateDocument, string>>().Should().NotBeNull();
+        app.MapAevatarMainnetHost();
+        var routes = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().ToArray();
+        routes.Should().ContainSingle(endpoint => endpoint.RoutePattern.RawText == "/api/callbacks/connect-link" &&
+            endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.Contains("GET"));
+        routes.Should().ContainSingle(endpoint => endpoint.RoutePattern.RawText == "/api/oauth/nyxid-callback");
+    }
+
     private static readonly System.Type[] StudioLocalToolSourceTypes =
     [
         typeof(ProvisionWorkflowScheduleToolSource),
@@ -569,7 +597,9 @@ public sealed class MainnetHostCompositionTests
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
             .OnlyHaveUniqueItems();
-        readModelDescriptors.Should().HaveCount(19);
+        readModelDescriptors.Should().HaveCount(20);
+        readModelDescriptors.Should()
+            .ContainSingle(static descriptor => descriptor.Name == "channel-external-callback-current-state");
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
         readModelDescriptors.Should()

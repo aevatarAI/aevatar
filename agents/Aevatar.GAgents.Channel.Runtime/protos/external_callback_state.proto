@@ -1,0 +1,90 @@
+syntax = "proto3";
+package aevatar.gagents.channel.runtime;
+option csharp_namespace = "Aevatar.GAgents.Channel.Runtime";
+import "external_callback_contracts.proto";
+import "google/protobuf/timestamp.proto";
+
+enum ExternalCallbackAuthorizationPhase {
+  EXTERNAL_CALLBACK_AUTHORIZATION_PHASE_UNSPECIFIED = 0;
+  EXTERNAL_CALLBACK_AUTHORIZATION_PHASE_WAITING = 1;
+  EXTERNAL_CALLBACK_AUTHORIZATION_PHASE_EXCHANGE_STARTED = 2;
+  EXTERNAL_CALLBACK_AUTHORIZATION_PHASE_PREPARED = 3;
+  EXTERNAL_CALLBACK_AUTHORIZATION_PHASE_BINDING_PENDING = 4;
+}
+
+message ExternalCallbackState {
+  aevatar.gagents.channel.abstractions.ExternalCallbackRegistration registration = 1;
+  aevatar.gagents.channel.abstractions.ExternalCallbackVerifiedReferences verified_references = 2;
+  aevatar.gagents.channel.abstractions.CallbackResult result = 3;
+  int64 revision = 4;
+  int32 verification_attempts = 5;
+  int64 next_attempt_at_unix_ms = 6;
+  int64 timer_generation = 7;
+  ExternalCallbackAuthorizationPhase oauth_phase = 8;
+  aevatar.gagents.channel.abstractions.OAuthBindingPreparation oauth_preparation = 9;
+  bool completion_context_accepted = 10;
+  int64 consumed_at_unix_ms = 11;
+  string failure_code = 12;
+  // Actor-derived stable query shape; materializers do not infer business status.
+  ExternalCallbackSnapshot snapshot = 13;
+  int64 context_revision = 14;
+  bool link_creation_started = 15;
+  string link_url = 16;
+  bool link_presented = 17;
+  bool abandon_pending = 18;
+  bool link_context_accepted = 19;
+  // Context and completion delivery may retry only through this durable grace
+  // deadline after the external operation expires.
+  int64 delivery_deadline_at_unix_ms = 20;
+  string delivery_failure_code = 21;
+}
+
+message ExternalCallbackSnapshot {
+  string callback_id = 1;
+  string operation_actor_id = 2;
+  string external_request_id = 3;
+  aevatar.gagents.channel.abstractions.ExternalCallbackKind kind = 4;
+  aevatar.gagents.channel.abstractions.CallbackResult result = 5;
+  int64 expires_at_unix_ms = 6;
+  int64 consumed_at_unix_ms = 7;
+}
+
+message ExternalCallbackStateChanged {
+  ExternalCallbackState state = 1;
+  // Write-side observation correlation only, not an actor/business identity.
+  string command_id = 2;
+}
+
+message RegisterExternalCallback {
+  aevatar.gagents.channel.abstractions.ExternalCallbackRegistration registration = 1;
+  string command_id = 2;
+}
+
+message ExternalCallbackStartRequested {
+  string callback_id = 1;
+}
+
+message ExternalCallbackHint {
+  string callback_id = 1;
+  string external_request_id = 2;
+}
+
+message ExternalCallbackRetryFired {
+  string callback_id = 1;
+  int64 generation = 2;
+}
+
+message ExternalCallbackCurrentStateDocument {
+  string id = 1;
+  int64 state_version = 2;
+  string last_event_id = 3;
+  google.protobuf.Timestamp updated_at_utc = 4;
+  string callback_id = 5;
+  string external_request_id = 6;
+  ExternalCallbackSnapshot snapshot = 7;
+}
+
+message ExternalCallbackWriteRejected {
+  string command_id = 1;
+  string rejection_code = 2;
+}

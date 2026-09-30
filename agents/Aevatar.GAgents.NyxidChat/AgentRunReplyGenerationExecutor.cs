@@ -1360,6 +1360,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         string runActorId,
         string targetActorId)
     {
+        // Delayed callback replies retain ChatStreamAsync execution, while the
+        // completed response uses registration outbound in ConversationGAgent.
+        // Their original relay reply token cannot authorize incremental edits.
+        if (!string.IsNullOrWhiteSpace(request.ExternalCallbackId))
+            return null;
         if (_relayOptions is not { StreamingRepliesEnabled: true })
             return null;
         if (request.Activity?.OutboundDelivery is not

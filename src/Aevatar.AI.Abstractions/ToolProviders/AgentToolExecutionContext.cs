@@ -266,7 +266,8 @@ public sealed record AgentToolChannelContext(
     string? DeliveryTargetId = null,
     ChannelWorkflowResultDeliveryCredential? WorkflowResultDeliveryCredential = null,
     string? BotRegistrationId = null,
-    IReadOnlyList<AgentToolChannelIdentityHint>? IdentityHints = null)
+    IReadOnlyList<AgentToolChannelIdentityHint>? IdentityHints = null,
+    AgentToolChannelContinuationContext? Continuation = null)
 {
     public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null, null, []);
 }

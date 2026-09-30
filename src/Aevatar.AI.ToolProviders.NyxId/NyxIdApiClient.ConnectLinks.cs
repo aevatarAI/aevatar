@@ -18,6 +18,13 @@ public sealed partial class NyxIdApiClient
         CancellationToken ct) =>
         GetAsync(token, $"{ConnectLinksPath}/{Uri.EscapeDataString(id.Trim())}", ct);
 
+    public Task<NyxIdProxyTextResponse> GetConnectLinkBoundedAsync(
+        string token,
+        string id,
+        long maxBytes,
+        CancellationToken ct) =>
+        GetBoundedAsync(token, $"{ConnectLinksPath}/{Uri.EscapeDataString(id.Trim())}", maxBytes, ct);
+
     public Task<string> CancelConnectLinkAsync(
         string token,
         string id,

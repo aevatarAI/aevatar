@@ -229,6 +229,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 CorrelationId = request.CorrelationId,
                 TargetActorId = request.TargetActorId,
                 StartedAtUnixMs = startedAtUnixMs,
+                ExternalCallbackId = request.ExternalCallbackId,
             });
         }
 
@@ -444,7 +445,8 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         // token used for the LLM call expires inside ~15 min. A request that has been
         // delayed past the run window cannot lead to a successful reply.
         var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-        if (request.RequestedAtUnixMs > 0 && nowMs - request.RequestedAtUnixMs > MaxRunRequestAgeMs)
+        if (string.IsNullOrWhiteSpace(State.ExternalCallbackId) &&
+            request.RequestedAtUnixMs > 0 && nowMs - request.RequestedAtUnixMs > MaxRunRequestAgeMs)
         {
             _logger.LogInformation(
                 "Dropping stale LLM reply request: runId={RunId} correlation={CorrelationId} ageMs={AgeMs}",
@@ -455,10 +457,11 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             return;
         }
 
-        // Relay credential gate: relay turns require a fresh reply_token to send the
-        // outbound. A relay request with no command-carried token cannot be delivered,
-        // so skip the LLM call entirely.
-        if (IsRelayRequest(request) && string.IsNullOrWhiteSpace(request.ReplyToken))
+        // Ordinary relay turns require their command-carried reply token. A
+        // delayed callback run delivers through the original registration's
+        // Agent Key in ConversationGAgent and re-mints its saved sender binding.
+        if (IsRelayRequest(request) && string.IsNullOrWhiteSpace(State.ExternalCallbackId) &&
+            string.IsNullOrWhiteSpace(request.ReplyToken))
         {
             _logger.LogWarning(
                 "Dropping relay LLM reply request without command-carried reply_token: runId={RunId} correlation={CorrelationId}",
@@ -2618,6 +2621,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                         RequestedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                         RequiresRuntimeReplyToken =
                             IsRelayRequest(request) &&
+                            string.IsNullOrWhiteSpace(State.ExternalCallbackId) &&
                             !HasPendingCardDeliveryCompletion() &&
                             State.ProducedWorkflowRunDelivery is null,
                     }),
@@ -2812,6 +2816,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             RunId = command.RunId ?? string.Empty,
             CorrelationId = NormalizeOptional(command.CorrelationId) ?? State.CorrelationId ?? string.Empty,
             TargetActorId = NormalizeOptional(command.TargetActorId) ?? State.TargetActorId ?? string.Empty,
+            ExternalCallbackId = State.ExternalCallbackId,
             Activity = BuildOutputDispatchRetryActivity(command),
         };
 
@@ -2984,6 +2989,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.TargetActorId = evt.TargetActorId;
         next.Status = AgentRunStatus.Started;
         next.StartedAtUnixMs = evt.StartedAtUnixMs;
+        next.ExternalCallbackId = evt.ExternalCallbackId;
         return next;
     }
 

@@ -36,6 +36,23 @@ public interface IConversationTurnRunner
     /// </summary>
     Task<ConversationTurnResult> RunContinueAsync(ConversationContinueRequestedEvent command, CancellationToken ct);
 
+    /// <summary>Resumes the original business input through the normal LLM run path.</summary>
+    Task<ConversationTurnResult> RunExternalCallbackAsync(
+        ChatActivity activity,
+        ChannelCallbackOrigin origin,
+        CallbackAuthorizationReference authorization,
+        ExternalCallbackVerifiedReferences references,
+        CallbackResult result,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct) => RunInboundAsync(activity, runtimeContext, ct);
+
+    /// <summary>Publishes a durable external-operation link to its original Channel.</summary>
+    Task<ConversationTurnResult> RunExternalCallbackLinkAsync(
+        ExternalCallbackLinkReady link,
+        ConversationTurnRuntimeContext runtimeContext,
+        CancellationToken ct) => Task.FromResult(ConversationTurnResult.PermanentFailure(
+            "callback_link_runner_unavailable", "External callback link delivery is unavailable."));
+
     /// <summary>
     /// Delivers one progressive streaming chunk to the downstream platform. If
     /// <paramref name="currentPlatformMessageId"/> is <c>null</c>, the chunk is dispatched as the
@@ -138,7 +155,9 @@ public sealed record ConversationTurnRuntimeContext(
     // Only the final Relay text leaf is deferred back to its actor-owned lifecycle.
     bool DeferRelayTextReply = false,
     // Once an Agent Key request is dispatched, a token-backed interactive attempt is forbidden.
-    bool RelayTextOnly = false)
+    bool RelayTextOnly = false,
+    string? ConversationActorId = null,
+    bool UseRegistrationOutbound = false)
 {
     public static ConversationTurnRuntimeContext Empty { get; } = new(NyxRelayReplyToken: null);
 }

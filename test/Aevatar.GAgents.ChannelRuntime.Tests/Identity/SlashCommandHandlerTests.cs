@@ -4,6 +4,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Slash;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
@@ -27,7 +28,8 @@ public sealed class SlashCommandHandlerTests
     private static ChannelSlashCommandContext Context(
         string? bindingValue = null,
         bool privateChat = true,
-        string platform = "lark") => new()
+        string platform = "lark",
+        ChannelCallbackOrigin? origin = null) => new()
     {
         CommandName = "init",
         ArgumentText = string.Empty,
@@ -38,7 +40,30 @@ public sealed class SlashCommandHandlerTests
         SenderId = "ou_user_y",
         SenderName = "Eric",
         IsPrivateChat = privateChat,
+        ContinuationOrigin = origin,
     };
+
+    [Fact]
+    public async Task Init_WithTrustedOrigin_ReturnsAuthorizationCardInOriginalReply()
+    {
+        var origin = new ChannelCallbackOrigin
+        {
+            ConversationActorId = "original-conversation", ChannelRegistrationId = "reg-1", ActionId = "original-action",
+        };
+        var broker = Substitute.For<INyxIdCapabilityBroker>();
+        broker.StartExternalBindingAsync(Arg.Any<ExternalSubjectRef>(), origin, Arg.Any<CancellationToken>())
+            .Returns(new BindingChallenge { AuthorizeUrl = "https://id.example.test/oauth/authorize?state=signed" });
+        var handler = new InitChannelSlashCommandHandler(broker, NullLogger<InitChannelSlashCommandHandler>.Instance);
+
+        var reply = await handler.HandleAsync(Context(platform: "telegram", origin: origin), default);
+
+        reply!.Actions.Should().ContainSingle(action => action.Kind == ActionElementKind.Link &&
+            action.Value == "https://id.example.test/oauth/authorize?state=signed");
+        reply.Cards.Should().ContainSingle();
+        reply.Text.Should().NotContain("正在准备").And.NotContain("稍后");
+        await broker.Received(1).StartExternalBindingAsync(Arg.Is<ExternalSubjectRef>(x => x.Equals(Subject("telegram"))), origin, Arg.Any<CancellationToken>());
+        await broker.DidNotReceive().StartExternalBindingAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>());
+    }
 
     [Fact]
     public async Task Init_ReturnsBindingCard_ForUnboundSenderInPrivateChat()

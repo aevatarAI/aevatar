@@ -28,7 +28,7 @@ public sealed partial class ConversationGAgent : INyxRelayAppendOperationActorCo
 
     private async Task InitializeAppendReplyAsync(NeedsLlmReplyEvent request)
     {
-        if (!IsRelayActivity(request.Activity) ||
+        if (!string.IsNullOrWhiteSpace(request.ExternalCallbackId) || !IsRelayActivity(request.Activity) ||
             FindReplyLifecycle(request.CorrelationId, ConversationReplyLifecycleMode.NyxRelayText) is not null)
             return;
         var profile = NyxRelayCapabilityProfiles.Resolve(AppendPlatform(request.Activity));

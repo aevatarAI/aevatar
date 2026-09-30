@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
+using NSubstitute;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
@@ -44,6 +45,48 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(NyxIdRedirectUriResolver.OverrideEnvVar, _savedOverride);
+    }
+
+    [Fact]
+    public async Task ContinuationStart_ReturnsAuthorizeUrlAfterAdmission_AndSignsTheSameCallbackId()
+    {
+        var admitted = new TaskCompletionSource<ExternalCallbackRegistration>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registered = new TaskCompletionSource<ExternalCallbackRegistration>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var continuations = Substitute.For<IExternalCallbackCommandPort>();
+        continuations.AdmitAsync(Arg.Any<ExternalCallbackRegistration>(), Arg.Any<CancellationToken>()).Returns(call =>
+        {
+            registered.SetResult(call.Arg<ExternalCallbackRegistration>().Clone());
+            return admitted.Task;
+        });
+        var broker = NewBroker(NewSnapshot(NyxIdRedirectUriResolver.Resolve()), continuations: continuations);
+        var origin = new ChannelCallbackOrigin { ConversationActorId = "opaque-conversation", ChannelRegistrationId = "registration", ActionId = "action" };
+
+        var pending = broker.StartExternalBindingAsync(SampleSubject(), origin);
+        var registration = await registered.Task;
+        pending.IsCompleted.Should().BeFalse("admission must complete before its acceptance is reported");
+        registration.Kind.Should().Be(ExternalCallbackKind.Oauth);
+        registration.LinkDeliveryMode.Should().Be(ExternalCallbackLinkDeliveryMode.Caller);
+        registration.Origin.Should().Be(origin);
+        registration.Authorization.ExternalSubject.Should().Be(SampleSubject());
+        admitted.SetResult(registration);
+        var challenge = await pending;
+        challenge.AuthorizeUrl.Should().NotBeEmpty("the original reply must contain the authorization link");
+        challenge.AuthorizeUrl.Should().Be(registration.OauthAuthorizeUrl);
+        var state = QueryHelpers.ParseQuery(new Uri(challenge.AuthorizeUrl).Query)["state"].ToString();
+        var decoded = await broker.TryDecodeStateTokenAsync(state);
+        decoded.ContinuationRequested.Should().BeTrue();
+        decoded.CorrelationId.Should().Be(registration.CallbackId);
+    }
+
+    [Fact]
+    public async Task ContinuationStart_AdmissionFailureDoesNotReturnAuthorizeUrl()
+    {
+        var continuations = Substitute.For<IExternalCallbackCommandPort>();
+        continuations.AdmitAsync(Arg.Any<ExternalCallbackRegistration>(), Arg.Any<CancellationToken>())
+            .Returns<Task<ExternalCallbackRegistration>>(_ => throw new InvalidOperationException("commit unavailable"));
+        var broker = NewBroker(NewSnapshot(NyxIdRedirectUriResolver.Resolve()), continuations: continuations);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => broker.StartExternalBindingAsync(SampleSubject(),
+            new ChannelCallbackOrigin { ConversationActorId = "original" }));
     }
 
     [Fact]
@@ -633,7 +676,8 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         NyxIdBrokerOptions? options = null,
         HttpMessageHandler? httpHandler = null,
         IExternalIdentityBindingQueryPort? queryPort = null,
-        ILogger<NyxIdRemoteCapabilityBroker>? logger = null)
+        ILogger<NyxIdRemoteCapabilityBroker>? logger = null,
+        IExternalCallbackCommandPort? continuations = null)
     {
         var provider = new FakeOAuthClientProvider(snapshot);
         options ??= new NyxIdBrokerOptions
@@ -654,7 +698,8 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             new StateTokenCodec(provider),
             queryPort ?? new EmptyBindingQueryPort(),
             new FakeTimeProvider(DateTimeOffset.Parse("2026-04-30T10:00:00Z")),
-            logger ?? NullLogger<NyxIdRemoteCapabilityBroker>.Instance);
+            logger ?? NullLogger<NyxIdRemoteCapabilityBroker>.Instance,
+            continuations);
     }
 
     private static AevatarOAuthClientSnapshot NewSnapshot(string? redirectUri) => new(

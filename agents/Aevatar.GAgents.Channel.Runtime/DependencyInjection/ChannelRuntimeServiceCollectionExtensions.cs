@@ -162,6 +162,19 @@ public static class ChannelRuntimeServiceCollectionExtensions
             ConversationDeliveryDocumentMetadataProvider>();
         services.TryAddSingleton<IConversationDeliveryQueryPort, ConversationDeliveryQueryPort>();
 
+        // External operations use the same committed-state projection pipeline.
+        services.TryAddSingleton<TimeProvider>(TimeProvider.System);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProjectionActivationPlanProvider, ExternalCallbackCommittedStateProjectionActivationPlanProvider>());
+        services.AddProjectionMaterializationRuntimeCore<
+            ExternalCallbackMaterializationContext, ExternalCallbackMaterializationLease,
+            ProjectionMaterializationScopeGAgent<ExternalCallbackMaterializationContext>>(
+            static key => new() { RootActorId = key.RootActorId, ProjectionKind = key.ProjectionKind },
+            static context => new(context));
+        services.AddCurrentStateProjectionMaterializer<ExternalCallbackMaterializationContext, ExternalCallbackCurrentStateProjector>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ExternalCallbackCurrentStateDocument>, ExternalCallbackDocumentMetadataProvider>();
+        services.TryAddSingleton<IExternalCallbackQueryPort, ExternalCallbackQueryPort>();
+        services.TryAddSingleton<IExternalCallbackCommandPort, ExternalCallbackCommandPort>();
+
         // ─── Channel pipeline composition ───
         services.TryAddSingleton<ConversationDispatchMiddleware>();
         services.Replace(ServiceDescriptor.Singleton(_ => new MiddlewarePipelineBuilder()

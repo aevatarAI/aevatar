@@ -11,6 +11,7 @@ import "chat_route_policy.proto";
 import "ai_messages.proto";
 import "Credentials/credential_secret_references.proto";
 import "channel_bot_registration.proto";
+import "external_callback_contracts.proto";
 
 message OutboundDeliveryReceipt {
   string reply_message_id = 1;
@@ -103,6 +104,82 @@ message NeedsLlmReplyEvent {
   // ChannelRegistration-owned runtime config provenance used by normal Channel bot runs.
   // It contains no runtime credentials and does not depend on Agent Profile resolution.
   ChannelRuntimeConfigProof channel_runtime_config = 19;
+  // Present only for an admitted external-operation business resumption. It selects
+  // durable registration outbound, never the expired original relay reply token.
+  string external_callback_id = 20;
+}
+
+message ConversationExternalCallbackContextCommitted {
+  aevatar.gagents.channel.abstractions.ExternalCallbackActionContextRecorded context = 1;
+}
+
+message ConversationExternalCallbackCompletionCommitted {
+  string callback_id = 1;
+  aevatar.gagents.channel.abstractions.CallbackResult result = 2;
+  string resume_run_id = 3;
+  string resume_activity_id = 4;
+}
+
+message ConversationExternalCallbackResumeRequested {
+  string callback_id = 1;
+}
+
+message ConversationExternalCallbackResumeAdmitted {
+  string callback_id = 1;
+}
+
+message ConversationExternalCallbackLinkReceived {
+  aevatar.gagents.channel.abstractions.ExternalCallbackLinkReady link = 1;
+}
+
+message ConversationExternalCallbackLinkDeliveryRequested {
+  string callback_id = 1;
+}
+
+message ConversationExternalCallbackLinkDelivered {
+  string callback_id = 1;
+}
+
+// Callback delivery phases have separate finite policies; no phase can restart its budget.
+enum ConversationExternalCallbackDeliveryPhase {
+  CONVERSATION_EXTERNAL_CALLBACK_DELIVERY_PHASE_UNSPECIFIED = 0;
+  CONVERSATION_EXTERNAL_CALLBACK_DELIVERY_PHASE_LINK = 1;
+  CONVERSATION_EXTERNAL_CALLBACK_DELIVERY_PHASE_RESUME = 2;
+  CONVERSATION_EXTERNAL_CALLBACK_DELIVERY_PHASE_REPLY = 3;
+  CONVERSATION_EXTERNAL_CALLBACK_DELIVERY_PHASE_RUN_DISPATCH = 4;
+}
+
+message ConversationExternalCallbackReplyReady {
+  string callback_id = 1;
+  // Immutable produced payload and original route; no runtime credentials.
+  LlmReplyReadyEvent reply = 2;
+}
+
+message ConversationExternalCallbackAttemptStarted {
+  string callback_id = 1;
+  ConversationExternalCallbackDeliveryPhase phase = 2;
+  int32 attempt_count = 3;
+  int64 deadline_at_unix_ms = 4;
+  int64 next_attempt_at_unix_ms = 5;
+}
+
+message ConversationExternalCallbackReplyDelivered {
+  string callback_id = 1;
+}
+
+message ConversationExternalCallbackReplyDeliveryRequested {
+  string callback_id = 1;
+}
+
+message ConversationExternalCallbackRunDispatchConfirmed {
+  string callback_id = 1;
+}
+
+message ConversationExternalCallbackDeliveryFailed {
+  string callback_id = 1;
+  ConversationExternalCallbackDeliveryPhase phase = 2;
+  string error_code = 3;
+  string error_summary = 4;
 }
 
 enum ChannelWorkflowDraftRunSourceKind {

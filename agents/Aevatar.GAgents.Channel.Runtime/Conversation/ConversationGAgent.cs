@@ -92,6 +92,7 @@ public sealed partial class ConversationGAgent :
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
+        await RecoverExternalCallbackActionsAsync(ct);
         await RecoverAppendRepliesAsync();
         await SchedulePendingLlmReplyDispatchesAsync(ct);
         await DispatchPendingWorkflowDraftRunsAsync(ct);
@@ -116,6 +117,16 @@ public sealed partial class ConversationGAgent :
             .On<ConversationReplyLifecycleChangedEvent>(ApplyReplyLifecycleChanged)
             .On<ConversationReplyLifecycleClearedEvent>(ApplyReplyLifecycleCleared)
             .On<ConversationRetainedHistoryClearedEvent>(ApplyRetainedHistoryCleared)
+            .On<ConversationExternalCallbackContextCommitted>(ApplyExternalCallbackContext)
+            .On<ConversationExternalCallbackCompletionCommitted>(ApplyExternalCallbackCompletion)
+            .On<ConversationExternalCallbackResumeAdmitted>(ApplyExternalCallbackResumeAdmitted)
+            .On<ConversationExternalCallbackLinkReceived>(ApplyExternalCallbackLinkReceived)
+            .On<ConversationExternalCallbackLinkDelivered>(ApplyExternalCallbackLinkDelivered)
+            .On<ConversationExternalCallbackReplyReady>(ApplyExternalCallbackReplyReady)
+            .On<ConversationExternalCallbackAttemptStarted>(ApplyExternalCallbackAttemptStarted)
+            .On<ConversationExternalCallbackReplyDelivered>(ApplyExternalCallbackReplyDelivered)
+            .On<ConversationExternalCallbackRunDispatchConfirmed>(ApplyExternalCallbackRunDispatchConfirmed)
+            .On<ConversationExternalCallbackDeliveryFailed>(ApplyExternalCallbackDeliveryFailed)
             .OrCurrent();
 
     /// <summary>
@@ -297,6 +308,7 @@ public sealed partial class ConversationGAgent :
         // messages, so a thread reply addresses the bot without a re-@-mention.
         var inboundContext = runtimeContext with
         {
+            ConversationActorId = Id,
             IsReplyToBot = ConversationBotMessageLedger.IsReplyToBotMessage(
                 State.BotSentPlatformMessageIds,
                 activity.ReplyToActivityId),
@@ -351,6 +363,7 @@ public sealed partial class ConversationGAgent :
             var channelRuntimeConfig = runCopy.ChannelRuntimeConfig?.Clone() ??
                                        await ResolveChannelRuntimeConfigProofAsync(runCopy, CancellationToken.None);
             runCopy.TargetActorId = Id;
+            StampToolContinuationOwner(runCopy);
             runCopy.TargetRef = targetRef.Clone();
             runCopy.ChannelRuntimeConfig = channelRuntimeConfig?.Clone();
             runCopy.AgentProfile = null;
@@ -816,6 +829,27 @@ public sealed partial class ConversationGAgent :
 
     private async Task DispatchPendingLlmReplyAsync(NeedsLlmReplyEvent request, CancellationToken ct)
     {
+        var callbackAction = string.IsNullOrWhiteSpace(request.ExternalCallbackId)
+            ? null : FindExternalCallbackAction(request.ExternalCallbackId);
+        if (callbackAction?.PendingReplyDelivery is not null || callbackAction?.RunDispatchConfirmed == true ||
+            callbackAction is not null && ExternalCallbackDeliveryStopped(callbackAction))
+        {
+            return;
+        }
+        if (callbackAction is not null)
+        {
+            // Reserve and schedule from actor-owned facts before credential or
+            // dispatch I/O. Accepted handoff has its own durable marker below.
+            if (!await BeginExternalCallbackAttemptAsync(callbackAction,
+                    ConversationExternalCallbackDeliveryPhase.RunDispatch,
+                    forceRecoveryAttempt: true))
+            {
+                if (!ExternalCallbackDeliveryStopped(FindExternalCallbackAction(request.ExternalCallbackId)!))
+                    await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
+                return;
+            }
+            await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
+        }
         // Progress delivery fences reply-token replay; only a successful run handoff
         // proves that the LLM run exists and must not be dispatched again. Telegram's
         // append lifecycle owns this durable handoff marker.
@@ -829,7 +863,7 @@ public sealed partial class ConversationGAgent :
             Logger.LogWarning(
                 "Channel LLM reply run dispatcher not registered; scheduling durable retry: correlation={CorrelationId}",
                 request.CorrelationId);
-            await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
+            await HandleCallbackDispatchFailureAsync(callbackAction, request, "llm_run_dispatch_unavailable", ct);
             return;
         }
 
@@ -848,11 +882,12 @@ public sealed partial class ConversationGAgent :
                 ex,
                 "Failed to resolve relay runtime credentials; scheduling durable retry: correlation={CorrelationId}",
                 request.CorrelationId);
-            await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
+            await HandleCallbackDispatchFailureAsync(callbackAction, request, "llm_run_credential_unavailable", ct);
             return;
         }
 
-        if (IsRelayActivity(dispatchRequest.Activity) && string.IsNullOrWhiteSpace(dispatchRequest.ReplyToken))
+        if (IsRelayActivity(dispatchRequest.Activity) && string.IsNullOrWhiteSpace(dispatchRequest.ReplyToken) &&
+            string.IsNullOrWhiteSpace(dispatchRequest.ExternalCallbackId))
         {
             await PersistMissingRuntimeCredentialFailureAsync(
                 BuildLlmReplyCommandId(dispatchRequest.CorrelationId),
@@ -875,6 +910,9 @@ public sealed partial class ConversationGAgent :
             //   Conversation observes only dispatch handoff success/failure here.
             //   Run duplicate/stale decisions are committed by AgentRunGAgent events.
             await dispatcher.DispatchAsync(dispatchRequest, ct);
+            if (callbackAction is not null)
+                await PersistDomainEventAsync(new ConversationExternalCallbackRunDispatchConfirmed
+                { CallbackId = callbackAction.Context.CallbackId });
             if (FindAppendLifecycle(request.CorrelationId) is { } appendLifecycle)
                 await ChangeAppendAsync(appendLifecycle, change => change.AppendLlmRunDispatched = true);
             LogReplyLifecycleDecision(
@@ -903,8 +941,18 @@ public sealed partial class ConversationGAgent :
                 handoffConfirmed: IsLlmReplyRunHandoffConfirmed(request.CorrelationId),
                 terminalReason: "dispatch_failed",
                 errorCode: "llm_run_dispatch_failed");
-            await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
+            await HandleCallbackDispatchFailureAsync(callbackAction, request, "llm_run_dispatch_failed", ct);
         }
+    }
+
+    private async Task HandleCallbackDispatchFailureAsync(ConversationExternalCallbackAction? action,
+        NeedsLlmReplyEvent request, string errorCode, CancellationToken ct)
+    {
+        if (action is not null && await StopExternalCallbackFailureAsync(action,
+                ConversationExternalCallbackDeliveryPhase.RunDispatch,
+                ConversationTurnResult.TransientFailure(errorCode, "The callback AgentRun could not be admitted.")))
+            return;
+        await ScheduleDeferredLlmReplyDispatchAsync(request, DeferredLlmDispatchRetryDelay, ct);
     }
 
     private async Task DispatchPendingWorkflowDraftRunAsync(NeedsWorkflowDraftRunEvent request, CancellationToken ct)
@@ -1114,6 +1162,12 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
+        if (FindExternalCallbackReplyAction(evt) is { } externalCallbackAction)
+        {
+            await PersistExternalCallbackReplyReadyAsync(externalCallbackAction, evt);
+            return;
+        }
+
         var referenceActivity = evt.UseSourceActivityDeliveryContext
             ? evt.Activity
             : pendingRequest?.Activity ?? pendingWorkflowRequest?.Activity ?? evt.Activity;
@@ -1139,6 +1193,8 @@ public sealed partial class ConversationGAgent :
             evt,
             referenceActivity,
             CancellationToken.None);
+        if (!string.IsNullOrWhiteSpace(pendingRequest?.ExternalCallbackId))
+            runtimeContext = runtimeContext with { UseRegistrationOutbound = true };
         Logger.LogInformation(
             "Received LLM reply ready: correlation={CorrelationId} terminal={TerminalState} replyTokenSource={Source}",
             evt.CorrelationId,
@@ -1158,8 +1214,15 @@ public sealed partial class ConversationGAgent :
             return;
 
         var runner = ResolveRunner();
+        var deliveryReply = evt;
+        if (runtimeContext.UseRegistrationOutbound && pendingRequest is not null)
+        {
+            deliveryReply = evt.Clone();
+            deliveryReply.Activity = pendingRequest.Activity?.Clone();
+            deliveryReply.RegistrationId = pendingRequest.RegistrationId;
+        }
         var result = await runner.RunLlmReplyAsync(
-            evt,
+            deliveryReply,
             runtimeContext,
             CancellationToken.None);
 
@@ -1560,6 +1623,11 @@ public sealed partial class ConversationGAgent :
             return;
         }
 
+        // The reply-token stream belongs to the original relay turn. Callback runs
+        // keep streaming through AgentRun, then use the durable registration send.
+        if (!string.IsNullOrWhiteSpace(FindPendingLlmReplyRequest(correlationId)?.ExternalCallbackId))
+            return;
+
         if (FindAppendLifecycle(correlationId) is not null)
         {
             await HandleAppendChunkAsync(evt);
@@ -1646,6 +1714,8 @@ public sealed partial class ConversationGAgent :
         ChatActivity? referenceActivity,
         ConversationTurnRuntimeContext runtimeContext)
     {
+        if (runtimeContext.UseRegistrationOutbound)
+            return false;
         var correlationId = NormalizeOptional(evt.CorrelationId);
         if (correlationId is null)
             return false;
@@ -2819,7 +2889,8 @@ public sealed partial class ConversationGAgent :
         {
             var ageMs = request.RequestedAtUnixMs > 0 ? nowMs - request.RequestedAtUnixMs : 0;
             var handoffConfirmed = IsLlmReplyRunHandoffConfirmed(request.CorrelationId);
-            if (request.RequestedAtUnixMs > 0 && ageMs > maxAgeMs && !handoffConfirmed)
+            if (request.RequestedAtUnixMs > 0 && ageMs > maxAgeMs && !handoffConfirmed &&
+                string.IsNullOrWhiteSpace(request.ExternalCallbackId))
             {
                 LogReplyLifecycleDecision(
                     "stale_cleanup_decision",

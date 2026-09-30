@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.GAgents.Channel.Identity";
 
 import "google/protobuf/timestamp.proto";
 import "channel_contracts.proto";
+import "external_callback_contracts.proto";
 
 // Per-(platform, tenant, external_user_id) actor state holding the opaque
 // NyxID-side binding pointer. Holds NO refresh_token or any user secret —
@@ -30,6 +31,7 @@ message ExternalIdentityBindingState {
   // Canonical business-data owner scope resolved from the NyxID account bound
   // by this external subject. Separate from registration/channel scope.
   string owner_scope_id = 6;
+  repeated BindingCallbackDecision callback_decisions = 7;
 }
 
 // Issued by the OAuth callback handler after exchanging the authorization code
@@ -41,6 +43,7 @@ message CommitBindingCommand {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
   string binding_id = 2;
   string owner_scope_id = 3;
+  BindingCallbackReply callback_reply = 4;
 }
 
 // Issued by the /unbind handler after a successful NyxID DELETE call, or by
@@ -64,6 +67,42 @@ message ReplaceBindingCommand {
   string expected_previous_binding_id = 3;
   string reason = 4;
   string owner_scope_id = 5;
+  BindingCallbackReply callback_reply = 6;
+}
+
+// Internal business-protocol reply address, never browser supplied. The
+// operation actor retries its command until it receives the durable decision.
+message BindingCallbackReply {
+  string callback_id = 1;
+  string operation_actor_id = 2;
+  int64 expires_at_unix_ms = 3;
+}
+
+message ConfirmBindingGrantCommand {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  string owner_scope_id = 3;
+  BindingCallbackReply callback_reply = 4;
+}
+
+// The operation could not adopt a verified new binding before its deadline.
+// The binding authority owns safe retirement and must preserve any binding
+// that is already current, including one adopted by another operation.
+message AbandonBindingPreparationCommand {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  string owner_scope_id = 3;
+  BindingCallbackReply callback_reply = 4;
+}
+
+message BindingCallbackDecision {
+  BindingCallbackReply reply = 1;
+  aevatar.gagents.channel.abstractions.OAuthBindingOutcome outcome = 2;
+}
+
+message BindingCallbackDecisionRecorded {
+  BindingCallbackDecision decision = 1;
+  int64 prune_before_unix_ms = 2;
 }
 
 // Operator/maintenance command: re-materialize the current-state readmodel for
@@ -81,6 +120,7 @@ message ExternalIdentityBoundEvent {
   string binding_id = 2;
   google.protobuf.Timestamp bound_at = 3;
   string owner_scope_id = 4;
+  BindingCallbackReply callback_reply = 5;
 }
 
 // Persisted when an active binding is atomically replaced. Applying the event
@@ -92,6 +132,16 @@ message ExternalIdentityBindingReplacedEvent {
   google.protobuf.Timestamp replaced_at = 4;
   string reason = 5;
   string owner_scope_id = 6;
+  BindingCallbackReply callback_reply = 7;
+}
+
+// Migrates a legacy binding's absent owner fact after exact binding
+// introspection during an in-place service grant review.
+message ExternalIdentityBindingOwnerConfirmedEvent {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  string owner_scope_id = 3;
+  BindingCallbackReply callback_reply = 4;
 }
 
 // Persisted when a newly issued binding loses a compare-and-swap race and was
@@ -137,6 +187,9 @@ message StateTokenPayload {
   // SHA-256 of the expected current binding_id for a grant-review flow. The
   // raw opaque binding credential must never be placed in browser-visible state.
   string expected_binding_hash = 5;
+  // HMAC authenticated intent: missing continuation state must fail closed
+  // and must never fall through to the legacy stateless callback path.
+  bool continuation_requested = 6;
 }
 
 // Read model: one document per actor (= per ExternalSubjectRef). Backs

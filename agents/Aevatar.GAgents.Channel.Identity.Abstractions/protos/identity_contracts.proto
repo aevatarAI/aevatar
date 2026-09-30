@@ -60,6 +60,8 @@ message BindingChallenge {
   // True when /init is renewing service authorization by issuing a new
   // binding that may replace the current binding after callback validation.
   bool renews_existing_binding = 3;
+  reserved 4;
+  reserved "continuation_accepted";
 }
 
 enum ManagedCodexCredentialStatus {

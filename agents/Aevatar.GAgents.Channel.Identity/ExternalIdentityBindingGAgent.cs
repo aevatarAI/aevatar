@@ -40,9 +40,11 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             .Match(current, evt)
             .On<ExternalIdentityBoundEvent>(ApplyBound)
             .On<ExternalIdentityBindingReplacedEvent>(ApplyReplaced)
+            .On<ExternalIdentityBindingOwnerConfirmedEvent>(ApplyOwnerConfirmed)
             .On<ExternalIdentityBindingRetirementQueuedEvent>(ApplyRetirementQueued)
             .On<ExternalIdentityBindingRetiredEvent>(ApplyRetired)
             .On<ExternalIdentityBindingRevokedEvent>(ApplyRevoked)
+            .On<BindingCallbackDecisionRecorded>(ApplyCallbackDecision)
             .OrCurrent();
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -68,7 +70,14 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
     /// pathological case of two turns racing past the State load.
     /// </remarks>
     [EventHandler]
-    public async Task HandleCommitBinding(CommitBindingCommand cmd)
+    public Task HandleCommitBinding(CommitBindingCommand cmd)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        return HandleCallbackBindingAsync(cmd.CallbackReply, cmd.ExternalSubject, cmd.BindingId, cmd.OwnerScopeId,
+            () => HandleCommitBindingCoreAsync(cmd));
+    }
+
+    private async Task HandleCommitBindingCoreAsync(CommitBindingCommand cmd)
     {
         ArgumentNullException.ThrowIfNull(cmd);
 
@@ -147,6 +156,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
                 ReplacedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 Reason = "commit_found_existing_binding",
                 OwnerScopeId = ownerScopeId,
+                CallbackReply = cmd.CallbackReply?.Clone(),
             });
 
             Logger.LogInformation(
@@ -166,6 +176,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             BindingId = cmd.BindingId,
             BoundAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             OwnerScopeId = ownerScopeId,
+            CallbackReply = cmd.CallbackReply?.Clone(),
         });
 
         Logger.LogInformation(
@@ -183,7 +194,14 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
     /// newer authorization result.
     /// </summary>
     [EventHandler]
-    public async Task HandleReplaceBinding(ReplaceBindingCommand cmd)
+    public Task HandleReplaceBinding(ReplaceBindingCommand cmd)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        return HandleCallbackBindingAsync(cmd.CallbackReply, cmd.ExternalSubject, cmd.BindingId, cmd.OwnerScopeId,
+            () => HandleReplaceBindingCoreAsync(cmd));
+    }
+
+    private async Task HandleReplaceBindingCoreAsync(ReplaceBindingCommand cmd)
     {
         ArgumentNullException.ThrowIfNull(cmd);
 
@@ -271,6 +289,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             ReplacedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Reason = reason,
             OwnerScopeId = ownerScopeId,
+            CallbackReply = cmd.CallbackReply?.Clone(),
         });
 
         Logger.LogInformation(
@@ -525,6 +544,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
         next.BoundAt = evt.BoundAt;
         next.RevokedAt = null;
         next.OwnerScopeId = evt.OwnerScopeId ?? string.Empty;
+        ApplyCommittedCallbackDecision(next, evt.CallbackReply, evt.ExternalSubject, evt.BindingId, evt.OwnerScopeId);
         return next;
     }
 
@@ -538,6 +558,7 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
         next.BoundAt = evt.ReplacedAt;
         next.RevokedAt = null;
         next.OwnerScopeId = evt.OwnerScopeId ?? string.Empty;
+        ApplyCommittedCallbackDecision(next, evt.CallbackReply, evt.ExternalSubject, evt.BindingId, evt.OwnerScopeId);
         AddPendingRetirement(next, evt.PreviousBindingId);
         return next;
     }

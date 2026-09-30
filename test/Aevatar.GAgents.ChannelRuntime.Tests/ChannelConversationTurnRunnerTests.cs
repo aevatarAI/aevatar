@@ -36,7 +36,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-public sealed class ChannelConversationTurnRunnerTests
+public sealed partial class ChannelConversationTurnRunnerTests
 {
     private const string GateIgnorePrefix = "ignored:group_message_not_addressed";
 
@@ -5498,7 +5498,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var relayOutboundPort = new NyxIdRelayOutboundPort(
             relayClient,
             NullLogger<NyxIdRelayOutboundPort>.Instance,
-            [new RelayStubComposer("lark")]);
+            [new RelayStubComposer("lark"), new RelayStubComposer("telegram")]);
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://example.com" },
             new HttpClient(nyxHandler)

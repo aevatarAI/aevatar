@@ -325,6 +325,12 @@ public sealed class IdentityOAuthCallbackEndpointTests
     {
         var subject = SampleSubject();
         var broker = NewBroker(subject, "bnd_incoming");
+        broker.ExchangeAuthorizationCodeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(new BrokerAuthorizationCodeResult("bnd_incoming", CreateIdToken(new
+            {
+                uid = "owner-user-1",
+                name = "Alice & Bob",
+            }), AccessToken: null));
         var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
         queryPort.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<BindingId?>(null));
@@ -334,12 +340,21 @@ public sealed class IdentityOAuthCallbackEndpointTests
             queryPort,
             new RecordingCommandDispatch<CommitBindingCommand>(),
             new RecordingCommandDispatch<ObserveBrokerCapabilityCommand>());
-        var (text, contentType) = await ReadTextWithContentTypeAsync(result);
+        var context = NewHttpContext();
+        await result.ExecuteAsync(context);
+        context.Response.Body.Position = 0;
+        var text = await new StreamReader(context.Response.Body, Encoding.UTF8).ReadToEndAsync();
 
-        contentType.Should().StartWith("text/html");
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        context.Response.ContentType.Should().StartWith("text/html");
         text.Should().Contain("<!DOCTYPE html>");
-        text.Should().Contain("已受理");
-        text.Should().Contain("/whoami");
+        text.Should().Contain("NyxID 绑定请求已受理")
+            .And.Contain("账号:Alice &amp; Bob")
+            .And.Contain("请求编号:<code>cmd-1</code>")
+            .And.Contain("下一步")
+            .And.Contain("/whoami")
+            .And.Contain("/model")
+            .And.NotContain("正在核验");
     }
 
     [Fact]
