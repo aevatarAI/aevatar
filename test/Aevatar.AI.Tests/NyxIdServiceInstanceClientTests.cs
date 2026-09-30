@@ -146,6 +146,55 @@ public sealed class NyxIdServiceInstanceClientTests
     }
 
     [Fact]
+    public async Task ReadAsync_RecommendedSkillRefs_MapsSha256AliasToCanonicalManifestDigest()
+    {
+        var handler = new InventoryHandler();
+        handler.KeysByToken["user-token"] = Keys("""
+            {"id":"us-personal","slug":"calendar","catalog_service_id":"catalog-calendar",
+             "catalog_service_slug":"api-calendar","is_active":true,"connected":true,"status":"active",
+             "credential_source":{"type":"personal"},
+             "recommended_skill_refs":[{
+               "source":"ornn",
+               "skill_id":"11111111-1111-1111-1111-111111111111",
+               "version":"1.2",
+               "manifest_digest":"",
+               "sha256":"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+             }]}
+            """);
+
+        var result = await CreateReader(handler).ReadAsync("user-token", organizationToken: null);
+
+        var skillRef = result.Instances.Should().ContainSingle().Subject.RecommendedSkillRefs
+            .Should().ContainSingle().Subject;
+        skillRef.LiteralVersion.Should().Be("1.2");
+        skillRef.ManifestDigest.Should()
+            .Be("sha256:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    }
+
+    [Fact]
+    public async Task ReadAsync_RecommendedSkillRefs_NormalizesSha256PrefixAndHexCase()
+    {
+        var handler = new InventoryHandler();
+        handler.KeysByToken["user-token"] = Keys("""
+            {"id":"us-personal","slug":"calendar","catalog_service_id":"catalog-calendar",
+             "catalog_service_slug":"api-calendar","is_active":true,"connected":true,"status":"active",
+             "credential_source":{"type":"personal"},
+             "recommended_skill_refs":[{
+               "source":"ornn",
+               "skill_id":"11111111-1111-1111-1111-111111111111",
+               "literal_version":"1.2",
+               "sha256":"sha256:ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD"
+             }]}
+            """);
+
+        var result = await CreateReader(handler).ReadAsync("user-token", organizationToken: null);
+
+        result.Instances.Should().ContainSingle().Subject.RecommendedSkillRefs
+            .Should().ContainSingle().Subject.ManifestDigest.Should()
+            .Be("sha256:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd");
+    }
+
+    [Fact]
     public async Task ReadAsync_MissingRecommendedSkillRefs_DoesNotSynthesizeRefs()
     {
         var handler = new InventoryHandler();

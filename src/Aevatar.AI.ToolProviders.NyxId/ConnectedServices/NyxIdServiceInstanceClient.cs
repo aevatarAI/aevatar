@@ -352,7 +352,8 @@ public sealed class NyxIdServiceInstanceClient
             return null;
         var skillId = ReadString(item, "skill_id") ?? ReadString(item, "id") ?? ReadString(item, "guid");
         var literalVersion = ReadString(item, "literal_version") ?? ReadString(item, "version");
-        var manifestDigest = ReadString(item, "manifest_digest") ?? ReadString(item, "digest") ?? ReadString(item, "skill_hash");
+        var manifestDigest = NormalizeRecommendedSkillManifestDigest(
+            ReadFirstNonEmptyString(item, "manifest_digest", "digest", "skill_hash", "sha256"));
         if (string.IsNullOrWhiteSpace(skillId) ||
             string.IsNullOrWhiteSpace(literalVersion) ||
             string.IsNullOrWhiteSpace(manifestDigest))
@@ -371,6 +372,42 @@ public sealed class NyxIdServiceInstanceClient
             Revision = ReadString(item, "revision") ?? string.Empty,
         };
     }
+
+    private static string? NormalizeRecommendedSkillManifestDigest(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var digest = value.Trim();
+        const string prefix = "sha256:";
+        if (digest.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var hex = digest[prefix.Length..];
+            return IsSha256Hex(hex)
+                ? prefix + hex.ToLowerInvariant()
+                : digest;
+        }
+
+        return IsSha256Hex(digest)
+            ? prefix + digest.ToLowerInvariant()
+            : digest;
+    }
+
+    private static string? ReadFirstNonEmptyString(JsonElement item, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = ReadString(item, name);
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
+    }
+
+    private static bool IsSha256Hex(string value) =>
+        value.Length == 64 && value.All(static character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
 
     private static bool TryParseRecommendedSkillSource(string? value, out NyxIdRecommendedSkillSource source)
     {
