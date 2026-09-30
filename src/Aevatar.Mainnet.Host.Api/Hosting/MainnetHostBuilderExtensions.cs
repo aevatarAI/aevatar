@@ -51,6 +51,7 @@ using Aevatar.GAgents.ChatbotClassifier;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.NyxidChat.ExternalCallbacks;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
@@ -780,6 +781,7 @@ public static class MainnetHostBuilderExtensions
         app.MapChannels();
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
+        app.MapConnectLinkCallbackEndpoints();
         app.MapScheduledAgentCredentialRepairAdminEndpoints();
         app.MapDevelopmentNyxIdApiKeyEndpoints();
         app.MapProjectionVersionRegressionRepairAdminEndpoints();

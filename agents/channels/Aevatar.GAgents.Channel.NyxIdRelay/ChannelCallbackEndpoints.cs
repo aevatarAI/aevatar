@@ -49,6 +49,7 @@ public static class ChannelCallbackEndpoints
                 ChannelRegistrationRequestSummary)
             .RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync)
+            .WithDescription("Lists channel registrations. Omit scope or use scope=mine for the authenticated account; scope=all uses the NyxID-authorized all-view. An explicit scope ID must match the authenticated account.")
             .Produces<object[]>(StatusCodes.Status200OK, "application/json")
             .RequireAuthorization();
         group.MapGet("/registrations/{registrationId}", HandleGetRegistrationAsync)
@@ -386,8 +387,8 @@ public static class ChannelCallbackEndpoints
     }
 
     /// <summary>
-    /// Lists channel-bot registrations scoped to the caller's account, or to the NyxID
-    /// all-view when the caller requests <c>scope=all</c>.
+    /// Lists channel-bot registrations scoped to the caller's account when scope is omitted
+    /// or <c>mine</c>, or to the NyxID all-view when the caller requests <c>scope=all</c>.
     /// </summary>
     private static async Task<IResult> HandleListRegistrationsAsync(
         HttpContext http,
@@ -401,9 +402,10 @@ public static class ChannelCallbackEndpoints
             return Results.Unauthorized();
 
         var allScopes = IsAllScope(scope);
-        var scopeResolution = allScopes
-            ? ResolveScopeId(http, null, required: false)
-            : ResolveScopeId(http, scope, required: false);
+        var explicitScopeId = allScopes || string.Equals(NormalizeOptional(scope), "mine", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : scope;
+        var scopeResolution = ResolveScopeId(http, explicitScopeId, required: false);
         if (scopeResolution.Error is not null)
             return Results.BadRequest(new { error = scopeResolution.Error });
         var callerScope = scopeResolution.ScopeId;

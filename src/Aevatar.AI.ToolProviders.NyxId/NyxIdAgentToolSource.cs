@@ -17,19 +17,22 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
     private readonly NyxIdDelegationTokenLease _delegationTokenLease;
     private readonly ILogger _logger;
     private readonly INyxIdProxyFileArtifactIngress? _fileArtifactIngress;
+    private readonly IChannelConnectLinkContinuationPort? _connectLinkContinuation;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
         INyxIdProxyFileArtifactIngress? fileArtifactIngress = null,
         ILogger<NyxIdAgentToolSource>? logger = null,
-        NyxIdDelegationTokenLease? delegationTokenLease = null)
+        NyxIdDelegationTokenLease? delegationTokenLease = null,
+        IChannelConnectLinkContinuationPort? connectLinkContinuation = null)
     {
         _options = options;
         _client = client;
         _delegationTokenLease = delegationTokenLease ?? new NyxIdDelegationTokenLease(client);
         _fileArtifactIngress = fileArtifactIngress;
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
+        _connectLinkContinuation = connectLinkContinuation;
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
@@ -52,7 +55,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdSessionsTool(_client),
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
-            new NyxIdConnectLinksTool(_client),
+            new NyxIdConnectLinksTool(_client, _connectLinkContinuation),
             new NyxIdProxyTool(
                 _client,
                 _logger,

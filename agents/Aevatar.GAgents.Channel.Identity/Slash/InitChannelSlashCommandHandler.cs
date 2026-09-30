@@ -53,7 +53,9 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
         BindingChallenge challenge;
         try
         {
-            challenge = await _broker.StartExternalBindingAsync(context.Subject, ct).ConfigureAwait(false);
+            challenge = context.ContinuationOrigin is { } origin
+                ? await _broker.StartExternalBindingAsync(context.Subject, origin, ct).ConfigureAwait(false)
+                : await _broker.StartExternalBindingAsync(context.Subject, ct).ConfigureAwait(false);
         }
         catch (AevatarOAuthClientNotProvisionedException ex)
         {

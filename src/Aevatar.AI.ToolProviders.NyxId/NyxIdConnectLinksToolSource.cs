@@ -10,15 +10,18 @@ public sealed class NyxIdConnectLinksToolSource : IAgentToolSource
     private readonly NyxIdToolOptions _options;
     private readonly NyxIdApiClient _client;
     private readonly ILogger _logger;
+    private readonly IChannelConnectLinkContinuationPort? _continuationPort;
 
     public NyxIdConnectLinksToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
-        ILogger<NyxIdConnectLinksToolSource>? logger = null)
+        ILogger<NyxIdConnectLinksToolSource>? logger = null,
+        IChannelConnectLinkContinuationPort? continuationPort = null)
     {
         _options = options;
         _client = client;
         _logger = logger ?? NullLogger<NyxIdConnectLinksToolSource>.Instance;
+        _continuationPort = continuationPort;
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
@@ -29,6 +32,6 @@ public sealed class NyxIdConnectLinksToolSource : IAgentToolSource
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
         }
 
-        return Task.FromResult<IReadOnlyList<IAgentTool>>([new NyxIdConnectLinksTool(_client)]);
+        return Task.FromResult<IReadOnlyList<IAgentTool>>([new NyxIdConnectLinksTool(_client, _continuationPort)]);
     }
 }

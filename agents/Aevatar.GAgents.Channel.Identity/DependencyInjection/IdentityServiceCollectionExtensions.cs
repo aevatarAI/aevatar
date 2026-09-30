@@ -14,6 +14,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
+using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.ProjectionRecovery;
@@ -224,6 +225,14 @@ public static class IdentityServiceCollectionExtensions
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
                 "channel-identity.oauth-replace"));
+        services.AddIdentityOAuthCommandDispatch<ConfirmBindingGrantCommand, ExternalIdentityBindingGAgent>(
+            static command => new ChannelIdentityOAuthCommandTarget(
+                command.ExternalSubject.ToActorId(),
+                "channel-identity.oauth-grant-confirm"));
+        services.AddIdentityOAuthCommandDispatch<AbandonBindingPreparationCommand, ExternalIdentityBindingGAgent>(
+            static command => new ChannelIdentityOAuthCommandTarget(
+                command.ExternalSubject.ToActorId(),
+                "channel-identity.oauth-abandon"));
         services.AddIdentityOAuthCommandDispatch<RebuildBindingProjectionCommand, ExternalIdentityBindingGAgent>(
             static command => new ChannelIdentityOAuthCommandTarget(
                 command.ExternalSubject.ToActorId(),
@@ -296,6 +305,7 @@ public static class IdentityServiceCollectionExtensions
             sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBrokerCallbackClient>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBindingRetirementPort>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
+        services.TryAddSingleton<IOAuthContinuationExecutionPort, OAuthContinuationExecutionPort>();
 
         // ─── Binding revocation reconciler (observed-invalid_grant self-heal) ───
         // Event-sources a local revoke when a turn observes BindingRevokedException

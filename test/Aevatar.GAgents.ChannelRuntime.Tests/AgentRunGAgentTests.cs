@@ -29,7 +29,7 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-public sealed class AgentRunGAgentTests
+public sealed partial class AgentRunGAgentTests
 {
     private static readonly ConditionalWeakTable<AgentRunGAgent, RecordingReplyGenerationExecutor> RecordingExecutors = new();
     private static readonly IBuiltInPromptFloorProvider BuiltInPromptFloorProvider =

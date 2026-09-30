@@ -1,0 +1,185 @@
+syntax = "proto3";
+
+package aevatar.gagents.channel.abstractions;
+option csharp_namespace = "Aevatar.GAgents.Channel.Abstractions";
+
+import "chat_activity.proto";
+import "channel_contracts.proto";
+
+// An external browser return is only a hint. The operation authority verifies it.
+enum ExternalCallbackKind {
+  EXTERNAL_CALLBACK_KIND_UNSPECIFIED = 0;
+  EXTERNAL_CALLBACK_KIND_OAUTH = 1;
+  EXTERNAL_CALLBACK_KIND_CONNECT_LINK = 2;
+}
+
+enum ExternalCallbackLinkDeliveryMode {
+  // Existing operations deliver through the conversation after commit.
+  EXTERNAL_CALLBACK_LINK_DELIVERY_MODE_UNSPECIFIED = 0;
+  EXTERNAL_CALLBACK_LINK_DELIVERY_MODE_CONVERSATION = 1;
+  // OAuth only: the broker returns the link for the original private reply.
+  // This is delivery responsibility, not proof of a successful Channel send.
+  EXTERNAL_CALLBACK_LINK_DELIVERY_MODE_CALLER = 2;
+}
+
+enum CallbackResult {
+  CALLBACK_RESULT_UNSPECIFIED = 0;
+  CALLBACK_RESULT_SUCCEEDED = 1;
+  CALLBACK_RESULT_FAILED = 2;
+  CALLBACK_RESULT_CANCELLED = 3;
+  CALLBACK_RESULT_EXPIRED = 4;
+}
+
+enum CallbackVerificationDisposition {
+  CALLBACK_VERIFICATION_DISPOSITION_UNSPECIFIED = 0;
+  // An exact authenticated read confirms that the user is still completing
+  // the operation. This clears the consecutive verification failure budget.
+  CALLBACK_VERIFICATION_DISPOSITION_PENDING = 1;
+  CALLBACK_VERIFICATION_DISPOSITION_SUCCEEDED = 2;
+  CALLBACK_VERIFICATION_DISPOSITION_FAILED = 3;
+  CALLBACK_VERIFICATION_DISPOSITION_CANCELLED = 4;
+  CALLBACK_VERIFICATION_DISPOSITION_EXPIRED = 5;
+  // Verification did not establish an authoritative outcome.
+  CALLBACK_VERIFICATION_DISPOSITION_UNAVAILABLE = 6;
+}
+
+// Supplied by the trusted Channel entry point, never by tool arguments.
+message ChannelCallbackOrigin {
+  string conversation_actor_id = 1;
+  string channel_registration_id = 2;
+  string action_id = 3;
+  ChatActivity original_activity = 4;
+}
+
+// A re-mintable original-user authorization reference, never a bearer token.
+message CallbackAuthorizationReference {
+  ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  string owner_scope_id = 3;
+}
+
+message ExternalCallbackRegistration {
+  string callback_id = 1;
+  string operation_actor_id = 2;
+  ExternalCallbackKind kind = 3;
+  ChannelCallbackOrigin origin = 4;
+  CallbackAuthorizationReference authorization = 5;
+  int64 expires_at_unix_ms = 6;
+  string external_request_id = 7;
+  string requested_catalog_service_slug = 8;
+  // Constructed by the OAuth broker; link_delivery_mode selects its sender.
+  string oauth_authorize_url = 9;
+  ConnectLinkCreationRequest connect_link_request = 10;
+  ExternalCallbackLinkDeliveryMode link_delivery_mode = 11;
+}
+
+message ConnectLinkCreationRequest {
+  string label = 1;
+  string requested_by = 2;
+  int32 expires_in_seconds = 3;
+}
+
+message ConnectLinkCreationResult {
+  string external_request_id = 1;
+  string connect_url = 2;
+  int64 expires_at_unix_ms = 3;
+  string failure_code = 4;
+}
+
+message ExternalCallbackLinkReady {
+  string callback_id = 1;
+  string operation_actor_id = 2;
+  ChannelCallbackOrigin origin = 3;
+  string connect_url = 4;
+  ExternalCallbackKind kind = 5;
+  int64 context_revision = 6;
+}
+
+message ExternalCallbackLinkPresented {
+  string callback_id = 1;
+  int64 context_revision = 2;
+}
+
+// Business references are persisted separately before the generic wakeup.
+message ExternalCallbackVerifiedReferences {
+  string binding_id = 1;
+  string owner_scope_id = 2;
+  string connect_link_id = 3;
+  string connected_service_id = 4;
+  string connected_service_slug = 5;
+  string catalog_service_slug = 6;
+}
+
+message ExternalCallbackActionContextRecorded {
+  string callback_id = 1;
+  string operation_actor_id = 2;
+  ChannelCallbackOrigin origin = 3;
+  CallbackAuthorizationReference authorization = 4;
+  ExternalCallbackVerifiedReferences verified_references = 5;
+  int64 context_revision = 6;
+}
+
+message ExternalCallbackActionContextAccepted {
+  string callback_id = 1;
+  int64 context_revision = 2;
+}
+
+// Intentionally exactly two fields: business data belongs to action context.
+message CallbackCompleted {
+  string callback_id = 1;
+  CallbackResult result = 2;
+}
+
+message CallbackCompletionConsumed {
+  string callback_id = 1;
+  CallbackResult result = 2;
+}
+
+// The original continuation route cannot receive the pending link or final
+// completion. The operation authority records this terminal acknowledgement
+// so it stops producing impossible redeliveries.
+message ExternalCallbackContinuationRejected {
+  string callback_id = 1;
+  int64 context_revision = 2;
+  string failure_code = 3;
+}
+
+message OAuthContinuationSubmission {
+  string callback_id = 1;
+  ExternalSubjectRef external_subject = 2;
+  string authorization_code = 3;
+  string pkce_verifier = 4;
+  string expected_binding_hash = 5;
+  string oauth_error = 6;
+  int64 expires_at_unix_ms = 7;
+}
+
+message OAuthBindingPreparation {
+  ExternalSubjectRef external_subject = 1;
+  string binding_id = 2;
+  string owner_scope_id = 3;
+  string expected_previous_binding_id = 4;
+  bool binding_updated = 5;
+  string error_code = 6;
+  bool is_transient_failure = 7;
+  bool rejected = 8;
+  bool verification_succeeded = 9;
+  int64 expires_at_unix_ms = 10;
+}
+
+// Business decision from the binding authority, never a dispatch receipt.
+message OAuthBindingOutcome {
+  string callback_id = 1;
+  string binding_id = 2;
+  string owner_scope_id = 3;
+  ExternalSubjectRef external_subject = 4;
+  bool succeeded = 5;
+  string error_code = 6;
+  bool abandoned = 7;
+}
+
+message ConnectLinkVerificationResult {
+  CallbackVerificationDisposition disposition = 1;
+  ExternalCallbackVerifiedReferences references = 2;
+  string failure_code = 3;
+}

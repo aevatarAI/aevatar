@@ -1155,6 +1155,38 @@ public sealed class AgentRunReplyGenerationExecutorTests
         execution.Continuation.LlmStepResult.Content.Should().Be("telegram final text");
     }
 
+    [Theory]
+    [InlineData("telegram")]
+    [InlineData("lark")]
+    public async Task ExternalCallback_StreamsGenerationWithoutExpiredRelayEditSink(string platform)
+    {
+        var provider = new RecordingProvider("resumed streamed text");
+        var (dispatchPort, envelopes) = BuildRecordingDispatchPort();
+        var executor = CreateToolEnabledExecutor(new CountingTool("submit_record"), provider,
+            actorDispatchPort: dispatchPort,
+            relayOptions: new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingRepliesEnabled = true,
+                StreamingCardKitEnabled = true,
+            });
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.Request.ExternalCallbackId = "callback-exact";
+        workItem.Request.Activity.ChannelId = ChannelId.From(platform);
+        workItem.Request.Activity.TransportExtras = new TransportExtras { NyxPlatform = platform };
+        workItem.Request.Activity.OutboundDelivery = new OutboundDeliveryContext
+        {
+            ReplyMessageId = "original-reply-anchor", CorrelationId = "resumed-activity",
+        };
+        workItem.Request.ReplyToken = string.Empty;
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        provider.Requests.Should().ContainSingle();
+        envelopes.Should().BeEmpty("registration outbound delivers the final callback result");
+        execution.Continuation.LlmStepResult.Content.Should().Be("resumed streamed text");
+        execution.Continuation.LlmStepResult.HasStreamedTextContent.Should().BeFalse();
+    }
+
     [Fact]
     public async Task BuildLlmStepContinuation_WhenLarkTurnHasCardKitEnabled_ShouldDispatchCardStreamChunk()
     {

@@ -101,6 +101,9 @@ message AgentRunGAgentState {
   // Encrypted, TTL-bound handle only. The raw NyxID user bearer remains outside
   // actor state and is resolved solely for Lark CardKit timeout compensation.
   aevatar.credentials.RuntimeSecretReference relay_user_access_token_ref = 33;
+  // Delayed callback runs use the originating conversation's persisted
+  // registration outbound route, without a transient relay reply token.
+  string external_callback_id = 34;
 }
 
 enum AgentRunToolApprovalDecision {
@@ -458,6 +461,7 @@ message AgentRunStartedEvent {
   string correlation_id = 2;
   string target_actor_id = 3;
   int64 started_at_unix_ms = 4;
+  string external_callback_id = 5;
 }
 
 message AgentRunReplyProducedEvent {

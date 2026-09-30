@@ -59,8 +59,10 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
     private static bool IsExternalIdentityBindingEvent(Any payload) =>
         payload.Is(ExternalIdentityBoundEvent.Descriptor) ||
         payload.Is(ExternalIdentityBindingReplacedEvent.Descriptor) ||
+        payload.Is(ExternalIdentityBindingOwnerConfirmedEvent.Descriptor) ||
         payload.Is(ExternalIdentityBindingRetirementQueuedEvent.Descriptor) ||
         payload.Is(ExternalIdentityBindingRetiredEvent.Descriptor) ||
+        payload.Is(BindingCallbackDecisionRecorded.Descriptor) ||
         payload.Is(ExternalIdentityBindingRevokedEvent.Descriptor);
 
     private static bool IsAevatarOAuthClientEvent(Any payload) =>

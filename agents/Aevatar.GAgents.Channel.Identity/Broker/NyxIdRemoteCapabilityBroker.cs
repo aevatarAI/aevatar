@@ -69,6 +69,7 @@ public sealed class NyxIdRemoteCapabilityBroker :
     private readonly IExternalIdentityBindingQueryPort _queryPort;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<NyxIdRemoteCapabilityBroker> _logger;
+    private readonly IExternalCallbackCommandPort? _continuations;
 
     public NyxIdRemoteCapabilityBroker(
         IHttpClientFactory httpClientFactory,
@@ -77,7 +78,8 @@ public sealed class NyxIdRemoteCapabilityBroker :
         StateTokenCodec stateTokenCodec,
         IExternalIdentityBindingQueryPort queryPort,
         TimeProvider timeProvider,
-        ILogger<NyxIdRemoteCapabilityBroker> logger)
+        ILogger<NyxIdRemoteCapabilityBroker> logger,
+        IExternalCallbackCommandPort? continuations = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _clientProvider = clientProvider ?? throw new ArgumentNullException(nameof(clientProvider));
@@ -86,6 +88,7 @@ public sealed class NyxIdRemoteCapabilityBroker :
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _continuations = continuations;
     }
 
     private HttpClient CreateHttpClient() => _httpClientFactory.CreateClient(HttpClientName);
@@ -105,9 +108,22 @@ public sealed class NyxIdRemoteCapabilityBroker :
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
-    public async Task<BindingChallenge> StartExternalBindingAsync(
+    public Task<BindingChallenge> StartExternalBindingAsync(
         ExternalSubjectRef externalSubject,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        StartExternalBindingCoreAsync(externalSubject, null, ct);
+
+    public Task<BindingChallenge> StartExternalBindingAsync(
+        ExternalSubjectRef externalSubject,
+        ChannelCallbackOrigin continuationOrigin,
+        CancellationToken ct = default) =>
+        StartExternalBindingCoreAsync(externalSubject,
+            continuationOrigin ?? throw new ArgumentNullException(nameof(continuationOrigin)), ct);
+
+    private async Task<BindingChallenge> StartExternalBindingCoreAsync(
+        ExternalSubjectRef externalSubject,
+        ChannelCallbackOrigin? continuationOrigin,
+        CancellationToken ct)
     {
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
 
@@ -122,20 +138,37 @@ public sealed class NyxIdRemoteCapabilityBroker :
             ? null
             : HashBindingId(existingBinding.Value);
         var stateToken = await _stateTokenCodec
-            .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, expectedBindingHash, ct)
+            .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, expectedBindingHash, continuationOrigin is not null, ct)
             .ConfigureAwait(false);
 
-        var url = BuildAuthorizeUrl(
-            snapshot,
-            redirectUri,
-            stateToken,
-            pkce.CodeChallenge,
-            externalSubject);
-        var expiresAt = _timeProvider.GetUtcNow().Add(_options.StateTokenLifetime).ToUnixTimeSeconds();
+        var url = BuildAuthorizeUrl(snapshot, redirectUri, stateToken, pkce.CodeChallenge, externalSubject);
+        var expiresAt = _timeProvider.GetUtcNow().Add(_options.StateTokenLifetime);
+        if (continuationOrigin is not null)
+        {
+            var continuations = _continuations
+                ?? throw new InvalidOperationException("Channel external callback continuation is not configured.");
+            await continuations.AdmitAsync(new ExternalCallbackRegistration
+            {
+                CallbackId = correlationId,
+                Kind = ExternalCallbackKind.Oauth,
+                Origin = continuationOrigin.Clone(),
+                Authorization = new CallbackAuthorizationReference
+                {
+                    ExternalSubject = externalSubject.Clone(),
+                    BindingId = existingBinding?.Value ?? string.Empty,
+                },
+                ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
+                OauthAuthorizeUrl = url,
+                LinkDeliveryMode = ExternalCallbackLinkDeliveryMode.Caller,
+            }, ct).ConfigureAwait(false);
+        }
+
+        // Admission does not wait for another actor's commit. The signed continuation
+        // intent keeps early callbacks fail-closed until their read model is visible.
         return new BindingChallenge
         {
             AuthorizeUrl = url,
-            ExpiresAtUnix = expiresAt,
+            ExpiresAtUnix = expiresAt.ToUnixTimeSeconds(),
             RenewsExistingBinding = existingBinding is not null,
         };
     }
@@ -368,7 +401,11 @@ public sealed class NyxIdRemoteCapabilityBroker :
             result.Payload.CorrelationId,
             result.Payload.ExternalSubject?.Clone(),
             result.Payload.PkceVerifier,
-            result.Payload.ExpectedBindingHash);
+            result.Payload.ExpectedBindingHash) with
+        {
+            ContinuationRequested = result.Payload.ContinuationRequested,
+            ExpiresAtUnixMs = result.Payload.ExpiresAt.ToDateTimeOffset().ToUnixTimeMilliseconds(),
+        };
     }
 
     public Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeAsync(
@@ -818,6 +855,10 @@ public sealed record CallbackStateDecode(
     string? ExpectedBindingHash,
     string? ErrorCode)
 {
+    public bool ContinuationRequested { get; init; }
+
+    public long ExpiresAtUnixMs { get; init; }
+
     public static CallbackStateDecode Ok(
         string correlationId,
         ExternalSubjectRef? subject,

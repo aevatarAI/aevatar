@@ -1753,6 +1753,7 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
         var senderContext = context with
         {
             CredentialSource = AgentToolCredentialSource.BearerToken,
+            Channel = PreserveOriginalChannelSenderAuthorization(context),
             DurableNyxIdCredential = null,
             Credentials = context.Credentials with
             {
@@ -1769,6 +1770,26 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             ResolveCredentialSource(senderContext),
             string.Empty,
             SelectedSenderBearer: true);
+    }
+
+    private static AgentToolChannelContext PreserveOriginalChannelSenderAuthorization(AgentToolExecutionContext context)
+    {
+        if (context.Channel.Continuation is not { } original ||
+            original.OriginalSenderAuthorization is not null ||
+            string.IsNullOrWhiteSpace(context.SenderBinding.BindingId) ||
+            !context.NyxIdAuthority.IsComplete || string.IsNullOrWhiteSpace(context.Caller.OwnerScopeId))
+            return context.Channel;
+        var continuation = original.Clone();
+        continuation.OriginalSenderAuthorization = new AgentToolChannelSenderAuthorization
+        {
+            BindingId = context.SenderBinding.BindingId,
+            OwnerScopeId = context.Caller.OwnerScopeId,
+            Platform = context.NyxIdAuthority.Platform ?? string.Empty,
+            Tenant = context.NyxIdAuthority.Tenant ?? string.Empty,
+            ExternalUserId = context.NyxIdAuthority.ExternalUserId ?? string.Empty,
+            NyxUserId = context.SenderBinding.NyxUserId ?? string.Empty,
+        };
+        return context.Channel with { Continuation = continuation };
     }
 
     private async Task<ChannelRegistrationAuthorityAdmissionResult?> AdmitChannelRegistrationAuthorityAsync(

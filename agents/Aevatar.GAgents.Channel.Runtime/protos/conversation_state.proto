@@ -8,6 +8,7 @@ import "chat_activity.proto";
 import "conversation_events.proto";
 import "delivery_ledger.proto";
 import "ai_messages.proto";
+import "external_callback_contracts.proto";
 
 message ConversationGAgentState {
   aevatar.gagents.channel.abstractions.ConversationReference conversation = 1;
@@ -42,6 +43,33 @@ message ConversationGAgentState {
   reserved 18;
   reserved "agent_profile";
   aevatar.ai.ConversationContextAttachmentSet context_attachments = 19;
+  repeated ConversationExternalCallbackAction external_callback_actions = 20;
+}
+
+message ConversationExternalCallbackAction {
+  aevatar.gagents.channel.abstractions.ExternalCallbackActionContextRecorded context = 1;
+  aevatar.gagents.channel.abstractions.CallbackResult result = 2;
+  string resume_run_id = 3;
+  string resume_activity_id = 4;
+  bool resume_admitted = 5;
+  aevatar.gagents.channel.abstractions.ExternalCallbackLinkReady link = 6;
+  bool link_delivered = 7;
+  LlmReplyReadyEvent pending_reply_delivery = 8;
+  ConversationExternalCallbackRetryState link_retry = 9;
+  ConversationExternalCallbackRetryState resume_retry = 10;
+  ConversationExternalCallbackRetryState reply_retry = 11;
+  bool reply_delivered = 12;
+  ConversationExternalCallbackDeliveryPhase failed_phase = 13;
+  string delivery_failure_code = 14;
+  string delivery_failure_summary = 15;
+  ConversationExternalCallbackRetryState run_dispatch_retry = 16;
+  bool run_dispatch_confirmed = 17;
+}
+
+message ConversationExternalCallbackRetryState {
+  int32 attempts = 1;
+  int64 deadline_at_unix_ms = 2;
+  int64 next_attempt_at_unix_ms = 3;
 }
 
 // Refactor (iter80/cluster-081-channel-reply-lifecycle-event-state-schema):

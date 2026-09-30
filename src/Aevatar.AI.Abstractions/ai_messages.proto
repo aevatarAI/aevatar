@@ -362,6 +362,55 @@ message AgentToolChannelContextPayload {
   ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 8;
   string bot_registration_id = 9;
   repeated AgentToolChannelIdentityHintPayload identity_hints = 10;
+  // Trusted originating Channel turn. It is populated by the conversation owner,
+  // never from tool arguments, and contains no raw credentials.
+  AgentToolChannelContinuationContext continuation = 11;
+}
+
+message AgentToolChannelContinuationContext {
+  string conversation_actor_id = 1;
+  string channel_registration_id = 2;
+  string canonical_conversation_key = 3;
+  string platform = 4;
+  string tenant_id = 5;
+  string chat_id = 6;
+  string sender_id = 7;
+  string thread_id = 8;
+  string original_activity_id = 9;
+  string original_user_text = 10;
+  AgentToolChannelSenderAuthorization original_sender_authorization = 11;
+  string conversation_partition = 12;
+  AgentToolChannelConversationScope conversation_scope = 13;
+  string channel_id = 14;
+  string bot_id = 15;
+  string nyx_agent_api_key_id = 16;
+  string nyx_conversation_id = 17;
+  string nyx_provider_slug = 18;
+  string reply_message_id = 19;
+  string delivery_address_id = 20;
+  string delivery_address_type = 21;
+  string delivery_fallback_address_id = 22;
+  string delivery_fallback_address_type = 23;
+  string nyx_lark_union_id = 24;
+  string nyx_lark_chat_id = 25;
+  string outbound_correlation_id = 26;
+}
+
+message AgentToolChannelSenderAuthorization {
+  string binding_id = 1;
+  string owner_scope_id = 2;
+  string platform = 3;
+  string tenant = 4;
+  string external_user_id = 5;
+  string nyx_user_id = 6;
+}
+
+enum AgentToolChannelConversationScope {
+  AGENT_TOOL_CHANNEL_CONVERSATION_SCOPE_UNSPECIFIED = 0;
+  AGENT_TOOL_CHANNEL_CONVERSATION_SCOPE_DIRECT_MESSAGE = 1;
+  AGENT_TOOL_CHANNEL_CONVERSATION_SCOPE_GROUP = 2;
+  AGENT_TOOL_CHANNEL_CONVERSATION_SCOPE_CHANNEL = 3;
+  AGENT_TOOL_CHANNEL_CONVERSATION_SCOPE_THREAD = 4;
 }
 
 message AgentToolChannelIdentityHintPayload {

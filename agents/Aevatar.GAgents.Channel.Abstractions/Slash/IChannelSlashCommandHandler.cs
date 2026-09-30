@@ -66,6 +66,9 @@ public interface IChannelSlashCommandHandler
 /// </summary>
 public sealed class ChannelSlashCommandContext
 {
+    /// <summary>Trusted originating conversation context for durable OAuth resumption.</summary>
+    public ChannelCallbackOrigin? ContinuationOrigin { get; init; }
+
     /// <summary>
     /// Canonical command name (without leading slash, lowercased).
     /// </summary>

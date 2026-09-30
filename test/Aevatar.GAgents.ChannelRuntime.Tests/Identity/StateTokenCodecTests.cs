@@ -60,6 +60,26 @@ public class StateTokenCodecTests
     }
 
     [Fact]
+    public async Task ContinuationIntent_IsAuthenticatedAndLegacyTokensRemainStateless()
+    {
+        var codec = new StateTokenCodec(new FakeOAuthClientProvider(Snapshot()));
+        var token = await codec.EncodeAsync("callback-once", SampleSubject(), "verifier", null, true);
+        var decoded = await codec.TryDecodeAsync(token);
+        decoded.Payload!.ContinuationRequested.Should().BeTrue();
+        decoded.Payload.CorrelationId.Should().Be("callback-once");
+
+        var legacy = await codec.TryDecodeAsync(await codec.EncodeAsync("legacy", SampleSubject(), "verifier"));
+        legacy.Payload!.ContinuationRequested.Should().BeFalse();
+
+        var parts = token.Split('.');
+        var raw = Convert.FromBase64String(parts[1].Replace('-', '+').Replace('_', '/') + new string('=', (4 - parts[1].Length % 4) % 4));
+        var payload = Aevatar.GAgents.Channel.Identity.StateTokenPayload.Parser.ParseFrom(raw);
+        payload.ContinuationRequested = false;
+        parts[1] = Convert.ToBase64String(Google.Protobuf.MessageExtensions.ToByteArray(payload)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        (await codec.TryDecodeAsync(string.Join('.', parts))).ErrorCode.Should().Be("state_signature_invalid");
+    }
+
+    [Fact]
     public async Task Encode_RejectsRawOrMalformedBindingReference()
     {
         var provider = new FakeOAuthClientProvider(Snapshot());

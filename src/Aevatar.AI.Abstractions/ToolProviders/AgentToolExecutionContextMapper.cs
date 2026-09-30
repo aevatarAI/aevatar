@@ -405,7 +405,8 @@ public static class AgentToolExecutionContextMapper
             AgentToolExecutionContext.Normalize(payload?.DeliveryTargetId),
             FromWorkflowResultDeliveryCredentialPayload(payload?.WorkflowResultDeliveryCredential),
             AgentToolExecutionContext.Normalize(payload?.BotRegistrationId),
-            FromIdentityHintPayloads(payload?.IdentityHints));
+            FromIdentityHintPayloads(payload?.IdentityHints),
+            payload?.Continuation?.Clone());
 
     private static AgentToolNyxIdCredentialKind FromNyxIdCredentialKindPayload(
         AgentToolNyxIdCredentialKindPayload? kind) =>
@@ -473,6 +474,7 @@ public static class AgentToolExecutionContextMapper
             DeliveryTargetId = context.DeliveryTargetId ?? string.Empty,
             WorkflowResultDeliveryCredential = context.WorkflowResultDeliveryCredential?.Clone(),
             BotRegistrationId = context.BotRegistrationId ?? string.Empty,
+            Continuation = context.Continuation?.Clone(),
         };
         AddIdentityHintPayloads(context.IdentityHints, payload);
         return payload;

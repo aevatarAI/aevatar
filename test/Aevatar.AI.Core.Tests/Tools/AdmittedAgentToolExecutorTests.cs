@@ -13,7 +13,7 @@ using FluentAssertions;
 
 namespace Aevatar.AI.Core.Tests.Tools;
 
-public sealed class AdmittedAgentToolExecutorTests
+public sealed partial class AdmittedAgentToolExecutorTests
 {
     [Fact]
     public void ArgumentsDigest_ShouldPreserveExactInput()

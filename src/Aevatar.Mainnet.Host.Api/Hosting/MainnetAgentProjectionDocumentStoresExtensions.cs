@@ -125,6 +125,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         RegisterElasticsearchHealthProbeOperationalSnapshotStore(services, configuration);
         TryAddElasticsearchStore<ChannelBotRegistrationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ConversationDeliveryCurrentStateDocument>(services, configuration, static document => document.Id);
+        TryAddElasticsearchStore<ExternalCallbackCurrentStateDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ProjectionScopeStatusDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ExternalIdentityBindingDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<AevatarOAuthClientDocument>(services, configuration, static document => document.Id);
@@ -173,6 +174,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             InMemoryHealthProbeOperationalSnapshotStore>());
         TryAddInMemoryStore<ChannelBotRegistrationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ConversationDeliveryCurrentStateDocument>(services, static document => document.Id);
+        TryAddInMemoryStore<ExternalCallbackCurrentStateDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ProjectionScopeStatusDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ExternalIdentityBindingDocument>(services, static document => document.Id);
         TryAddInMemoryStore<AevatarOAuthClientDocument>(services, static document => document.Id);
@@ -205,6 +207,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
         TryAddReadModelDescriptor<ChannelBotRegistrationDocument>(services, "channel-bot-registration", "ChannelBotGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<ConversationDeliveryCurrentStateDocument>(services, "conversation-delivery-current-state", "ConversationGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<ExternalCallbackCurrentStateDocument>(services, "channel-external-callback-current-state", "ExternalCallbackGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<ProjectionScopeStatusDocument>(services, "projection-scope-status", "ProjectionMaterializationScopeGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<ExternalIdentityBindingDocument>(services, "external-identity-binding", "ExternalIdentityBindingGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<AevatarOAuthClientDocument>(services, "aevatar-oauth-client", "AevatarOAuthClientGAgent", engineLabel, shape);

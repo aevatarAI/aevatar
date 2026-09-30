@@ -22,9 +22,11 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
         [
             new ExternalIdentityBoundEvent(),
             new ExternalIdentityBindingReplacedEvent(),
+            new ExternalIdentityBindingOwnerConfirmedEvent(),
             new ExternalIdentityBindingRetirementQueuedEvent(),
             new ExternalIdentityBindingRetiredEvent(),
             new ExternalIdentityBindingRevokedEvent(),
+            new BindingCallbackDecisionRecorded(),
         ];
 
         foreach (var stateEvent in stateEvents)

@@ -24,6 +24,13 @@ public interface INyxIdCapabilityBroker
         ExternalSubjectRef externalSubject,
         CancellationToken ct = default);
 
+    /// <summary>Starts a binding flow registered durably against the originating conversation.</summary>
+    Task<BindingChallenge> StartExternalBindingAsync(
+        ExternalSubjectRef externalSubject,
+        ChannelCallbackOrigin continuationOrigin,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException("This broker does not support durable channel continuations.");
+
     /// <summary>
     /// Revokes the binding both at NyxID (source of truth) and locally.
     /// NyxID failures abort the local revoke to avoid source-of-truth divergence

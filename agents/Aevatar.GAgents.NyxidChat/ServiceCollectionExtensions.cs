@@ -28,6 +28,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.NyxidChat.ExternalCallbacks;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.GAgents.NyxidChat.Voice;
@@ -233,6 +234,9 @@ public static class ServiceCollectionExtensions
                 contentArtifactQueryPort: sp.GetService<IContentArtifactQueryPort>(),
                 useSkillLogger: sp.GetService<ILogger<UseSkillTool>>()));
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
+        services.TryAddSingleton<IChannelConnectLinkContinuationPort, NyxIdConnectLinkContinuationAdapter>();
+        services.TryAddSingleton<IConnectLinkCreationPort, NyxIdConnectLinkCreationAdapter>();
+        services.TryAddSingleton<IConnectLinkVerificationPort, NyxIdConnectLinkVerifier>();
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>
             new NyxIdActionPostconditionPort(

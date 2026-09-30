@@ -2032,8 +2032,12 @@ public sealed class ChannelCallbackEndpointsTests
             Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public async Task HandleListRegistrationsAsync_ExcludesOtherAccountsByDefault()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("mine")]
+    [InlineData(" MINE ")]
+    [InlineData("scope-1")]
+    public async Task HandleListRegistrationsAsync_CurrentCallerScope_ExcludesOtherAccounts(string? scope)
     {
         var queryPort = QueryPortWith(
             new ChannelBotRegistrationEntry { Id = "mine", Platform = "lark", ScopeId = "scope-1", NyxChannelBotId = "bot-mine" },
@@ -2041,7 +2045,7 @@ public sealed class ChannelCallbackEndpointsTests
         var http = CreateHttpContext("scope-1");
         http.Request.Headers.Authorization = "Bearer test-token";
 
-        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, NyxClientWithChannelBots("bot-mine", "bot-theirs"), null, CancellationToken.None);
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort, NyxClientWithChannelBots("bot-mine", "bot-theirs"), scope, CancellationToken.None);
         var response = await ExecuteResultAsync(result);
 
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
@@ -2053,6 +2057,24 @@ public sealed class ChannelCallbackEndpointsTests
             .Single(row => row.GetProperty("nyx_channel_bot_id").GetString() == "bot-mine");
         mineRow.GetProperty("nyx_channel_bot_owner_scope_id").GetString().Should().Be("scope-1");
         mineRow.GetProperty("nyx_channel_bot_owner_scope_name").GetString().Should().Be("personal");
+    }
+
+    [Fact]
+    public async Task HandleListRegistrationsAsync_ExplicitOtherScope_IsRejectedBeforeReadingRegistrations()
+    {
+        var queryPort = QueryPortWith();
+        var nyxHandler = new RecordingNyxHttpMessageHandler(request => throw new InvalidOperationException("Unexpected upstream request"));
+        var http = CreateHttpContext("scope-1");
+        http.Request.Headers.Authorization = "Bearer test-token";
+
+        var result = await InvokeAsync("HandleListRegistrationsAsync", http, queryPort,
+            CreateNyxClient(nyxHandler), "scope-2", CancellationToken.None);
+        var response = await ExecuteResultAsync(result);
+
+        response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        response.Body.Should().Contain("scope_id does not match the authenticated scope");
+        nyxHandler.Requests.Should().BeEmpty();
+        await queryPort.DidNotReceive().QueryAllSnapshotsAsync(Arg.Any<CancellationToken>());
     }
 
     [Fact]

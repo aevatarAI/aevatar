@@ -26,7 +26,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
 
-public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
+public sealed partial class ChannelConversationTurnRunner : IConversationTurnRunner
 {
     private static readonly HashSet<string> LocalSlashCommands = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -456,6 +456,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             SenderId = inbound.SenderId.Trim(),
             SenderName = (inbound.SenderName ?? string.Empty).Trim(),
             IsPrivateChat = IsPrivateChat(inbound),
+            ContinuationOrigin = BuildCallbackOrigin(activity, registration, runtimeContext),
         };
 
         MessageContent? reply;
@@ -623,7 +624,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             {
                 try
                 {
-                    var challenge = await broker.StartExternalBindingAsync(subject, ct).ConfigureAwait(false);
+                    var origin = BuildCallbackOrigin(activity, registration, runtimeContext);
+                    var challenge = origin is null
+                        ? await broker.StartExternalBindingAsync(subject, ct).ConfigureAwait(false)
+                        : await broker.StartExternalBindingAsync(subject, origin, ct).ConfigureAwait(false);
                     reply = InitChannelSlashCommandHandler.BuildBindingCard(
                         challenge.AuthorizeUrl,
                         subject.Platform,
@@ -1421,18 +1425,57 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     ex,
                     "Registration lookup failed on relay reply path; reply will proceed but post-reply reaction clear will be skipped. correlation={CorrelationId}",
                     reply.CorrelationId);
+                if (runtimeContext.UseRegistrationOutbound)
+                {
+                    return ConversationTurnResult.TransientFailure(
+                        "callback_registration_unavailable",
+                        "The original Channel registration is temporarily unavailable.");
+                }
                 registration = null;
             }
         }
         else
         {
-            registration = await ResolveRegistrationForReplyAsync(reply, ct);
+            try
+            {
+                registration = await ResolveRegistrationForReplyAsync(reply, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (runtimeContext.UseRegistrationOutbound)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Registration lookup failed on callback direct reply path; reply will be retried. correlation={CorrelationId}",
+                    reply.CorrelationId);
+                return ConversationTurnResult.TransientFailure(
+                    "callback_registration_unavailable",
+                    "The original Channel registration is temporarily unavailable.");
+            }
+
             if (registration is null)
             {
+                if (runtimeContext.UseRegistrationOutbound)
+                {
+                    return ConversationTurnResult.PermanentFailure(
+                        "callback_origin_unavailable",
+                        "The original Channel registration is unavailable.");
+                }
+
                 return ConversationTurnResult.PermanentFailure(
                     "registration_not_found",
                     "Channel registration not found.");
             }
+        }
+
+        if (runtimeContext.UseRegistrationOutbound &&
+            (registration is not { Tombstoned: false } || !IsCallbackReplyRegistrationAvailable(reply.Activity, registration)))
+        {
+            return ConversationTurnResult.PermanentFailure(
+                "callback_origin_unavailable",
+                "The original Channel registration is unavailable.");
         }
 
         var sentSeed = string.IsNullOrWhiteSpace(reply.CorrelationId)
@@ -1690,7 +1733,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     ResolveUserAccessToken(activity, runtimeContext),
                     senderBinding,
                     channelContext.Metadata,
-                    channelContext.IdentityHints)
+                    channelContext.IdentityHints,
+                    runtimeContext)
                 .WithCallId($"{inboundEvent.MessageId}:agent-builder") with
             {
                 ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration(registration.Id),
@@ -1757,6 +1801,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (HasRelayDelivery(inbound))
         {
             var relayDelivery = inbound.OutboundDelivery!.Clone();
+            if (runtimeContext.UseRegistrationOutbound)
+                return await SendExternalCallbackReplyAsync(outboundIntent, sentActivitySeed, conversation,
+                    inbound, registration, relayDelivery, ct);
             var relayToken = ResolveRelayReplyToken(relayDelivery, runtimeContext);
             if (runtimeContext.DeferRelayTextReply && (runtimeContext.RelayTextOnly || relayToken is null))
             {
@@ -2388,7 +2435,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         string? userAccessToken,
         ResolvedSenderBinding? senderBinding,
         IReadOnlyDictionary<string, string> metadata,
-        IReadOnlyList<AgentToolChannelIdentityHint> identityHints)
+        IReadOnlyList<AgentToolChannelIdentityHint> identityHints,
+        ConversationTurnRuntimeContext runtimeContext)
     {
         var token = NormalizeOptional(userAccessToken);
         return AgentToolExecutionContext.Empty with
@@ -2409,7 +2457,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 null,
                 BuildWorkflowResultDeliveryCredential(registration),
                 NormalizeOptional(registration.Id),
-                identityHints),
+                identityHints,
+                BuildToolChannelContinuation(activity, registration, runtimeContext, senderBinding)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
     }
@@ -2598,7 +2647,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ResolvedSenderBinding? senderBinding,
         long registrationStateVersion,
         CancellationToken ct,
-        bool allowDefaultSkillRouting = false)
+        bool allowDefaultSkillRouting = false,
+        bool allowSenderCredentialIssuance = true)
     {
         var allowSkillInvocationPrompt = _identityBindingQueryPort is null || senderBinding is not null;
         // Explicit skill commands still require a verified sender binding. A registration default
@@ -2678,7 +2728,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 null,
                 BuildWorkflowResultDeliveryCredential(registration),
                 NormalizeOptional(registration.Id),
-                replyChannelContext.IdentityHints),
+                replyChannelContext.IdentityHints,
+                BuildToolChannelContinuation(activity, registration, runtimeContext, senderBinding)),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
             ExecutionOwner = AgentToolExecutionOwners.ChannelRegistration(registration.Id),
         }).ToPayload();
@@ -2743,7 +2794,9 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     OwnerScopeId = senderBinding.OwnerScopeId,
                 },
             }).ToPayload();
-            var senderAccessToken = await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false);
+            var senderAccessToken = allowSenderCredentialIssuance
+                ? await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false)
+                : null;
             if (!string.IsNullOrWhiteSpace(senderAccessToken))
             {
                 var currentControl = LLMControlContextMapper.FromPayload(request.LlmControl);

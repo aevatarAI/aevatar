@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
+using static Aevatar.GAgents.Channel.Identity.Broker.OAuthBindingVerification;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -113,7 +114,8 @@ public static class IdentityOAuthEndpoints
         [FromServices] IOwnerScopeResolver ownerScopeResolver,
         [FromServices] ICommandDispatchService<ObserveBrokerCapabilityCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> brokerCapabilityDispatch,
         [FromServices] ILoggerFactory loggerFactory,
-        CancellationToken ct)
+        CancellationToken ct,
+        [FromServices] IExternalCallbackCommandPort? continuations = null)
     {
         // Refactor (iter27/cluster-028-identity-oauth-endpoint):
         //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
@@ -122,6 +124,23 @@ public static class IdentityOAuthEndpoints
 
         if (!string.IsNullOrWhiteSpace(error))
         {
+            // Only authenticated continuation intent may route a cancellation.
+            // Legacy providers may return errors without state, and retain the
+            // established response below.
+            if (!string.IsNullOrWhiteSpace(state))
+            {
+                CallbackStateDecode? errorState = null;
+                try
+                {
+                    errorState = await brokerCallback.TryDecodeStateTokenAsync(state, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested)
+                {
+                    logger.LogWarning(ex, "Unable to authenticate an OAuth error return; no continuation was routed.");
+                }
+                if (errorState is { Succeeded: true, ContinuationRequested: true, ExternalSubject: not null })
+                    return await SubmitContinuationAsync(errorState, null, error, format, continuations, ct).ConfigureAwait(false);
+            }
             logger.LogWarning("OAuth callback received error from NyxID: {Error}", error);
             return Results.BadRequest(new { error, detail = $"NyxID returned an error on the OAuth callback. {RetryInitInstruction(null)}。" });
         }
@@ -149,6 +168,9 @@ public static class IdentityOAuthEndpoints
         }
         var subject = decode.ExternalSubject;
         var verifier = decode.PkceVerifier ?? string.Empty;
+
+        if (decode.ContinuationRequested)
+            return await SubmitContinuationAsync(decode, code, null, format, continuations, ct).ConfigureAwait(false);
 
         BrokerAuthorizationCodeResult exchange;
         try
@@ -466,92 +488,59 @@ public static class IdentityOAuthEndpoints
         return RenderBindingAccepted(displayName, accepted.Receipt, format, subject.Platform);
     }
 
-    private enum IssuedBindingProbeResult
-    {
-        Usable,
-        MissingRequiredAccess,
-        Invalid,
-        Unavailable,
-    }
-
-    private static async Task<IssuedBindingProbeResult> ProbeIssuedBindingAsync(
-        INyxIdCapabilityBroker capabilityBroker,
-        ExternalSubjectRef subject,
-        string bindingId,
-        ILogger logger,
+    private static async Task<IResult> SubmitContinuationAsync(
+        CallbackStateDecode state,
+        string? code,
+        string? error,
+        string? format,
+        IExternalCallbackCommandPort? continuations,
         CancellationToken ct)
     {
+        if (continuations is null)
+            return OAuthCallbackProblem(StatusCodes.Status503ServiceUnavailable,
+                "continuation_unavailable", "Aevatar 暂时无法接收本次授权结果，请稍后重试。");
+        if (string.IsNullOrWhiteSpace(state.CorrelationId) || state.ExternalSubject is null)
+            return Results.BadRequest(new { error = "state_payload_invalid" });
+
         try
         {
-            await capabilityBroker
-                .IssueShortLivedByBindingIdAsync(
-                    subject,
-                    bindingId,
-                    new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
-                    ct)
-                .ConfigureAwait(false);
-            // The binding id itself is a bearer credential, so only its
-            // irreversible digest prefix is correlatable from logs.
-            logger.LogInformation(
-                "New channel NyxID binding cleared the configured runtime floor. probe_result={ProbeResult}, binding_digest={BindingDigest}",
-                nameof(IssuedBindingProbeResult.Usable),
-                BindingDigest(bindingId));
-            return IssuedBindingProbeResult.Usable;
+            await continuations.SubmitOAuthAsync(new OAuthContinuationSubmission
+            {
+                CallbackId = state.CorrelationId,
+                ExternalSubject = state.ExternalSubject.Clone(),
+                AuthorizationCode = code ?? string.Empty,
+                PkceVerifier = state.PkceVerifier ?? string.Empty,
+                ExpectedBindingHash = state.ExpectedBindingHash ?? string.Empty,
+                OauthError = error ?? string.Empty,
+                ExpiresAtUnixMs = state.ExpiresAtUnixMs,
+            }, ct).ConfigureAwait(false);
         }
-        catch (BindingScopeMismatchException ex)
+        catch (KeyNotFoundException)
         {
-            logger.LogInformation(
-                ex,
-                "New channel NyxID binding lacks the required proxy scope. probe_result={ProbeResult}, binding_digest={BindingDigest}",
-                nameof(IssuedBindingProbeResult.MissingRequiredAccess),
-                BindingDigest(bindingId));
-            return IssuedBindingProbeResult.MissingRequiredAccess;
+            return OAuthCallbackProblem(StatusCodes.Status503ServiceUnavailable,
+                "continuation_pending", "Aevatar 暂时无法读取本次授权操作，请稍后重试此页面。");
         }
-        catch (BindingServiceAccessMismatchException ex)
+        catch (ArgumentException)
         {
-            logger.LogInformation(
-                ex,
-                "New channel NyxID binding lacks one or more required services. probe_result={ProbeResult}, binding_digest={BindingDigest}, unsatisfied_resource_count={UnsatisfiedResourceCount}",
-                nameof(IssuedBindingProbeResult.MissingRequiredAccess),
-                BindingDigest(bindingId),
-                ex.RequiredResources.Count);
-            return IssuedBindingProbeResult.MissingRequiredAccess;
+            return Results.BadRequest(new { error = "continuation_invalid" });
         }
-        catch (BindingRevokedException ex)
+        catch (Exception) when (!ct.IsCancellationRequested)
         {
-            logger.LogWarning(
-                ex,
-                "New channel NyxID binding was already revoked before adoption. probe_result={ProbeResult}, binding_digest={BindingDigest}",
-                nameof(IssuedBindingProbeResult.Invalid),
-                BindingDigest(bindingId));
-            return IssuedBindingProbeResult.Invalid;
+            return OAuthCallbackProblem(StatusCodes.Status503ServiceUnavailable,
+                "continuation_unavailable", "Aevatar 暂时无法接收本次授权结果，请稍后重试此页面。");
         }
-        catch (BindingNotFoundException ex)
-        {
-            logger.LogWarning(
-                ex,
-                "New channel NyxID binding was not found before adoption. probe_result={ProbeResult}, binding_digest={BindingDigest}",
-                nameof(IssuedBindingProbeResult.Invalid),
-                BindingDigest(bindingId));
-            return IssuedBindingProbeResult.Invalid;
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(
-                ex,
-                "New channel NyxID binding could not be verified before adoption. probe_result={ProbeResult}, binding_digest={BindingDigest}",
-                nameof(IssuedBindingProbeResult.Unavailable),
-                BindingDigest(bindingId));
-            return IssuedBindingProbeResult.Unavailable;
-        }
-    }
 
-    private static string BindingDigest(string bindingId) =>
-        NyxIdRemoteCapabilityBroker.BindingDigest(bindingId);
+        // This receipt means inbox admission only. The operation authority
+        // exchanges the code and awaits the binding actor's committed decision.
+        if (string.Equals(format, "json", StringComparison.OrdinalIgnoreCase))
+            return Results.Json(new { status = "continuation_pending", callback_id = state.CorrelationId },
+                statusCode: StatusCodes.Status202Accepted);
+        return RenderBindingAcceptedHtmlInternal(
+            displayName: null,
+            state.CorrelationId,
+            state.ExternalSubject.Platform,
+            continuationPending: true);
+    }
 
     private static string ChannelDisplayName(string? platform)
     {
@@ -1283,40 +1272,6 @@ public static class IdentityOAuthEndpoints
         return null;
     }
 
-    private static string? ResolveOwnerScopeId(string? idToken)
-    {
-        if (string.IsNullOrWhiteSpace(idToken)) return null;
-        var parts = idToken.Split('.');
-        if (parts.Length < 2) return null;
-        try
-        {
-            var json = System.Text.Encoding.UTF8.GetString(Base64UrlDecode(parts[1]));
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("uid", out var uid) &&
-                uid.ValueKind == System.Text.Json.JsonValueKind.String &&
-                !string.IsNullOrWhiteSpace(uid.GetString()))
-            {
-                return uid.GetString()!.Trim();
-            }
-
-            if (doc.RootElement.TryGetProperty("sub", out var sub) &&
-                sub.ValueKind == System.Text.Json.JsonValueKind.String &&
-                !string.IsNullOrWhiteSpace(sub.GetString()))
-            {
-                return sub.GetString()!.Trim();
-            }
-        }
-        catch (FormatException)
-        {
-            return null;
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return null;
-        }
-        return null;
-    }
-
     private static byte[] Base64UrlDecode(string value)
     {
         var padded = value.Replace('-', '+').Replace('_', '/');
@@ -1327,6 +1282,7 @@ public static class IdentityOAuthEndpoints
         }
         return Convert.FromBase64String(padded);
     }
+
 
     /// <summary>
     /// Render the user-facing success page returned in the OAuth-callback
@@ -1398,7 +1354,7 @@ public static class IdentityOAuthEndpoints
             }, statusCode: StatusCodes.Status202Accepted);
         }
 
-        return RenderBindingAcceptedHtmlInternal(displayName, receipt, platform);
+        return RenderBindingAcceptedHtmlInternal(displayName, receipt.CommandId, platform);
     }
 
     internal static IResult RenderBindingGrantUpdated(string? format, string? platform = null)
@@ -1481,17 +1437,21 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; }}
 
     private static IResult RenderBindingAcceptedHtmlInternal(
         string? displayName,
-        ChannelIdentityOAuthAcceptedReceipt receipt,
-        string? platform)
+        string requestId,
+        string? platform,
+        bool continuationPending = false)
     {
         // Refactor (iter27/cluster-028-identity-oauth-endpoint):
         //   Old pattern: IdentityOAuthEndpoints + AevatarOAuthClientBootstrapService 直接构造 EventEnvelope 投递,然后在 endpoint 内同步等 projection readiness / rebuild observation / readmodel polling (3-15s timeout + 50-250ms polling),违反 ACK 协议 + query-time projection priming
         //   New principle: 加 module-local CQRS dispatch adapters(ChannelIdentityOAuthCommandDispatch);endpoint inject typed ICommandDispatchService<...>,返回 accepted/pending + status URL,不再等 projection;删 IProjectionReadinessPort/ExternalIdentityBindingProjectionPort/AevatarOAuthClientProjectionPort/AevatarOAuthClientRebuildCoordinator/ProjectionWaitTimeout 等
         var channelName = System.Net.WebUtility.HtmlEncode(ChannelDisplayName(platform));
         var displayLine = string.IsNullOrWhiteSpace(displayName)
-            ? string.Empty
+            ? (continuationPending ? "<p>账号:核验中</p>" : string.Empty)
             : $"<p>账号:{System.Net.WebUtility.HtmlEncode(displayName)}</p>";
-        var commandId = System.Net.WebUtility.HtmlEncode(receipt.CommandId);
+        var continuationNotice = continuationPending
+            ? "<p>Aevatar 正在核验本次授权。请回到原来的聊天会话，后续结果会在那里发送。</p>"
+            : string.Empty;
+        var encodedRequestId = System.Net.WebUtility.HtmlEncode(requestId);
         var html = $@"<!DOCTYPE html>
 <html lang=""zh-CN"">
 <head>
@@ -1510,13 +1470,15 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; }}
 <span class=""badge"">已受理</span>
 <h1>NyxID 绑定请求已受理</h1>
 {displayLine}
-<p>可以关闭此页,回到 {channelName} 稍后继续对话。请求编号:<code>{commandId}</code></p>
+{continuationNotice}
+<p>可以关闭此页,回到 {channelName} 稍后继续对话。请求编号:<code>{encodedRequestId}</code></p>
 <div class=""hint"">
 <strong>下一步</strong><br>
 回到 {channelName} 后,发送 <code>/whoami</code> 查看绑定状态。状态可见后,发送 <code>/model</code> 选择想用的模型。
 </div>
 </body>
 </html>";
-        return Results.Content(html, "text/html; charset=utf-8");
+        return Results.Content(html, "text/html; charset=utf-8",
+            statusCode: continuationPending ? StatusCodes.Status202Accepted : null);
     }
 }
