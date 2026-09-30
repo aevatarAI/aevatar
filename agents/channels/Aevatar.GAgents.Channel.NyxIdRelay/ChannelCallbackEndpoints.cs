@@ -41,6 +41,7 @@ public static class ChannelCallbackEndpoints
             .Produces<object[]>(StatusCodes.Status200OK, "application/json")
             .RequireAuthorization();
         group.MapPost("/registrations", HandleRegisterAsync)
+            .Accepts<ChannelRegistrationCreateRequest>("application/json")
             .WithEndpointAudit(
                 "channel.registration.create",
                 AuditSensitivityLevel.Confidential,
@@ -55,6 +56,7 @@ public static class ChannelCallbackEndpoints
             .Produces<object>(StatusCodes.Status200OK, "application/json")
             .RequireAuthorization();
         group.MapPost("/registrations/{registrationId}", HandleUpdateRegistrationAsync)
+            .Accepts<ChannelRegistrationUpdateRequest>("application/json")
             .WithEndpointAudit(
                 "channel.registration.update",
                 AuditSensitivityLevel.Confidential,

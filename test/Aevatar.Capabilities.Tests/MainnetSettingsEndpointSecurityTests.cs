@@ -45,6 +45,81 @@ public sealed class MainnetSettingsEndpointSecurityTests
     private const string OwnerAModel = "owner-alpha-model";
     private const string OwnerARuntimeUrl = "https://owner-alpha-runtime.example.test";
 
+    [Theory]
+    [InlineData("/api/channels/registrations", true)]
+    [InlineData("/api/channels/registrations/{registrationId}", false)]
+    public async Task MainnetHost_PublishedOpenApi_DeclaresCompleteRegistrationRequestBody(
+        string path,
+        bool isCreate)
+    {
+        await using var host = await MainnetTestHost.StartAsync();
+        var response = await host.Client.GetAsync("/api/openapi.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var operation = document.RootElement.GetProperty("paths").GetProperty(path).GetProperty("post");
+
+        operation.TryGetProperty("requestBody", out var requestBody).Should().BeTrue(
+            "dynamic registration tools must be able to carry the JSON fields accepted by the handler");
+        requestBody.GetProperty("required").GetBoolean().Should().BeTrue();
+        var schema = ResolveOpenApiSchema(document.RootElement, requestBody.GetProperty("content")
+            .GetProperty("application/json").GetProperty("schema"));
+        var properties = schema.GetProperty("properties");
+        string[] commonFields = ["skill_name", "authorization_mode", "service_ids", "runtime_config"];
+        var expectedFields = isCreate
+            ? commonFields.Concat(["registration_id", "nyx_channel_bot_id", "nyx_conversation_route_id", "nyx_provider_slug"])
+            : commonFields;
+        properties.EnumerateObject().Select(static property => property.Name)
+            .Should().BeEquivalentTo(expectedFields);
+        properties.GetProperty("skill_name").GetProperty("type").GetString().Should().Be("string");
+        properties.GetProperty("authorization_mode").GetProperty("type").GetString().Should().Be("string");
+        var serviceIds = properties.GetProperty("service_ids");
+        serviceIds.GetProperty("type").GetString().Should().Be("array");
+        serviceIds.GetProperty("items").GetProperty("type").GetString().Should().Be("string");
+        if (isCreate)
+        {
+            schema.GetProperty("required").EnumerateArray().Select(static field => field.GetString())
+                .Should().Equal("nyx_channel_bot_id");
+        }
+        else
+        {
+            schema.TryGetProperty("required", out _).Should().BeFalse(
+                "updates may omit the Service selection to retain the current allowlist");
+            var registrationId = operation.GetProperty("parameters").EnumerateArray()
+                .Single(parameter => parameter.GetProperty("name").GetString() == "registrationId");
+            registrationId.GetProperty("in").GetString().Should().Be("path");
+            registrationId.GetProperty("required").GetBoolean().Should().BeTrue();
+        }
+
+        var runtimeProperties = ResolveOpenApiSchema(document.RootElement,
+            properties.GetProperty("runtime_config")).GetProperty("properties");
+        runtimeProperties.EnumerateObject().Select(static property => property.Name)
+            .Should().BeEquivalentTo("instructions", "default_skill", "tool_set_refs", "extra_tool_names",
+                "nyxid_service_selectors", "credential_source_mode");
+        runtimeProperties.GetProperty("credential_source_mode").GetProperty("type").GetString().Should().Be("string");
+        var defaultSkill = ResolveOpenApiSchema(document.RootElement,
+            runtimeProperties.GetProperty("default_skill")).GetProperty("properties");
+        defaultSkill.EnumerateObject().Select(static property => property.Name)
+            .Should().BeEquivalentTo("name", "version");
+        var selector = ResolveOpenApiSchema(document.RootElement,
+            runtimeProperties.GetProperty("nyxid_service_selectors").GetProperty("items"))
+            .GetProperty("properties");
+        selector.EnumerateObject().Select(static property => property.Name)
+            .Should().BeEquivalentTo("service_slug", "endpoint_names");
+        selector.GetProperty("endpoint_names").GetProperty("items").GetProperty("type")
+            .GetString().Should().Be("string");
+    }
+
+    private static JsonElement ResolveOpenApiSchema(JsonElement document, JsonElement schema)
+    {
+        if (!schema.TryGetProperty("$ref", out var reference))
+            return schema;
+
+        var pointer = reference.GetString()!;
+        pointer.Should().StartWith("#/components/schemas/");
+        return document.GetProperty("components").GetProperty("schemas")
+            .GetProperty(pointer["#/components/schemas/".Length..]);
+    }
+
     [Fact]
     public async Task MainnetHost_PublishedOpenApi_ExposesTheSendersOwnRegistrationRead()
     {
