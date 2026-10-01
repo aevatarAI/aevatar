@@ -440,7 +440,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ExecuteAsync_ThroughRealAdmission_UsesSenderInventoryWithSeparateCredentialAuthority(
+    public async Task ExecuteAsync_ThroughRealAdmission_WithSenderBinding_PrefersSenderInventoryCapability(
         bool registrationAgentKeyMode)
     {
         var handler = new InventoryHandler();
@@ -481,24 +481,15 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         outcome.ResultJson.Should().Contain("GitHub");
         outcome.AuditCompleted.Should().BeTrue();
         handler.RequestPath.Should().Be("/api/v1/keys");
-        handler.Authorization.Should().Be(registrationAgentKeyMode
-            ? "Bearer registration-agent-key"
-            : "Bearer strict-sender-token");
+        var expectedToken = registrationAgentKeyMode ? "inventory-access-token" : "strict-sender-token";
+        handler.Authorization.Should().Be($"Bearer {expectedToken}");
         handler.ExecutionContext.Should().NotBeNull();
         var readContext = handler.ExecutionContext!;
-        if (registrationAgentKeyMode)
-        {
-            readContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
-            readContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
-            readContext.DurableNyxIdCredential.Should().NotBeNull();
-        }
-        else
-        {
-            readContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
-            readContext.Credentials.SenderNyxIdAccessToken.Should().Be(readContext.Credentials.NyxIdAccessToken);
-            readContext.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
-            readContext.DurableNyxIdCredential.Should().BeNull();
-        }
+        readContext.Credentials.NyxIdAccessToken.Should().Be(expectedToken);
+        readContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+        readContext.Credentials.SenderNyxIdAccessToken.Should().Be(readContext.Credentials.NyxIdAccessToken);
+        readContext.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
+        readContext.DurableNyxIdCredential.Should().BeNull();
 
         readContext.ExecutionOwner.Should().BeEquivalentTo(outerContext.ExecutionOwner);
         readContext.SenderBinding.Should().Be(outerContext.SenderBinding);
@@ -513,17 +504,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         inventoryAudit.Correlation.CallId.Should().Be("call-inventory-1:inventory-read");
         terminalRecords.Single(record => record.OperationName == "nyxid_service_inventory")
             .Correlation.CallId.Should().Be("call-inventory-1");
-        if (registrationAgentKeyMode)
-        {
-            await issuer.DidNotReceiveWithAnyArgs().IssueByBindingIdAsync(default!, default!, default);
-        }
-        else
-        {
-            inventoryAudit.CredentialSource.Should().Be(AuditCredentialSource.BearerToken);
-            await issuer.Received(1).IssueByBindingIdAsync(
-                Arg.Is<ExternalSubjectRef>(subject => subject.ExternalUserId == "sender-1"),
-                "bnd-sender-1", Arg.Any<CancellationToken>());
-        }
+        inventoryAudit.CredentialSource.Should().Be(AuditCredentialSource.BearerToken);
+        await issuer.Received(1).IssueByBindingIdAsync(
+            Arg.Is<ExternalSubjectRef>(subject => subject.ExternalUserId == "sender-1"),
+            "bnd-sender-1", Arg.Any<CancellationToken>());
     }
 
     [Theory]
@@ -984,7 +968,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     {
         var handler = new InventoryHandler { KeysResponse = KeysWithoutRecommendedSkill() };
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
-        var executionPort = new RecordingExecutionPort();
+        var auditRecords = new List<AuditRecord>();
+        var executionPort = CreateAdmittedExecutionPort(auditRecords);
         var createdRefs = new[]
         {
             new NyxIdRecommendedSkillRef
@@ -1006,21 +991,30 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             Substitute.For<INyxIdConnectedServiceCapabilityIssuer>(),
             recommendedSkillRefCreator: creator,
             clientCredentialsTokenSource: new StaticTokenSource("client-credentials-token"));
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        var context = CreateRegistrationContext(hasSenderBinding: false);
+        using var scope = AgentToolContextScope.Push(context);
         var tool = EnsureRecommendedSkillRefsTool(await source.DiscoverToolsAsync());
 
-        var result = await tool.ExecuteAsync("""{"service_slug":"calendar"}""");
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            """{"service_slug":"calendar"}""",
+            context,
+            AgentToolApprovalContinuationMode.None,
+            ApprovalGrant: null));
 
-        using var document = JsonDocument.Parse(result);
+        using var document = JsonDocument.Parse(outcome.ResultJson);
         document.RootElement.GetProperty("status").GetString().Should().Be("success");
         document.RootElement.GetProperty("created").GetBoolean().Should().BeTrue();
         document.RootElement.GetProperty("recommended_skill_refs").EnumerateArray().Should().ContainSingle(skillRef =>
             skillRef.GetProperty("skill_id").GetString() == "22222222-2222-2222-2222-222222222222");
         creator.CallCount.Should().Be(1);
         creator.ObservedInstance!.UserServiceId.Should().Be("user-service-1");
-        executionPort.Requests.Should().ContainSingle()
-            .Which.Tool.Name.Should().Be("nyxid_recommended_skill_refs_provisioner");
         handler.Authorization.Should().Be("Bearer client-credentials-token");
+        auditRecords.Where(record => record.LifecyclePhase == AuditLifecyclePhase.Terminal)
+            .Select(record => record.OperationName)
+            .Should().BeEquivalentTo(
+                "nyxid_ensure_recommended_skill_refs",
+                "nyxid_recommended_skill_refs_provisioner");
     }
 
     [Fact]
@@ -1039,7 +1033,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             executionPort,
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
-            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+            CreateSenderCapabilityIssuer());
         var context = CreateRegistrationContext();
         using var scope = AgentToolContextScope.Push(context);
         var tool = OperationTool(await source.DiscoverToolsAsync());
@@ -1061,17 +1055,15 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
         outcome.TerminalInvoked.Should().BeTrue();
         outcome.ResultJson.Should().Contain("quiet table");
-        handler.RawOpenApiRequests.Should().ContainSingle()
-            .Which.Should().Be("/api/v1/catalog-specs/api-google-workspace/openapi.json");
         var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
         proxyRequest.Method.Should().Be("GET");
         proxyRequest.Path.Should().Contain("/profile/dining");
         proxyRequest.Query.Should().Contain("alt=media");
-        proxyRequest.BearerToken.Should().Be("registration-agent-key");
+        proxyRequest.BearerToken.Should().Be("strict-sender-token");
     }
 
     [Fact]
-    public async Task InvokeOperationAsync_WithRegistrationAgentKey_ExecutesExactOperationWithoutExposingEndpointTool()
+    public async Task InvokeOperationAsync_WithRegistrationAgentKeyWithoutSenderBinding_ExecutesExactOperationWithoutExposingEndpointTool()
     {
         var handler = new InventoryHandler
         {
@@ -1087,7 +1079,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
-        var context = CreateRegistrationContext();
+        var context = CreateRegistrationContext(hasSenderBinding: false);
         using var scope = AgentToolContextScope.Push(context);
         var tools = await source.DiscoverToolsAsync();
         var tool = OperationTool(tools);
@@ -1130,7 +1122,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             new RecordingExecutionPort(),
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
-            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+            CreateSenderCapabilityIssuer());
         using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
@@ -1149,11 +1141,11 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         document.RootElement.GetProperty("error").GetString().Should().Be("operation_not_visible");
         document.RootElement.GetProperty("service_slug").GetString().Should().Be("api-google-workspace");
         document.RootElement.GetProperty("message").GetString().Should()
-            .Be("The requested connected-service operation is not visible for service 'api-google-workspace'. Add this NyxID service to the channel registration permissions, then retry.");
+            .Be("The requested connected-service operation is not visible for service 'api-google-workspace'. Verify the service is admitted for this channel, the operation id is current, and the service exposes the operation.");
         outcome.Receipt.Should().NotBeNull();
         outcome.Receipt!.ErrorCode.Should().Be("operation_not_visible");
         outcome.Receipt.ErrorMessage.Should()
-            .Be("The requested connected-service operation is not visible for service 'api-google-workspace'. Add this NyxID service to the channel registration permissions, then retry.");
+            .Be("The requested connected-service operation is not visible for service 'api-google-workspace'. Verify the service is admitted for this channel, the operation id is current, and the service exposes the operation.");
         handler.ProxyRequests.Should().BeEmpty();
     }
 
@@ -1172,7 +1164,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             executionPort,
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
-            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+            CreateSenderCapabilityIssuer());
         var context = CreateRegistrationContext();
         using var scope = AgentToolContextScope.Push(context);
         var tool = OperationTool(await source.DiscoverToolsAsync());
@@ -1201,7 +1193,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         proxyRequest.Method.Should().Be("GET");
         proxyRequest.Path.Should().Contain("/docs/policies");
         proxyRequest.Query.Should().Contain("restaurant=north");
-        proxyRequest.BearerToken.Should().Be("registration-agent-key");
+        proxyRequest.BearerToken.Should().Be("strict-sender-token");
     }
 
     [Fact]
@@ -1366,7 +1358,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             new RecordingExecutionPort(),
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
-            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+            CreateSenderCapabilityIssuer());
         using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
@@ -1404,7 +1396,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             new RecordingExecutionPort(),
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
-            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+            CreateSenderCapabilityIssuer());
         using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
@@ -1445,7 +1437,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             new RecordingExecutionPort(),
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
-            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+            CreateSenderCapabilityIssuer());
         using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
@@ -1480,7 +1472,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             new RecordingExecutionPort(),
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
-            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
+            CreateSenderCapabilityIssuer());
         using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
@@ -1666,6 +1658,22 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
     private static IAgentTool EnsureRecommendedSkillRefsTool(IReadOnlyList<IAgentTool> tools) =>
         tools.Should().ContainSingle(tool => tool.Name == "nyxid_ensure_recommended_skill_refs").Subject;
+
+    private static INyxIdConnectedServiceCapabilityIssuer CreateSenderCapabilityIssuer(
+        string token = "strict-sender-token")
+    {
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        issuer.IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                "bnd-sender-1",
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CapabilityHandle
+            {
+                AccessToken = token,
+                Scope = "proxy",
+            }));
+        return issuer;
+    }
 
     private static AgentToolExecutionContext CreateRegistrationContext(bool hasSenderBinding = true)
     {
@@ -2053,13 +2061,19 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         public int CallCount { get; private set; }
         public NyxIdServiceInstance? ObservedInstance { get; private set; }
 
-        public Task<IReadOnlyList<NyxIdRecommendedSkillRef>> CreateRecommendedSkillRefsAsync(
+        public Task<NyxIdRecommendedSkillRefCreationResult> CreateRecommendedSkillRefsAsync(
             NyxIdServiceInstance instance,
             CancellationToken ct)
         {
             CallCount++;
             ObservedInstance = instance;
-            return Task.FromResult(refs);
+            return Task.FromResult(new NyxIdRecommendedSkillRefCreationResult(
+                refs,
+                [],
+                refs.Count == 0
+                    ? NyxIdRecommendedSkillRefPersistenceStatus.EmptyInput
+                    : NyxIdRecommendedSkillRefPersistenceStatus.Succeeded,
+                string.Empty));
         }
     }
 
