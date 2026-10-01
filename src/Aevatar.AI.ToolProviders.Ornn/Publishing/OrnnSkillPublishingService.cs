@@ -54,24 +54,59 @@ public sealed class OrnnSkillPublishingService
             if (IsConflictPublishFailure(publish) &&
                 await TryResolveExistingPublishedSkillAsync(accessToken, request, ct).ConfigureAwait(false) is { } existing)
             {
-                return OrnnSkillPublishingResult.Succeeded(
-                    existing.Guid,
-                    existing.Version ?? request.Version,
-                    existing.SkillHash,
+                return await CompletePublishedSkillAsync(
+                    accessToken,
+                    request,
+                    existing,
                     package.ZipBytes.Length,
-                    publish.RawResponse);
+                    publish.RawResponse,
+                    ct).ConfigureAwait(false);
             }
 
             return OrnnSkillPublishingResult.Failed(publish.Failure!);
         }
 
-        var published = ExtractPublishedSkill(publish.RawResponse);
+        return await CompletePublishedSkillAsync(
+            accessToken,
+            request,
+            ExtractPublishedSkill(publish.RawResponse),
+            package.ZipBytes.Length,
+            publish.RawResponse,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<OrnnSkillPublishingResult> CompletePublishedSkillAsync(
+        string accessToken,
+        OrnnSkillPublishRequest request,
+        PublishedSkillSubject published,
+        int packageBytes,
+        string rawResponse,
+        CancellationToken ct)
+    {
+        if (IsPublicVisibility(request.Visibility) && !string.IsNullOrWhiteSpace(published.Guid))
+        {
+            var permissionUpdate = await _client
+                .UpdateSkillPermissionsAsync(
+                    accessToken,
+                    published.Guid.Trim(),
+                    new OrnnSkillPermissionUpdateRequest(IsPrivate: false),
+                    ct)
+                .ConfigureAwait(false);
+            if (!permissionUpdate.Succeeded)
+            {
+                return OrnnSkillPublishingResult.Failed(
+                    "permission_update_failed",
+                    permissionUpdate.Failure?.Message ?? "Ornn skill permission update failed.",
+                    permissionUpdate.Failure);
+            }
+        }
+
         return OrnnSkillPublishingResult.Succeeded(
             published.Guid,
             published.Version ?? request.Version,
             published.SkillHash,
-            package.ZipBytes.Length,
-            publish.RawResponse);
+            packageBytes,
+            rawResponse);
     }
 
     private async Task<PublishedSkillSubject?> TryResolveExistingPublishedSkillAsync(
@@ -117,6 +152,9 @@ public sealed class OrnnSkillPublishingService
     private static bool IsConflictPublishFailure(OrnnSkillMutationResponse publish) =>
         publish.Failure?.HttpStatus == 409 ||
         publish.RawResponse.Contains("\"status\":409", StringComparison.Ordinal);
+
+    private static bool IsPublicVisibility(string? visibility) =>
+        string.Equals(visibility?.Trim(), "public", StringComparison.OrdinalIgnoreCase);
 
     public static PublishedSkillSubject ExtractPublishedSkill(string? rawResponse)
     {
@@ -217,6 +255,12 @@ public sealed record OrnnSkillPublishingResult(
 
     public static OrnnSkillPublishingResult Failed(string status, string error) =>
         new(status, error, [], [], null, null, null, 0, string.Empty, null);
+
+    public static OrnnSkillPublishingResult Failed(
+        string status,
+        string error,
+        OrnnSkillMutationFailure? failure) =>
+        new(status, error, [], [], null, null, null, 0, string.Empty, failure);
 
     public static OrnnSkillPublishingResult Failed(OrnnSkillMutationFailure failure) =>
         new("error", failure.Message, [], [], null, null, null, 0, string.Empty, failure);

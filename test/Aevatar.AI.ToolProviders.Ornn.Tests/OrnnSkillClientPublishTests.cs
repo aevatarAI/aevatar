@@ -30,6 +30,44 @@ public sealed class OrnnSkillClientPublishTests
     }
 
     [Fact]
+    public async Task UpdateSkillPermissionsAsync_ShouldPutPermissionsThroughNyxIdProxy()
+    {
+        var handler = new CapturingHandler("""{ "data": { "isPrivate": false } }""");
+        var client = CreateClient(handler);
+
+        var result = await client.UpdateSkillPermissionsAsync(
+            "caller-token",
+            "33333333-3333-3333-3333-333333333333",
+            new OrnnSkillPermissionUpdateRequest(IsPrivate: false));
+
+        result.Succeeded.Should().BeTrue();
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Put);
+        request.Uri!.AbsoluteUri.Should().Be("https://nyx.example/api/v1/proxy/s/ornn/api/v1/skills/33333333-3333-3333-3333-333333333333/permissions");
+        request.Authorization!.Parameter.Should().Be("caller-token");
+        request.ContentType.Should().Be("application/json");
+        System.Text.Encoding.UTF8.GetString(request.Body).Should().Contain("\"isPrivate\":false");
+    }
+
+    [Fact]
+    public async Task UpdateSkillPermissionsAsync_ShouldSurfaceProxyError()
+    {
+        var handler = new CapturingHandler("""{ "error": "forbidden" }""", HttpStatusCode.Forbidden);
+        var client = CreateClient(handler);
+
+        var result = await client.UpdateSkillPermissionsAsync(
+            "token",
+            "33333333-3333-3333-3333-333333333333",
+            new OrnnSkillPermissionUpdateRequest(IsPrivate: false));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().NotBeNull();
+        result.Failure!.Kind.Should().Be(OrnnSkillMutationFailureKind.Rejected);
+        result.Failure.Code.Should().Be("ornn_permission_update_forbidden");
+        result.Failure.HttpStatus.Should().Be(403);
+    }
+
+    [Fact]
     public async Task PublishSkillAsync_ShouldSurfaceProxyError()
     {
         var handler = new CapturingHandler("""{ "error": "nope" }""", HttpStatusCode.InternalServerError);

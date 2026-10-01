@@ -69,7 +69,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                     "Ornn recommended skill creation failed for catalog slug {CatalogServiceSlug} with status {Status}",
                     instance.CatalogServiceSlug,
                     publishResult.Status);
-                return NyxIdRecommendedSkillRefCreationResult.Empty();
+                return MapPublishFailure(publishResult);
             }
 
             var refs = new[]
@@ -93,6 +93,13 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
             _gate.Release();
         }
     }
+
+    private static NyxIdRecommendedSkillRefCreationResult MapPublishFailure(OrnnSkillPublishingResult publishResult) =>
+        string.Equals(publishResult.Status, "permission_update_failed", StringComparison.Ordinal)
+            ? NyxIdRecommendedSkillRefCreationResult.Empty(
+                NyxIdRecommendedSkillRefPersistenceStatus.WriteDenied,
+                publishResult.Failure?.Code ?? publishResult.Status)
+            : NyxIdRecommendedSkillRefCreationResult.Empty();
 
     private async Task<NyxIdRecommendedSkillRefCreationResult> PersistCreatedRefsAsync(
         string token,
