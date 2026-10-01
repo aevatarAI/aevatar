@@ -472,6 +472,17 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             ct).ConfigureAwait(false);
         if (!fetchResult.IsSuccess)
         {
+            if (fetchResult.FailureCode == ExactRemoteSkillFetchFailureCode.NotFound)
+            {
+                return await RegenerateMissingRecommendedSkillAsync(
+                        inventory,
+                        service,
+                        skillRef,
+                        arguments,
+                        ct)
+                    .ConfigureAwait(false);
+            }
+
             return JsonSerializer.Serialize(new
             {
                 result_type = "nyxid_recommended_skill_load",
@@ -974,6 +985,72 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         return new InventoryRecommendedSkillRefEnsureResult(inventory, createdSkills);
     }
 
+    private async Task<string> RegenerateMissingRecommendedSkillAsync(
+        NyxIdServiceInventoryResult inventory,
+        NyxIdServiceInstance service,
+        NyxIdRecommendedSkillRef missingSkillRef,
+        RecommendedSkillArguments arguments,
+        CancellationToken ct)
+    {
+        if (_recommendedSkillRefCreator is null)
+            return RecommendedSkillFailure("recommended_skill_ref_creation_failed");
+
+        NyxIdRecommendedSkillRefCreationResult creationResult;
+        try
+        {
+            creationResult = await _recommendedSkillRefCreator
+                .CreateRecommendedSkillRefsAsync(service, ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "NyxID recommended skill regeneration failed after an Ornn ref returned NotFound. userServiceId={UserServiceId} skillId={SkillId}",
+                service.UserServiceId,
+                missingSkillRef.SkillId);
+            return RecommendedSkillFailure("recommended_skill_ref_creation_failed");
+        }
+
+        if (creationResult.Refs.Count == 0 || creationResult.CreatedSkills.Count == 0)
+            return RecommendedSkillFailure("recommended_skill_ref_creation_failed");
+
+        for (var index = service.RecommendedSkillRefs.Count - 1; index >= 0; index--)
+        {
+            if (SameRecommendedSkillRef(service.RecommendedSkillRefs[index], arguments))
+                service.RecommendedSkillRefs.RemoveAt(index);
+        }
+
+        service.RecommendedSkillRefs.Add(
+            creationResult.Refs.Select(static skillRef => skillRef.Clone()));
+        inventory.RecommendedSkillCatalog.Clear();
+        inventory.RecommendedSkillCatalog.Add(
+            inventory.Instances.SelectMany(BuildRecommendedSkillCatalogEntries));
+
+        if (TryLoadGeneratedRecommendedSkill(
+                creationResult.CreatedSkills,
+                arguments,
+                service,
+                out var generatedSkillJson))
+        {
+            return generatedSkillJson;
+        }
+
+        if (creationResult.Refs.Count == 1 && creationResult.CreatedSkills.Count == 1)
+        {
+            var generatedSkill = creationResult.CreatedSkills[0];
+            if (SameRecommendedSkillRef(generatedSkill.Ref, creationResult.Refs[0]))
+            {
+                return SerializeGeneratedRecommendedSkill(generatedSkill, service);
+            }
+        }
+
+        return RecommendedSkillFailure("recommended_skill_ref_creation_failed");
+    }
 
     private static bool TryLoadGeneratedRecommendedSkill(
         IReadOnlyList<NyxIdCreatedRecommendedSkill> createdSkills,
@@ -988,7 +1065,14 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             return false;
         }
 
-        resultJson = JsonSerializer.Serialize(new
+        resultJson = SerializeGeneratedRecommendedSkill(createdSkill, service);
+        return true;
+    }
+
+    private static string SerializeGeneratedRecommendedSkill(
+        NyxIdCreatedRecommendedSkill createdSkill,
+        NyxIdServiceInstance service) =>
+        JsonSerializer.Serialize(new
         {
             result_type = "nyxid_recommended_skill_load",
             status = "success",
@@ -1009,14 +1093,20 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             main_document = createdSkill.MainDocument,
             resources = Array.Empty<object>(),
         });
-        return true;
-    }
 
     private static bool SameRecommendedSkillRef(NyxIdRecommendedSkillRef skillRef, RecommendedSkillArguments arguments) =>
         skillRef.Source == NyxIdRecommendedSkillSource.Ornn &&
         string.Equals(skillRef.SkillId, arguments.SkillId, StringComparison.Ordinal) &&
         string.Equals(skillRef.LiteralVersion, arguments.LiteralVersion, StringComparison.Ordinal) &&
         string.Equals(skillRef.ManifestDigest, arguments.ManifestDigest, StringComparison.Ordinal);
+
+    private static bool SameRecommendedSkillRef(
+        NyxIdRecommendedSkillRef left,
+        NyxIdRecommendedSkillRef right) =>
+        left.Source == right.Source &&
+        string.Equals(left.SkillId, right.SkillId, StringComparison.Ordinal) &&
+        string.Equals(left.LiteralVersion, right.LiteralVersion, StringComparison.Ordinal) &&
+        string.Equals(left.ManifestDigest, right.ManifestDigest, StringComparison.Ordinal);
 
     private static IEnumerable<NyxIdRecommendedSkillCatalogEntry> BuildRecommendedSkillCatalogEntries(
         NyxIdServiceInstance service)
