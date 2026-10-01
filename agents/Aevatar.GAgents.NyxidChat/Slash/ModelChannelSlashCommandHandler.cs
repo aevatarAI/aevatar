@@ -171,6 +171,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
                     {
                         ExternalSubject = context.Subject.Clone(),
                         Reason = reason,
+                        BindingId = context.BindingIdValue ?? string.Empty,
                     }),
                     Route = EnvelopeRouteSemantics.CreateDirect(
                         NyxIdChatServiceDefaults.ModelSelfHealPublisherActorId,

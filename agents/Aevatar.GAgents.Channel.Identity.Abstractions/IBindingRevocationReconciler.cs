@@ -28,4 +28,15 @@ public interface IBindingRevocationReconciler
     /// path (never block the response on this).
     /// </summary>
     Task ReconcileRevokedAsync(ExternalSubjectRef subject, string reason, CancellationToken ct = default);
+
+    /// <summary>
+    /// Event-sources a guarded local revoke for an upstream invalid_grant observed
+    /// while using <paramref name="bindingId"/>. If the actor has since adopted a
+    /// different binding, the revoke is ignored.
+    /// </summary>
+    Task ReconcileRevokedBindingAsync(
+        ExternalSubjectRef subject,
+        string bindingId,
+        string reason,
+        CancellationToken ct = default);
 }

@@ -33,11 +33,27 @@ public sealed class BindingRevocationReconciler : IBindingRevocationReconciler
         _catalogLifecyclePort = catalogLifecyclePort;
     }
 
-    public async Task ReconcileRevokedAsync(ExternalSubjectRef subject, string reason, CancellationToken ct = default)
+    public Task ReconcileRevokedAsync(ExternalSubjectRef subject, string reason, CancellationToken ct = default) =>
+        ReconcileRevokedBindingCoreAsync(subject, bindingId: null, reason, ct);
+
+    public Task ReconcileRevokedBindingAsync(
+        ExternalSubjectRef subject,
+        string bindingId,
+        string reason,
+        CancellationToken ct = default) =>
+        ReconcileRevokedBindingCoreAsync(subject, bindingId, reason, ct);
+
+    private async Task ReconcileRevokedBindingCoreAsync(
+        ExternalSubjectRef subject,
+        string? bindingId,
+        string reason,
+        CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(subject);
         if (_catalogLifecyclePort != null)
             await _catalogLifecyclePort.InvalidateAsync(subject, reason, ct).ConfigureAwait(false);
+
+        var expectedBindingId = string.IsNullOrWhiteSpace(bindingId) ? string.Empty : bindingId.Trim();
 
         // Event-source the local revoke so the projection flips to inactive
         // independently of any NyxID CAE webhook. Retry once on a transient
@@ -58,6 +74,7 @@ public sealed class BindingRevocationReconciler : IBindingRevocationReconciler
                     {
                         ExternalSubject = subject.Clone(),
                         Reason = reason,
+                        BindingId = expectedBindingId,
                     }),
                     Route = EnvelopeRouteSemantics.CreateDirect(DispatchRoutePublisher, actorId),
                 };

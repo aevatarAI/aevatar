@@ -349,6 +349,20 @@ public sealed partial class ExternalIdentityBindingGAgent : GAgentBase<ExternalI
             return;
         }
 
+        var expectedBindingId = NormalizeOptional(cmd.BindingId);
+        if (expectedBindingId is not null && !string.Equals(State.BindingId, expectedBindingId, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "RevokeBinding compare-and-swap rejected for {Platform}:{Tenant}:{User} (expected={ExpectedBindingId}, current={CurrentBindingId}, reason={Reason})",
+                cmd.ExternalSubject.Platform,
+                cmd.ExternalSubject.Tenant,
+                cmd.ExternalSubject.ExternalUserId,
+                expectedBindingId,
+                State.BindingId,
+                reason);
+            return;
+        }
+
         var revokedBindingId = State.BindingId;
 
         await PersistDomainEventAsync(new ExternalIdentityBindingRevokedEvent

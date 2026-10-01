@@ -120,7 +120,7 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleCommitBinding_DiscardsDuplicateBindingWhenReadModelMissedIt()
+    public async Task HandleCommitBinding_ReplacesExistingBindingWhenReadModelMissedIt()
     {
         var subject = SampleSubject();
 
@@ -139,12 +139,12 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
             OwnerScopeId = "owner-user-1",
         });
 
-        _agent.State.BindingId.Should().Be("bnd_first");
+        _agent.State.BindingId.Should().Be("bnd_second");
         _agent.State.OwnerScopeId.Should().Be("owner-user-1");
         _agent.State.RevokedAt.Should().BeNull();
         _agent.State.PendingRetirementBindingIds.Should().BeEmpty();
-        _agent.EventSourcing!.CurrentVersion.Should().Be(afterFirstVersion);
-        _retirementPort.RetiredBindingIds.Should().BeEmpty();
+        _agent.EventSourcing!.CurrentVersion.Should().BeGreaterThan(afterFirstVersion);
+        _retirementPort.RetiredBindingIds.Should().Contain("bnd_first");
     }
 
     [Fact]
@@ -394,6 +394,38 @@ public class ExternalIdentityBindingGAgentTests : IAsyncLifetime
 
         _agent.State.BindingId.Should().BeEmpty();
         _agent.State.RevokedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task HandleRevokeBinding_IgnoresStaleObservedBindingId()
+    {
+        var subject = SampleSubject();
+        await _agent.HandleCommitBinding(new CommitBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_old",
+            OwnerScopeId = "owner-user-1",
+        });
+        await _agent.HandleReplaceBinding(new ReplaceBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_new",
+            ExpectedPreviousBindingId = "bnd_old",
+            OwnerScopeId = "owner-user-1",
+            Reason = "channel_service_access_review",
+        });
+        var versionAfterReplace = _agent.EventSourcing!.CurrentVersion;
+
+        await _agent.HandleRevokeBinding(new RevokeBindingCommand
+        {
+            ExternalSubject = subject,
+            BindingId = "bnd_old",
+            Reason = "nyx_invalid_grant",
+        });
+
+        _agent.State.BindingId.Should().Be("bnd_new");
+        _agent.State.RevokedAt.Should().BeNull();
+        _agent.EventSourcing!.CurrentVersion.Should().Be(versionAfterReplace);
     }
 
     [Fact]
