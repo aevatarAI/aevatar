@@ -28,6 +28,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
     private readonly INyxIdConnectedServiceCapabilityIssuer? _capabilityIssuer;
     private readonly IExactRemoteSkillFetcher? _exactSkillFetcher;
     private readonly INyxIdRecommendedSkillRefCreator? _recommendedSkillRefCreator;
+    private readonly INyxIdClientCredentialsTokenSource? _clientCredentialsTokenSource;
     private readonly ILogger _logger;
 
     public ChannelNyxIdConnectedServiceInventoryToolSource(
@@ -37,7 +38,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         INyxIdConnectedServiceCapabilityIssuer? capabilityIssuer = null,
         ILogger<ChannelNyxIdConnectedServiceInventoryToolSource>? logger = null,
         IExactRemoteSkillFetcher? exactSkillFetcher = null,
-        INyxIdRecommendedSkillRefCreator? recommendedSkillRefCreator = null)
+        INyxIdRecommendedSkillRefCreator? recommendedSkillRefCreator = null,
+        INyxIdClientCredentialsTokenSource? clientCredentialsTokenSource = null)
     {
         _toolExecutionPort = toolExecutionPort ?? throw new ArgumentNullException(nameof(toolExecutionPort));
         _options = options;
@@ -45,6 +47,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         _capabilityIssuer = capabilityIssuer;
         _exactSkillFetcher = exactSkillFetcher;
         _recommendedSkillRefCreator = recommendedSkillRefCreator;
+        _clientCredentialsTokenSource = clientCredentialsTokenSource;
         _logger = logger ?? NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance;
     }
 
@@ -90,10 +93,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         if (_options is null || _apiClientFactory is null)
             return false;
 
-        if (IsRegistrationAgentKeyContext(context))
-            return true;
+        if (bindingId is not null)
+            return _capabilityIssuer is not null;
 
-        return bindingId is not null && _capabilityIssuer is not null;
+        return IsRegistrationAgentKeyContext(context);
     }
 
     private static bool IsRegistrationAgentKeyContext(AgentToolExecutionContext context) =>
@@ -111,70 +114,76 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             return InventoryFailure("inventory_capability_unavailable");
 
         var bindingId = Normalize(context.SenderBinding.BindingId);
-        if (bindingId is null)
+        if (bindingId is not null)
         {
-            if (!IsRegistrationAgentKeyContext(context))
+            if (_capabilityIssuer is null || !TryBuildSubject(context, out var subject))
                 return InventoryFailure("inventory_capability_unavailable");
 
-            return await ExecuteWithRegistrationAgentKeyAsync(context, context.Credentials.NyxIdAccessToken!, argumentsJson, ct)
-                .ConfigureAwait(false);
-        }
+            try
+            {
+                // A sender token is request-local and carries no durable binding proof.
+                // Revalidate the retained binding before every inventory read so a
+                // tool discovered for binding A cannot read with its token after the
+                // sender has moved to binding B. The issuer returns a fresh token for
+                // the exact current binding, and rejects a changed binding before
+                // token exchange.
+                var capability = await _capabilityIssuer
+                    .IssueByBindingIdAsync(subject, bindingId, ct)
+                    .ConfigureAwait(false);
+                var inventoryToken = Normalize(capability.AccessToken);
+                if (inventoryToken is null)
+                    return InventoryFailure("inventory_capability_unavailable");
 
-        if (_capabilityIssuer is null || !TryBuildSubject(context, out var subject))
-            return InventoryFailure("inventory_capability_unavailable");
-
-        try
-        {
-            // A sender token is request-local and carries no durable binding proof.
-            // Revalidate the retained binding before every inventory read so a
-            // tool discovered for binding A cannot read with its token after the
-            // sender has moved to binding B. The issuer returns a fresh token for
-            // the exact current binding, and rejects a changed binding before
-            // token exchange.
-            var capability = await _capabilityIssuer
-                .IssueByBindingIdAsync(subject, bindingId, ct)
-                .ConfigureAwait(false);
-            var inventoryToken = Normalize(capability.AccessToken);
-            if (inventoryToken is null)
+                return await ExecuteWithSenderTokenAsync(context, inventoryToken, argumentsJson, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (BindingRevokedException ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "NyxID connected-service inventory binding was revoked. subject={Platform}:{Tenant}:{User}",
+                    subject.Platform,
+                    subject.Tenant,
+                    subject.ExternalUserId);
+                return InventoryFailure("inventory_binding_revoked");
+            }
+            catch (BindingScopeMismatchException ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "NyxID connected-service inventory scope is unavailable. subject={Platform}:{Tenant}:{User}",
+                    subject.Platform,
+                    subject.Tenant,
+                    subject.ExternalUserId);
+                return InventoryFailure("inventory_scope_unavailable");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "NyxID connected-service inventory capability issue failed. subject={Platform}:{Tenant}:{User}",
+                    subject.Platform,
+                    subject.Tenant,
+                    subject.ExternalUserId);
                 return InventoryFailure("inventory_capability_unavailable");
+            }
+        }
 
-            return await ExecuteWithSenderTokenAsync(context, inventoryToken, argumentsJson, ct)
+        if (IsRegistrationAgentKeyContext(context))
+        {
+            return await ExecuteWithRegistrationAgentKeyAsync(
+                    context,
+                    context.Credentials.NyxIdAccessToken!,
+                    argumentsJson,
+                    ct)
                 .ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (BindingRevokedException ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "NyxID connected-service inventory binding was revoked. subject={Platform}:{Tenant}:{User}",
-                subject.Platform,
-                subject.Tenant,
-                subject.ExternalUserId);
-            return InventoryFailure("inventory_binding_revoked");
-        }
-        catch (BindingScopeMismatchException ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "NyxID connected-service inventory scope is unavailable. subject={Platform}:{Tenant}:{User}",
-                subject.Platform,
-                subject.Tenant,
-                subject.ExternalUserId);
-            return InventoryFailure("inventory_scope_unavailable");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "NyxID connected-service inventory capability issue failed. subject={Platform}:{Tenant}:{User}",
-                subject.Platform,
-                subject.Tenant,
-                subject.ExternalUserId);
-            return InventoryFailure("inventory_capability_unavailable");
-        }
+
+        return InventoryFailure("inventory_capability_unavailable");
     }
 
     private async Task<string> ExecuteWithSenderTokenAsync(
@@ -300,11 +309,44 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             return RecommendedSkillFailure("exact_skill_loader_unavailable");
 
         var bindingId = Normalize(context.SenderBinding.BindingId);
-        if (bindingId is null)
+        if (bindingId is not null)
         {
-            if (!IsRegistrationAgentKeyContext(context))
+            if (_capabilityIssuer is null || !TryBuildSubject(context, out var subject))
                 return RecommendedSkillFailure("inventory_capability_unavailable");
 
+            try
+            {
+                var capability = await _capabilityIssuer
+                    .IssueByBindingIdAsync(subject, bindingId, ct)
+                    .ConfigureAwait(false);
+                var token = Normalize(capability.AccessToken);
+                if (token is null)
+                    return RecommendedSkillFailure("inventory_capability_unavailable");
+
+                return await ExecuteRecommendedSkillLoadWithSenderTokenAsync(context, token, arguments, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (BindingRevokedException)
+            {
+                return RecommendedSkillFailure("inventory_binding_revoked");
+            }
+            catch (BindingScopeMismatchException)
+            {
+                return RecommendedSkillFailure("inventory_scope_unavailable");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "NyxID recommended skill capability issue failed");
+                return RecommendedSkillFailure("inventory_capability_unavailable");
+            }
+        }
+
+        if (IsRegistrationAgentKeyContext(context))
+        {
             return await ExecuteRecommendedSkillLoadWithRegistrationAgentKeyAsync(
                     context,
                     context.Credentials.NyxIdAccessToken!,
@@ -313,38 +355,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 .ConfigureAwait(false);
         }
 
-        if (_capabilityIssuer is null || !TryBuildSubject(context, out var subject))
-            return RecommendedSkillFailure("inventory_capability_unavailable");
-
-        try
-        {
-            var capability = await _capabilityIssuer
-                .IssueByBindingIdAsync(subject, bindingId, ct)
-                .ConfigureAwait(false);
-            var token = Normalize(capability.AccessToken);
-            if (token is null)
-                return RecommendedSkillFailure("inventory_capability_unavailable");
-
-            return await ExecuteRecommendedSkillLoadWithSenderTokenAsync(context, token, arguments, ct)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (BindingRevokedException)
-        {
-            return RecommendedSkillFailure("inventory_binding_revoked");
-        }
-        catch (BindingScopeMismatchException)
-        {
-            return RecommendedSkillFailure("inventory_scope_unavailable");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "NyxID recommended skill capability issue failed");
-            return RecommendedSkillFailure("inventory_capability_unavailable");
-        }
+        return RecommendedSkillFailure("inventory_capability_unavailable");
     }
 
     private async Task<string> ExecuteRecommendedSkillLoadWithSenderTokenAsync(
@@ -435,6 +446,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
     {
         var inventory = await ReadInventoryResultAsync(reader, token, inventoryReadAuthority, ct)
             .ConfigureAwait(false);
+        var ensureResult = await EnsureInventoryRecommendedSkillRefsAsync(inventory, ct).ConfigureAwait(false);
+        inventory = ensureResult.Inventory;
         var service = inventory.Instances.FirstOrDefault(instance =>
             string.Equals(instance.UserServiceId, arguments.UserServiceId, StringComparison.Ordinal));
         if (service is null)
@@ -446,6 +459,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             string.Equals(candidate.ManifestDigest, arguments.ManifestDigest, StringComparison.Ordinal));
         if (skillRef is null)
             return RecommendedSkillFailure("recommended_skill_ref_not_visible");
+        if (TryLoadGeneratedRecommendedSkill(ensureResult.CreatedSkills, arguments, service, out var generatedSkillJson))
+            return generatedSkillJson;
 
         var fetchResult = await exactSkillFetcher.FetchAsync(
             token,
@@ -506,49 +521,102 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         if (_recommendedSkillRefCreator is null)
             return EnsureRecommendedSkillRefsFailure("recommended_skill_ref_creator_unavailable");
 
+        var bindingId = Normalize(context.SenderBinding.BindingId);
+        if (bindingId is not null)
+        {
+            if (_capabilityIssuer is null || !TryBuildSubject(context, out var subject))
+                return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
+
+            try
+            {
+                var capability = await _capabilityIssuer
+                    .IssueByBindingIdAsync(subject, bindingId, ct)
+                    .ConfigureAwait(false);
+                var token = Normalize(capability.AccessToken);
+                if (token is null)
+                    return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
+
+                return await ExecuteEnsureRecommendedSkillRefsWithSenderTokenAsync(context, token, arguments, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (BindingRevokedException)
+            {
+                return EnsureRecommendedSkillRefsFailure("inventory_binding_revoked");
+            }
+            catch (BindingScopeMismatchException)
+            {
+                return EnsureRecommendedSkillRefsFailure("inventory_scope_unavailable");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "NyxID recommended skill ref ensure capability issue failed");
+                return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
+            }
+        }
+
         if (IsRegistrationAgentKeyContext(context))
         {
-            return await ExecuteEnsureRecommendedSkillRefsWithRegistrationAgentKeyAsync(
+            return await ExecuteEnsureRecommendedSkillRefsWithClientCredentialsAsync(
                     context,
-                    context.Credentials.NyxIdAccessToken!,
                     arguments,
                     ct)
                 .ConfigureAwait(false);
         }
 
-        var bindingId = Normalize(context.SenderBinding.BindingId);
-        if (bindingId is null || _capabilityIssuer is null || !TryBuildSubject(context, out var subject))
+        return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
+    }
+
+    private async Task<string> ExecuteEnsureRecommendedSkillRefsWithClientCredentialsAsync(
+        AgentToolExecutionContext context,
+        EnsureRecommendedSkillRefsArguments arguments,
+        CancellationToken ct)
+    {
+        if (_options is null || _apiClientFactory is null ||
+            _recommendedSkillRefCreator is null || _clientCredentialsTokenSource is null)
+        {
+            return EnsureRecommendedSkillRefsFailure("inventory_source_unavailable");
+        }
+
+        var token = Normalize(await _clientCredentialsTokenSource.GetAccessTokenAsync(ct).ConfigureAwait(false));
+        if (token is null)
             return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
 
-        try
+        var reader = new NyxIdConnectedServiceInventoryReader(
+            new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
+        var serviceAccountContext = context with
         {
-            var capability = await _capabilityIssuer
-                .IssueByBindingIdAsync(subject, bindingId, ct)
-                .ConfigureAwait(false);
-            var token = Normalize(capability.AccessToken);
-            if (token is null)
-                return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
-
-            return await ExecuteEnsureRecommendedSkillRefsWithSenderTokenAsync(context, token, arguments, ct)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (BindingRevokedException)
-        {
-            return EnsureRecommendedSkillRefsFailure("inventory_binding_revoked");
-        }
-        catch (BindingScopeMismatchException)
-        {
-            return EnsureRecommendedSkillRefsFailure("inventory_scope_unavailable");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "NyxID recommended skill ref ensure capability issue failed");
-            return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
-        }
+            CredentialSource = AgentToolCredentialSource.ServiceAccount,
+            DurableNyxIdCredential = null,
+            Credentials = new AgentToolCredentials(
+                token,
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: null,
+                NyxIdCredentialKind: AgentToolNyxIdCredentialKind.ProxyDelegation,
+                NyxIdCredentialAuthority: AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
+            Request = context.Request with
+            {
+                CallId = CreateRecommendedSkillRefsEnsureCallId(context.Request.CallId),
+            },
+        };
+        var outcome = await _toolExecutionPort.ExecuteAsync(
+            new AgentToolExecutionRequest(
+                new SenderEnsureRecommendedSkillRefsProvisionerTool(
+                    this,
+                    reader,
+                    _recommendedSkillRefCreator,
+                    token,
+                    InventoryReadAuthority.Caller,
+                    arguments),
+                "{}",
+                serviceAccountContext,
+                AgentToolApprovalContinuationMode.None,
+                ApprovalGrant: null),
+            ct).ConfigureAwait(false);
+        return outcome.ResultJson;
     }
 
     private async Task<string> ExecuteEnsureRecommendedSkillRefsWithSenderTokenAsync(
@@ -594,41 +662,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         return outcome.ResultJson;
     }
 
-    private async Task<string> ExecuteEnsureRecommendedSkillRefsWithRegistrationAgentKeyAsync(
-        AgentToolExecutionContext context,
-        string agentKey,
-        EnsureRecommendedSkillRefsArguments arguments,
-        CancellationToken ct)
-    {
-        if (_options is null || _apiClientFactory is null || _recommendedSkillRefCreator is null)
-            return EnsureRecommendedSkillRefsFailure("inventory_source_unavailable");
-
-        var reader = new NyxIdConnectedServiceInventoryReader(
-            new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
-        var registrationContext = context with
-        {
-            Request = context.Request with
-            {
-                CallId = CreateRecommendedSkillRefsEnsureCallId(context.Request.CallId),
-            },
-        };
-        var outcome = await _toolExecutionPort.ExecuteAsync(
-            new AgentToolExecutionRequest(
-                new SenderEnsureRecommendedSkillRefsProvisionerTool(
-                    this,
-                    reader,
-                    _recommendedSkillRefCreator,
-                    agentKey,
-                    InventoryReadAuthority.AgentKey,
-                    arguments),
-                "{}",
-                registrationContext,
-                AgentToolApprovalContinuationMode.None,
-                ApprovalGrant: null),
-            ct).ConfigureAwait(false);
-        return outcome.ResultJson;
-    }
-
     private async Task<string> EnsureRecommendedSkillRefsAsync(
         NyxIdConnectedServiceInventoryReader reader,
         INyxIdRecommendedSkillRefCreator recommendedSkillRefCreator,
@@ -652,12 +685,12 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                     created: false);
             }
 
-            var refs = await recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, ct)
+            var creationResult = await recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, ct)
                 .ConfigureAwait(false);
-            if (refs.Count == 0)
+            if (creationResult.Refs.Count == 0)
                 return EnsureRecommendedSkillRefsFailure("recommended_skill_ref_creation_failed");
 
-            return RecommendedSkillRefsEnsured(service, refs, created: true);
+            return RecommendedSkillRefsEnsured(service, creationResult, created: true);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -700,54 +733,58 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
 
         var context = AgentToolRequestContext.Current;
         if (context is null)
-            return OperationFailure(callId, "operation_context_unavailable");
+            return OperationFailure(callId, "operation_context_unavailable", arguments);
+
+        var bindingId = Normalize(context.SenderBinding.BindingId);
+        if (bindingId is not null)
+        {
+            if (_capabilityIssuer is null || !TryBuildSubject(context, out var subject))
+                return OperationFailure(callId, "inventory_capability_unavailable", arguments);
+
+            try
+            {
+                var capability = await _capabilityIssuer
+                    .IssueByBindingIdAsync(subject, bindingId, ct)
+                    .ConfigureAwait(false);
+                var token = Normalize(capability.AccessToken);
+                if (token is null)
+                    return OperationFailure(callId, "inventory_capability_unavailable", arguments);
+
+                var senderContext = ChannelConnectedServiceCredentialPolicy.Apply(
+                    context,
+                    token,
+                    registrationAgentKey: null);
+                _logger.LogInformation(
+                    "NyxID connected-service operation using sender binding credential. bindingIdPresent={BindingIdPresent} credentialSource={CredentialSource} credentialKind={CredentialKind} authority={CredentialAuthority}",
+                    true,
+                    senderContext.CredentialSource,
+                    senderContext.Credentials.NyxIdCredentialKind,
+                    senderContext.Credentials.NyxIdCredentialAuthority);
+                return await ExecuteOperationWithContextAsync(senderContext, callId, arguments, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (BindingRevokedException)
+            {
+                return OperationFailure(callId, "inventory_binding_revoked", arguments);
+            }
+            catch (BindingScopeMismatchException)
+            {
+                return OperationFailure(callId, "inventory_scope_unavailable", arguments);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "NyxID connected-service operation capability issue failed");
+                return OperationFailure(callId, "inventory_capability_unavailable", arguments);
+            }
+        }
 
         if (IsRegistrationAgentKeyContext(context))
             return await ExecuteOperationWithContextAsync(context, callId, arguments, ct).ConfigureAwait(false);
 
-        var bindingId = Normalize(context.SenderBinding.BindingId);
-        if (bindingId is null || _capabilityIssuer is null || !TryBuildSubject(context, out var subject))
-            return OperationFailure(callId, "inventory_capability_unavailable");
-
-        try
-        {
-            var capability = await _capabilityIssuer
-                .IssueByBindingIdAsync(subject, bindingId, ct)
-                .ConfigureAwait(false);
-            var token = Normalize(capability.AccessToken);
-            if (token is null)
-                return OperationFailure(callId, "inventory_capability_unavailable");
-
-            var senderContext = context with
-            {
-                CredentialSource = AgentToolCredentialSource.BearerToken,
-                DurableNyxIdCredential = null,
-                Credentials = new AgentToolCredentials(
-                    token,
-                    token,
-                    SenderNyxIdAccessToken: token,
-                    NyxIdCredentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
-                    NyxIdCredentialAuthority: AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
-            };
-            return await ExecuteOperationWithContextAsync(senderContext, callId, arguments, ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (BindingRevokedException)
-        {
-            return OperationFailure(callId, "inventory_binding_revoked");
-        }
-        catch (BindingScopeMismatchException)
-        {
-            return OperationFailure(callId, "inventory_scope_unavailable");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "NyxID connected-service operation capability issue failed");
-            return OperationFailure(callId, "inventory_capability_unavailable");
-        }
+        return OperationFailure(callId, "inventory_capability_unavailable", arguments);
     }
 
     private async Task<AgentToolTerminalOutcome> ExecuteOperationWithContextAsync(
@@ -757,7 +794,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         CancellationToken ct)
     {
         if (_options is null || _apiClientFactory is null)
-            return OperationFailure(callId, "operation_source_unavailable");
+            return OperationFailure(callId, "operation_source_unavailable", arguments);
 
         try
         {
@@ -786,9 +823,18 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                     "nyxid_invoke_operation",
                     ct)
                 .ConfigureAwait(false);
-            return result.IsSuccess && result.Outcome is not null
-                ? result.Outcome
-                : OperationFailure(callId, result.FailureCode);
+            if (result.IsSuccess && result.Outcome is not null)
+                return result.Outcome;
+
+            _logger.LogWarning(
+                "NyxID connected-service operation invocation returned failure. failureCode={FailureCode} userServiceId={UserServiceId} serviceSlug={ServiceSlug} operationId={OperationId} hasDocumentRequest={HasDocumentRequest} hasRawRequest={HasRawRequest}",
+                result.FailureCode,
+                arguments.UserServiceId,
+                arguments.ServiceSlug,
+                arguments.OperationId,
+                arguments.DocumentRequest is not null,
+                arguments.RawRequest is not null);
+            return OperationFailure(callId, result.FailureCode, arguments);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -797,7 +843,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "NyxID connected-service operation invocation failed");
-            return OperationFailure(callId, "operation_source_unavailable");
+            return OperationFailure(callId, "operation_source_unavailable", arguments);
         }
     }
 
@@ -859,8 +905,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         {
             var result = await ReadInventoryResultAsync(reader, token, inventoryReadAuthority, ct)
                 .ConfigureAwait(false);
-            result = await EnsureInventoryRecommendedSkillRefsAsync(result, ct).ConfigureAwait(false);
-            return ResultFormatter.Format(result);
+            var ensureResult = await EnsureInventoryRecommendedSkillRefsAsync(result, ct).ConfigureAwait(false);
+            return ResultFormatter.Format(ensureResult.Inventory);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -878,23 +924,24 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         }
     }
 
-    private async Task<NyxIdServiceInventoryResult> EnsureInventoryRecommendedSkillRefsAsync(
+    private async Task<InventoryRecommendedSkillRefEnsureResult> EnsureInventoryRecommendedSkillRefsAsync(
         NyxIdServiceInventoryResult inventory,
         CancellationToken ct)
     {
         if (_recommendedSkillRefCreator is null || inventory.Instances.Count == 0)
-            return inventory;
+            return new InventoryRecommendedSkillRefEnsureResult(inventory, []);
 
         var updated = false;
+        var createdSkills = new List<NyxIdCreatedRecommendedSkill>();
         foreach (var service in inventory.Instances)
         {
             if (service.RecommendedSkillRefs.Count > 0)
                 continue;
 
-            IReadOnlyList<NyxIdRecommendedSkillRef> refs;
+            NyxIdRecommendedSkillRefCreationResult creationResult;
             try
             {
-                refs = await _recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, ct)
+                creationResult = await _recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, ct)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -911,20 +958,65 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 continue;
             }
 
-            if (refs.Count == 0)
+            if (creationResult.Refs.Count == 0)
                 continue;
 
-            service.RecommendedSkillRefs.Add(refs.Select(static skillRef => skillRef.Clone()));
+            service.RecommendedSkillRefs.Add(creationResult.Refs.Select(static skillRef => skillRef.Clone()));
+            createdSkills.AddRange(creationResult.CreatedSkills);
             updated = true;
         }
 
         if (!updated)
-            return inventory;
+            return new InventoryRecommendedSkillRefEnsureResult(inventory, createdSkills);
 
         inventory.RecommendedSkillCatalog.Clear();
         inventory.RecommendedSkillCatalog.Add(inventory.Instances.SelectMany(BuildRecommendedSkillCatalogEntries));
-        return inventory;
+        return new InventoryRecommendedSkillRefEnsureResult(inventory, createdSkills);
     }
+
+
+    private static bool TryLoadGeneratedRecommendedSkill(
+        IReadOnlyList<NyxIdCreatedRecommendedSkill> createdSkills,
+        RecommendedSkillArguments arguments,
+        NyxIdServiceInstance service,
+        out string resultJson)
+    {
+        var createdSkill = createdSkills.FirstOrDefault(skill => SameRecommendedSkillRef(skill.Ref, arguments));
+        if (createdSkill is null)
+        {
+            resultJson = string.Empty;
+            return false;
+        }
+
+        resultJson = JsonSerializer.Serialize(new
+        {
+            result_type = "nyxid_recommended_skill_load",
+            status = "success",
+            loaded = true,
+            service_instance_id = service.UserServiceId,
+            service_label = service.Label,
+            skill = new
+            {
+                source = "ornn",
+                skill_id = createdSkill.Ref.SkillId,
+                literal_version = createdSkill.Ref.LiteralVersion,
+                name = createdSkill.Name,
+                publisher_id = createdSkill.PublisherId,
+                manifest_digest = createdSkill.Ref.ManifestDigest,
+                recommended_name = createdSkill.Ref.RecommendationName,
+                revision = createdSkill.Ref.Revision,
+            },
+            main_document = createdSkill.MainDocument,
+            resources = Array.Empty<object>(),
+        });
+        return true;
+    }
+
+    private static bool SameRecommendedSkillRef(NyxIdRecommendedSkillRef skillRef, RecommendedSkillArguments arguments) =>
+        skillRef.Source == NyxIdRecommendedSkillSource.Ornn &&
+        string.Equals(skillRef.SkillId, arguments.SkillId, StringComparison.Ordinal) &&
+        string.Equals(skillRef.LiteralVersion, arguments.LiteralVersion, StringComparison.Ordinal) &&
+        string.Equals(skillRef.ManifestDigest, arguments.ManifestDigest, StringComparison.Ordinal);
 
     private static IEnumerable<NyxIdRecommendedSkillCatalogEntry> BuildRecommendedSkillCatalogEntries(
         NyxIdServiceInstance service)
@@ -1257,14 +1349,22 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         }
     }
 
-    private static AgentToolTerminalOutcome OperationFailure(string callId, string errorCode)
+    private static AgentToolTerminalOutcome OperationFailure(
+        string callId,
+        string errorCode,
+        OperationArguments? arguments = null)
     {
+        var targetService = OperationTargetService(arguments);
+        var errorMessage = OperationFailureMessage(errorCode, targetService);
         var resultJson = JsonSerializer.Serialize(new
         {
             result_type = "nyxid_connected_operation_invoke",
             status = "failed",
             invoked = false,
             error = errorCode,
+            message = errorMessage,
+            user_service_id = arguments?.UserServiceId,
+            service_slug = arguments?.ServiceSlug,
         });
         return new AgentToolTerminalOutcome(resultJson, new AgentToolReceipt
         {
@@ -1273,10 +1373,42 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             Status = AgentToolReceiptStatus.Error,
             ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
             ErrorCode = errorCode,
-            ErrorMessage = "The connected-service operation could not be invoked.",
+            ErrorMessage = errorMessage,
             ResultJson = resultJson,
         });
     }
+
+    private static string OperationTargetService(OperationArguments? arguments) =>
+        FirstNonEmpty(arguments?.ServiceSlug, arguments?.UserServiceId);
+
+    private static string OperationFailureMessage(string errorCode, string targetService) => errorCode switch
+    {
+        "operation_not_visible" when !string.IsNullOrWhiteSpace(targetService) =>
+            $"The requested connected-service operation is not visible for service '{targetService}'. Verify the service is admitted for this channel, the operation id is current, and the service exposes the operation.",
+        "operation_not_visible" =>
+            "The requested connected-service operation is not visible for the selected NyxID service. Verify the service admission, operation id, and service exposure policy.",
+        "operation_ambiguous" when !string.IsNullOrWhiteSpace(targetService) =>
+            $"The requested connected-service operation matched multiple NyxID service instances for service '{targetService}'. Use user_service_id to select one instance.",
+        "operation_ambiguous" =>
+            "The requested connected-service operation matched multiple NyxID service instances.",
+        "operation_context_unavailable" =>
+            "The connected-service operation credential context is unavailable.",
+        "document_request_not_admitted" =>
+            "The requested document-guided operation is not admitted by the selected recommended skill ref.",
+        "document_request_invalid" =>
+            "The requested document-guided operation request is invalid.",
+        "raw_request_invalid" =>
+            "The delegated connected-service operation request is invalid.",
+        "inventory_capability_unavailable" =>
+            "The connected-service operation inventory capability is unavailable.",
+        "inventory_binding_revoked" =>
+            "The connected-service operation binding was revoked.",
+        "inventory_scope_unavailable" =>
+            "The connected-service operation binding scope is unavailable.",
+        "invalid_arguments" =>
+            "The connected-service operation arguments are invalid.",
+        _ => "The connected-service operation could not be invoked.",
+    };
 
     private static string InventoryFailure(string errorCode) =>
         JsonSerializer.Serialize(new
@@ -1317,6 +1449,24 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             service_slug = service.DisplaySlug,
             catalog_service_slug = service.CatalogServiceSlug,
             recommended_skill_refs = refs.Select(ToRecommendedSkillRefResult).ToArray(),
+        });
+
+    private static string RecommendedSkillRefsEnsured(
+        NyxIdServiceInstance service,
+        NyxIdRecommendedSkillRefCreationResult creationResult,
+        bool created) =>
+        JsonSerializer.Serialize(new
+        {
+            result_type = "nyxid_recommended_skill_refs_ensure",
+            status = "success",
+            ensured = true,
+            created,
+            service_instance_id = service.UserServiceId,
+            service_slug = service.DisplaySlug,
+            catalog_service_slug = service.CatalogServiceSlug,
+            recommended_skill_refs = creationResult.Refs.Select(ToRecommendedSkillRefResult).ToArray(),
+            recommended_skill_ref_persistence_status = creationResult.PersistenceStatus.ToString(),
+            recommended_skill_ref_persistence_failure_code = creationResult.PersistenceFailureCode,
         });
 
     private static object ToRecommendedSkillRefResult(NyxIdRecommendedSkillRef skillRef) => new
@@ -1460,6 +1610,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
     private sealed record EnsureRecommendedSkillRefsArguments(
         string? UserServiceId,
         string? ServiceSlug);
+
+    private sealed record InventoryRecommendedSkillRefEnsureResult(
+        NyxIdServiceInventoryResult Inventory,
+        IReadOnlyList<NyxIdCreatedRecommendedSkill> CreatedSkills);
 
     private sealed class SenderConnectedServiceOperationTool(ChannelNyxIdConnectedServiceInventoryToolSource source) : IAgentTool
     {

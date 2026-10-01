@@ -2795,7 +2795,7 @@ public sealed partial class ChannelConversationTurnRunner : IConversationTurnRun
                 },
             }).ToPayload();
             var senderAccessToken = allowSenderCredentialIssuance
-                ? await TryIssueSenderLlmAccessTokenAsync(senderBinding.Subject, ct).ConfigureAwait(false)
+                ? await TryIssueSenderLlmAccessTokenAsync(senderBinding, ct).ConfigureAwait(false)
                 : null;
             if (!string.IsNullOrWhiteSpace(senderAccessToken))
             {
@@ -3001,13 +3001,14 @@ public sealed partial class ChannelConversationTurnRunner : IConversationTurnRun
     }
 
     private async Task<string?> TryIssueSenderLlmAccessTokenAsync(
-        ExternalSubjectRef subject,
+        ResolvedSenderBinding senderBinding,
         CancellationToken ct)
     {
         var broker = _capabilityBroker;
         if (broker is null)
             return null;
 
+        var subject = senderBinding.Subject;
         try
         {
             var handle = await broker
@@ -3035,7 +3036,7 @@ public sealed partial class ChannelConversationTurnRunner : IConversationTurnRun
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
-            TriggerBindingReconcile(subject);
+            TriggerBindingReconcile(subject, senderBinding.BindingId);
             return null;
         }
         catch (BindingServiceAccessMismatchException ex)
@@ -3062,6 +3063,7 @@ public sealed partial class ChannelConversationTurnRunner : IConversationTurnRun
 
     private void TriggerBindingReconcile(
         ExternalSubjectRef subject,
+        string bindingId,
         string reason = "nyx_invalid_grant")
     {
         var reconciler = _bindingRevocationReconciler;
@@ -3069,12 +3071,13 @@ public sealed partial class ChannelConversationTurnRunner : IConversationTurnRun
             return;
 
         var subjectSnapshot = subject.Clone();
+        var bindingIdSnapshot = bindingId.Trim();
         _ = Task.Run(async () =>
         {
             try
             {
                 await reconciler
-                    .ReconcileRevokedAsync(subjectSnapshot, reason, CancellationToken.None)
+                    .ReconcileRevokedBindingAsync(subjectSnapshot, bindingIdSnapshot, reason, CancellationToken.None)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

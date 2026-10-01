@@ -63,9 +63,26 @@ public sealed class BindingRevocationReconcilerTests
 
         var revoke = envelope.Payload.Unpack<RevokeBindingCommand>();
         revoke.Reason.Should().Be("nyx_invalid_grant");
+        revoke.BindingId.Should().BeEmpty();
         revoke.ExternalSubject.Platform.Should().Be("lark");
         revoke.ExternalSubject.Tenant.Should().Be("ou_tenant_x");
         revoke.ExternalSubject.ExternalUserId.Should().Be("ou_user_y");
+    }
+
+    [Fact]
+    public async Task ReconcileRevokedBindingAsync_DispatchesGuardedRevokeBindingCommand()
+    {
+        var dispatchPort = new RecordingActorDispatchPort();
+        var reconciler = new BindingRevocationReconciler(
+            dispatchPort,
+            NullLogger<BindingRevocationReconciler>.Instance);
+        var subject = Subject();
+
+        await reconciler.ReconcileRevokedBindingAsync(subject, " bnd_observed ", "nyx_invalid_grant", CancellationToken.None);
+
+        var revoke = dispatchPort.Dispatched.Should().ContainSingle().Which.Envelope.Payload.Unpack<RevokeBindingCommand>();
+        revoke.Reason.Should().Be("nyx_invalid_grant");
+        revoke.BindingId.Should().Be("bnd_observed");
     }
 
     [Fact]

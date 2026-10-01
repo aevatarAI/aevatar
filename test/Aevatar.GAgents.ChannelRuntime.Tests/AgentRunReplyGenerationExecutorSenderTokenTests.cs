@@ -92,7 +92,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
     }
 
     [Fact]
-    public async Task BuildInitialStepState_WithRegistrationAgentKeyModeAndSenderBinding_UsesSenderForLlmAndConnectedServices()
+    public async Task BuildInitialStepState_WithRegistrationAgentKeyModeAndSenderBinding_UsesAgentKeyForLlmAndSenderForConnectedServices()
     {
         var vault = new InMemorySecretVault();
         var stored = (await vault.PutAsync(new StoreSecretRequest(
@@ -125,13 +125,13 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             CancellationToken.None);
 
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("fresh-sender-token");
-        generator.CapturedLlmControl.NyxIdOrgToken.Should().Be("fresh-sender-token");
-        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("registration-agent-key");
+        generator.CapturedLlmControl.NyxIdOrgToken.Should().BeNull();
+        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().BeNull();
 
         var control = AgentRunReplyStepMappers.LlmControlFromProto(state);
-        control.NyxIdAccessToken.Should().Be("fresh-sender-token");
-        control.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        control.NyxIdAccessToken.Should().Be("registration-agent-key");
+        control.SenderNyxIdAccessToken.Should().BeNull();
 
         generator.CapturedToolContext.Should().NotBeNull();
         generator.CapturedToolContext!.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
@@ -146,6 +146,84 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         toolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
         toolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WithRegistrationAgentKeyModeAndSenderBinding_RevalidatesWithSenderBearer()
+    {
+        var capabilityIssuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
+        capabilityIssuer
+            .IssueByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                SenderBindingId,
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CapabilityHandle { AccessToken = "fresh-sender-token" }));
+        var executor = CreateExecutor(
+            new EchoStepPlanReplyGenerator(),
+            broker: null,
+            Substitute.For<IBindingRevocationReconciler>(),
+            connectedServiceCapabilityIssuer: capabilityIssuer);
+        var request = BuildRequest(
+            senderBindingId: SenderBindingId,
+            senderTenant: "tenant-authority-alpha",
+            credentialSourceMode: ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey).Request;
+        var toolCall = new AgentRunToolCall
+        {
+            Id = "call-1",
+            Name = "nyxid_invoke_operation",
+            ArgumentsJson = "{}",
+        };
+        var staleAgentKeyContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext) with
+        {
+            CredentialSource = AgentToolCredentialSource.ChannelRegistration,
+            Credentials = new AgentToolCredentials(
+                "registration-agent-key",
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: null,
+                NyxIdCredentialKind: AgentToolNyxIdCredentialKind.AgentKey,
+                SourceReadableNyxIdAccessToken: null,
+                NyxIdCredentialAuthority: AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
+        };
+        AgentToolExecutionContext? executedContext = null;
+        var authorizedStep = new AgentRunAuthorizedToolStep(
+            "run-1",
+            request.CorrelationId,
+            attempt: 1,
+            stepIndex: 2,
+            [toolCall],
+            staleAgentKeyContext,
+            (context, _) =>
+            {
+                executedContext = context;
+                return Task.FromResult(new AgentRunToolStepResult { AdvanceRound = true });
+            });
+        var stepState = new AgentRunReplyStepState
+        {
+            RunId = "run-1",
+            CorrelationId = request.CorrelationId,
+            Attempt = 1,
+            NextStepIndex = 2,
+            ToolContext = staleAgentKeyContext.ToPayload(),
+        };
+        stepState.PendingToolCalls.Add(toolCall.Clone());
+
+        await executor.BuildToolStepContinuationAsync(
+            new AgentRunReplyStepExecutionRequest(
+                "run-1",
+                "conversation-actor",
+                Attempt: 1,
+                StepIndex: 2,
+                request,
+                stepState),
+            authorizedStep,
+            CancellationToken.None);
+
+        executedContext.Should().NotBeNull();
+        executedContext!.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
+        executedContext.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        executedContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        executedContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be("fresh-sender-token");
+        executedContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
     }
 
     [Fact]
@@ -412,7 +490,8 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         IBindingRevocationReconciler? reconciler,
         INyxIdRelayScopeResolver? scopeResolver = null,
         IUserConfigQueryPort? userConfigQueryPort = null,
-        ISecretVault? secretVault = null) =>
+        ISecretVault? secretVault = null,
+        INyxIdConnectedServiceCapabilityIssuer? connectedServiceCapabilityIssuer = null) =>
         new(
             Substitute.For<IActorDispatchPort>(),
             generator,
@@ -424,7 +503,8 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             timeProvider: null,
             capabilityBroker: broker,
             bindingRevocationReconciler: reconciler,
-            secretVault: secretVault);
+            secretVault: secretVault,
+            connectedServiceCapabilityIssuer: connectedServiceCapabilityIssuer);
 
     private static AgentRunReplyGenerationExecutionRequest BuildRequest(
         string? senderBindingId,

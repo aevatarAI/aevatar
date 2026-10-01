@@ -55,6 +55,11 @@ message RevokeBindingCommand {
   // Free-form reason for audit (e.g. "user_unbind", "nyx_invalid_grant",
   // "admin_revoke"). Intended for audit log only — not surfaced to senders.
   string reason = 2;
+  // Optional compare-and-swap guard for observed upstream revocations. Empty
+  // means revoke the current binding (explicit /unbind, CAE webhook). When set,
+  // the actor revokes only if its active binding still equals this value, so a
+  // stale invalid_grant observation cannot clear a newer replacement binding.
+  string binding_id = 3;
 }
 
 // Issued after a fresh authorization-code exchange returns a verified binding
