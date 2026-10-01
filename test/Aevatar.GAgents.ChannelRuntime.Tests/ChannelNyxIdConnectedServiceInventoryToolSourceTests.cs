@@ -1608,6 +1608,138 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     [Fact]
+    public async Task LoadRecommendedSkillAsync_WhenExactRefIsNotFound_RegeneratesAndReturnsGeneratedDocument()
+    {
+        var staleDigest = "sha256:" + new string('0', 64);
+        var regeneratedRef = new NyxIdRecommendedSkillRef
+        {
+            Source = NyxIdRecommendedSkillSource.Ornn,
+            SkillId = "22222222-2222-2222-2222-222222222222",
+            LiteralVersion = "2.0",
+            ManifestDigest = "sha256:" + new string('2', 64),
+            DisplayName = "Calendar Operator",
+            RecommendationName = "calendar-default",
+            Revision = "rev-created",
+        };
+        var handler = new InventoryHandler { KeysResponse = KeysWithRecommendedSkill(staleDigest) };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var generatedSkill = new NyxIdCreatedRecommendedSkill(
+            regeneratedRef.Clone(),
+            "Calendar Operator",
+            "publisher-alpha",
+            "# Calendar Operator\n\nUse nyxid_invoke_operation.");
+        var creator = new RecordingRecommendedSkillRefCreator(
+            [regeneratedRef],
+            [generatedSkill]);
+        var fetcher = new RecordingExactFetcher(
+            ExactRemoteSkillFetchResult.Failed(ExactRemoteSkillFetchFailureCode.NotFound));
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>(),
+            exactSkillFetcher: fetcher,
+            recommendedSkillRefCreator: creator);
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync($$"""
+            {
+              "user_service_id":"user-service-1",
+              "source":"ornn",
+              "skill_id":"11111111-1111-1111-1111-111111111111",
+              "literal_version":"1.2",
+              "manifest_digest":"{{staleDigest}}"
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("status").GetString().Should().Be("success");
+        document.RootElement.GetProperty("skill").GetProperty("skill_id").GetString()
+            .Should().Be(regeneratedRef.SkillId);
+        document.RootElement.GetProperty("main_document").GetString()
+            .Should().Contain("Calendar Operator");
+        fetcher.CallCount.Should().Be(1);
+        creator.CallCount.Should().Be(1);
+        creator.ObservedInstance!.RecommendedSkillRefs.Should().ContainSingle(skillRef =>
+            skillRef.SkillId == regeneratedRef.SkillId);
+    }
+
+    [Fact]
+    public async Task LoadRecommendedSkillAsync_WhenExactRefIsNotFoundAndRegenerationIsEmpty_ReturnsCreationFailure()
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithRecommendedSkill("sha256:" + new string('0', 64)),
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var creator = new RecordingRecommendedSkillRefCreator([]);
+        var fetcher = new RecordingExactFetcher(
+            ExactRemoteSkillFetchResult.Failed(ExactRemoteSkillFetchFailureCode.NotFound));
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>(),
+            exactSkillFetcher: fetcher,
+            recommendedSkillRefCreator: creator);
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync("""
+            {
+              "user_service_id":"user-service-1",
+              "source":"ornn",
+              "skill_id":"11111111-1111-1111-1111-111111111111",
+              "literal_version":"1.2",
+              "manifest_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString()
+            .Should().Be("recommended_skill_ref_creation_failed");
+        creator.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task LoadRecommendedSkillAsync_WhenExactRefIsAccessDenied_DoesNotRegenerate()
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithRecommendedSkill("sha256:" + new string('0', 64)),
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var creator = new RecordingRecommendedSkillRefCreator([]);
+        var fetcher = new RecordingExactFetcher(
+            ExactRemoteSkillFetchResult.Failed(ExactRemoteSkillFetchFailureCode.AccessDenied));
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>(),
+            exactSkillFetcher: fetcher,
+            recommendedSkillRefCreator: creator);
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync("""
+            {
+              "user_service_id":"user-service-1",
+              "source":"ornn",
+              "skill_id":"11111111-1111-1111-1111-111111111111",
+              "literal_version":"1.2",
+              "manifest_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("failure_code").GetString()
+            .Should().Be(nameof(ExactRemoteSkillFetchFailureCode.AccessDenied));
+        creator.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task LoadRecommendedSkillAsync_WhenRefIsNotVisible_DoesNotFetchExactSkill()
     {
         var handler = new InventoryHandler { KeysResponse = KeysWithRecommendedSkill("sha256:" + new string('0', 64)) };
@@ -2055,7 +2187,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         }
     }
 
-    private sealed class RecordingRecommendedSkillRefCreator(IReadOnlyList<NyxIdRecommendedSkillRef> refs)
+    private sealed class RecordingRecommendedSkillRefCreator(
+        IReadOnlyList<NyxIdRecommendedSkillRef> refs,
+        IReadOnlyList<NyxIdCreatedRecommendedSkill>? createdSkills = null)
         : INyxIdRecommendedSkillRefCreator
     {
         public int CallCount { get; private set; }
@@ -2069,7 +2203,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             ObservedInstance = instance;
             return Task.FromResult(new NyxIdRecommendedSkillRefCreationResult(
                 refs,
-                [],
+                createdSkills ?? [],
                 refs.Count == 0
                     ? NyxIdRecommendedSkillRefPersistenceStatus.EmptyInput
                     : NyxIdRecommendedSkillRefPersistenceStatus.Succeeded,
