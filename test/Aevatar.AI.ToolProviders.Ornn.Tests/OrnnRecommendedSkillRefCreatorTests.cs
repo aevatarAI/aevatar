@@ -19,11 +19,12 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var creator = CreateCreator(handler);
         var instance = ReadyInstance();
 
-        var refs = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
-        var refsAgain = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
 
-        refsAgain.Should().BeEquivalentTo(refs);
-        var skillRef = refs.Should().ContainSingle().Subject;
+        resultAgain.Refs.Should().BeEquivalentTo(result.Refs);
+        result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.Succeeded);
+        var skillRef = result.Refs.Should().ContainSingle().Subject;
         skillRef.Source.Should().Be(NyxIdRecommendedSkillSource.Ornn);
         skillRef.SkillId.Should().Be("33333333-3333-3333-3333-333333333333");
         skillRef.LiteralVersion.Should().Be("1.0");
@@ -71,9 +72,10 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var handler = new CapturingHandler { ConflictOnPublish = true };
         var creator = CreateCreator(handler);
 
-        var refs = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
 
-        var skillRef = refs.Should().ContainSingle().Subject;
+        result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.Succeeded);
+        var skillRef = result.Refs.Should().ContainSingle().Subject;
         skillRef.Source.Should().Be(NyxIdRecommendedSkillSource.Ornn);
         skillRef.SkillId.Should().Be("44444444-4444-4444-4444-444444444444");
         skillRef.LiteralVersion.Should().Be("1.0");
@@ -92,19 +94,22 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
     }
 
     [Fact]
-    public async Task CreateRecommendedSkillRefsAsync_CacheHitWithNyxIdUpdateFailure_ReturnsEmptyWithoutRepublishing()
+    public async Task CreateRecommendedSkillRefsAsync_CacheHitWithNyxIdUpdateFailure_ReturnsCreatedRefsWithoutRepublishing()
     {
         var handler = new CapturingHandler();
         var creator = CreateCreator(handler);
         var instance = ReadyInstance();
-        var refs = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
         handler.ClearRecommendedSkillRefs();
         handler.FailUpdate = true;
 
-        var refsAgain = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
 
-        refs.Should().ContainSingle();
-        refsAgain.Should().BeEmpty();
+        result.Refs.Should().ContainSingle();
+        resultAgain.Refs.Should().ContainSingle();
+        resultAgain.CreatedSkills.Should().ContainSingle()
+            .Which.MainDocument.Should().Contain("nyxid_invoke_operation");
+        resultAgain.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.WriteDenied);
         handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")
             .Should().ContainSingle();
         handler.Requests.Where(request => request.Method == HttpMethod.Get && request.Path == "/api/v1/keys/us-personal")
@@ -114,16 +119,19 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
     }
 
     [Fact]
-    public async Task CreateRecommendedSkillRefsAsync_WhenNyxIdReadFails_ReturnsEmptyWithoutDirectWriteOrRepublishing()
+    public async Task CreateRecommendedSkillRefsAsync_WhenNyxIdReadFails_ReturnsCreatedRefsWithoutDirectWriteOrRepublishing()
     {
         var handler = new CapturingHandler { FailRead = true };
         var creator = CreateCreator(handler);
 
-        var refs = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
-        var refsAgain = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
 
-        refs.Should().BeEmpty();
-        refsAgain.Should().BeEmpty();
+        result.Refs.Should().ContainSingle();
+        result.CreatedSkills.Should().ContainSingle()
+            .Which.MainDocument.Should().Contain("nyxid_invoke_operation");
+        resultAgain.Refs.Should().ContainSingle();
+        result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.ReadDenied);
         handler.Requests.Should().HaveCount(6);
         handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")
             .Should().ContainSingle();
@@ -134,16 +142,20 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
     }
 
     [Fact]
-    public async Task CreateRecommendedSkillRefsAsync_WhenNyxIdUpdateFails_ReturnsEmptyWithoutRepublishing()
+    public async Task CreateRecommendedSkillRefsAsync_WhenNyxIdUpdateFails_ReturnsCreatedRefsWithoutRepublishing()
     {
         var handler = new CapturingHandler { FailUpdate = true };
         var creator = CreateCreator(handler);
 
-        var refs = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
-        var refsAgain = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
 
-        refs.Should().BeEmpty();
-        refsAgain.Should().BeEmpty();
+        result.Refs.Should().ContainSingle();
+        result.CreatedSkills.Should().ContainSingle()
+            .Which.MainDocument.Should().Contain("nyxid_invoke_operation");
+        result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.WriteDenied);
+        resultAgain.Refs.Should().ContainSingle();
+        resultAgain.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.WriteDenied);
         handler.Requests.Should().HaveCount(8);
         handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")
             .Should().ContainSingle();
@@ -159,9 +171,9 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var instance = ReadyInstance();
         instance.CatalogServiceSlug = "api-calendar";
 
-        var refs = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
 
-        refs.Should().BeEmpty();
+        result.Refs.Should().BeEmpty();
         handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")
             .Should().BeEmpty();
     }

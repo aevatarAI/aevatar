@@ -30,7 +30,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         _logger = logger ?? NullLogger<OrnnRecommendedSkillRefCreator>.Instance;
     }
 
-    public async Task<IReadOnlyList<NyxIdRecommendedSkillRef>> CreateRecommendedSkillRefsAsync(
+    public async Task<NyxIdRecommendedSkillRefCreationResult> CreateRecommendedSkillRefsAsync(
         NyxIdServiceInstance instance,
         CancellationToken ct)
     {
@@ -41,7 +41,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         {
             var token = await _tokenSource.GetAccessTokenAsync(ct).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(token))
-                return [];
+                return NyxIdRecommendedSkillRefCreationResult.Empty();
 
             var generatedSkill = await _skillGenerator
                 .GenerateAsync(token, instance, ct)
@@ -51,25 +51,25 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                 _logger.LogWarning(
                     "NyxID recommended skill generation found no operation contracts for catalog slug {CatalogServiceSlug}",
                     instance.CatalogServiceSlug);
-                return [];
+                return NyxIdRecommendedSkillRefCreationResult.Empty();
             }
 
             var cacheKey = BuildCacheKey(instance, generatedSkill);
             if (_createdRefs.TryGetValue(cacheKey, out var cachedRefs))
-                return await PersistCreatedRefsAsync(token, instance, cachedRefs, ct).ConfigureAwait(false);
+                return await PersistCreatedRefsAsync(token, instance, cachedRefs, generatedSkill, ct).ConfigureAwait(false);
 
             var request = BuildPublishRequest(generatedSkill);
-            var result = await _publishingService.PublishAsync(token, request, ct).ConfigureAwait(false);
-            if (!result.IsSuccess ||
-                string.IsNullOrWhiteSpace(result.Guid) ||
-                string.IsNullOrWhiteSpace(result.Version) ||
-                string.IsNullOrWhiteSpace(result.SkillHash))
+            var publishResult = await _publishingService.PublishAsync(token, request, ct).ConfigureAwait(false);
+            if (!publishResult.IsSuccess ||
+                string.IsNullOrWhiteSpace(publishResult.Guid) ||
+                string.IsNullOrWhiteSpace(publishResult.Version) ||
+                string.IsNullOrWhiteSpace(publishResult.SkillHash))
             {
                 _logger.LogWarning(
                     "Ornn recommended skill creation failed for catalog slug {CatalogServiceSlug} with status {Status}",
                     instance.CatalogServiceSlug,
-                    result.Status);
-                return [];
+                    publishResult.Status);
+                return NyxIdRecommendedSkillRefCreationResult.Empty();
             }
 
             var refs = new[]
@@ -77,17 +77,16 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                 new NyxIdRecommendedSkillRef
                 {
                     Source = NyxIdRecommendedSkillSource.Ornn,
-                    SkillId = result.Guid.Trim(),
-                    LiteralVersion = result.Version.Trim(),
-                    ManifestDigest = result.SkillHash.Trim(),
+                    SkillId = publishResult.Guid.Trim(),
+                    LiteralVersion = publishResult.Version.Trim(),
+                    ManifestDigest = publishResult.SkillHash.Trim(),
                     DisplayName = generatedSkill.DisplayName,
                     RecommendationName = generatedSkill.RecommendationName,
                     Revision = generatedSkill.Revision,
                 },
             };
             _createdRefs[cacheKey] = refs;
-            var persistedRefs = await PersistCreatedRefsAsync(token, instance, refs, ct).ConfigureAwait(false);
-            return persistedRefs;
+            return await PersistCreatedRefsAsync(token, instance, refs, generatedSkill, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -95,10 +94,11 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         }
     }
 
-    private async Task<IReadOnlyList<NyxIdRecommendedSkillRef>> PersistCreatedRefsAsync(
+    private async Task<NyxIdRecommendedSkillRefCreationResult> PersistCreatedRefsAsync(
         string token,
         NyxIdServiceInstance instance,
         IReadOnlyList<NyxIdRecommendedSkillRef> refs,
+        NyxIdGeneratedRecommendedSkill generatedSkill,
         CancellationToken ct)
     {
         var persistenceResult = await _persistenceService.PersistRecommendedSkillRefsAsync(
@@ -106,15 +106,25 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
             instance,
             refs,
             ct).ConfigureAwait(false);
-        if (persistenceResult.IsSuccess)
-            return persistenceResult.Refs;
+        if (!persistenceResult.IsSuccess)
+        {
+            _logger.LogWarning(
+                "NyxID recommended skill ref persistence failed for user service {UserServiceId} with status {Status} and code {FailureCode}",
+                instance.UserServiceId,
+                persistenceResult.Status,
+                persistenceResult.FailureCode);
+        }
 
-        _logger.LogWarning(
-            "NyxID recommended skill ref persistence failed for user service {UserServiceId} with status {Status} and code {FailureCode}",
-            instance.UserServiceId,
+        return new NyxIdRecommendedSkillRefCreationResult(
+            refs,
+            refs.Select(skillRef => new NyxIdCreatedRecommendedSkill(
+                    skillRef.Clone(),
+                    generatedSkill.Name,
+                    string.Empty,
+                    generatedSkill.InstructionsMarkdown))
+                .ToArray(),
             persistenceResult.Status,
             persistenceResult.FailureCode);
-        return [];
     }
 
     private static OrnnSkillPublishRequest BuildPublishRequest(NyxIdGeneratedRecommendedSkill skill) =>

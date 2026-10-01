@@ -267,6 +267,22 @@ public sealed class AgentRunAuthorizedToolStep
             refreshedCredentials);
     }
 
+    internal AgentRunAuthorizedToolStep WithExecutionContext(
+        AgentToolExecutionContext toolContext)
+    {
+        ArgumentNullException.ThrowIfNull(toolContext);
+        return new AgentRunAuthorizedToolStep(
+            RunId,
+            CorrelationId,
+            Attempt,
+            StepIndex,
+            _toolCalls,
+            toolContext,
+            _executeAsync,
+            _approvalGrant,
+            _refreshedCredentials);
+    }
+
     internal Task<AgentRunToolStepResult> ExecuteAsync(CancellationToken ct)
     {
         var context = _toolContext;

@@ -2,17 +2,35 @@ namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
 public interface INyxIdRecommendedSkillRefCreator
 {
-    Task<IReadOnlyList<NyxIdRecommendedSkillRef>> CreateRecommendedSkillRefsAsync(
+    Task<NyxIdRecommendedSkillRefCreationResult> CreateRecommendedSkillRefsAsync(
         NyxIdServiceInstance instance,
         CancellationToken ct);
 }
+
+public sealed record NyxIdRecommendedSkillRefCreationResult(
+    IReadOnlyList<NyxIdRecommendedSkillRef> Refs,
+    IReadOnlyList<NyxIdCreatedRecommendedSkill> CreatedSkills,
+    NyxIdRecommendedSkillRefPersistenceStatus PersistenceStatus,
+    string PersistenceFailureCode)
+{
+    public static NyxIdRecommendedSkillRefCreationResult Empty(
+        NyxIdRecommendedSkillRefPersistenceStatus status = NyxIdRecommendedSkillRefPersistenceStatus.EmptyInput,
+        string failureCode = "") =>
+        new([], [], status, failureCode);
+}
+
+public sealed record NyxIdCreatedRecommendedSkill(
+    NyxIdRecommendedSkillRef Ref,
+    string Name,
+    string PublisherId,
+    string MainDocument);
 
 public sealed class EmptyNyxIdRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCreator
 {
     public static EmptyNyxIdRecommendedSkillRefCreator Instance { get; } = new();
 
-    public Task<IReadOnlyList<NyxIdRecommendedSkillRef>> CreateRecommendedSkillRefsAsync(
+    public Task<NyxIdRecommendedSkillRefCreationResult> CreateRecommendedSkillRefsAsync(
         NyxIdServiceInstance instance,
         CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<NyxIdRecommendedSkillRef>>([]);
+        Task.FromResult(NyxIdRecommendedSkillRefCreationResult.Empty());
 }

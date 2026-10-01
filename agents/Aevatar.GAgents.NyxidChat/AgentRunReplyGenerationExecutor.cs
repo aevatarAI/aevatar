@@ -897,9 +897,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         CancellationToken ct)
     {
         var toolContext = authorizedToolStep.ExecutionContext;
-        if (UsesChannelRegistrationAgentKeyCredential(toolContext))
-            return authorizedToolStep;
-
         var bindingId = NormalizeOptional(toolContext.SenderBinding.BindingId);
         if (bindingId is null)
             return authorizedToolStep;
@@ -934,11 +931,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 return null;
             }
 
-            return authorizedToolStep.WithRefreshedCredentials(
+            return authorizedToolStep.WithExecutionContext(
                 ChannelConnectedServiceCredentialPolicy.Apply(
                     toolContext,
                     senderToken,
-                    registrationAgentKey: null).ToPayload().Credentials);
+                    registrationAgentKey: null));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1809,21 +1806,19 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var registrationAgentKeyMode = request.ChannelRuntimeConfig?.CredentialSourceMode ==
                                        ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
         var hasSenderBinding = !string.IsNullOrWhiteSpace(toolContext.SenderBinding.BindingId);
-        if (!registrationAgentKeyMode)
+        control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
+        var senderConnectedServiceToken = NormalizeOptional(control.SenderNyxIdAccessToken);
+        if (hasSenderBinding)
         {
-            control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
-            var senderConnectedServiceToken = NormalizeOptional(control.SenderNyxIdAccessToken);
-            if (hasSenderBinding)
-            {
-                // Connected-service authority is selected independently from the LLM
-                // route. A bound sender remains authoritative even when minting its
-                // short-lived token failed; the policy then makes discovery fail closed.
-                toolContext = ChannelConnectedServiceCredentialPolicy.Apply(
-                    toolContext,
-                    senderConnectedServiceToken,
-                    registrationAgentKey: null);
-            }
+            // Connected-service authority is selected independently from the LLM
+            // route. A bound sender remains authoritative even when minting its
+            // short-lived token failed; the policy then makes discovery fail closed.
+            toolContext = ChannelConnectedServiceCredentialPolicy.Apply(
+                toolContext,
+                senderConnectedServiceToken,
+                registrationAgentKey: null);
         }
+
         var agentKeyOverlay = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
                 request,
                 toolContext,
@@ -1831,8 +1826,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ct)
             .ConfigureAwait(false);
         if (registrationAgentKeyMode)
-        {
             control = agentKeyOverlay.Control;
+        if (registrationAgentKeyMode && !hasSenderBinding)
+        {
             toolContext = agentKeyOverlay.AgentKey is null
                 ? ClearNyxIdCredentials(toolContext)
                 : ApplyChannelRegistrationAgentKeyToolCredential(toolContext, agentKeyOverlay.AgentKey);
@@ -2009,18 +2005,16 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var registrationAgentKeyMode = request.ChannelRuntimeConfig?.CredentialSourceMode ==
                                        ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
         var hasSenderBinding = !string.IsNullOrWhiteSpace(planToolContext.SenderBinding.BindingId);
-        if (!registrationAgentKeyMode)
+        requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
+        var senderConnectedServiceToken = NormalizeOptional(requestControl.SenderNyxIdAccessToken);
+        if (hasSenderBinding)
         {
-            requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
-            var senderConnectedServiceToken = NormalizeOptional(requestControl.SenderNyxIdAccessToken);
-            if (hasSenderBinding)
-            {
-                planToolContext = ChannelConnectedServiceCredentialPolicy.Apply(
-                    planToolContext,
-                    senderConnectedServiceToken,
-                    registrationAgentKey: null);
-            }
+            planToolContext = ChannelConnectedServiceCredentialPolicy.Apply(
+                planToolContext,
+                senderConnectedServiceToken,
+                registrationAgentKey: null);
         }
+
         var agentKeyOverlay = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
                 request,
                 planToolContext,
@@ -2028,8 +2022,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ct)
             .ConfigureAwait(false);
         if (registrationAgentKeyMode)
-        {
             requestControl = agentKeyOverlay.Control;
+        if (registrationAgentKeyMode && !hasSenderBinding)
+        {
             planToolContext = agentKeyOverlay.AgentKey is null
                 ? ClearNyxIdCredentials(planToolContext)
                 : ApplyChannelRegistrationAgentKeyToolCredential(
@@ -2102,10 +2097,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             NyxIdOrgToken = userAccessToken,
         };
     }
-
-    private static bool UsesChannelRegistrationAgentKeyCredential(AgentToolExecutionContext toolContext) =>
-        toolContext.CredentialSource == AgentToolCredentialSource.ChannelRegistration &&
-        toolContext.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.AgentKey;
 
     private static bool TryRebuildSenderSubject(
         AgentToolExecutionContext toolContext,
