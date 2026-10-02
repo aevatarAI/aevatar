@@ -1056,6 +1056,42 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     [Fact]
+    public async Task EnsureRecommendedSkillRefsAsync_WhenGenerationReturnsNoRefs_ReturnsUnavailableWithoutFailedReceipt()
+    {
+        var handler = new InventoryHandler { KeysResponse = KeysWithoutRecommendedSkill() };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var auditRecords = new List<AuditRecord>();
+        var executionPort = CreateAdmittedExecutionPort(auditRecords);
+        var creator = new RecordingRecommendedSkillRefCreator([]);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>(),
+            recommendedSkillRefCreator: creator,
+            clientCredentialsTokenSource: new StaticTokenSource("client-credentials-token"));
+        var context = CreateRegistrationContext(hasSenderBinding: false);
+        using var scope = AgentToolContextScope.Push(context);
+        var tool = EnsureRecommendedSkillRefsTool(await source.DiscoverToolsAsync());
+
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            """{"service_slug":"calendar"}""",
+            context,
+            AgentToolApprovalContinuationMode.None,
+            ApprovalGrant: null));
+
+        using var document = JsonDocument.Parse(outcome.ResultJson);
+        document.RootElement.GetProperty("status").GetString().Should().Be("success");
+        document.RootElement.GetProperty("ensured").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("recommended_skill_unavailable");
+        document.RootElement.GetProperty("recommended_skill_refs").EnumerateArray().Should().BeEmpty();
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success, outcome.ResultJson);
+        outcome.Receipt.ErrorCode.Should().BeEmpty();
+        creator.CallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task InvokeOperationAsync_ThroughExecutionPortWithoutApproval_ExecutesAuthorizedProxyRequest()
     {
         var handler = new InventoryHandler
@@ -1063,7 +1099,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             KeysResponse = KeysWithGoogleWorkspace(),
             ProxyResponseBody = "{\"profile\":\"quiet table\"}",
         };
-        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/api-google-workspace/openapi.json"] = DiningProfileOpenApi;
+        handler.OpenApiResponsesByPath["/api/v1/proxy/s/api-google-workspace/openapi.json"] = DiningProfileOpenApi;
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var auditRecords = new List<AuditRecord>();
         var executionPort = CreateAdmittedExecutionPort(auditRecords);
@@ -1108,7 +1144,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             KeysResponse = KeysWithGoogleWorkspace(),
             ProxyResponseBody = "{\"profile\":\"quiet table\"}",
         };
-        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/api-google-workspace/openapi.json"] = DiningProfileOpenApi;
+        handler.OpenApiResponsesByPath["/api/v1/proxy/s/api-google-workspace/openapi.json"] = DiningProfileOpenApi;
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var auditRecords = new List<AuditRecord>();
         var executionPort = CreateAdmittedExecutionPort(auditRecords);
@@ -1139,7 +1175,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         result.Should().Contain("quiet table");
         handler.RawOpenApiRequests.Should().ContainSingle()
-            .Which.Should().Be("/api/v1/catalog-specs/api-google-workspace/openapi.json");
+            .Which.Should().Be("/api/v1/proxy/s/api-google-workspace/openapi.json");
         var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
         proxyRequest.Method.Should().Be("GET");
         proxyRequest.Path.Should().Contain("/profile/dining");
@@ -1154,7 +1190,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         {
             KeysResponse = KeysWithGoogleWorkspace(),
         };
-        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/api-google-workspace/openapi.json"] = DiningProfileOpenApi;
+        handler.OpenApiResponsesByPath["/api/v1/proxy/s/api-google-workspace/openapi.json"] = DiningProfileOpenApi;
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             new RecordingExecutionPort(),
@@ -1194,7 +1230,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         {
             KeysResponse = KeysWithGoogleWorkspaceRecommendedSkill(),
         };
-        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/api-google-workspace/openapi.json"] = DiningProfileOpenApi;
+        handler.OpenApiResponsesByPath["/api/v1/proxy/s/api-google-workspace/openapi.json"] = DiningProfileOpenApi;
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             new RecordingExecutionPort(),
@@ -1748,7 +1784,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     [Fact]
-    public async Task LoadRecommendedSkillAsync_WhenExactRefIsNotFoundAndRegenerationIsEmpty_ReturnsCreationFailure()
+    public async Task LoadRecommendedSkillAsync_WhenExactRefIsNotFoundAndRegenerationIsEmpty_ReturnsUnavailableWithoutFailedReceipt()
     {
         var handler = new InventoryHandler
         {
@@ -1768,7 +1804,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
         var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
 
-        var result = await tool.ExecuteAsync("""
+        const string argumentsJson = """
             {
               "user_service_id":"user-service-1",
               "source":"ornn",
@@ -1776,11 +1812,18 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
               "literal_version":"1.2",
               "manifest_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"
             }
-            """);
+            """;
+        var result = await tool.ExecuteAsync(argumentsJson);
 
         using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("status").GetString().Should().Be("unavailable");
+        document.RootElement.GetProperty("loaded").GetBoolean().Should().BeFalse();
         document.RootElement.GetProperty("error").GetString()
-            .Should().Be("recommended_skill_ref_creation_failed");
+            .Should().Be("recommended_skill_unavailable");
+        var receipt = tool.CreateResultReceipt("call-load-1", tool.Name, argumentsJson, result);
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ErrorCode.Should().BeEmpty();
         creator.CallCount.Should().Be(1);
     }
 
@@ -2010,6 +2053,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
               "catalog_service_id": "catalog-google-workspace",
               "catalog_service_slug": "api-google-workspace",
               "label": "Google Workspace",
+              "endpoint_url": "https://workspace.test",
+              "openapi_spec_url": "https://workspace.test/openapi.json",
               "is_active": true,
               "connected": true,
               "status": "active",
@@ -2028,6 +2073,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
               "catalog_service_id": "catalog-google-workspace",
               "catalog_service_slug": "api-google-workspace",
               "label": "Google Workspace",
+              "endpoint_url": "https://workspace.test",
+              "openapi_spec_url": "https://workspace.test/openapi.json",
               "is_active": true,
               "connected": true,
               "status": "active",
@@ -2141,19 +2188,14 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             request.Headers.TryGetValues("X-API-Key", out var apiKeyValues);
             var apiKey = apiKeyValues?.SingleOrDefault() ?? string.Empty;
             if (request.Method == HttpMethod.Get &&
-                requestPath.StartsWith("/api/v1/catalog-specs/", StringComparison.Ordinal) &&
-                requestPath.EndsWith("/openapi.json", StringComparison.Ordinal))
+                requestPath.StartsWith("/api/v1/proxy/", StringComparison.Ordinal) &&
+                OpenApiResponsesByPath.TryGetValue(requestPath, out var proxyOpenApiResponse))
             {
                 RawOpenApiRequests.Add(requestPath);
-                if (OpenApiResponsesByPath.TryGetValue(requestPath, out var openApiResponse))
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                 {
-                    return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-                    {
-                        Content = new StringContent(openApiResponse),
-                    });
-                }
-
-                throw new InvalidOperationException("catalog_openapi_must_be_configured");
+                    Content = new StringContent(proxyOpenApiResponse),
+                });
             }
 
             if (requestPath.StartsWith("/api/v1/proxy/", StringComparison.Ordinal))
