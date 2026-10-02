@@ -109,6 +109,66 @@ public sealed class MainnetSettingsEndpointSecurityTests
             .GetString().Should().Be("string");
     }
 
+    [Fact]
+    public async Task MainnetHost_ChannelOpenApi_DescribesRealResponsesAndAdmitsRequiredOperations()
+    {
+        await using var host = await MainnetTestHost.StartAsync();
+        var json = await host.Client.GetStringAsync("/api/openapi.json");
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        (string Path, string Method, string Status, string[] Fields)[] operations =
+        [
+            ("/api/channels/me", "get", "200", ["scope_id", "is_admin", "role", "grant_source"]),
+            ("/api/channels/registrations", "post", "202", ["registration_id", "command_id", "correlation_id", "nyx_channel_bot_id"]),
+            ("/api/channels/registrations", "get", "200", ["id", "owned", "binding_status", "nyx_channel_bot_id", "service_ids", "agent_key", "state_version"]),
+            ("/api/channels/registrations/{registrationId}", "get", "200", ["id", "runtime_config", "skill_name", "service_ids", "state_version"]),
+            ("/api/channels/registrations/{registrationId}/status", "get", "200", ["registration_id", "status", "workflow_result_delivery_status"]),
+            ("/api/channels/registrations/{registrationId}", "post", "202", ["registration_id", "command_id", "correlation_id", "skill_name"]),
+        ];
+        foreach (var (path, method, status, fields) in operations)
+        {
+            var responses = root.GetProperty("paths").GetProperty(path).GetProperty(method).GetProperty("responses");
+            responses.TryGetProperty(status, out var success).Should().BeTrue($"{method} {path} returns {status}");
+            success.TryGetProperty("content", out var content).Should().BeTrue($"{method} {path} returns JSON");
+            var schema = ResolveOpenApiSchema(root, content.GetProperty("application/json").GetProperty("schema"));
+            if (schema.TryGetProperty("items", out var items))
+                schema = ResolveOpenApiSchema(root, items);
+            schema.GetProperty("properties").EnumerateObject().Select(property => property.Name).Should().Contain(fields);
+            if (method == "get" && path == "/api/channels/registrations")
+            {
+                schema.GetProperty("required").EnumerateArray().Select(field => field.GetString())
+                    .Should().NotContain(["id", "state_version", "nyx_channel_bot_owner_scope_name"],
+                        "unbound Bots and unknown owner names omit these fields");
+                var agentKey = ResolveOpenApiSchema(root, schema.GetProperty("properties").GetProperty("agent_key"));
+                agentKey.GetProperty("properties").GetProperty("ready").GetProperty("type").GetString().Should().Be("boolean");
+            }
+            if (status == "202")
+                responses.TryGetProperty("200", out _).Should().BeFalse("dispatch acceptance must not be documented as synchronous completion");
+        }
+
+        using var handler = new PublishedOpenApiInventoryHandler(json);
+        var options = new NyxIdToolOptions
+        {
+            BaseUrl = "https://nyx.example.test",
+            EnableAssistantConnectedServiceEffects = true,
+        };
+        using var api = new NyxIdApiClient(options, new HttpClient(handler));
+        var source = new NyxIdConnectedServiceToolSource(options, api, new NyxIdServiceInstanceClient(api));
+        using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            SenderBinding = new AgentToolSenderBindingContext("sender-binding", "sender-user", "tenant"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext("telegram", "tenant", "external-sender"),
+            Credentials = new AgentToolCredentials("sender-token", null, "sender-token",
+                AgentToolNyxIdCredentialKind.SourceReadableUserBearer, "sender-token",
+                AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
+        });
+        var tools = await source.DiscoverToolsAsync();
+        foreach (var (path, method, _, _) in operations)
+            tools.OfType<IAgentToolOperationAdmissionOwner>().Should().ContainSingle(tool =>
+                tool.OperationAdmission.PathTemplate == path &&
+                tool.OperationAdmission.HttpMethod == method.ToUpperInvariant());
+    }
+
     private static JsonElement ResolveOpenApiSchema(JsonElement document, JsonElement schema)
     {
         if (!schema.TryGetProperty("$ref", out var reference))
@@ -159,7 +219,8 @@ public sealed class MainnetSettingsEndpointSecurityTests
 
         var tool = tools
             .Where(candidate => candidate is IAgentToolOperationAdmissionOwner owner &&
-                                owner.OperationAdmission.PathTemplate == "/api/channels/registrations")
+                                owner.OperationAdmission.PathTemplate == "/api/channels/registrations" &&
+                                owner.OperationAdmission.HttpMethod == "GET")
             .Should().ContainSingle(
                 $"the published Mainnet OpenAPI ({Encoding.UTF8.GetByteCount(document)} bytes) must expose its own Channel read")
             .Subject;

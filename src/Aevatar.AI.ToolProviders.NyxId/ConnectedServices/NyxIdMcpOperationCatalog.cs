@@ -720,12 +720,13 @@ internal static class NyxIdMcpOperationCatalog
                 return SourceFailure(source, accessDenied: false);
             }
 
-            return ParseCustomOpenApiPaths(serviceInstance, paths, source);
+            return ParseCustomOpenApiPaths(serviceInstance, root, paths, source);
         }
     }
 
     private static NyxIdMcpCatalogRead ParseCustomOpenApiPaths(
         NyxIdServiceInstance serviceInstance,
+        JsonElement document,
         JsonElement paths,
         ExternalCapabilitySourceStamp source)
     {
@@ -753,15 +754,30 @@ internal static class NyxIdMcpOperationCatalog
                     continue;
                 }
 
-                var endpoint = ParseCustomOpenApiOperation(
-                    serviceInstance.UserServiceId,
-                    serviceInstance.DisplaySlug,
-                    pathProperty.Name,
-                    method,
-                    pathParameters,
-                    operationProperty.Value,
-                    seenEndpointIds,
-                    issues);
+                NyxIdMcpEndpoint? endpoint;
+                try
+                {
+                    endpoint = ParseCustomOpenApiOperation(
+                        serviceInstance.UserServiceId,
+                        serviceInstance.DisplaySlug,
+                        pathProperty.Name,
+                        method,
+                        pathParameters,
+                        operationProperty.Value,
+                        seenEndpointIds,
+                        issues,
+                        new NyxIdOpenApiReferenceResolver(document));
+                }
+                catch (NyxIdOperationSchemaUnsupportedException)
+                {
+                    issues.Add(new NyxIdMcpCatalogIssue(
+                        ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema,
+                        "The OpenAPI operation contains an unsupported local reference.",
+                        serviceInstance.UserServiceId,
+                        ExactString(operationProperty.Value, "operationId") ??
+                        "custom_" + ExternalWorkflowCapabilityContractDigest.Compute(method, pathProperty.Name)[..32]));
+                    continue;
+                }
                 if (endpoint is not null)
                     endpoints.Add(endpoint);
             }
@@ -804,7 +820,8 @@ internal static class NyxIdMcpOperationCatalog
         IReadOnlyList<JsonElement> pathParameters,
         JsonElement operation,
         ISet<string> seenEndpointIds,
-        ICollection<NyxIdMcpCatalogIssue> issues)
+        ICollection<NyxIdMcpCatalogIssue> issues,
+        NyxIdOpenApiReferenceResolver references)
     {
         if (!TryReadPathPlaceholders(path, out var pathPlaceholders))
         {
@@ -832,10 +849,11 @@ internal static class NyxIdMcpOperationCatalog
             endpointId,
             pathPlaceholders,
             pathParameters.Concat(ReadOpenApiParameterArray(operation, "parameters")),
-            issues);
+            issues,
+            references);
         if (parameters is null)
             return null;
-        var body = ParseCustomOpenApiRequestBody(operation, serviceId, endpointId, method, issues);
+        var body = ParseCustomOpenApiRequestBody(operation, serviceId, endpointId, method, issues, references);
         if (!body.Supported)
             return null;
         var response = ParseCustomOpenApiResponse(operation, serviceId, endpointId, method, issues);
@@ -890,14 +908,16 @@ internal static class NyxIdMcpOperationCatalog
         string endpointId,
         IReadOnlySet<string> pathPlaceholders,
         IEnumerable<JsonElement> parameterElements,
-        ICollection<NyxIdMcpCatalogIssue> issues)
+        ICollection<NyxIdMcpCatalogIssue> issues,
+        NyxIdOpenApiReferenceResolver references)
     {
         var parameters = new List<ConnectedServiceToolParameter>();
         var identities = new HashSet<(string Name, ParameterLocation Location)>();
-        foreach (var item in parameterElements)
+        foreach (var parameter in parameterElements)
         {
-            if (item.ValueKind != JsonValueKind.Object || item.TryGetProperty("$ref", out _))
+            if (parameter.ValueKind != JsonValueKind.Object)
                 return UnsupportedParameters(issues, serviceId, endpointId);
+            var item = references.ResolveObject(parameter);
             var name = ExactString(item, "name");
             var locationText = ExactString(item, "in")?.ToLowerInvariant();
             if (name is null || locationText == "cookie" || !TryMapLocation(locationText, out var location))
@@ -921,7 +941,8 @@ internal static class NyxIdMcpOperationCatalog
             {
                 if (schemaElement.ValueKind != JsonValueKind.Object)
                     return UnsupportedSchema(issues, serviceId, endpointId);
-                schema = JsonNode.Parse(Canonicalize(schemaElement));
+                var resolved = references.ResolveSchema(schemaElement);
+                schema = JsonNode.Parse(Canonicalize(JsonSerializer.SerializeToElement(resolved)));
             }
             parameters.Add(new ConnectedServiceToolParameter(
                 name,
@@ -952,13 +973,15 @@ internal static class NyxIdMcpOperationCatalog
             string serviceId,
             string endpointId,
             string method,
-            ICollection<NyxIdMcpCatalogIssue> issues)
+            ICollection<NyxIdMcpCatalogIssue> issues,
+            NyxIdOpenApiReferenceResolver references)
     {
         if (!operation.TryGetProperty("requestBody", out var requestBody) ||
             requestBody.ValueKind == JsonValueKind.Null)
         {
             return (true, null, false, null);
         }
+        requestBody = references.ResolveObject(requestBody);
         if (method is "GET" or "HEAD" ||
             requestBody.ValueKind != JsonValueKind.Object ||
             requestBody.TryGetProperty("$ref", out _) ||
@@ -973,7 +996,8 @@ internal static class NyxIdMcpOperationCatalog
             return UnsupportedRequestBody(issues, serviceId, endpointId);
         }
 
-        return (true, JsonNode.Parse(Canonicalize(schema)), required, "application/json");
+        var resolved = references.ResolveSchema(schema);
+        return (true, JsonNode.Parse(Canonicalize(JsonSerializer.SerializeToElement(resolved))), required, "application/json");
     }
 
     private static (bool Supported, IReadOnlyList<string> MediaTypes, bool? BinaryArtifact)

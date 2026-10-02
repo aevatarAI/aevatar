@@ -10,6 +10,72 @@ namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdRecommendedSkillGeneratorTests
 {
+    [Fact]
+    public async Task GenerateAsync_LocalReferences_PreservesOptionalNestedRequestSchema()
+    {
+        var handler = new DocumentHandler { DocumentBody = ReferencedOpenApi };
+        var skill = await GenerateAsync(handler, new RecordingLogger());
+
+        skill.Should().NotBeNull();
+        var instructions = skill!.InstructionsMarkdown;
+        instructions.Should().Contain("POST /registrations")
+            .And.Contain("service_ids").And.Contain("default_skill")
+            .And.NotContain("$ref");
+
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
+        var inventory = await new NyxIdConnectedServiceInventoryReader(new NyxIdServiceInstanceClient(client))
+            .ReadAsync("caller-token", organizationToken: null);
+        var parsed = NyxIdMcpOperationCatalog.ParseCustomOpenApi(ReferencedOpenApi, inventory.Instances.Single(),
+            "test", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
+        var request = parsed.Services.Single().Endpoints.Single().RequestBodySchema!;
+        request["required"].Should().BeNull("omitted update fields must remain optional");
+        request["properties"]!["service_ids"]!["default"].Should().BeNull("resolution must not insert empty selections");
+        request["properties"]!["service_ids"]!["type"]!.GetValue<string>().Should().Be("array");
+        request["properties"]!["runtime_config"]!["properties"]!["default_skill"]!["properties"]!["name"]!["type"]!
+            .GetValue<string>().Should().Be("string");
+    }
+
+    [Theory]
+    [InlineData("#/components/schemas/Missing")]
+    [InlineData("https://outside.test/schema.json")]
+    [InlineData("#/components/schemas/Update")]
+    public async Task GenerateAsync_InvalidReference_RejectsOnlyAffectedOperation(string reference)
+    {
+        var document = JsonNode.Parse(ReferencedOpenApi)!;
+        document["components"]!["schemas"]!["Update"]!["properties"]!["runtime_config"] =
+            new JsonObject { ["$ref"] = reference };
+        document["paths"]!["/healthy"] = JsonNode.Parse("""
+            {"get":{"responses":{"200":{"content":{"application/json":{"schema":{"type":"string"}}}}}}}
+            """);
+        var handler = new DocumentHandler { DocumentBody = document.ToJsonString() };
+        var skill = await GenerateAsync(handler, new RecordingLogger());
+
+        skill.Should().NotBeNull();
+        skill!.InstructionsMarkdown.Should().Contain("GET /healthy").And.NotContain("POST /registrations");
+        handler.Requests.Should().HaveCount(2, "references must not trigger network fetches");
+    }
+
+    private const string ReferencedOpenApi = """
+        {"openapi":"3.1.1","paths":{"/registrations":{"post":{
+          "description":"Update a registration and read back the committed state.",
+          "requestBody":{"$ref":"#/components/requestBodies/Update"},
+          "responses":{
+            "202":{"description":"Accepted","content":{"application/json":{"schema":{"type":"object"}}}},
+            "404":{"description":"Registration not found","content":{"application/json":{
+              "schema":{"type":"object","properties":{"error":{"type":"string"}}}}}}
+          }
+        }}},"components":{
+          "requestBodies":{"Update":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Update"}}}}},
+          "schemas":{
+            "Update":{"type":"object","properties":{
+              "service_ids":{"type":"array","items":{"type":"string"}},
+              "runtime_config":{"$ref":"#/components/schemas/Runtime"}}},
+            "Runtime":{"type":"object","properties":{"default_skill":{"$ref":"#/components/schemas/Skill~1Name~0"}}},
+            "Skill/Name~":{"type":"object","properties":{"name":{"type":"string"}}}
+          }
+        }}
+        """;
+
     private const string Inventory = """
         {"keys":[{
           "id":"us-aevatar","slug":"aevatar","catalog_service_id":"catalog-aevatar",

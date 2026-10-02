@@ -36,12 +36,28 @@ public static class ChannelCallbackEndpoints
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
 
         // Registration CRUD — requires authentication
-        group.MapGet("/me", HandleGetCallerInfoAsync).RequireAuthorization();
+        group.MapGet("/me", HandleGetCallerInfoAsync)
+            .WithSummary("Read the authenticated Channel caller")
+            .WithDescription("Returns the current sender scope_id. A non-empty scope_id is required before sender-authorized onboarding can continue; omit scope overrides.")
+            .Produces<ChannelCallerResponse>(StatusCodes.Status200OK, "application/json")
+            .Produces(StatusCodes.Status401Unauthorized)
+            .RequireAuthorization();
         group.MapGet("/services", HandleListServicesAsync)
             .Produces<object[]>(StatusCodes.Status200OK, "application/json")
             .RequireAuthorization();
         group.MapPost("/registrations", HandleRegisterAsync)
             .Accepts<ChannelRegistrationCreateRequest>("application/json")
+            .WithSummary("Create a Channel registration for an owned NyxID Bot")
+            .WithDescription("Returns 202 Accepted for dispatch, not completed binding. Preserve registration_id, command_id and correlation_id, then read back GET /api/channels/registrations or GET /api/channels/registrations/{registrationId}. Continue only when the same Bot is bound, owned, has positive state_version, the exact skill_name, complete service_ids and agent_key.ready=true. A pending read does not authorize a duplicate create.")
+            .Produces<ChannelRegistrationAcceptedResponse>(StatusCodes.Status202Accepted, "application/json")
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status400BadRequest)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status401Unauthorized)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status403Forbidden)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status404NotFound)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status409Conflict)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status500InternalServerError)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status502BadGateway)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
             .WithEndpointAudit(
                 "channel.registration.create",
                 AuditSensitivityLevel.Confidential,
@@ -50,14 +66,33 @@ public static class ChannelCallbackEndpoints
                 ChannelRegistrationRequestSummary)
             .RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync)
+            .WithSummary("List owned NyxID Bots and their materialized Channel registrations")
             .WithDescription("Lists channel registrations. Omit scope or use scope=mine for the authenticated account; scope=all uses the NyxID-authorized all-view. An explicit scope ID must match the authenticated account.")
-            .Produces<object[]>(StatusCodes.Status200OK, "application/json")
+            .Produces<ChannelRegistrationListResponse[]>(StatusCodes.Status200OK, "application/json")
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status502BadGateway)
             .RequireAuthorization();
         group.MapGet("/registrations/{registrationId}", HandleGetRegistrationAsync)
-            .Produces<object>(StatusCodes.Status200OK, "application/json")
+            .WithSummary("Read the exact materialized Channel registration")
+            .WithDescription("Use the Aevatar registration ID, not the NyxID Bot ID. The result exposes persisted runtime configuration and the committed source state_version. Missing or inaccessible registrations return 404.")
+            .Produces<ChannelRegistrationDetailResponse>(StatusCodes.Status200OK, "application/json")
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status404NotFound)
             .RequireAuthorization();
         group.MapPost("/registrations/{registrationId}", HandleUpdateRegistrationAsync)
             .Accepts<ChannelRegistrationUpdateRequest>("application/json")
+            .WithSummary("Update a Channel registration Skill and service authorization")
+            .WithDescription("Send the complete desired service_ids set when changing the explicit allowlist. Omitted fields preserve their existing semantics; an empty array is an explicit selection, not omission. Returns 202 Accepted for dispatch only. Preserve registration_id, command_id and correlation_id and read back the exact registration through GET /api/channels/registrations/{registrationId} until the desired configuration is visible before continuing dependent work.")
+            .Produces<ChannelRegistrationUpdatedResponse>(StatusCodes.Status202Accepted, "application/json")
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status403Forbidden)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status404NotFound)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status409Conflict)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status500InternalServerError)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status502BadGateway)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status503ServiceUnavailable)
             .WithEndpointAudit(
                 "channel.registration.update",
                 AuditSensitivityLevel.Confidential,
@@ -65,7 +100,13 @@ public static class ChannelCallbackEndpoints
                 EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
                 EndpointAuditSanitizers.WithRouteValues("registrationId"))
             .RequireAuthorization();
-        group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
+        group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync)
+            .WithSummary("Read live Channel Bot and workflow result delivery status")
+            .WithDescription("Live status may degrade to unknown with note or error. An elevated cross-account observation returns owned=false. This status alone does not prove the registration Skill and service allowlist are ready; read back the registration configuration.")
+            .Produces<ChannelRegistrationStatusResponse>(StatusCodes.Status200OK, "application/json")
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces<ChannelRegistrationErrorResponse>(StatusCodes.Status404NotFound)
+            .RequireAuthorization();
         group.MapPost(
                 "/registrations/{registrationId}/workflow-result-delivery/repair",
                 HandleRepairWorkflowResultDeliveryAsync)
@@ -201,20 +242,20 @@ public static class ChannelCallbackEndpoints
         }
 
         return Results.Json(
-            new
+            new ChannelRegistrationAcceptedResponse
             {
-                status = "accepted",
-                registration_id = result.RegistrationId,
-                command_id = result.Receipt!.CommandId,
-                correlation_id = result.Receipt.CorrelationId,
-                platform = result.Platform,
-                nyx_provider_slug = result.NyxProviderSlug,
-                nyx_channel_bot_id = result.NyxChannelBotId,
-                nyx_agent_api_key_id = result.NyxAgentApiKeyId,
-                nyx_conversation_route_id = result.NyxConversationRouteId,
-                relay_callback_url = result.RelayCallbackUrl,
-                webhook_url = result.WebhookUrl,
-                workflow_result_delivery_status = "registration_pending",
+                Status = "accepted",
+                RegistrationId = result.RegistrationId,
+                CommandId = result.Receipt!.CommandId,
+                CorrelationId = result.Receipt.CorrelationId,
+                Platform = result.Platform,
+                NyxProviderSlug = result.NyxProviderSlug,
+                NyxChannelBotId = result.NyxChannelBotId,
+                NyxAgentApiKeyId = result.NyxAgentApiKeyId,
+                NyxConversationRouteId = result.NyxConversationRouteId,
+                RelayCallbackUrl = result.RelayCallbackUrl,
+                WebhookUrl = result.WebhookUrl,
+                WorkflowResultDeliveryStatus = "registration_pending",
             },
             RegistrationJsonOptions,
             statusCode: StatusCodes.Status202Accepted);
@@ -627,13 +668,13 @@ public static class ChannelCallbackEndpoints
             throw;
         }
 
-        return Results.Accepted(value: new
+        return Results.Accepted(value: new ChannelRegistrationUpdatedResponse
         {
-            status = "accepted",
-            registration_id = registrationId,
-            command_id = receipt.CommandId,
-            correlation_id = receipt.CorrelationId,
-            skill_name = runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
+            Status = "accepted",
+            RegistrationId = registrationId,
+            CommandId = receipt.CommandId,
+            CorrelationId = receipt.CorrelationId,
+            SkillName = runtimeConfig?.DefaultSkill?.Name ?? string.Empty,
         });
     }
 
@@ -744,12 +785,12 @@ public static class ChannelCallbackEndpoints
             ? PlatformCaller.NotElevated
             : await adminAuthorizer.ResolveCallerAsync(token, ct);
 
-        return Results.Json(new
+        return Results.Json(new ChannelCallerResponse
         {
-            scope_id = callerScope,
-            is_admin = caller.IsElevated,
-            role = caller.Role,
-            grant_source = caller.GrantSource,
+            ScopeId = callerScope,
+            IsAdmin = caller.IsElevated,
+            Role = caller.Role,
+            GrantSource = caller.GrantSource,
         });
     }
 
@@ -811,16 +852,16 @@ public static class ChannelCallbackEndpoints
                 return Results.NotFound(new { error = "Registration not found" });
 
             var observedAt = registration.LastInboundAtUtc;
-            return Results.Json(new
+            return Results.Json(new ChannelRegistrationStatusResponse
             {
-                registration_id = registrationId,
-                nyx_channel_bot_id = registration.NyxChannelBotId,
-                status = observedAt is not null ? "active" : "pending_webhook",
-                last_event_at = observedAt?.ToDateTimeOffset(),
-                workflow_result_delivery_status = capabilityStatusValue,
-                workflow_result_delivery_failure_phase = failurePhaseValue,
-                workflow_result_delivery_failure_reason = failureReasonValue,
-                owned = false,
+                RegistrationId = registrationId,
+                NyxChannelBotId = registration.NyxChannelBotId,
+                Status = observedAt is not null ? "active" : "pending_webhook",
+                LastEventAt = observedAt?.ToDateTimeOffset().ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                WorkflowResultDeliveryStatus = capabilityStatusValue,
+                WorkflowResultDeliveryFailurePhase = failurePhaseValue,
+                WorkflowResultDeliveryFailureReason = failureReasonValue,
+                Owned = false,
             }, RegistrationJsonOptions);
         }
 
@@ -829,14 +870,14 @@ public static class ChannelCallbackEndpoints
 
         if (string.IsNullOrWhiteSpace(registration.NyxChannelBotId))
         {
-            return Results.Json(new
+            return Results.Json(new ChannelRegistrationStatusResponse
             {
-                registration_id = registrationId,
-                status = "unknown",
-                workflow_result_delivery_status = capabilityStatusValue,
-                workflow_result_delivery_failure_phase = failurePhaseValue,
-                workflow_result_delivery_failure_reason = failureReasonValue,
-                note = "no channel bot id",
+                RegistrationId = registrationId,
+                Status = "unknown",
+                WorkflowResultDeliveryStatus = capabilityStatusValue,
+                WorkflowResultDeliveryFailurePhase = failurePhaseValue,
+                WorkflowResultDeliveryFailureReason = failureReasonValue,
+                Note = "no channel bot id",
             }, RegistrationJsonOptions);
         }
 
@@ -852,28 +893,28 @@ public static class ChannelCallbackEndpoints
                 "Nyx channel-bot status read failed: registration={RegistrationId}, botId={BotId}",
                 registrationId,
                 registration.NyxChannelBotId);
-            return Results.Json(new
+            return Results.Json(new ChannelRegistrationStatusResponse
             {
-                registration_id = registrationId,
-                nyx_channel_bot_id = registration.NyxChannelBotId,
-                status = "unknown",
-                workflow_result_delivery_status = capabilityStatusValue,
-                workflow_result_delivery_failure_phase = failurePhaseValue,
-                workflow_result_delivery_failure_reason = failureReasonValue,
-                error = "status_query_failed",
+                RegistrationId = registrationId,
+                NyxChannelBotId = registration.NyxChannelBotId,
+                Status = "unknown",
+                WorkflowResultDeliveryStatus = capabilityStatusValue,
+                WorkflowResultDeliveryFailurePhase = failurePhaseValue,
+                WorkflowResultDeliveryFailureReason = failureReasonValue,
+                Error = "status_query_failed",
             }, RegistrationJsonOptions);
         }
 
         var (status, lastEventAt) = ParseChannelBotStatus(raw);
-        return Results.Json(new
+        return Results.Json(new ChannelRegistrationStatusResponse
         {
-            registration_id = registrationId,
-            nyx_channel_bot_id = registration.NyxChannelBotId,
-            status,
-            last_event_at = lastEventAt,
-            workflow_result_delivery_status = capabilityStatusValue,
-            workflow_result_delivery_failure_phase = failurePhaseValue,
-            workflow_result_delivery_failure_reason = failureReasonValue,
+            RegistrationId = registrationId,
+            NyxChannelBotId = registration.NyxChannelBotId,
+            Status = status,
+            LastEventAt = lastEventAt,
+            WorkflowResultDeliveryStatus = capabilityStatusValue,
+            WorkflowResultDeliveryFailurePhase = failurePhaseValue,
+            WorkflowResultDeliveryFailureReason = failureReasonValue,
         }, RegistrationJsonOptions);
     }
 
@@ -1027,7 +1068,7 @@ public static class ChannelCallbackEndpoints
                 registration.RegistrationServiceAllowlist?.ServiceIds.ToArray() ?? [])
             : ChannelRegistrationServiceSelection.NyxIdDefaultSpecified();
 
-    private static object MapRegistrationListRow(
+    private static ChannelRegistrationListResponse MapRegistrationListRow(
         NyxChannelBotRecord bot,
         ChannelBotRegistrationSnapshot? snapshot,
         string? callerScope,
@@ -1036,36 +1077,36 @@ public static class ChannelCallbackEndpoints
         if (snapshot is null)
         {
             var unboundOwnerScopeName = ResolveOwnerScopeName(bot.OwnerScopeId, callerScope, organizationNames);
-            return new
+            return new ChannelRegistrationListResponse
             {
-                id = (string?)null,
-                platform = bot.Platform,
-                label = bot.Label,
-                registration_mode = "nyx_channel_bot_adoption",
-                binding_status = "unbound",
-                availability_status = MapNyxChannelBotAvailability(bot),
-                nyx_status = bot.Status,
-                authorization_mode = (string?)null,
-                service_ids = (IReadOnlyList<string>?)null,
-                state_version = (long?)null,
-                nyx_provider_slug = ResolveDefaultProviderSlug(bot.Platform),
-                callback_url = string.Empty,
-                webhook_url = bot.WebhookUrl,
-                nyx_channel_bot_id = bot.Id,
-                nyx_channel_bot_owner_scope_id = bot.OwnerScopeId,
-                nyx_channel_bot_owner_scope_name = unboundOwnerScopeName,
-                nyx_agent_api_key_id = string.Empty,
-                nyx_conversation_route_id = string.Empty,
-                skill_name = string.Empty,
-                has_instructions = false,
-                has_tool_set_refs = false,
-                has_extra_tool_names = false,
-                nyxid_service_selectors = Array.Empty<NyxIdServiceSelectorResponse>(),
-                agent_key = new { api_key_id = string.Empty, ready = false, status = "missing" },
-                workflow_result_delivery_status = "unbound",
-                workflow_result_delivery_failure_phase = (string?)null,
-                workflow_result_delivery_failure_reason = (string?)null,
-                owned = true,
+                Id = (string?)null,
+                Platform = bot.Platform,
+                Label = bot.Label,
+                RegistrationMode = "nyx_channel_bot_adoption",
+                BindingStatus = "unbound",
+                AvailabilityStatus = MapNyxChannelBotAvailability(bot),
+                NyxStatus = bot.Status,
+                AuthorizationMode = (string?)null,
+                ServiceIds = (IReadOnlyList<string>?)null,
+                StateVersion = (long?)null,
+                NyxProviderSlug = ResolveDefaultProviderSlug(bot.Platform),
+                CallbackUrl = string.Empty,
+                WebhookUrl = bot.WebhookUrl,
+                NyxChannelBotId = bot.Id,
+                NyxChannelBotOwnerScopeId = bot.OwnerScopeId,
+                NyxChannelBotOwnerScopeName = unboundOwnerScopeName,
+                NyxAgentApiKeyId = string.Empty,
+                NyxConversationRouteId = string.Empty,
+                SkillName = string.Empty,
+                HasInstructions = false,
+                HasToolSetRefs = false,
+                HasExtraToolNames = false,
+                NyxIdServiceSelectors = Array.Empty<NyxIdServiceSelectorResponse>(),
+                AgentKey = new ChannelRegistrationAgentKeyResponse { ApiKeyId = string.Empty, Ready = false, Status = "missing" },
+                WorkflowResultDeliveryStatus = "unbound",
+                WorkflowResultDeliveryFailurePhase = (string?)null,
+                WorkflowResultDeliveryFailureReason = (string?)null,
+                Owned = true,
             };
         }
 
@@ -1077,42 +1118,42 @@ public static class ChannelCallbackEndpoints
         var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(e);
         var repairFailed = capabilityStatus ==
             ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
-        return new
+        return new ChannelRegistrationListResponse
         {
-            id = e.Id,
-            platform = string.IsNullOrWhiteSpace(e.Platform) ? bot.Platform : e.Platform,
-            label = bot.Label,
-            registration_mode = "nyx_relay_webhook",
-            binding_status = "bound",
-            availability_status = MapNyxChannelBotAvailability(bot),
-            nyx_status = bot.Status,
-            authorization_mode = MapAuthorizationMode(e),
-            service_ids = MapRegistrationServiceIds(e),
-            state_version = snapshot.StateVersion,
-            nyx_provider_slug = e.NyxProviderSlug,
-            callback_url = string.Empty,
-            webhook_url = string.IsNullOrWhiteSpace(e.WebhookUrl) ? bot.WebhookUrl : e.WebhookUrl,
-            nyx_channel_bot_id = e.NyxChannelBotId,
-            nyx_channel_bot_owner_scope_id = ownerScopeId,
-            nyx_channel_bot_owner_scope_name = ownerScopeName,
-            nyx_agent_api_key_id = e.NyxAgentApiKeyId,
-            nyx_conversation_route_id = e.NyxConversationRouteId,
-            skill_name = ResolveSkillName(e.RuntimeConfig, e.DefaultSkillName),
-            has_instructions = !string.IsNullOrWhiteSpace(e.RuntimeConfig?.Instructions),
-            has_tool_set_refs = e.RuntimeConfig?.ToolSetRefs.Count > 0,
-            has_extra_tool_names = e.RuntimeConfig?.ExtraToolNames.Count > 0,
-            nyxid_service_selectors = MapNyxIdServiceSelectors(e.RuntimeConfig),
-            agent_key = MapAgentKeyStatus(e),
-            workflow_result_delivery_status = MapCapabilityStatus(e, capabilityStatus),
-            workflow_result_delivery_failure_phase = repairFailed
+            Id = e.Id,
+            Platform = string.IsNullOrWhiteSpace(e.Platform) ? bot.Platform : e.Platform,
+            Label = bot.Label,
+            RegistrationMode = "nyx_relay_webhook",
+            BindingStatus = "bound",
+            AvailabilityStatus = MapNyxChannelBotAvailability(bot),
+            NyxStatus = bot.Status,
+            AuthorizationMode = MapAuthorizationMode(e),
+            ServiceIds = MapRegistrationServiceIds(e),
+            StateVersion = snapshot.StateVersion,
+            NyxProviderSlug = e.NyxProviderSlug,
+            CallbackUrl = string.Empty,
+            WebhookUrl = string.IsNullOrWhiteSpace(e.WebhookUrl) ? bot.WebhookUrl : e.WebhookUrl,
+            NyxChannelBotId = e.NyxChannelBotId,
+            NyxChannelBotOwnerScopeId = ownerScopeId,
+            NyxChannelBotOwnerScopeName = ownerScopeName,
+            NyxAgentApiKeyId = e.NyxAgentApiKeyId,
+            NyxConversationRouteId = e.NyxConversationRouteId,
+            SkillName = ResolveSkillName(e.RuntimeConfig, e.DefaultSkillName),
+            HasInstructions = !string.IsNullOrWhiteSpace(e.RuntimeConfig?.Instructions),
+            HasToolSetRefs = e.RuntimeConfig?.ToolSetRefs.Count > 0,
+            HasExtraToolNames = e.RuntimeConfig?.ExtraToolNames.Count > 0,
+            NyxIdServiceSelectors = MapNyxIdServiceSelectors(e.RuntimeConfig),
+            AgentKey = MapAgentKeyStatus(e),
+            WorkflowResultDeliveryStatus = MapCapabilityStatus(e, capabilityStatus),
+            WorkflowResultDeliveryFailurePhase = repairFailed
                 ? MapRepairPhase(e.WorkflowResultDeliveryRepair?.FailurePhase ??
                     ChannelWorkflowResultDeliveryRepairPhase.Unspecified)
                 : null,
-            workflow_result_delivery_failure_reason = repairFailed
+            WorkflowResultDeliveryFailureReason = repairFailed
                 ? MapRepairFailureReason(e.WorkflowResultDeliveryRepair?.FailureReason ??
                     ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
                 : null,
-            owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
+            Owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
         };
     }
 
@@ -1132,51 +1173,51 @@ public static class ChannelCallbackEndpoints
 
     private sealed record RegistrationManagementOwner(string ScopeId);
 
-    private static object MapRegistrationDetail(ChannelBotRegistrationSnapshot snapshot)
+    private static ChannelRegistrationDetailResponse MapRegistrationDetail(ChannelBotRegistrationSnapshot snapshot)
     {
         var entry = snapshot.Registration;
         var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(entry);
         var repairFailed = capabilityStatus ==
             ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
-        return new
+        return new ChannelRegistrationDetailResponse
         {
-            id = entry.Id,
-            platform = entry.Platform,
-            label = entry.Id,
-            registration_mode = "nyx_relay_webhook",
-            binding_status = "bound",
-            authorization_mode = MapAuthorizationMode(entry),
-            service_ids = MapRegistrationServiceIds(entry),
-            runtime_config = MapRuntimeConfig(entry.RuntimeConfig),
-            skill_name = ResolveSkillName(entry.RuntimeConfig, entry.DefaultSkillName),
-            state_version = snapshot.StateVersion,
-            nyx_provider_slug = entry.NyxProviderSlug,
-            webhook_url = entry.WebhookUrl,
-            nyx_channel_bot_id = entry.NyxChannelBotId,
-            nyx_channel_bot_owner_scope_id = entry.NyxChannelBotOwnerScopeId,
-            nyx_agent_api_key_id = entry.NyxAgentApiKeyId,
-            nyx_conversation_route_id = entry.NyxConversationRouteId,
-            agent_key = MapAgentKeyStatus(entry),
-            workflow_result_delivery_status = MapCapabilityStatus(entry, capabilityStatus),
-            workflow_result_delivery_failure_phase = repairFailed
+            Id = entry.Id,
+            Platform = entry.Platform,
+            Label = entry.Id,
+            RegistrationMode = "nyx_relay_webhook",
+            BindingStatus = "bound",
+            AuthorizationMode = MapAuthorizationMode(entry),
+            ServiceIds = MapRegistrationServiceIds(entry),
+            RuntimeConfig = MapRuntimeConfig(entry.RuntimeConfig),
+            SkillName = ResolveSkillName(entry.RuntimeConfig, entry.DefaultSkillName),
+            StateVersion = snapshot.StateVersion,
+            NyxProviderSlug = entry.NyxProviderSlug,
+            WebhookUrl = entry.WebhookUrl,
+            NyxChannelBotId = entry.NyxChannelBotId,
+            NyxChannelBotOwnerScopeId = entry.NyxChannelBotOwnerScopeId,
+            NyxAgentApiKeyId = entry.NyxAgentApiKeyId,
+            NyxConversationRouteId = entry.NyxConversationRouteId,
+            AgentKey = MapAgentKeyStatus(entry),
+            WorkflowResultDeliveryStatus = MapCapabilityStatus(entry, capabilityStatus),
+            WorkflowResultDeliveryFailurePhase = repairFailed
                 ? MapRepairPhase(entry.WorkflowResultDeliveryRepair?.FailurePhase ??
                     ChannelWorkflowResultDeliveryRepairPhase.Unspecified)
                 : null,
-            workflow_result_delivery_failure_reason = repairFailed
+            WorkflowResultDeliveryFailureReason = repairFailed
                 ? MapRepairFailureReason(entry.WorkflowResultDeliveryRepair?.FailureReason ??
                     ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
                 : null,
-            owned = true,
+            Owned = true,
         };
     }
 
-    private static object MapRuntimeConfig(ChannelBotRuntimeConfig? config) => new
+    private static ChannelRegistrationRuntimeConfigResponse MapRuntimeConfig(ChannelBotRuntimeConfig? config) => new()
     {
-        instructions = config?.Instructions ?? string.Empty,
-        tool_set_refs = config?.ToolSetRefs.ToArray() ?? Array.Empty<string>(),
-        extra_tool_names = config?.ExtraToolNames.ToArray() ?? Array.Empty<string>(),
-        nyxid_service_selectors = MapNyxIdServiceSelectors(config),
-        credential_source_mode = MapCredentialSourceMode(config?.CredentialSourceMode ??
+        Instructions = config?.Instructions ?? string.Empty,
+        ToolSetRefs = config?.ToolSetRefs.ToArray() ?? Array.Empty<string>(),
+        ExtraToolNames = config?.ExtraToolNames.ToArray() ?? Array.Empty<string>(),
+        NyxIdServiceSelectors = MapNyxIdServiceSelectors(config),
+        CredentialSourceMode = MapCredentialSourceMode(config?.CredentialSourceMode ??
             ChannelBotRuntimeCredentialSourceMode.Unspecified),
     };
 
@@ -1203,17 +1244,17 @@ public static class ChannelCallbackEndpoints
                 selector.EndpointNames.ToArray()))
             .ToArray() ?? [];
 
-    private static object MapAgentKeyStatus(ChannelBotRegistrationEntry entry)
+    private static ChannelRegistrationAgentKeyResponse MapAgentKeyStatus(ChannelBotRegistrationEntry entry)
     {
         var ready = ChannelWorkflowResultDeliveryCapability.TryGetDeliveryCredential(
             entry,
             out var apiKeyId,
             out _);
-        return new
+        return new ChannelRegistrationAgentKeyResponse
         {
-            api_key_id = ready ? apiKeyId : entry.ChannelAgentKey?.ApiKeyId ?? entry.NyxAgentApiKeyId ?? string.Empty,
-            ready,
-            status = ready ? "ready" : "missing",
+            ApiKeyId = ready ? apiKeyId : entry.ChannelAgentKey?.ApiKeyId ?? entry.NyxAgentApiKeyId ?? string.Empty,
+            Ready = ready,
+            Status = ready ? "ready" : "missing",
         };
     }
 
@@ -1457,10 +1498,6 @@ public static class ChannelCallbackEndpoints
     }
 
     private sealed record ScopeIdResolution(string? ScopeId, string? Error);
-
-    private sealed record NyxIdServiceSelectorResponse(
-        string ServiceSlug,
-        IReadOnlyList<string> EndpointNames);
 
     private sealed record RuntimeConfigFieldError(
         string Field,
