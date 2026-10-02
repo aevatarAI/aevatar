@@ -600,57 +600,12 @@ public sealed class NyxIdConnectedServiceOperationInvoker
 
     private async Task<IReadOnlyList<NyxIdMcpService>> ReadAgentKeyOpenApiServicesAsync(
         IReadOnlyList<NyxIdServiceInstanceBinding> bindings,
-        CancellationToken ct)
-    {
-        var services = new List<NyxIdMcpService>();
-        var catalogServiceIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var binding in bindings)
-        {
-            foreach (var catalogSpecSlug in EnumerateCatalogSpecSlugs(binding.Instance))
-            {
-                try
-                {
-                    var response = await _apiClient.GetCatalogOpenApiSpecAsync(
-                        binding.AccessToken,
-                        catalogSpecSlug,
-                        ct).ConfigureAwait(false);
-                    var parsed = NyxIdMcpOperationCatalog.ParseCustomOpenApi(
-                        response,
-                        binding.Instance,
-                        $"agent-key-catalog:{catalogSpecSlug}",
-                        DateTimeOffset.UtcNow,
-                        CatalogFreshnessWindow);
-                    foreach (var diagnostic in parsed.Discovery.Diagnostics)
-                    {
-                        _logger.LogInformation(
-                            "NyxID Agent Key fixed operation OpenAPI diagnostic. code={DiagnosticCode}, count={DiagnosticCount}",
-                            diagnostic.Code,
-                            diagnostic.Count);
-                    }
-                    if (parsed.Services.Count > 0)
-                    {
-                        services.AddRange(parsed.Services);
-                        catalogServiceIds.Add(binding.Instance.UserServiceId);
-                        break;
-                    }
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception)
-                {
-                    _logger.LogWarning(
-                        "NyxID Agent Key fixed operation OpenAPI diagnostic. code={DiagnosticCode}, count={DiagnosticCount}",
-                        ExternalCapabilityDiscoveryDiagnosticCode.SourceUnavailable,
-                        1);
-                }
-            }
-        }
-
-        services.AddRange(await ReadCustomOpenApiServicesAsync(bindings, catalogServiceIds, ct).ConfigureAwait(false));
-        return services;
-    }
+        CancellationToken ct) =>
+        await ReadCustomOpenApiServicesAsync(
+                bindings,
+                new HashSet<string>(StringComparer.Ordinal),
+                ct)
+            .ConfigureAwait(false);
 
     private async Task<IReadOnlyList<NyxIdMcpService>> ReadCustomOpenApiServicesAsync(
         IReadOnlyList<NyxIdServiceInstanceBinding> bindings,
@@ -774,33 +729,6 @@ public sealed class NyxIdConnectedServiceOperationInvoker
             binding.Instance.DisplaySlug,
             service.ServiceSlug,
             StringComparison.Ordinal);
-
-    private static IEnumerable<string> EnumerateCatalogSpecSlugs(NyxIdServiceInstance instance)
-    {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var serviceSlug in new[] { instance.CatalogServiceSlug, instance.DisplaySlug })
-        {
-            foreach (var candidate in EnumerateCatalogSpecSlugCandidates(serviceSlug))
-            {
-                if (seen.Add(candidate))
-                    yield return candidate;
-            }
-        }
-    }
-
-    private static IEnumerable<string> EnumerateCatalogSpecSlugCandidates(string serviceSlug)
-    {
-        if (string.IsNullOrWhiteSpace(serviceSlug))
-            yield break;
-        var normalized = serviceSlug.Trim();
-        yield return normalized;
-        const string apiPrefix = "api-";
-        if (normalized.StartsWith(apiPrefix, StringComparison.OrdinalIgnoreCase) &&
-            normalized.Length > apiPrefix.Length)
-        {
-            yield return normalized[apiPrefix.Length..];
-        }
-    }
 
     private static bool TryBuildCustomOpenApiProxyPath(
         NyxIdServiceInstance instance,

@@ -34,13 +34,13 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
 
         handler.Requests.Should().HaveCount(8);
         handler.Requests.Select(request => request.Path).Should().Equal(
-            "/api/v1/catalog-specs/api-github/openapi.json",
+            "/api/v1/proxy/s/github/openapi.json",
             "/api/v1/proxy/s/ornn/api/v1/skill-format/validate",
             "/api/v1/proxy/s/ornn/api/v1/skills",
             "/api/v1/proxy/s/ornn/api/v1/skills/33333333-3333-3333-3333-333333333333/permissions",
             "/api/v1/keys/catalog-github",
             "/api/v1/keys/catalog-github",
-            "/api/v1/catalog-specs/api-github/openapi.json",
+            "/api/v1/proxy/s/github/openapi.json",
             "/api/v1/keys/catalog-github");
         handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")
             .Should().ContainSingle();
@@ -148,7 +148,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         skillRef.LiteralVersion.Should().Be("1.0");
         skillRef.ManifestDigest.Should().Be(new string('b', 64));
         handler.Requests.Select(request => request.Path).Should().Equal(
-            "/api/v1/catalog-specs/api-github/openapi.json",
+            "/api/v1/proxy/s/github/openapi.json",
             "/api/v1/proxy/s/ornn/api/v1/skill-format/validate",
             "/api/v1/proxy/s/ornn/api/v1/skills",
             "/api/v1/proxy/s/ornn/api/v1/skill-search",
@@ -273,7 +273,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var handler = new CapturingHandler();
         var creator = CreateCreator(handler);
         var instance = ReadyInstance();
-        instance.CatalogServiceSlug = "api-calendar";
+        instance.OpenapiSpecUrl = string.Empty;
 
         var result = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
 
@@ -318,6 +318,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         CatalogServiceSlug = "api-github",
         Label = "GitHub",
         EndpointUrl = "https://api.github.test",
+        OpenapiSpecUrl = "https://api.github.test/openapi.json",
         IsActive = true,
         CredentialAllowed = true,
         CredentialSource = NyxIdServiceCredentialSource.Personal,
@@ -414,7 +415,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
 
             var response = (request.Method.Method, request.RequestUri.AbsolutePath) switch
             {
-                ("GET", "/api/v1/catalog-specs/api-github/openapi.json") => new CapturingResponse(OpenApiSpec),
+                ("GET", "/api/v1/proxy/s/github/openapi.json") => new CapturingResponse(OpenApiSpec),
                 ("POST", "/api/v1/proxy/s/ornn/api/v1/skill-format/validate") => new CapturingResponse("""{"data":{"valid":true,"violations":[]}}"""),
                 ("POST", "/api/v1/proxy/s/ornn/api/v1/skills") when ConflictOnPublish => new CapturingResponse("""{"error":{"code":"skill_conflict","message":"skill already exists"}}""", HttpStatusCode.Conflict),
                 ("POST", "/api/v1/proxy/s/ornn/api/v1/skills") => new CapturingResponse("""{"data":{"guid":"33333333-3333-3333-3333-333333333333","version":"1.0","skillHash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}"""),

@@ -101,37 +101,6 @@ public sealed class NyxIdRecommendedSkillGenerator
         CancellationToken ct)
     {
         var services = new List<NyxIdMcpService>();
-        foreach (var catalogSpecSlug in EnumerateCatalogSpecSlugs(instance))
-        {
-            try
-            {
-                var response = await _client.GetCatalogOpenApiSpecAsync(
-                    serverToken,
-                    catalogSpecSlug,
-                    ct).ConfigureAwait(false);
-                var parsed = NyxIdMcpOperationCatalog.ParseCustomOpenApi(
-                    response,
-                    instance,
-                    $"recommended-skill-catalog:{catalogSpecSlug}",
-                    DateTimeOffset.UtcNow,
-                    CatalogFreshnessWindow);
-                services.AddRange(parsed.Services);
-                if (parsed.Services.Count > 0)
-                    return services;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    ex,
-                    "NyxID recommended skill catalog OpenAPI read failed for slug {CatalogSpecSlug}",
-                    catalogSpecSlug);
-            }
-        }
-
         if (!TryBuildCustomOpenApiProxyPath(instance, out var proxyPath))
             return services;
 
@@ -264,23 +233,6 @@ public sealed class NyxIdRecommendedSkillGenerator
         }
         if (endpoint.ResponseMediaTypes.Count > 0)
             builder.AppendLine($"- response_media_types: {string.Join(", ", endpoint.ResponseMediaTypes.Select(static value => $"`{value}`"))}");
-    }
-
-    private static IEnumerable<string> EnumerateCatalogSpecSlugs(NyxIdServiceInstance instance)
-    {
-        foreach (var value in new[] { instance.CatalogServiceSlug, instance.DisplaySlug })
-        {
-            var slug = value?.Trim();
-            if (string.IsNullOrWhiteSpace(slug))
-                continue;
-            yield return slug;
-            const string apiPrefix = "api-";
-            if (slug.StartsWith(apiPrefix, StringComparison.OrdinalIgnoreCase) &&
-                slug.Length > apiPrefix.Length)
-            {
-                yield return slug[apiPrefix.Length..];
-            }
-        }
     }
 
     private static bool TryBuildCustomOpenApiProxyPath(

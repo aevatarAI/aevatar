@@ -353,7 +353,6 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.KeysByToken["agent-key-token"] = Keys(
             InstanceWithOpenApiUrl("usvc-alpha", "api-google-workspace", "api-google-workspace", "http://internal/api/openapi.json"));
         handler.McpConfigByToken["agent-key-token"] = catalogResponse;
-        handler.OpenApiResponsesByPath["/api/v1/catalog-specs/google-workspace/openapi.json"] = CustomOpenApi;
         var source = CreateSource(handler);
         using var scope = PushContext(
             "agent-key-token",
@@ -3077,16 +3076,6 @@ public class NyxIdConnectedServiceToolSourceTests
                 if (OpenApiResponsesByPath.TryGetValue(path, out var openApiResponse))
                     return Task.FromResult(Json(openApiResponse));
                 throw new InvalidOperationException("raw_openapi_must_not_be_requested");
-            }
-
-            if (request.Method == HttpMethod.Get &&
-                path.StartsWith("/api/v1/catalog-specs/", StringComparison.Ordinal) &&
-                path.EndsWith("/openapi.json", StringComparison.Ordinal))
-            {
-                RawOpenApiRequests.Add(path);
-                if (OpenApiResponsesByPath.TryGetValue(path, out var openApiResponse))
-                    return Task.FromResult(Json(openApiResponse));
-                throw new InvalidOperationException("catalog_openapi_must_be_configured");
             }
 
             if (request.Method == HttpMethod.Get &&

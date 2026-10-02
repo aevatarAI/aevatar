@@ -736,7 +736,16 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             var creationResult = await recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, ct)
                 .ConfigureAwait(false);
             if (creationResult.Refs.Count == 0)
-                return EnsureRecommendedSkillRefsFailure("recommended_skill_ref_creation_failed");
+            {
+                _logger.LogInformation(
+                    "NyxID recommended skill ref ensure skipped because no generated skill was available. userServiceId={UserServiceId} serviceSlug={ServiceSlug} failureCode={FailureCode}",
+                    service.UserServiceId,
+                    service.DisplaySlug,
+                    creationResult.PersistenceFailureCode);
+                return RecommendedSkillRefsUnavailable(
+                    service,
+                    FirstNonEmpty(creationResult.PersistenceFailureCode, "recommended_skill_unavailable"));
+            }
 
             return RecommendedSkillRefsEnsured(service, creationResult, created: true);
         }
@@ -1030,7 +1039,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         CancellationToken ct)
     {
         if (_recommendedSkillRefCreator is null)
-            return RecommendedSkillFailure("recommended_skill_ref_creation_failed");
+            return RecommendedSkillUnavailable("recommended_skill_unavailable");
 
         NyxIdRecommendedSkillRefCreationResult creationResult;
         try
@@ -1047,14 +1056,23 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         {
             _logger.LogWarning(
                 ex,
-                "NyxID recommended skill regeneration failed. userServiceId={UserServiceId} skillId={SkillId}",
+                "NyxID recommended skill regeneration skipped after failure. userServiceId={UserServiceId} skillId={SkillId}",
                 service.UserServiceId,
                 staleSkillRef.SkillId);
-            return RecommendedSkillFailure("recommended_skill_ref_creation_failed");
+            return RecommendedSkillUnavailable("recommended_skill_unavailable");
         }
 
         if (creationResult.Refs.Count == 0 || creationResult.CreatedSkills.Count == 0)
-            return RecommendedSkillFailure("recommended_skill_ref_creation_failed");
+        {
+            _logger.LogInformation(
+                "NyxID recommended skill regeneration skipped because no generated skill was available. userServiceId={UserServiceId} serviceSlug={ServiceSlug} failureCode={FailureCode}",
+                service.UserServiceId,
+                service.DisplaySlug,
+                creationResult.PersistenceFailureCode);
+            return RecommendedSkillUnavailable(FirstNonEmpty(
+                creationResult.PersistenceFailureCode,
+                "recommended_skill_unavailable"));
+        }
 
         for (var index = service.RecommendedSkillRefs.Count - 1; index >= 0; index--)
         {
@@ -1607,6 +1625,16 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             error = errorCode,
         });
 
+    private static string RecommendedSkillUnavailable(string errorCode) =>
+        JsonSerializer.Serialize(new
+        {
+            result_type = "nyxid_recommended_skill_load",
+            status = "unavailable",
+            loaded = false,
+            error = errorCode,
+            message = "No generated recommended skill is available for this connected service. Continue without this skill.",
+        });
+
     private static string EnsureRecommendedSkillRefsFailure(string errorCode) =>
         JsonSerializer.Serialize(new
         {
@@ -1614,6 +1642,23 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             status = "failed",
             ensured = false,
             error = errorCode,
+        });
+
+    private static string RecommendedSkillRefsUnavailable(
+        NyxIdServiceInstance service,
+        string errorCode) =>
+        JsonSerializer.Serialize(new
+        {
+            result_type = "nyxid_recommended_skill_refs_ensure",
+            status = "success",
+            ensured = false,
+            created = false,
+            service_instance_id = service.UserServiceId,
+            service_slug = service.DisplaySlug,
+            catalog_service_slug = service.CatalogServiceSlug,
+            recommended_skill_refs = Array.Empty<object>(),
+            error = errorCode,
+            message = "No generated recommended skill is available for this connected service. Continue without recommended skill refs.",
         });
 
     private static string RecommendedSkillRefsEnsured(
@@ -1684,6 +1729,18 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             var loaded = loadedValue.GetBoolean();
             var status = statusValue.GetString();
             if (loaded && string.Equals(status, "success", StringComparison.Ordinal))
+            {
+                return new AgentToolReceipt
+                {
+                    CallId = callId ?? string.Empty,
+                    ToolName = toolName ?? string.Empty,
+                    Status = AgentToolReceiptStatus.Success,
+                    ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                    ResultJson = resultJson ?? string.Empty,
+                };
+            }
+
+            if (string.Equals(status, "unavailable", StringComparison.Ordinal))
             {
                 return new AgentToolReceipt
                 {

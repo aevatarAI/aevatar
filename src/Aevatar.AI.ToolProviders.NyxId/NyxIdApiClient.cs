@@ -267,9 +267,6 @@ public sealed partial class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetCatalogEntryAsync(string token, string slug, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/catalog/{Uri.EscapeDataString(slug)}", ct);
 
-    public Task<string> GetCatalogOpenApiSpecAsync(string token, string catalogSpecSlug, CancellationToken ct) =>
-        GetAsync(token, $"/api/v1/catalog-specs/{Uri.EscapeDataString(catalogSpecSlug)}/openapi.json", ct);
-
     // ─── AI Services (unified /keys) ───
 
     public Task<string> ListServicesAsync(string token, CancellationToken ct) =>
