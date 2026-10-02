@@ -235,7 +235,7 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     [Theory]
     [InlineData("""{"path_params":{"event_id":"evt-alpha"},"query":{"notify":7}}""", "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
     [InlineData("""{"path_params":{"event_id":"evt-alpha"},"headers":{"If-Match":false}}""", "NYXID_OPERATION_HEADER_INVALID")]
-    public void AdmittedRequestBuilder_ShouldRejectNonStringAuthoredQueryOrHeader(
+    public void AdmittedRequestBuilder_ShouldRejectAuthoredQueryOrHeader_WhenSchemaDoesNotMatch(
         string argumentsJson,
         string errorCode)
     {
@@ -247,36 +247,44 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         result.Failure!.Code.Should().Be(errorCode);
     }
 
-    [Theory]
-    [InlineData(
-        AgentToolOperationParameterLocation.Query,
-        AgentToolOperationValueKind.Integer,
-        """{"path_params":{"event_id":"evt-alpha"},"query":{"notify":7}}""",
-        "NYXID_OPERATION_QUERY_PARAMETER_INVALID")]
-    [InlineData(
-        AgentToolOperationParameterLocation.Header,
-        AgentToolOperationValueKind.Boolean,
-        """{"path_params":{"event_id":"evt-alpha"},"headers":{"If-Match":true}}""",
-        "NYXID_OPERATION_HEADER_INVALID")]
-    public void AdmittedRequestBuilder_ShouldRejectNonStringAuthoredQueryOrHeader_WhenSchemaMatchesScalar(
-        AgentToolOperationParameterLocation location,
-        AgentToolOperationValueKind kind,
-        string argumentsJson,
-        string errorCode)
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldAcceptAuthoredNumericQuery_WhenSchemaMatchesScalar()
     {
         var admission = AuthoredRequestAdmission();
         admission = admission with
         {
-            Parameters = admission.Parameters.Select(parameter =>
-                parameter.Location == location
-                    ? parameter with { Schema = ScalarSchema(kind) }
+            Parameters = admission.Parameters.Select(static parameter =>
+                parameter.Location == AgentToolOperationParameterLocation.Query
+                    ? parameter with { Schema = ScalarSchema(AgentToolOperationValueKind.Integer) }
                     : parameter).ToArray(),
         };
 
-        var result = NyxIdAdmittedRequestBuilder.Build(admission, argumentsJson);
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            admission,
+            """{"path_params":{"event_id":"evt-alpha"},"query":{"notify":7}}""");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Path.Should().Be("/events/evt-alpha?notify=7");
+    }
+
+    [Fact]
+    public void AdmittedRequestBuilder_ShouldRejectAuthoredNonStringHeader_WhenSchemaMatchesScalar()
+    {
+        var admission = AuthoredRequestAdmission();
+        admission = admission with
+        {
+            Parameters = admission.Parameters.Select(static parameter =>
+                parameter.Location == AgentToolOperationParameterLocation.Header
+                    ? parameter with { Schema = ScalarSchema(AgentToolOperationValueKind.Boolean) }
+                    : parameter).ToArray(),
+        };
+
+        var result = NyxIdAdmittedRequestBuilder.Build(
+            admission,
+            """{"path_params":{"event_id":"evt-alpha"},"headers":{"If-Match":true}}""");
 
         result.Succeeded.Should().BeFalse();
-        result.Failure!.Code.Should().Be(errorCode);
+        result.Failure!.Code.Should().Be("NYXID_OPERATION_HEADER_INVALID");
     }
 
     [Theory]

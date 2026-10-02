@@ -43,6 +43,16 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
             if (string.IsNullOrWhiteSpace(token))
                 return NyxIdRecommendedSkillRefCreationResult.Empty();
 
+            if (string.IsNullOrWhiteSpace(instance.CatalogServiceId))
+            {
+                _logger.LogWarning(
+                    "NyxID recommended skill ref creation skipped because catalog_service_id is missing for user service {UserServiceId}",
+                    instance.UserServiceId);
+                return NyxIdRecommendedSkillRefCreationResult.Empty(
+                    NyxIdRecommendedSkillRefPersistenceStatus.WriteUnavailable,
+                    "catalog_service_id_missing");
+            }
+
             var generatedSkill = await _skillGenerator
                 .GenerateAsync(token, instance, ct)
                 .ConfigureAwait(false);

@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
@@ -35,10 +37,14 @@ public sealed record NyxIdRecommendedSkillRefPersistenceResult(
 public sealed class NyxIdRecommendedSkillRefPersistenceService
 {
     private readonly NyxIdApiClient _client;
+    private readonly ILogger<NyxIdRecommendedSkillRefPersistenceService> _logger;
 
-    public NyxIdRecommendedSkillRefPersistenceService(NyxIdApiClient client)
+    public NyxIdRecommendedSkillRefPersistenceService(
+        NyxIdApiClient client,
+        ILogger<NyxIdRecommendedSkillRefPersistenceService>? logger = null)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
+        _logger = logger ?? NullLogger<NyxIdRecommendedSkillRefPersistenceService>.Instance;
     }
 
     public async Task<NyxIdRecommendedSkillRefPersistenceResult> PersistRecommendedSkillRefsAsync(
@@ -50,6 +56,13 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
         if (refs.Count == 0)
             return NyxIdRecommendedSkillRefPersistenceResult.EmptyInput();
 
+        if (!TrySelectCatalogServiceKeyId(instance, out var catalogServiceKeyId))
+        {
+            return NyxIdRecommendedSkillRefPersistenceResult.Failed(
+                NyxIdRecommendedSkillRefPersistenceStatus.WriteUnavailable,
+                "catalog_service_id_missing");
+        }
+
         IReadOnlyList<NyxIdRecommendedSkillRef> currentRefs = instance.RecommendedSkillRefs
             .Select(static skillRef => skillRef.Clone())
             .ToArray();
@@ -57,7 +70,7 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
         {
             var currentResponse = await _client.GetServiceAsync(
                 serverToken,
-                instance.UserServiceId,
+                catalogServiceKeyId,
                 ct).ConfigureAwait(false);
             var readFailure = ClassifyFailure(
                 currentResponse,
@@ -70,19 +83,27 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
         }
 
         var mergedRefs = MergeRefs(currentRefs, refs);
-        if (mergedRefs.Count == currentRefs.Count)
+        if (SameRefs(currentRefs, mergedRefs))
             return NyxIdRecommendedSkillRefPersistenceResult.Succeeded(currentRefs);
 
         return await WriteRecommendedSkillRefsAsync(
             serverToken,
-            instance.UserServiceId,
+            catalogServiceKeyId,
             mergedRefs,
             ct).ConfigureAwait(false);
     }
 
+    private static bool TrySelectCatalogServiceKeyId(
+        NyxIdServiceInstance instance,
+        out string catalogServiceKeyId)
+    {
+        catalogServiceKeyId = instance.CatalogServiceId?.Trim() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(catalogServiceKeyId);
+    }
+
     private async Task<NyxIdRecommendedSkillRefPersistenceResult> WriteRecommendedSkillRefsAsync(
         string serverToken,
-        string userServiceId,
+        string servicePersistenceId,
         IReadOnlyList<NyxIdRecommendedSkillRef> refs,
         CancellationToken ct)
     {
@@ -93,7 +114,7 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
 
         var updateResponse = await _client.UpdateServiceAsync(
             serverToken,
-            userServiceId,
+            servicePersistenceId,
             body,
             ct).ConfigureAwait(false);
         var writeFailure = ClassifyFailure(
@@ -101,9 +122,51 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
             NyxIdRecommendedSkillRefPersistenceStatus.WriteDenied,
             NyxIdRecommendedSkillRefPersistenceStatus.WriteUnavailable);
         if (writeFailure is not null)
+        {
+            LogRecommendedSkillRefsUpdateFailure(
+                servicePersistenceId,
+                refs,
+                updateResponse,
+                writeFailure);
             return writeFailure;
+        }
 
         return NyxIdRecommendedSkillRefPersistenceResult.Succeeded(refs);
+    }
+
+    private void LogRecommendedSkillRefsUpdateFailure(
+        string catalogServiceKeyId,
+        IReadOnlyList<NyxIdRecommendedSkillRef> refs,
+        string updateResponse,
+        NyxIdRecommendedSkillRefPersistenceResult writeFailure)
+    {
+        _logger.LogWarning(
+            "NyxID recommended skill refs update failed. catalogServiceId={CatalogServiceId} status={Status} failureCode={FailureCode} refCount={RefCount} refs={Refs} response={Response}",
+            catalogServiceKeyId,
+            writeFailure.Status,
+            writeFailure.FailureCode,
+            refs.Count,
+            BuildRefSummary(refs),
+            LimitDiagnosticText(updateResponse, 1200));
+    }
+
+    private static string BuildRefSummary(IReadOnlyList<NyxIdRecommendedSkillRef> refs) =>
+        string.Join(
+            "; ",
+            refs.Select(static skillRef =>
+                string.Join(
+                    '/',
+                    SourceToJson(skillRef.Source),
+                    skillRef.SkillId.Trim(),
+                    skillRef.LiteralVersion.Trim(),
+                    LimitDiagnosticText(skillRef.ManifestDigest.Trim().ToLowerInvariant(), 16))));
+
+    private static string LimitDiagnosticText(string value, int maxLength)
+    {
+        var normalized = value.Replace('\r', ' ').Replace('\n', ' ');
+        return normalized.Length <= maxLength
+            ? normalized
+            : normalized[..maxLength];
     }
 
     private static IReadOnlyList<NyxIdRecommendedSkillRef> ParseRecommendedSkillRefs(string json)
@@ -150,7 +213,10 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
             return null;
         var skillId = ReadString(item, "skill_id") ?? ReadString(item, "id") ?? ReadString(item, "guid");
         var literalVersion = ReadString(item, "literal_version") ?? ReadString(item, "version");
-        var manifestDigest = ReadString(item, "manifest_digest") ?? ReadString(item, "digest") ?? ReadString(item, "skill_hash");
+        var manifestDigest = ReadString(item, "manifest_digest") ??
+                             ReadString(item, "digest") ??
+                             ReadString(item, "skill_hash") ??
+                             ReadString(item, "sha256");
         if (string.IsNullOrWhiteSpace(skillId) ||
             string.IsNullOrWhiteSpace(literalVersion) ||
             string.IsNullOrWhiteSpace(manifestDigest))
@@ -174,16 +240,32 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
         IReadOnlyList<NyxIdRecommendedSkillRef> currentRefs,
         IReadOnlyList<NyxIdRecommendedSkillRef> createdRefs)
     {
-        var mergedRefs = new List<NyxIdRecommendedSkillRef>(currentRefs.Count + createdRefs.Count);
-        foreach (var skillRef in currentRefs.Concat(createdRefs))
+        var mergedRefs = currentRefs
+            .Select(static skillRef => skillRef.Clone())
+            .ToList();
+        foreach (var skillRef in createdRefs)
         {
             if (mergedRefs.Any(existing => SameRef(existing, skillRef)))
                 continue;
+
+            var replacementIndex = mergedRefs.FindIndex(existing => SameRecommendationSlot(existing, skillRef));
+            if (replacementIndex >= 0)
+            {
+                mergedRefs[replacementIndex] = skillRef.Clone();
+                continue;
+            }
+
             mergedRefs.Add(skillRef.Clone());
         }
 
         return mergedRefs;
     }
+
+    private static bool SameRefs(
+        IReadOnlyList<NyxIdRecommendedSkillRef> left,
+        IReadOnlyList<NyxIdRecommendedSkillRef> right) =>
+        left.Count == right.Count &&
+        left.Zip(right).All(pair => SameRef(pair.First, pair.Second));
 
     private static bool SameRef(NyxIdRecommendedSkillRef left, NyxIdRecommendedSkillRef right) =>
         left.Source == right.Source &&
@@ -191,15 +273,30 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
         string.Equals(left.LiteralVersion, right.LiteralVersion, StringComparison.Ordinal) &&
         string.Equals(left.ManifestDigest, right.ManifestDigest, StringComparison.Ordinal);
 
+    private static bool SameRecommendationSlot(NyxIdRecommendedSkillRef left, NyxIdRecommendedSkillRef right)
+    {
+        var leftName = RefPersistenceName(left);
+        var rightName = RefPersistenceName(right);
+        return left.Source == right.Source &&
+               !string.IsNullOrWhiteSpace(leftName) &&
+               string.Equals(leftName, rightName, StringComparison.Ordinal);
+    }
+
+    private static string RefPersistenceName(NyxIdRecommendedSkillRef skillRef) =>
+        string.IsNullOrWhiteSpace(skillRef.RecommendationName)
+            ? skillRef.DisplayName.Trim()
+            : skillRef.RecommendationName.Trim();
+
     private static object ToJsonContract(NyxIdRecommendedSkillRef skillRef) => new
     {
         source = SourceToJson(skillRef.Source),
         skill_id = skillRef.SkillId,
-        literal_version = skillRef.LiteralVersion,
-        manifest_digest = skillRef.ManifestDigest,
-        display_name = skillRef.DisplayName,
-        recommendation_name = skillRef.RecommendationName,
-        revision = skillRef.Revision,
+        name = string.IsNullOrWhiteSpace(skillRef.RecommendationName)
+            ? skillRef.DisplayName
+            : skillRef.RecommendationName,
+        version = skillRef.LiteralVersion,
+        sha256 = skillRef.ManifestDigest,
+        dependencies = Array.Empty<object>(),
     };
 
     private static NyxIdRecommendedSkillRefPersistenceResult? ClassifyFailure(
@@ -230,9 +327,6 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
 
     private static string? ReadFailureCode(JsonElement root)
     {
-        if (TryReadStatus(root, out var status) && status >= 400)
-            return ReadString(root, "code") ?? ReadString(root, "error") ?? $"http_{status}";
-
         if (root.TryGetProperty("body", out var body) &&
             body.ValueKind == JsonValueKind.String &&
             !string.IsNullOrWhiteSpace(body.GetString()))
@@ -241,22 +335,97 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
             {
                 using var bodyDocument = JsonDocument.Parse(body.GetString()!);
                 if (bodyDocument.RootElement.ValueKind == JsonValueKind.Object)
-                    return ReadFailureCode(bodyDocument.RootElement);
+                {
+                    var bodyCode = ReadFailureCode(bodyDocument.RootElement);
+                    if (!string.IsNullOrWhiteSpace(bodyCode))
+                        return TryReadStatus(root, out var wrapperStatus) && wrapperStatus >= 400
+                            ? AppendFailureDetail($"http_{wrapperStatus}", bodyCode)
+                            : bodyCode;
+                }
             }
             catch (JsonException)
             {
-                return ReadString(root, "error") ?? "upstream_error";
+                var bodyText = body.GetString();
+                if (TryReadStatus(root, out var wrapperStatus) && wrapperStatus >= 400)
+                    return AppendFailureDetail($"http_{wrapperStatus}", bodyText);
+
+                return AppendFailureDetail(ReadString(root, "error") ?? "upstream_error", bodyText);
             }
         }
 
+        if (TryReadStatus(root, out var status) && status >= 400)
+            return BuildFailureCode(root, ReadString(root, "code") ?? ReadString(root, "error") ?? $"http_{status}");
+
         var code = ReadString(root, "code") ?? ReadString(root, "error");
         if (!string.IsNullOrWhiteSpace(code))
-            return code;
+            return BuildFailureCode(root, code);
+
+        if (!string.IsNullOrWhiteSpace(ReadFailureDetail(root, "message")) ||
+            !string.IsNullOrWhiteSpace(ReadFailureDetail(root, "detail")) ||
+            !string.IsNullOrWhiteSpace(ReadFailureDetail(root, "error_description")) ||
+            !string.IsNullOrWhiteSpace(ReadFailureDetail(root, "errors")))
+        {
+            return BuildFailureCode(root, "upstream_error");
+        }
 
         return root.TryGetProperty("error", out var error) &&
                error.ValueKind is not (JsonValueKind.False or JsonValueKind.Null)
-            ? "upstream_error"
+            ? BuildFailureCode(root, "upstream_error")
             : null;
+    }
+
+    private static string BuildFailureCode(JsonElement root, string code)
+    {
+        var detail = ReadFailureDetail(root, "message") ??
+                     ReadFailureDetail(root, "detail") ??
+                     ReadFailureDetail(root, "error_description") ??
+                     ReadFailureDetail(root, "errors");
+        return AppendFailureDetail(code, detail);
+    }
+
+    private static string? ReadFailureDetail(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty(name, out var value))
+            return null;
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Array => string.Join("; ", value.EnumerateArray()
+                .Select(ReadFailureDetail)
+                .Where(static detail => !string.IsNullOrWhiteSpace(detail))),
+            JsonValueKind.Object => value.ToString(),
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null,
+        };
+    }
+
+    private static string? ReadFailureDetail(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.String)
+            return value.GetString();
+        if (value.ValueKind != JsonValueKind.Object)
+            return value.ToString();
+
+        return ReadString(value, "message") ??
+               ReadString(value, "detail") ??
+               ReadString(value, "reason") ??
+               ReadFailureDetail(value, "loc") ??
+               ReadString(value, "msg") ??
+               value.ToString();
+    }
+
+    private static string AppendFailureDetail(string code, string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail) || string.Equals(code, detail, StringComparison.Ordinal))
+            return code;
+
+        var normalized = detail.Trim().Replace('\r', ' ').Replace('\n', ' ');
+        return normalized.Length <= 180
+            ? $"{code}:{normalized}"
+            : $"{code}:{normalized[..180]}";
     }
 
     private static bool IsAccessDenied(JsonElement root, string failureCode)
@@ -308,8 +477,15 @@ public sealed class NyxIdRecommendedSkillRefPersistenceService
         return source != NyxIdRecommendedSkillSource.Unspecified;
     }
 
-    private static string? ReadString(JsonElement item, string name) =>
-        item.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
+    private static string? ReadString(JsonElement item, string name)
+    {
+        if (!item.TryGetProperty(name, out var value))
+            return null;
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number => value.GetRawText(),
+            _ => null,
+        };
+    }
 }
