@@ -1193,10 +1193,13 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         proxyRequest.BearerToken.Should().Be("registration-agent-key");
     }
 
-    [Fact]
-    public async Task InvokeOperationAsync_WithAgentKeyAndGatewayOnlyDocument_ExecutesExactInstanceOperation()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvokeOperationAsync_WithAgentKeyAndGatewayOnlyDocument_ExecutesExactInstanceOperation(bool missingInstanceDocument)
     {
         const string documentPath = "/api/v1/proxy/services/user-service-1/openapi.json";
+        const string catalogPath = "/api/v1/proxy/services/catalog-google-workspace/openapi.json";
         var handler = new InventoryHandler
         {
             KeysResponse = """
@@ -1211,6 +1214,14 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             ProxyResponseBody = "{\"profile\":\"quiet table\"}",
         };
         handler.OpenApiResponsesByPath[documentPath] = DiningProfileOpenApi;
+        if (missingInstanceDocument)
+        {
+            handler.OpenApiResponseStatuses[documentPath] = System.Net.HttpStatusCode.NotFound;
+            handler.OpenApiResponsesByPath[documentPath] = """
+                {"error":"not_found","error_code":1003,"message":"Not found: Service has no documentation spec configured"}
+                """;
+            handler.OpenApiResponsesByPath[catalogPath] = DiningProfileOpenApi;
+        }
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var executionPort = CreateAdmittedExecutionPort([]);
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
@@ -1227,8 +1238,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             """);
 
         result.Should().Contain("quiet table");
-        handler.RawOpenApiRequests.Should().Equal(documentPath);
-        handler.DocumentTokens.Should().Equal("registration-agent-key");
+        handler.RawOpenApiRequests.Should().Equal(missingInstanceDocument ? [documentPath, catalogPath] : [documentPath]);
+        handler.DocumentTokens.Should().HaveCount(missingInstanceDocument ? 2 : 1)
+            .And.OnlyContain(token => token == "registration-agent-key");
         var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
         proxyRequest.Method.Should().Be("GET");
         proxyRequest.Path.Should().Be("/api/v1/proxy/s/api-google-workspace/profile/dining");
@@ -2290,6 +2302,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         public bool FailKeysRequest { get; init; }
         public string? McpConfigResponse { get; set; }
         public Dictionary<string, string> OpenApiResponsesByPath { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, System.Net.HttpStatusCode> OpenApiResponseStatuses { get; } = new(StringComparer.Ordinal);
         public List<string> RawOpenApiRequests { get; } = [];
         public List<string?> DocumentTokens { get; } = [];
         public List<ProxyRequestRecord> ProxyRequests { get; } = [];
@@ -2311,7 +2324,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             {
                 RawOpenApiRequests.Add(requestPath);
                 DocumentTokens.Add(request.Headers.Authorization?.Parameter);
-                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                return Task.FromResult(new HttpResponseMessage(OpenApiResponseStatuses.GetValueOrDefault(requestPath, System.Net.HttpStatusCode.OK))
                 {
                     Content = new StringContent(proxyOpenApiResponse),
                 });

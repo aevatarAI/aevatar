@@ -23,7 +23,11 @@ NyxID `GET /api/v1/mcp/config` supplies the normalized descriptor catalog for pu
 | `openapi_url` | `NyxIdServiceInstance.openapi_document_url` | NyxID 网关文档资源。只接受当前配置的 public API origin 或根相对地址；路径必须精确匹配 `/api/v1/proxy/services/{id}/openapi.json`，其中 ID 来自该 inventory 条目的 `user_service_id` 或 `catalog_service_id`。不要求下游 `endpoint_url`。 |
 | `openapi_spec_url` | `NyxIdServiceInstance.openapi_spec_url` | 下游原始规范地址。绝对地址必须与该实例的 `endpoint_url` 同源；安全的相对路径可以直接使用。请求通过实例绑定的 NyxID service proxy 发出。 |
 
-网关地址优先；存在但不合法、读取失败或文档无效时，不改走另一个来源。网关地址不允许 userinfo、query 或 fragment，也不会作为下游 proxy path。下游路径拒绝协议相对地址、dot segment、反斜杠、fragment 和控制字符。地址差异属于实例 authority 的差异，重验与同 ID 冲突处理必须包含两个字段。
+网关地址优先。网关地址不允许 userinfo、query 或 fragment，也不会作为下游 proxy path。下游路径拒绝协议相对地址、dot segment、反斜杠、fragment 和控制字符。地址差异属于实例 authority 的差异，重验与同 ID 冲突处理必须包含两个字段。
+
+实例网关文档有且仅有一个受控回退：已验证的文档目标必须是原 `user_service_id`，inventory 未声明显式 `openapi_spec_url`，并且同一条目提供了不同于实例 ID 的非空 `catalog_service_id`。原请求须返回 HTTP 404，且 JSON 同时满足 `error = not_found`、`error_code = 1003`、`message = Not found: Service has no documentation spec configured`，三个判定字段各出现一次，重复字段视为含歧义响应。适配边界将该真实错误契约归一化为 `DocumentNotConfigured`，随后使用同一 caller credential，从配置的 NyxID API 读取 `/api/v1/proxy/services/{catalog_service_id}/openapi.json` 一次；构造后的 catalog 路径仍须通过安全路径校验。关联身份只来自 inventory，不从 slug 或 URL 猜测。
+
+普通或无法辨别原因的 404、401/403、限流、服务端/传输错误、无效地址、无效或超限文档均不触发回退；显式实例 spec 失败及已指向 catalog 的文档失败也不回退。catalog 读取或解析失败立即返回相应诊断，不再寻找其他来源。catalog 文档仍用原实例解析 operation，文档内的 `servers` 不改变执行目标；后续调用保持原 `user_service_id` 与 `_nyxid_via`，读取器不会改写 inventory 或 catalog 配置。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -31,7 +35,9 @@ flowchart LR
     I["Caller inventory /keys"] --> R["Shared document reader"]
     R --> G["Gateway document: configured NyxID origin + exact inventory ID"]
     R --> D["Downstream spec: safe path + exact instance proxy"]
-    G --> P["Bounded fetch and operation parser"]
+    G -->|"Success"| P["Bounded fetch and original-instance operation parser"]
+    G -->|"Exact missing-doc error + eligible association"| C["Associated catalog document: same caller, one attempt"]
+    C --> P
     D --> P
     P --> S["Recommended skill generation"]
     P --> T["Dynamic discovery / fixed operation-ID invocation"]
@@ -48,11 +54,11 @@ reader 不缓存文档，沿用 1 MiB 上限和既有 operation admission。调�
 | Stage | 代表性 FailureCode | 定位方向 |
 |---|---|---|
 | `AddressResolution` | `DocumentUrlMissing`、`GatewayOriginMismatch`、`GatewayServiceIdentityMismatch`、`EndpointUrlMissing`、`SpecOriginMismatch`、`UnsafeProxyPath` | inventory 地址缺失、来源或 exact identity 不匹配；此阶段失败不会发出文档 HTTP 请求。 |
-| `Fetch` | `AuthenticationRequired`、`AccessDenied`、`NotFound`、`HttpError`、`TransportFailure`、`ResponseTooLarge` | 区分 401、403、404、其他 HTTP 状态、传输失败和大小超限。 |
+| `Fetch` | `AuthenticationRequired`、`AccessDenied`、`NotFound`、`DocumentNotConfigured`、`HttpError`、`TransportFailure`、`ResponseTooLarge` | 区分 401、403、普通 404、明确未配置文档、其他 HTTP 状态、传输失败和大小超限。 |
 | `Parse` | `InvalidDocument` | 响应不是可解析的 OpenAPI 契约。 |
 | `OperationSelection` | `NoOperations`、`NoAdmissibleOperations` | 文档没有 operation，或 operation 均被契约检查拒绝；相关 parser diagnostic 另记 code/count。 |
 
-成功日志记录文档来源和 operation 数量；上述日志不记录任意 URL、文档正文、token 或 provider exception message。文档读取成功只证明契约可供生成和准入；推荐 skill 发布、catalog 持久化、可见性及实际加载仍分别确认。`recommended_skill_unavailable` 继续表示未能加载，不能因已有 catalog ref 而报告成功。
+回退日志 `NyxID OpenAPI document fallback` 记录 `DocumentNotConfigured`、原实例 ID、关联 catalog ID、原来源、目标来源与原 HTTP 状态；后续成功或失败日志的 `DocumentSource = Catalog`。成功日志记录文档来源和 operation 数量；上述日志不记录任意 URL、文档正文、token 或 provider exception message。文档读取成功只证明契约可供生成和准入；推荐 skill 发布、catalog 持久化、可见性及实际加载仍分别确认。`recommended_skill_unavailable` 继续表示未能加载，不能因已有 catalog ref 而报告成功。
 
 ### Caller-visible inventory 与 route 自动收敛
 

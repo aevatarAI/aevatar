@@ -1,10 +1,11 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
 internal enum NyxIdOpenApiReadStage { AddressResolution, Fetch, Parse, OperationSelection }
 
-internal enum NyxIdOpenApiDocumentSource { Gateway, Downstream }
+internal enum NyxIdOpenApiDocumentSource { Gateway, Downstream, Catalog }
 
 internal enum NyxIdOpenApiReadFailure
 {
@@ -19,6 +20,7 @@ internal enum NyxIdOpenApiReadFailure
     AuthenticationRequired,
     AccessDenied,
     NotFound,
+    DocumentNotConfigured,
     HttpError,
     TransportFailure,
     ResponseTooLarge,
@@ -56,6 +58,25 @@ internal sealed class NyxIdOpenApiDocumentReader(NyxIdApiClient client, ILogger 
                 : await client.ProxyRequestBoundedAsync(
                     accessToken, instance.DisplaySlug, instance.UserServiceId, target,
                     HttpMethod.Get.Method, body: null, extraHeaders: null, MaxDocumentBytes, ct).ConfigureAwait(false);
+            failure = ClassifyFetchFailure(response);
+            if (source == NyxIdOpenApiDocumentSource.Gateway &&
+                failure == NyxIdOpenApiReadFailure.DocumentNotConfigured &&
+                string.Equals(target, instance.UserServiceId, StringComparison.Ordinal) &&
+                string.IsNullOrWhiteSpace(instance.OpenapiSpecUrl) &&
+                !string.IsNullOrWhiteSpace(instance.CatalogServiceId) &&
+                !string.Equals(instance.CatalogServiceId, instance.UserServiceId, StringComparison.Ordinal) &&
+                IsSafePath(NyxIdApiClient.BuildServiceOpenApiDocumentPath(instance.CatalogServiceId)))
+            {
+                ct.ThrowIfCancellationRequested();
+                logger.LogInformation(
+                    "NyxID OpenAPI document fallback. stage={Stage} code={FailureCode} userServiceId={UserServiceId} catalogServiceId={CatalogServiceId} source={DocumentSource} targetSource={TargetDocumentSource} httpStatus={HttpStatus}",
+                    NyxIdOpenApiReadStage.Fetch, failure, instance.UserServiceId, instance.CatalogServiceId,
+                    source, NyxIdOpenApiDocumentSource.Catalog, response.HttpStatus);
+                source = NyxIdOpenApiDocumentSource.Catalog;
+                response = await client.GetServiceOpenApiDocumentAsync(
+                    accessToken, instance.CatalogServiceId, MaxDocumentBytes, ct).ConfigureAwait(false);
+                failure = ClassifyFetchFailure(response);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -66,20 +87,8 @@ internal sealed class NyxIdOpenApiDocumentReader(NyxIdApiClient client, ILogger 
             return Failed(instance, source, NyxIdOpenApiReadStage.Fetch, NyxIdOpenApiReadFailure.TransportFailure);
         }
 
-        if (!response.Succeeded)
-        {
-            failure = response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes"
-                ? NyxIdOpenApiReadFailure.ResponseTooLarge
-                : response.HttpStatus switch
-                {
-                    401 => NyxIdOpenApiReadFailure.AuthenticationRequired,
-                    403 => NyxIdOpenApiReadFailure.AccessDenied,
-                    404 => NyxIdOpenApiReadFailure.NotFound,
-                    0 => NyxIdOpenApiReadFailure.TransportFailure,
-                    _ => NyxIdOpenApiReadFailure.HttpError,
-                };
+        if (failure != NyxIdOpenApiReadFailure.None)
             return Failed(instance, source, NyxIdOpenApiReadStage.Fetch, failure, response.HttpStatus);
-        }
 
         NyxIdMcpCatalogRead parsed;
         try
@@ -117,6 +126,48 @@ internal sealed class NyxIdOpenApiDocumentReader(NyxIdApiClient client, ILogger 
             "NyxID OpenAPI contract read completed. userServiceId={UserServiceId} source={DocumentSource} operationCount={OperationCount}",
             instance.UserServiceId, source, parsed.Services.Sum(static service => service.Endpoints.Count));
         return parsed.Services;
+    }
+
+    private static NyxIdOpenApiReadFailure ClassifyFetchFailure(NyxIdProxyTextResponse response)
+    {
+        if (response.Succeeded)
+            return NyxIdOpenApiReadFailure.None;
+        if (response.Detail is "content_length_exceeds_max_bytes" or "content_exceeds_max_bytes")
+            return NyxIdOpenApiReadFailure.ResponseTooLarge;
+        return response.HttpStatus switch
+        {
+            401 => NyxIdOpenApiReadFailure.AuthenticationRequired,
+            403 => NyxIdOpenApiReadFailure.AccessDenied,
+            404 when IsDocumentNotConfigured(response.Content) => NyxIdOpenApiReadFailure.DocumentNotConfigured,
+            404 => NyxIdOpenApiReadFailure.NotFound,
+            0 => NyxIdOpenApiReadFailure.TransportFailure,
+            _ => NyxIdOpenApiReadFailure.HttpError,
+        };
+    }
+
+    private static bool IsDocumentNotConfigured(string content)
+    {
+        // NyxID uses the same numeric code for hidden/missing instances and missing
+        // documentation. Recognize only its exact missing-document error contract.
+        // Require all three fields exactly once: TryGetProperty alone takes the last duplicate.
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                   root.EnumerateObject().Count(property => property.Name is "error" or "error_code" or "message") == 3 &&
+                   root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String &&
+                   error.GetString() == "not_found" &&
+                   root.TryGetProperty("error_code", out var code) && code.ValueKind == JsonValueKind.Number &&
+                   code.TryGetInt32(out var value) && value == 1003 &&
+                   root.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String &&
+                   message.GetString() == "Not found: Service has no documentation spec configured";
+        }
+        catch (JsonException)
+        {
+            // Unknown response shapes remain NotFound and are reported by Failed.
+            return false;
+        }
     }
 
     private IReadOnlyList<NyxIdMcpService> Failed(

@@ -598,10 +598,13 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.RawOpenApiRequests.Should().Equal("/api/v1/proxy/s/user-context-mock/openapi.json");
     }
 
-    [Fact]
-    public async Task DiscoverToolsAsync_GatewayOnlyServiceMissingFromMcp_ExposesExactReadOperation()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DiscoverToolsAsync_GatewayOnlyServiceMissingFromMcp_ExposesExactReadOperation(bool missingInstanceDocument)
     {
         const string documentPath = "/api/v1/proxy/services/us-aevatar/openapi.json";
+        const string catalogPath = "/api/v1/proxy/services/catalog-aevatar/openapi.json";
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["user-token"] = Keys("""
             {"id":"us-aevatar","slug":"aevatar","catalog_service_id":"catalog-aevatar",
@@ -610,6 +613,14 @@ public class NyxIdConnectedServiceToolSourceTests
              "openapi_url":"https://nyx.test/api/v1/proxy/services/us-aevatar/openapi.json"}
             """);
         handler.OpenApiResponsesByPath[documentPath] = CustomOpenApi;
+        if (missingInstanceDocument)
+        {
+            handler.OpenApiResponseStatuses[documentPath] = HttpStatusCode.NotFound;
+            handler.OpenApiResponsesByPath[documentPath] = """
+                {"error":"not_found","error_code":1003,"message":"Not found: Service has no documentation spec configured"}
+                """;
+            handler.OpenApiResponsesByPath[catalogPath] = CustomOpenApi;
+        }
 
         using var scope = PushContext("user-token");
         var tools = await CreateSource(handler).DiscoverToolsAsync();
@@ -622,7 +633,7 @@ public class NyxIdConnectedServiceToolSourceTests
         owner.OperationAdmission.Identity.Should().Be(
             new AgentToolOperationIdentity.PublishedEndpoint("readDiningProfileContext"));
         owner.OperationAdmission.PathTemplate.Should().Be("/profile/dining");
-        handler.RawOpenApiRequests.Should().Equal(documentPath);
+        handler.RawOpenApiRequests.Should().Equal(missingInstanceDocument ? [documentPath, catalogPath] : [documentPath]);
         handler.ProxyRequests.Should().BeEmpty();
     }
 
@@ -3023,6 +3034,7 @@ public class NyxIdConnectedServiceToolSourceTests
         public Dictionary<string, string> KeysByToken { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> McpConfigByToken { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> OpenApiResponsesByPath { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, HttpStatusCode> OpenApiResponseStatuses { get; } = new(StringComparer.Ordinal);
         public List<string> DiscoveryTokens { get; } = [];
         public List<string> DiscoveryPaths { get; } = [];
         public List<string> DiscoveryAuthorizationHeaders { get; } = [];
@@ -3094,7 +3106,7 @@ public class NyxIdConnectedServiceToolSourceTests
             {
                 RawOpenApiRequests.Add(path);
                 if (OpenApiResponsesByPath.TryGetValue(path, out var gatewayOpenApiResponse))
-                    return Task.FromResult(Json(gatewayOpenApiResponse));
+                    return Task.FromResult(Json(gatewayOpenApiResponse, OpenApiResponseStatuses.GetValueOrDefault(path, HttpStatusCode.OK)));
                 throw new InvalidOperationException("raw_openapi_must_not_be_requested");
             }
 
