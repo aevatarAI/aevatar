@@ -47,7 +47,6 @@ public sealed record NyxIdConnectedServiceOperationInvokeResult(
 public sealed class NyxIdConnectedServiceOperationInvoker
 {
     private static readonly TimeSpan CatalogFreshnessWindow = TimeSpan.FromMinutes(5);
-    private const int CustomOpenApiMaxBytes = 1024 * 1024;
     private const int MaxReadSourceBytes = 16 * 1024;
 
     private readonly NyxIdToolOptions _options;
@@ -613,57 +612,17 @@ public sealed class NyxIdConnectedServiceOperationInvoker
         CancellationToken ct)
     {
         var services = new List<NyxIdMcpService>();
+        var reader = new NyxIdOpenApiDocumentReader(_apiClient, _logger);
         foreach (var binding in bindings)
         {
-            if (catalogServiceIds.Contains(binding.Instance.UserServiceId) ||
-                string.IsNullOrWhiteSpace(binding.Instance.OpenapiSpecUrl) ||
-                !TryBuildCustomOpenApiProxyPath(binding.Instance, out var proxyPath))
-            {
+            if (catalogServiceIds.Contains(binding.Instance.UserServiceId))
                 continue;
-            }
-
-            try
-            {
-                var response = await _apiClient.ProxyRequestBoundedAsync(
-                    binding.AccessToken,
-                    binding.Instance.DisplaySlug,
-                    binding.Instance.UserServiceId,
-                    proxyPath,
-                    HttpMethod.Get.Method,
-                    body: null,
-                    extraHeaders: null,
-                    CustomOpenApiMaxBytes,
-                    ct);
-                if (!response.Succeeded)
-                    continue;
-                var parsed = NyxIdMcpOperationCatalog.ParseCustomOpenApi(
-                    response.Content,
-                    binding.Instance,
-                    $"caller-custom:{binding.Instance.UserServiceId}",
-                    DateTimeOffset.UtcNow,
-                    CatalogFreshnessWindow);
-                foreach (var diagnostic in parsed.Discovery.Diagnostics)
-                {
-                    _logger.LogInformation(
-                        "NyxID fixed operation custom OpenAPI diagnostic. code={DiagnosticCode}, count={DiagnosticCount}",
-                        diagnostic.Code,
-                        diagnostic.Count);
-                }
-                services.AddRange(parsed.Services);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception)
-            {
-                _logger.LogWarning(
-                    "NyxID fixed operation custom OpenAPI diagnostic. code={DiagnosticCode}, count={DiagnosticCount}",
-                    ExternalCapabilityDiscoveryDiagnosticCode.SourceUnavailable,
-                    1);
-            }
+            services.AddRange(await reader.ReadAsync(
+                binding.AccessToken,
+                binding.Instance,
+                $"caller-custom:{binding.Instance.UserServiceId}",
+                ct).ConfigureAwait(false));
         }
-
         return services;
     }
 
@@ -729,50 +688,4 @@ public sealed class NyxIdConnectedServiceOperationInvoker
             binding.Instance.DisplaySlug,
             service.ServiceSlug,
             StringComparison.Ordinal);
-
-    private static bool TryBuildCustomOpenApiProxyPath(
-        NyxIdServiceInstance instance,
-        out string path)
-    {
-        path = string.Empty;
-        if (string.IsNullOrWhiteSpace(instance.OpenapiSpecUrl))
-            return false;
-        if (!Uri.TryCreate(instance.OpenapiSpecUrl.Trim(), UriKind.RelativeOrAbsolute, out var openApiUri))
-            return false;
-
-        if (openApiUri.IsAbsoluteUri)
-        {
-            if (!Uri.TryCreate(instance.EndpointUrl, UriKind.Absolute, out var endpointUri) ||
-                !string.Equals(openApiUri.Scheme, endpointUri.Scheme, StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(openApiUri.Host, endpointUri.Host, StringComparison.OrdinalIgnoreCase) ||
-                openApiUri.Port != endpointUri.Port ||
-                !string.IsNullOrEmpty(openApiUri.Fragment))
-            {
-                return false;
-            }
-
-            path = openApiUri.PathAndQuery;
-        }
-        else
-        {
-            path = instance.OpenapiSpecUrl.Trim();
-            if (!path.StartsWith("/", StringComparison.Ordinal))
-                path = "/" + path;
-        }
-
-        return IsSafeCustomOpenApiProxyPath(path);
-    }
-
-    private static bool IsSafeCustomOpenApiProxyPath(string path)
-    {
-        var queryIndex = path.IndexOf('?', StringComparison.Ordinal);
-        var resourcePath = queryIndex >= 0 ? path[..queryIndex] : path;
-        return resourcePath is { Length: > 0 } &&
-               resourcePath[0] == '/' &&
-               !resourcePath.StartsWith("//", StringComparison.Ordinal) &&
-               !resourcePath.Contains("..", StringComparison.Ordinal) &&
-               !resourcePath.Contains('\\', StringComparison.Ordinal) &&
-               !path.Contains('#', StringComparison.Ordinal) &&
-               !path.Any(char.IsControl);
-    }
 }

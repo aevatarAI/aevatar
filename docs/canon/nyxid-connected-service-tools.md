@@ -12,7 +12,47 @@ NyxID Assistant 的 operation-class 权威边界见 [ADR-0048](../adr/0048-nyxid
 
 模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发，凭证注入、proxy/broker 审计、node routing 和 delegation 由 NyxID 负责；Aevatar 在进入 proxy 前统一执行 credential policy、actor-owned durable approval 和平台 tool audit。两边各自记录本边界事实，NyxID 的审批能力不能替代 Aevatar 本地准入。
 
-NyxID `GET /api/v1/mcp/config` supplies the normalized descriptor catalog for published operations. `GET /api/v1/keys` supplies the caller-executable exact UserService inventory plus credential/node execution readiness; `/api/v1/user-services` is the route-configuration and write-authority surface, not the execution-readiness authority. Current-turn MCP operation exposure requires the exact ordinal intersection of `/keys` and MCP on both `user_service_id` and route slug; matching an ID with a different slug is route drift and fails closed. For an exact executable instance omitted from MCP, the existing adapter may read its published, same-origin OpenAPI URL through an instance-bound NyxID proxy and normalize that contract. The response is bounded to 1 MiB; larger responses expose no operations. This accommodates the full Mainnet document, verified by a real host contract test. It is relevant to public catalog services whose master credential is usable by the proxy but absent from MCP's user-credential catalog. The model never receives a generic proxy or raw contract-fetch tool. Published-operation runtime revalidates the MCP endpoint when available; eligible read-only proofs omitted from MCP rely on NyxID's exact proxy route for live authority. Channel registrations use the same generic operation parser and admission path; their sender authority is selected by the common Channel credential policy. Authored-request runtime reads neither MCP, OpenAPI, nor inventory.
+NyxID `GET /api/v1/mcp/config` supplies the normalized descriptor catalog for published operations. `GET /api/v1/keys` supplies the caller-executable exact UserService inventory plus credential/node execution readiness; `/api/v1/user-services` is the route-configuration and write-authority surface, not the execution-readiness authority. Current-turn MCP operation exposure requires the exact ordinal intersection of `/keys` and MCP on both `user_service_id` and route slug; matching an ID with a different slug is route drift and fails closed. For an exact executable instance omitted from MCP, the shared OpenAPI document adapter may read its NyxID gateway document or its downstream specification through the instance-bound proxy, then normalize that contract. The response is bounded to 1 MiB; larger responses expose no operations. This accommodates the full Mainnet document, verified by a real host contract test. It is relevant to public catalog services whose master credential is usable by the proxy but absent from MCP's user-credential catalog. The model never receives a generic proxy or raw contract-fetch tool. Published-operation runtime revalidates the MCP endpoint when available; eligible read-only proofs omitted from MCP rely on NyxID's exact proxy route for live authority. Channel registrations use the same generic operation parser and admission path; their sender authority is selected by the common Channel credential policy. Authored-request runtime reads neither MCP, OpenAPI, nor inventory.
+
+### OpenAPI 文档地址与凭据
+
+`/keys` 的两个文档字段分别映射到 Protobuf 中的独立字段，禁止混用：
+
+| NyxID 字段 | 内部字段 | 读取规则 |
+|---|---|---|
+| `openapi_url` | `NyxIdServiceInstance.openapi_document_url` | NyxID 网关文档资源。只接受当前配置的 public API origin 或根相对地址；路径必须精确匹配 `/api/v1/proxy/services/{id}/openapi.json`，其中 ID 来自该 inventory 条目的 `user_service_id` 或 `catalog_service_id`。不要求下游 `endpoint_url`。 |
+| `openapi_spec_url` | `NyxIdServiceInstance.openapi_spec_url` | 下游原始规范地址。绝对地址必须与该实例的 `endpoint_url` 同源；安全的相对路径可以直接使用。请求通过实例绑定的 NyxID service proxy 发出。 |
+
+网关地址优先；存在但不合法、读取失败或文档无效时，不改走另一个来源。网关地址不允许 userinfo、query 或 fragment，也不会作为下游 proxy path。下游路径拒绝协议相对地址、dot segment、反斜杠、fragment 和控制字符。地址差异属于实例 authority 的差异，重验与同 ID 冲突处理必须包含两个字段。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    I["Caller inventory /keys"] --> R["Shared document reader"]
+    R --> G["Gateway document: configured NyxID origin + exact inventory ID"]
+    R --> D["Downstream spec: safe path + exact instance proxy"]
+    G --> P["Bounded fetch and operation parser"]
+    D --> P
+    P --> S["Recommended skill generation"]
+    P --> T["Dynamic discovery / fixed operation-ID invocation"]
+```
+
+推荐技能生成、动态工具发现和固定 `operation_id` 调用复用同一无状态 reader。文档读取使用获取该 inventory 的 caller credential，包括 Channel sender token 或 registration Agent Key；Ornn 发布、权限设置及 NyxID catalog ref 回写继续使用 server credential。文档读取不会使用发布凭据代替用户实例的读取权限。已有 document-guided/raw invocation 不因此增加文档读取。
+
+reader 不缓存文档，沿用 1 MiB 上限和既有 operation admission。调用者取消必须向上传播，不记录为服务不可用。无需新增配置项或修改 NyxID/Ornn API。
+
+### 文档失败诊断
+
+日志 `NyxID OpenAPI contract read failed` 包含结构化 `Stage`、`FailureCode`、`UserServiceId`、`CatalogServiceSlug`、`DocumentSource` 和 `HttpStatus`：
+
+| Stage | 代表性 FailureCode | 定位方向 |
+|---|---|---|
+| `AddressResolution` | `DocumentUrlMissing`、`GatewayOriginMismatch`、`GatewayServiceIdentityMismatch`、`EndpointUrlMissing`、`SpecOriginMismatch`、`UnsafeProxyPath` | inventory 地址缺失、来源或 exact identity 不匹配；此阶段失败不会发出文档 HTTP 请求。 |
+| `Fetch` | `AuthenticationRequired`、`AccessDenied`、`NotFound`、`HttpError`、`TransportFailure`、`ResponseTooLarge` | 区分 401、403、404、其他 HTTP 状态、传输失败和大小超限。 |
+| `Parse` | `InvalidDocument` | 响应不是可解析的 OpenAPI 契约。 |
+| `OperationSelection` | `NoOperations`、`NoAdmissibleOperations` | 文档没有 operation，或 operation 均被契约检查拒绝；相关 parser diagnostic 另记 code/count。 |
+
+成功日志记录文档来源和 operation 数量；上述日志不记录任意 URL、文档正文、token 或 provider exception message。文档读取成功只证明契约可供生成和准入；推荐 skill 发布、catalog 持久化、可见性及实际加载仍分别确认。`recommended_skill_unavailable` 继续表示未能加载，不能因已有 catalog ref 而报告成功。
 
 ### Caller-visible inventory 与 route 自动收敛
 

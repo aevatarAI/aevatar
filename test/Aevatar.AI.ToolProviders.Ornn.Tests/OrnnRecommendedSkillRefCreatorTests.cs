@@ -13,14 +13,36 @@ namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 public sealed class OrnnRecommendedSkillRefCreatorTests
 {
     [Fact]
+    public async Task CreateRecommendedSkillRefsAsync_UsesCallerCredentialForDocumentAndServerCredentialForPublication()
+    {
+        var handler = new CapturingHandler();
+        var creator = CreateCreator(handler);
+
+        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), "caller-document-token", CancellationToken.None);
+
+        result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.Succeeded);
+        handler.Requests.Should().ContainSingle(request => request.Path == "/api/v1/proxy/s/github/openapi.json")
+            .Which.Authorization.Should().BeEquivalentTo(new AuthenticationHeaderValue("Bearer", "caller-document-token"));
+        handler.Requests.Where(request => request.Path != "/api/v1/proxy/s/github/openapi.json")
+            .Select(request => request.Authorization?.Parameter)
+            .Should().OnlyContain(token => token == "server-token");
+        handler.Requests.Should().Contain(request =>
+            request.Method == HttpMethod.Post && request.Path == "/api/v1/proxy/s/ornn/api/v1/skills");
+        handler.Requests.Should().Contain(request =>
+            request.Method == HttpMethod.Put && request.Path.EndsWith("/permissions", StringComparison.Ordinal));
+        handler.Requests.Should().Contain(request =>
+            request.Method == HttpMethod.Put && request.Path == "/api/v1/keys/catalog-github");
+    }
+
+    [Fact]
     public async Task CreateRecommendedSkillRefsAsync_MatchingTemplate_PublishesPublicSkillWithServerToken()
     {
         var handler = new CapturingHandler();
         var creator = CreateCreator(handler);
         var instance = ReadyInstance();
 
-        var result = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
-        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(instance, "caller-document-token", CancellationToken.None);
+        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(instance, "caller-document-token", CancellationToken.None);
 
         resultAgain.Refs.Should().BeEquivalentTo(result.Refs);
         result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.Succeeded);
@@ -51,7 +73,12 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
             .Should().HaveCount(2);
         handler.Requests.Where(request => request.Method == HttpMethod.Put && request.Path == "/api/v1/keys/catalog-github")
             .Should().ContainSingle();
-        handler.Requests.Select(request => request.Authorization?.Parameter).Should().OnlyContain(token => token == "server-token");
+        handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/github/openapi.json")
+            .Select(request => request.Authorization?.Parameter)
+            .Should().OnlyContain(token => token == "caller-document-token");
+        handler.Requests.Where(request => request.Path != "/api/v1/proxy/s/github/openapi.json")
+            .Select(request => request.Authorization?.Parameter)
+            .Should().OnlyContain(token => token == "server-token");
         handler.Requests[2].ContentType.Should().Be("application/zip");
         var skillMarkdown = ReadZipEntry(handler.Requests[2].Body, "api-github-connected-service/SKILL.md");
         skillMarkdown.Should().Contain("visibility: public");
@@ -93,7 +120,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         instance.CatalogServiceSlug = "api-github";
         instance.DisplaySlug = "github";
 
-        var result = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(instance, "caller-document-token", CancellationToken.None);
 
         result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.Succeeded);
         handler.Requests.Where(request => request.Path == "/api/v1/keys/catalog-github")
@@ -110,7 +137,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var instance = ReadyInstance();
         instance.CatalogServiceId = string.Empty;
 
-        var result = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(instance, "caller-document-token", CancellationToken.None);
 
         result.Refs.Should().BeEmpty();
         result.CreatedSkills.Should().BeEmpty();
@@ -125,7 +152,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var handler = new CapturingHandler { FailUpdateValidation = true };
         var creator = CreateCreator(handler);
 
-        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), "caller-document-token", CancellationToken.None);
 
         result.Refs.Should().ContainSingle();
         result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.WriteUnavailable);
@@ -139,7 +166,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var handler = new CapturingHandler { ConflictOnPublish = true };
         var creator = CreateCreator(handler);
 
-        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), "caller-document-token", CancellationToken.None);
 
         result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.Succeeded);
         var skillRef = result.Refs.Should().ContainSingle().Subject;
@@ -171,7 +198,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
             """);
         var creator = CreateCreator(handler);
 
-        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), "caller-document-token", CancellationToken.None);
 
         result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.Succeeded);
         var update = handler.Requests.Should().ContainSingle(request =>
@@ -186,11 +213,11 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var handler = new CapturingHandler();
         var creator = CreateCreator(handler);
         var instance = ReadyInstance();
-        var result = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(instance, "caller-document-token", CancellationToken.None);
         handler.ClearRecommendedSkillRefs();
         handler.FailUpdate = true;
 
-        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(instance, "caller-document-token", CancellationToken.None);
 
         result.Refs.Should().ContainSingle();
         resultAgain.Refs.Should().ContainSingle();
@@ -211,8 +238,8 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var handler = new CapturingHandler { FailRead = true };
         var creator = CreateCreator(handler);
 
-        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
-        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), "caller-document-token", CancellationToken.None);
+        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), "caller-document-token", CancellationToken.None);
 
         result.Refs.Should().ContainSingle();
         result.CreatedSkills.Should().ContainSingle()
@@ -234,8 +261,8 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var handler = new CapturingHandler { FailUpdate = true };
         var creator = CreateCreator(handler);
 
-        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
-        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), "caller-document-token", CancellationToken.None);
+        var resultAgain = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), "caller-document-token", CancellationToken.None);
 
         result.Refs.Should().ContainSingle();
         result.CreatedSkills.Should().ContainSingle()
@@ -256,7 +283,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var handler = new CapturingHandler { FailPermissionUpdate = true };
         var creator = CreateCreator(handler);
 
-        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(ReadyInstance(), "caller-document-token", CancellationToken.None);
 
         result.Refs.Should().BeEmpty();
         result.PersistenceStatus.Should().Be(NyxIdRecommendedSkillRefPersistenceStatus.WriteDenied);
@@ -275,7 +302,7 @@ public sealed class OrnnRecommendedSkillRefCreatorTests
         var instance = ReadyInstance();
         instance.OpenapiSpecUrl = string.Empty;
 
-        var result = await creator.CreateRecommendedSkillRefsAsync(instance, CancellationToken.None);
+        var result = await creator.CreateRecommendedSkillRefsAsync(instance, "caller-document-token", CancellationToken.None);
 
         result.Refs.Should().BeEmpty();
         handler.Requests.Where(request => request.Path == "/api/v1/proxy/s/ornn/api/v1/skills")

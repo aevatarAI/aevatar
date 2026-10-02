@@ -599,6 +599,34 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task DiscoverToolsAsync_GatewayOnlyServiceMissingFromMcp_ExposesExactReadOperation()
+    {
+        const string documentPath = "/api/v1/proxy/services/us-aevatar/openapi.json";
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys("""
+            {"id":"us-aevatar","slug":"aevatar","catalog_service_id":"catalog-aevatar",
+             "catalog_service_slug":"aevatar","is_active":true,"connected":true,"status":"active",
+             "credential_source":{"type":"personal"},
+             "openapi_url":"https://nyx.test/api/v1/proxy/services/us-aevatar/openapi.json"}
+            """);
+        handler.OpenApiResponsesByPath[documentPath] = CustomOpenApi;
+
+        using var scope = PushContext("user-token");
+        var tools = await CreateSource(handler).DiscoverToolsAsync();
+
+        var tool = tools.Should().ContainSingle().Subject;
+        tool.IsReadOnly.Should().BeTrue();
+        var owner = tool.Should().BeAssignableTo<IAgentToolOperationAdmissionOwner>().Subject;
+        owner.OperationAdmission.ServiceInstanceId.Should().Be("us-aevatar");
+        owner.OperationAdmission.ServiceSlug.Should().Be("aevatar");
+        owner.OperationAdmission.Identity.Should().Be(
+            new AgentToolOperationIdentity.PublishedEndpoint("readDiningProfileContext"));
+        owner.OperationAdmission.PathTemplate.Should().Be("/profile/dining");
+        handler.RawOpenApiRequests.Should().Equal(documentPath);
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task DiscoverToolsAsync_CustomOpenApiOverOneMiB_DoesNotExposeOperations()
     {
         var handler = new FakeNyxIdHandler();
@@ -3065,6 +3093,8 @@ public class NyxIdConnectedServiceToolSourceTests
                 path.EndsWith("/openapi.json", StringComparison.Ordinal))
             {
                 RawOpenApiRequests.Add(path);
+                if (OpenApiResponsesByPath.TryGetValue(path, out var gatewayOpenApiResponse))
+                    return Task.FromResult(Json(gatewayOpenApiResponse));
                 throw new InvalidOperationException("raw_openapi_must_not_be_requested");
             }
 

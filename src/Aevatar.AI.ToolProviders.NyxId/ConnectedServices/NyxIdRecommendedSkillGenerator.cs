@@ -30,31 +30,29 @@ public sealed class NyxIdRecommendedSkillGenerator
         WriteIndented = false,
     };
 
-    private static readonly TimeSpan CatalogFreshnessWindow = TimeSpan.FromMinutes(5);
-    private const int CustomOpenApiMaxBytes = 1024 * 1024;
     private const int MaxOperationsInSkill = 40;
     private const int MaxSchemaChars = 1400;
 
-    private readonly NyxIdApiClient _client;
-    private readonly ILogger _logger;
+    private readonly NyxIdOpenApiDocumentReader _documentReader;
 
     public NyxIdRecommendedSkillGenerator(
         NyxIdApiClient client,
         ILogger<NyxIdRecommendedSkillGenerator>? logger = null)
     {
-        _client = client ?? throw new ArgumentNullException(nameof(client));
-        _logger = logger ?? NullLogger<NyxIdRecommendedSkillGenerator>.Instance;
+        ArgumentNullException.ThrowIfNull(client);
+        _documentReader = new NyxIdOpenApiDocumentReader(client, logger ?? NullLogger<NyxIdRecommendedSkillGenerator>.Instance);
     }
 
     public async Task<NyxIdGeneratedRecommendedSkill?> GenerateAsync(
-        string serverToken,
+        string accessToken,
         NyxIdServiceInstance instance,
         CancellationToken ct)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(serverToken);
+        ArgumentException.ThrowIfNullOrWhiteSpace(accessToken);
         ArgumentNullException.ThrowIfNull(instance);
 
-        var services = await ReadOperationContractsAsync(serverToken, instance, ct).ConfigureAwait(false);
+        var services = await _documentReader.ReadAsync(
+            accessToken, instance, $"recommended-skill-custom:{instance.UserServiceId}", ct).ConfigureAwait(false);
         var selectedServices = services
             .Where(service => string.Equals(service.UserServiceId, instance.UserServiceId, StringComparison.Ordinal) ||
                               string.Equals(service.ServiceSlug, instance.DisplaySlug, StringComparison.Ordinal))
@@ -93,53 +91,6 @@ public sealed class NyxIdRecommendedSkillGenerator
             serviceLabel,
             skillName,
             revision);
-    }
-
-    private async Task<IReadOnlyList<NyxIdMcpService>> ReadOperationContractsAsync(
-        string serverToken,
-        NyxIdServiceInstance instance,
-        CancellationToken ct)
-    {
-        var services = new List<NyxIdMcpService>();
-        if (!TryBuildCustomOpenApiProxyPath(instance, out var proxyPath))
-            return services;
-
-        try
-        {
-            var response = await _client.ProxyRequestBoundedAsync(
-                serverToken,
-                instance.DisplaySlug,
-                instance.UserServiceId,
-                proxyPath,
-                HttpMethod.Get.Method,
-                body: null,
-                extraHeaders: null,
-                CustomOpenApiMaxBytes,
-                ct).ConfigureAwait(false);
-            if (!response.Succeeded)
-                return services;
-
-            var parsed = NyxIdMcpOperationCatalog.ParseCustomOpenApi(
-                response.Content,
-                instance,
-                $"recommended-skill-custom:{instance.UserServiceId}",
-                DateTimeOffset.UtcNow,
-                CatalogFreshnessWindow);
-            services.AddRange(parsed.Services);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "NyxID recommended skill custom OpenAPI read failed for user service {UserServiceId}",
-                instance.UserServiceId);
-        }
-
-        return services;
     }
 
     private static string BuildInstructions(
@@ -233,52 +184,6 @@ public sealed class NyxIdRecommendedSkillGenerator
         }
         if (endpoint.ResponseMediaTypes.Count > 0)
             builder.AppendLine($"- response_media_types: {string.Join(", ", endpoint.ResponseMediaTypes.Select(static value => $"`{value}`"))}");
-    }
-
-    private static bool TryBuildCustomOpenApiProxyPath(
-        NyxIdServiceInstance instance,
-        out string path)
-    {
-        path = string.Empty;
-        if (string.IsNullOrWhiteSpace(instance.OpenapiSpecUrl))
-            return false;
-        if (!Uri.TryCreate(instance.OpenapiSpecUrl.Trim(), UriKind.RelativeOrAbsolute, out var openApiUri))
-            return false;
-
-        if (openApiUri.IsAbsoluteUri)
-        {
-            if (!Uri.TryCreate(instance.EndpointUrl, UriKind.Absolute, out var endpointUri) ||
-                !string.Equals(openApiUri.Scheme, endpointUri.Scheme, StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(openApiUri.Host, endpointUri.Host, StringComparison.OrdinalIgnoreCase) ||
-                openApiUri.Port != endpointUri.Port ||
-                !string.IsNullOrEmpty(openApiUri.Fragment))
-            {
-                return false;
-            }
-
-            path = openApiUri.PathAndQuery;
-        }
-        else
-        {
-            path = instance.OpenapiSpecUrl.Trim();
-            if (!path.StartsWith("/", StringComparison.Ordinal))
-                path = "/" + path;
-        }
-
-        return IsSafeCustomOpenApiProxyPath(path);
-    }
-
-    private static bool IsSafeCustomOpenApiProxyPath(string path)
-    {
-        var queryIndex = path.IndexOf('?', StringComparison.Ordinal);
-        var resourcePath = queryIndex >= 0 ? path[..queryIndex] : path;
-        return resourcePath is { Length: > 0 } &&
-               resourcePath[0] == '/' &&
-               !resourcePath.StartsWith("//", StringComparison.Ordinal) &&
-               !resourcePath.Contains("..", StringComparison.Ordinal) &&
-               !resourcePath.Contains('\\') &&
-               !path.Contains('#') &&
-               !path.Any(char.IsControl);
     }
 
     private static string BuildSkillName(NyxIdServiceInstance instance)

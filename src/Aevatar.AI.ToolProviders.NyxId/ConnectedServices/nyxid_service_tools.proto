@@ -81,8 +81,11 @@ message NyxIdServiceInstance {
   bool credential_allowed = 13;
   optional string catalog_service_slug = 14;
   NyxIdServiceCallerExecutionReadiness caller_execution_readiness = 15;
+  // Downstream specification URL, read through the exact instance's service proxy.
   optional string openapi_spec_url = 16;
   repeated NyxIdRecommendedSkillRef recommended_skill_refs = 17;
+  // NyxID gateway document URL from /keys.openapi_url; not a downstream path.
+  optional string openapi_document_url = 18;
 }
 
 message NyxIdServiceUpdateRequest {

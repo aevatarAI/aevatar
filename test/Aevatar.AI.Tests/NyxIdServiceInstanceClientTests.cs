@@ -57,6 +57,35 @@ public sealed class NyxIdServiceInstanceClientTests
             ("/api/v1/keys", "user-token"), ("/api/v1/keys", "org-token"));
     }
 
+    [Fact]
+    public async Task ReadAsync_GatewayAndDownstreamDocuments_PreservesSeparateAuthorities()
+    {
+        const string gatewayUrl = "https://nyx.test/api/v1/proxy/services/us-personal/openapi.json";
+        const string specUrl = "https://github.test/openapi.json";
+        var key = ReadyKey.Replace("\"id\":", $"\"openapi_url\":\"{gatewayUrl}\",\"openapi_spec_url\":\"{specUrl}\",\"id\":", StringComparison.Ordinal);
+        var handler = new InventoryHandler();
+        handler.KeysByToken["user-token"] = Keys(key);
+
+        var inventory = await CreateReader(handler).ReadAsync("user-token", organizationToken: null);
+
+        var instance = inventory.Instances.Should().ContainSingle().Subject;
+        instance.OpenapiDocumentUrl.Should().Be(gatewayUrl);
+        instance.OpenapiSpecUrl.Should().Be(specUrl);
+    }
+
+    [Fact]
+    public async Task ReadAsync_DuplicateIdentityWithDifferentDocumentAuthority_DropsInstance()
+    {
+        var key = ReadyKey.Replace("\"id\":", "\"openapi_url\":\"https://nyx.test/api/v1/proxy/services/us-personal/openapi.json\",\"id\":", StringComparison.Ordinal);
+        var handler = new InventoryHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            key, key.Replace("/services/us-personal/", "/services/catalog-github/", StringComparison.Ordinal));
+
+        var inventory = await CreateReader(handler).ReadAsync("user-token", organizationToken: null);
+
+        inventory.Instances.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("{unsafe-provider-secret")]

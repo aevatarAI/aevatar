@@ -478,7 +478,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
     {
         var inventory = await ReadInventoryResultAsync(reader, token, inventoryReadAuthority, ct)
             .ConfigureAwait(false);
-        var ensureResult = await EnsureInventoryRecommendedSkillRefsAsync(inventory, ct).ConfigureAwait(false);
+        var ensureResult = await EnsureInventoryRecommendedSkillRefsAsync(inventory, token, ct).ConfigureAwait(false);
         inventory = ensureResult.Inventory;
         var service = inventory.Instances.FirstOrDefault(instance =>
             string.Equals(instance.UserServiceId, arguments.UserServiceId, StringComparison.Ordinal));
@@ -516,6 +516,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                         service,
                         skillRef,
                         arguments,
+                        token,
                         ct)
                     .ConfigureAwait(false);
             }
@@ -733,7 +734,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                     created: false);
             }
 
-            var creationResult = await recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, ct)
+            var creationResult = await recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, token, ct)
                 .ConfigureAwait(false);
             if (creationResult.Refs.Count == 0)
             {
@@ -962,7 +963,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         {
             var result = await ReadInventoryResultAsync(reader, token, inventoryReadAuthority, ct)
                 .ConfigureAwait(false);
-            var ensureResult = await EnsureInventoryRecommendedSkillRefsAsync(result, ct).ConfigureAwait(false);
+            var ensureResult = await EnsureInventoryRecommendedSkillRefsAsync(result, token, ct).ConfigureAwait(false);
             return ResultFormatter.Format(ensureResult.Inventory);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -983,6 +984,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
 
     private async Task<InventoryRecommendedSkillRefEnsureResult> EnsureInventoryRecommendedSkillRefsAsync(
         NyxIdServiceInventoryResult inventory,
+        string documentAccessToken,
         CancellationToken ct)
     {
         if (_recommendedSkillRefCreator is null || inventory.Instances.Count == 0)
@@ -998,7 +1000,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             NyxIdRecommendedSkillRefCreationResult creationResult;
             try
             {
-                creationResult = await _recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, ct)
+                creationResult = await _recommendedSkillRefCreator.CreateRecommendedSkillRefsAsync(service, documentAccessToken, ct)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1036,6 +1038,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         NyxIdServiceInstance service,
         NyxIdRecommendedSkillRef staleSkillRef,
         RecommendedSkillArguments arguments,
+        string documentAccessToken,
         CancellationToken ct)
     {
         if (_recommendedSkillRefCreator is null)
@@ -1045,7 +1048,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         try
         {
             creationResult = await _recommendedSkillRefCreator
-                .CreateRecommendedSkillRefsAsync(service, ct)
+                .CreateRecommendedSkillRefsAsync(service, documentAccessToken, ct)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

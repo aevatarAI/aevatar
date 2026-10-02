@@ -32,6 +32,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
 
     public async Task<NyxIdRecommendedSkillRefCreationResult> CreateRecommendedSkillRefsAsync(
         NyxIdServiceInstance instance,
+        string documentAccessToken,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(instance);
@@ -39,8 +40,8 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var token = await _tokenSource.GetAccessTokenAsync(ct).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(token))
+            var serverToken = await _tokenSource.GetAccessTokenAsync(ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(serverToken))
                 return NyxIdRecommendedSkillRefCreationResult.Empty();
 
             if (string.IsNullOrWhiteSpace(instance.CatalogServiceId))
@@ -54,22 +55,22 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
             }
 
             var generatedSkill = await _skillGenerator
-                .GenerateAsync(token, instance, ct)
+                .GenerateAsync(documentAccessToken, instance, ct)
                 .ConfigureAwait(false);
             if (generatedSkill is null)
             {
                 _logger.LogWarning(
-                    "NyxID recommended skill generation found no operation contracts for catalog slug {CatalogServiceSlug}",
+                    "NyxID recommended skill generation is unavailable for catalog slug {CatalogServiceSlug}",
                     instance.CatalogServiceSlug);
                 return NyxIdRecommendedSkillRefCreationResult.Empty();
             }
 
             var cacheKey = BuildCacheKey(instance, generatedSkill);
             if (_createdRefs.TryGetValue(cacheKey, out var cachedRefs))
-                return await PersistCreatedRefsAsync(token, instance, cachedRefs, generatedSkill, ct).ConfigureAwait(false);
+                return await PersistCreatedRefsAsync(serverToken, instance, cachedRefs, generatedSkill, ct).ConfigureAwait(false);
 
             var request = BuildPublishRequest(generatedSkill);
-            var publishResult = await _publishingService.PublishAsync(token, request, ct).ConfigureAwait(false);
+            var publishResult = await _publishingService.PublishAsync(serverToken, request, ct).ConfigureAwait(false);
             if (!publishResult.IsSuccess ||
                 string.IsNullOrWhiteSpace(publishResult.Guid) ||
                 string.IsNullOrWhiteSpace(publishResult.Version) ||
@@ -96,7 +97,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                 },
             };
             _createdRefs[cacheKey] = refs;
-            return await PersistCreatedRefsAsync(token, instance, refs, generatedSkill, ct).ConfigureAwait(false);
+            return await PersistCreatedRefsAsync(serverToken, instance, refs, generatedSkill, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -112,14 +113,14 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
             : NyxIdRecommendedSkillRefCreationResult.Empty();
 
     private async Task<NyxIdRecommendedSkillRefCreationResult> PersistCreatedRefsAsync(
-        string token,
+        string serverToken,
         NyxIdServiceInstance instance,
         IReadOnlyList<NyxIdRecommendedSkillRef> refs,
         NyxIdGeneratedRecommendedSkill generatedSkill,
         CancellationToken ct)
     {
         var persistenceResult = await _persistenceService.PersistRecommendedSkillRefsAsync(
-            token,
+            serverToken,
             instance,
             refs,
             ct).ConfigureAwait(false);

@@ -4,6 +4,7 @@ public interface INyxIdRecommendedSkillRefCreator
 {
     Task<NyxIdRecommendedSkillRefCreationResult> CreateRecommendedSkillRefsAsync(
         NyxIdServiceInstance instance,
+        string documentAccessToken,
         CancellationToken ct);
 }
 
@@ -31,6 +32,7 @@ public sealed class EmptyNyxIdRecommendedSkillRefCreator : INyxIdRecommendedSkil
 
     public Task<NyxIdRecommendedSkillRefCreationResult> CreateRecommendedSkillRefsAsync(
         NyxIdServiceInstance instance,
+        string documentAccessToken,
         CancellationToken ct) =>
         Task.FromResult(NyxIdRecommendedSkillRefCreationResult.Empty());
 }
