@@ -449,15 +449,6 @@ internal static class NyxIdAdmittedRequestBuilder
         var pairs = new List<string>();
         foreach (var name in supplied.Keys.OrderBy(static key => key, StringComparer.Ordinal))
         {
-            if (admission.Identity is AgentToolOperationIdentity.AuthoredRequest &&
-                supplied[name].ValueKind != JsonValueKind.String)
-            {
-                failure = new NyxIdOperationRequestFailure(
-                    "NYXID_OPERATION_QUERY_PARAMETER_INVALID",
-                    $"query parameter '{name}' must be a string for an authored request.");
-                return string.Empty;
-            }
-
             failure = ValidateSchema(
                 $"query.{name}",
                 declared[name].Schema,

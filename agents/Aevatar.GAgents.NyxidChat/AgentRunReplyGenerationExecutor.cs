@@ -901,6 +901,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (bindingId is null)
             return authorizedToolStep;
 
+        if (AgentToolSourceReadableNyxIdCredential.ResolveBearerToken(toolContext.Credentials) is null)
+            return authorizedToolStep;
+
         if (_connectedServiceCapabilityIssuer is null)
         {
             _logger.LogWarning(
@@ -1808,11 +1811,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var hasSenderBinding = !string.IsNullOrWhiteSpace(toolContext.SenderBinding.BindingId);
         control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
         var senderConnectedServiceToken = NormalizeOptional(control.SenderNyxIdAccessToken);
-        if (hasSenderBinding)
+        var hasSenderConnectedServiceBearer = hasSenderBinding && senderConnectedServiceToken is not null;
+        if (hasSenderConnectedServiceBearer)
         {
-            // Connected-service authority is selected independently from the LLM
-            // route. A bound sender remains authoritative even when minting its
-            // short-lived token failed; the policy then makes discovery fail closed.
             toolContext = ChannelConnectedServiceCredentialPolicy.Apply(
                 toolContext,
                 senderConnectedServiceToken,
@@ -1827,7 +1828,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             .ConfigureAwait(false);
         if (registrationAgentKeyMode)
             control = agentKeyOverlay.Control;
-        if (registrationAgentKeyMode && !hasSenderBinding)
+        if (registrationAgentKeyMode && !hasSenderConnectedServiceBearer)
         {
             toolContext = agentKeyOverlay.AgentKey is null
                 ? ClearNyxIdCredentials(toolContext)
@@ -2007,7 +2008,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var hasSenderBinding = !string.IsNullOrWhiteSpace(planToolContext.SenderBinding.BindingId);
         requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
         var senderConnectedServiceToken = NormalizeOptional(requestControl.SenderNyxIdAccessToken);
-        if (hasSenderBinding)
+        var hasSenderConnectedServiceBearer = hasSenderBinding && senderConnectedServiceToken is not null;
+        if (hasSenderConnectedServiceBearer)
         {
             planToolContext = ChannelConnectedServiceCredentialPolicy.Apply(
                 planToolContext,
@@ -2023,7 +2025,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             .ConfigureAwait(false);
         if (registrationAgentKeyMode)
             requestControl = agentKeyOverlay.Control;
-        if (registrationAgentKeyMode && !hasSenderBinding)
+        if (registrationAgentKeyMode && !hasSenderConnectedServiceBearer)
         {
             planToolContext = agentKeyOverlay.AgentKey is null
                 ? ClearNyxIdCredentials(planToolContext)
@@ -2039,22 +2041,22 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             NyxIdAccessToken = NormalizeOptional(requestControl.NyxIdAccessToken) ??
                                (registrationAgentKeyMode ? null : planToolContext.Credentials.NyxIdAccessToken) ??
                                (registrationAgentKeyMode ? null : stepControl.NyxIdAccessToken),
-            NyxIdOrgToken = hasSenderBinding
+            NyxIdOrgToken = hasSenderConnectedServiceBearer
                 ? NormalizeOptional(requestControl.NyxIdOrgToken)
                 : registrationAgentKeyMode ? null : NormalizeOptional(requestControl.NyxIdOrgToken) ??
                                              planToolContext.Credentials.NyxIdOrgToken ??
                                              stepControl.NyxIdOrgToken,
-            SenderNyxIdAccessToken = hasSenderBinding
+            SenderNyxIdAccessToken = hasSenderConnectedServiceBearer
                 ? NormalizeOptional(requestControl.SenderNyxIdAccessToken)
                 : registrationAgentKeyMode ? null : NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
                                              planToolContext.Credentials.SenderNyxIdAccessToken ??
                                              stepControl.SenderNyxIdAccessToken,
         };
         var toolContext = control.ToToolContext(planToolContext);
-        var activityUserToken = registrationAgentKeyMode || hasSenderBinding
+        var activityUserToken = registrationAgentKeyMode || hasSenderConnectedServiceBearer
             ? null
             : NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
-        var requestToolContextOwnsCredential = !hasSenderBinding && requestCredentials.NyxIdCredentialAuthority ==
+        var requestToolContextOwnsCredential = !hasSenderConnectedServiceBearer && requestCredentials.NyxIdCredentialAuthority ==
                                                AgentToolNyxIdCredentialAuthority.ToolExecutionContext;
         var executionAccessToken = activityUserToken ??
                                    (requestToolContextOwnsCredential

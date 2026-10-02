@@ -456,6 +456,52 @@ public sealed class OrnnSkillClient
         }
     }
 
+    public async Task<OrnnSkillMutationResponse> UpdateSkillPermissionsAsync(
+        string accessToken,
+        string skillId,
+        OrnnSkillPermissionUpdateRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var path = $"/api/v1/skills/{Uri.EscapeDataString(skillId)}/permissions";
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: path,
+                method: "PUT",
+                body: JsonSerializer.Serialize(request, JsonOptions),
+                extraHeaders: null,
+                ct: linkedCts.Token);
+
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+                return CreateHttpMutationFailure("permission_update", response, proxyError);
+
+            return OrnnSkillMutationResponse.Success(response);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Ornn skill permission update exceeded {TimeoutSeconds}s per-call budget for '{SkillId}'",
+                (int)_perCallTimeout.TotalSeconds,
+                skillId);
+            return CreateTimeoutMutationFailure("permission_update");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Ornn skill permission update failed for '{SkillId}'", skillId);
+            return CreateTransportMutationFailure("permission_update", ex);
+        }
+    }
+
     public async Task<OrnnSkillMutationResponse> UpdateSkillAsync(
         string accessToken,
         string skillId,

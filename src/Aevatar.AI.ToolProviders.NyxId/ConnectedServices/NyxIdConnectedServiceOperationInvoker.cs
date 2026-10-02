@@ -32,13 +32,16 @@ public sealed record NyxIdConnectedServiceRawRequest(
 public sealed record NyxIdConnectedServiceOperationInvokeResult(
     bool IsSuccess,
     AgentToolTerminalOutcome? Outcome,
-    string FailureCode)
+    string FailureCode,
+    IReadOnlyList<NyxIdRecommendedSkillRef>? SuggestedSkillRefs = null)
 {
     public static NyxIdConnectedServiceOperationInvokeResult Success(AgentToolTerminalOutcome outcome) =>
         new(true, outcome, string.Empty);
 
-    public static NyxIdConnectedServiceOperationInvokeResult Failure(string failureCode) =>
-        new(false, null, failureCode);
+    public static NyxIdConnectedServiceOperationInvokeResult Failure(
+        string failureCode,
+        IReadOnlyList<NyxIdRecommendedSkillRef>? suggestedSkillRefs = null) =>
+        new(false, null, failureCode, suggestedSkillRefs);
 }
 
 public sealed class NyxIdConnectedServiceOperationInvoker
@@ -150,7 +153,16 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                 .ToArray();
 
             if (matches.Length == 0)
-                return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_not_visible");
+            {
+                var suggestedSkillRefs = matchedBindings
+                    .SelectMany(static binding => binding.Instance.RecommendedSkillRefs)
+                    .Where(static skillRef => skillRef.Source == NyxIdRecommendedSkillSource.Ornn)
+                    .Select(static skillRef => skillRef.Clone())
+                    .ToArray();
+                return suggestedSkillRefs.Length > 0
+                    ? NyxIdConnectedServiceOperationInvokeResult.Failure("document_request_required", suggestedSkillRefs)
+                    : NyxIdConnectedServiceOperationInvokeResult.Failure("operation_not_visible");
+            }
             if (matches.Length > 1)
                 return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_ambiguous");
 

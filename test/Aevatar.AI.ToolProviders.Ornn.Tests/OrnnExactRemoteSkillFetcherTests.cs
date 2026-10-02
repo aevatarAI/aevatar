@@ -200,6 +200,18 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     }
 
     [Fact]
+    public async Task FetchAsync_NyxIdProxyWrapperNotFound_ShouldReturnTypedNotFound()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            "{\"error\":true,\"status\":404,\"body\":\"{\\\"message\\\":\\\"skill not found\\\"}\"}");
+
+        var result = await CreateFetcher(handler).FetchAsync("token", ExactRef());
+
+        result.FailureCode.Should().Be(ExactRemoteSkillFetchFailureCode.NotFound);
+        handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task FetchAsync_InternalTimeout_ShouldReturnTypedTimeout()
     {
         var handler = new CancellationObservingHttpMessageHandler();

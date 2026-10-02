@@ -5,9 +5,8 @@ namespace Aevatar.GAgents.NyxidChat;
 /// <summary>
 /// Selects the authority used by Channel connected-service operations. The LLM
 /// credential is resolved separately; this policy only prepares the tool
-/// execution context. A present sender binding always owns the decision, even
-/// when its short-lived token could not be minted, so an unavailable sender
-/// token cannot silently turn into a registration credential.
+/// execution context. Sender authority requires both a binding identity and a
+/// readable bearer token; otherwise a registration Agent Key may own the turn.
 /// </summary>
 public static class ChannelConnectedServiceCredentialPolicy
 {
@@ -19,9 +18,9 @@ public static class ChannelConnectedServiceCredentialPolicy
         ArgumentNullException.ThrowIfNull(context);
 
         var bindingId = Normalize(context.SenderBinding.BindingId);
-        if (bindingId is not null)
+        var token = Normalize(senderToken);
+        if (bindingId is not null && token is not null)
         {
-            var token = Normalize(senderToken);
             return context with
             {
                 CredentialSource = AgentToolCredentialSource.BearerToken,
@@ -38,7 +37,23 @@ public static class ChannelConnectedServiceCredentialPolicy
 
         var agentKey = Normalize(registrationAgentKey);
         if (agentKey is null)
-            return context;
+        {
+            if (bindingId is null)
+                return context;
+
+            return context with
+            {
+                CredentialSource = AgentToolCredentialSource.BearerToken,
+                DurableNyxIdCredential = null,
+                Credentials = new AgentToolCredentials(
+                    null,
+                    NyxIdOrgToken: null,
+                    SenderNyxIdAccessToken: null,
+                    NyxIdCredentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                    SourceReadableNyxIdAccessToken: null,
+                    NyxIdCredentialAuthority: AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
+            };
+        }
 
         return context with
         {

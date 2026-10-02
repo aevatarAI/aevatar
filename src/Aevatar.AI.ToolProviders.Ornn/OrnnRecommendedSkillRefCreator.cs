@@ -43,6 +43,16 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
             if (string.IsNullOrWhiteSpace(token))
                 return NyxIdRecommendedSkillRefCreationResult.Empty();
 
+            if (string.IsNullOrWhiteSpace(instance.CatalogServiceId))
+            {
+                _logger.LogWarning(
+                    "NyxID recommended skill ref creation skipped because catalog_service_id is missing for user service {UserServiceId}",
+                    instance.UserServiceId);
+                return NyxIdRecommendedSkillRefCreationResult.Empty(
+                    NyxIdRecommendedSkillRefPersistenceStatus.WriteUnavailable,
+                    "catalog_service_id_missing");
+            }
+
             var generatedSkill = await _skillGenerator
                 .GenerateAsync(token, instance, ct)
                 .ConfigureAwait(false);
@@ -69,7 +79,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                     "Ornn recommended skill creation failed for catalog slug {CatalogServiceSlug} with status {Status}",
                     instance.CatalogServiceSlug,
                     publishResult.Status);
-                return NyxIdRecommendedSkillRefCreationResult.Empty();
+                return MapPublishFailure(publishResult);
             }
 
             var refs = new[]
@@ -93,6 +103,13 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
             _gate.Release();
         }
     }
+
+    private static NyxIdRecommendedSkillRefCreationResult MapPublishFailure(OrnnSkillPublishingResult publishResult) =>
+        string.Equals(publishResult.Status, "permission_update_failed", StringComparison.Ordinal)
+            ? NyxIdRecommendedSkillRefCreationResult.Empty(
+                NyxIdRecommendedSkillRefPersistenceStatus.WriteDenied,
+                publishResult.Failure?.Code ?? publishResult.Status)
+            : NyxIdRecommendedSkillRefCreationResult.Empty();
 
     private async Task<NyxIdRecommendedSkillRefCreationResult> PersistCreatedRefsAsync(
         string token,

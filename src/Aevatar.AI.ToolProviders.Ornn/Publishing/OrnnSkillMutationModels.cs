@@ -17,6 +17,8 @@ public sealed record OrnnSkillMutationFailure(
     int? HttpStatus,
     AgentToolFailureOutcome Outcome);
 
+public sealed record OrnnSkillPermissionUpdateRequest(bool IsPrivate);
+
 public sealed record OrnnSkillMutationResponse
 {
     private OrnnSkillMutationResponse(
