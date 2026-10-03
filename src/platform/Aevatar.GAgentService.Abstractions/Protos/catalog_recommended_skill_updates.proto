@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.catalogskills;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions.CatalogSkills";
+
+enum CatalogRecommendedSkillUpdateStatus {
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STATUS_UNSPECIFIED = 0;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STATUS_UPDATED = 1;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STATUS_FAILED = 2;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STATUS_UNCERTAIN = 3;
+}
+
+enum CatalogRecommendedSkillUpdateStage {
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_UNSPECIFIED = 0;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_AUTHORIZE = 1;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_RESOLVE_TARGET = 2;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_VALIDATE_VERSION = 3;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_READ_CONTRACT = 4;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_GENERATE_CONTENT = 5;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_VALIDATE_PACKAGE = 6;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_PUBLISH_VERSION = 7;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_VERIFY_PUBLICATION = 8;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_PERSIST_REFERENCE = 9;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_STAGE_VERIFY_REFERENCE = 10;
+}
+
+enum CatalogRecommendedSkillUpdateErrorCode {
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_UNSPECIFIED = 0;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_INVALID_REQUEST = 1;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_INVALID_VERSION = 2;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_TARGET_NOT_FOUND = 4;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_TARGET_MISMATCH = 5;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_FORBIDDEN = 6;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_EXPECTED_VERSION_CONFLICT = 7;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_VERSION_OCCUPIED = 8;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_CONTRACT_UNAVAILABLE = 9;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_CONTRACT_INVALID = 10;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_PACKAGE_INVALID = 11;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_PUBLICATION_FAILED = 12;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_PUBLICATION_UNCERTAIN = 13;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_PUBLICATION_INVALID = 14;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_VISIBILITY_UNAVAILABLE = 15;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_REFERENCE_CONFLICT = 16;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_REFERENCE_FAILED = 17;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_REFERENCE_INVALID = 18;
+  CATALOG_RECOMMENDED_SKILL_UPDATE_ERROR_CODE_DEPENDENCY_UNAVAILABLE = 19;
+}
+
+message CatalogRecommendedSkillUpdateRequest {
+  string operation_id = 1;
+  string administrator_id = 2;
+  string catalog_service_id = 3;
+  string skill_id = 4;
+  string expected_version = 5;
+  string new_version = 6;
+}
+
+message CatalogRecommendedSkillDependency {
+  string source = 1;
+  string skill_id = 2;
+  string name = 3;
+  string version = 4;
+  string manifest_digest = 5;
+}
+
+message CatalogRecommendedSkillReference {
+  string source = 1;
+  string skill_id = 2;
+  string name = 3;
+  string version = 4;
+  string manifest_digest = 5;
+  repeated CatalogRecommendedSkillDependency dependencies = 6;
+}
+
+message CatalogRecommendedSkillUpdateTarget {
+  int64 catalog_skills_revision = 1;
+  string skill_name = 2;
+  repeated CatalogRecommendedSkillReference recommendations = 3;
+}
+
+message CatalogRecommendedSkillPublication {
+  string skill_id = 1;
+  string skill_name = 2;
+  string version = 3;
+  string manifest_digest = 4;
+  bool is_public = 5;
+  bool consumer_readable = 6;
+}
+
+message CatalogRecommendedSkillReferenceWrite {
+  int64 skills_revision = 1;
+  string version = 2;
+  string manifest_digest = 3;
+  bool confirmed = 4;
+}
+
+message CatalogRecommendedSkillUpdateFailure {
+  CatalogRecommendedSkillUpdateErrorCode code = 1;
+  CatalogRecommendedSkillUpdateStage stage = 2;
+  string safe_message = 3;
+  int32 downstream_status_code = 4;
+}
+
+// Transient result of one administrator HTTP request; no operation state is persisted.
+message CatalogRecommendedSkillUpdateOutcome {
+  CatalogRecommendedSkillUpdateRequest request = 1;
+  CatalogRecommendedSkillUpdateStatus status = 2;
+  CatalogRecommendedSkillUpdateStage stage = 3;
+  CatalogRecommendedSkillPublication publication = 4;
+  CatalogRecommendedSkillReferenceWrite reference = 5;
+  CatalogRecommendedSkillUpdateFailure failure = 6;
+}

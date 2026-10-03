@@ -113,6 +113,33 @@ namespace Aevatar.Capabilities.Tests;
 public sealed class MainnetHostCompositionTests
 {
     [Fact]
+    public void CatalogRecommendedSkillUpdates_ShouldResolveRequestServiceAndAuthenticatedPost()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        using var runtimeProvider = new EnvironmentVariableScope("AEVATAR_ActorRuntime__Provider", "InMemory");
+        using var secretStoreBackend = new EnvironmentVariableScope("AEVATAR_ActorRuntime__SecretStoreBackend", "InMemory");
+        var builder = CreateBuilder();
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+        using var app = builder.Build();
+        app.Services.GetRequiredService<Aevatar.GAgentService.Abstractions.CatalogSkills.ICatalogRecommendedSkillUpdateApplicationService>()
+            .Should().BeOfType<Aevatar.GAgentService.Application.CatalogSkills.CatalogRecommendedSkillUpdateApplicationService>();
+        app.Services.GetRequiredService<Aevatar.GAgentService.Abstractions.CatalogSkills.ICatalogRecommendedSkillUpdateSteps>()
+            .Should().BeOfType<Aevatar.AI.ToolProviders.Ornn.CatalogSkills.OrnnCatalogRecommendedSkillUpdateSteps>();
+        app.MapAevatarMainnetHost();
+        var routes = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>().Where(endpoint => endpoint.RoutePattern.RawText?.StartsWith("/api/admin/nyxid/catalog/", StringComparison.Ordinal) == true).ToArray();
+        routes.Should().ContainSingle();
+        routes.Should().ContainSingle(endpoint => endpoint.RoutePattern.RawText ==
+            "/api/admin/nyxid/catalog/{catalogServiceId}/recommended-skills/{skillId}:update" &&
+            endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods.Contains("POST"));
+        routes.Should().OnlyContain(endpoint => endpoint.Metadata.GetMetadata<Microsoft.AspNetCore.Authorization.IAuthorizeData>() != null);
+    }
+
+    [Fact]
     public void ExternalCallbacks_ShouldResolveRealAdaptersProjectionAndIndependentGetRoute()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -1213,10 +1240,11 @@ public sealed class MainnetHostCompositionTests
             workspace.Sources.Select(static source => source.GetType()).Concat(
             [
                 typeof(OrnnAuthoringAgentToolSource),
-                typeof(NyxIdConnectedServiceToolSource),
                 typeof(NyxIdConnectLinksToolSource),
                 typeof(ChannelNyxIdConnectedServiceInventoryToolSource),
             ]));
+        channelReply.Sources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource,
+            "the default Channel route exposes the fixed connected-service tools");
         channelReply.Sources.Select(static source => source.GetType()).Should()
             .Equal(channelToolSources.Select(static source => source.GetType()));
 

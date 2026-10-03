@@ -11,23 +11,180 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdRecommendedSkillGeneratorTests
 {
     [Fact]
-    public async Task GenerateAsync_LocalReferences_PreservesOptionalNestedRequestSchema()
+    public async Task GenerateAsync_DifferentCallersAndInstances_ProduceSameAuthoritativeCatalogContent()
     {
-        var handler = new DocumentHandler { DocumentBody = ReferencedOpenApi };
-        var skill = await GenerateAsync(handler, new RecordingLogger());
+        var handler = new CatalogDocumentHandler();
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
+        var firstInstance = CatalogInstance();
+        var secondInstance = new NyxIdServiceInstance
+        {
+            UserServiceId = "us-second-account",
+            DisplaySlug = "another-private-instance",
+            Label = "Another Account Private Label",
+            CatalogServiceId = "catalog-aevatar",
+            CatalogServiceSlug = "untrusted-instance-catalog-slug",
+            OpenapiDocumentUrl = "https://outside.invalid/second-private-document.json",
+            OpenapiSpecUrl = "/private/openapi.json",
+            EndpointUrl = "https://private-instance.invalid",
+        };
+        var original = firstInstance.Clone();
+        var generator = new NyxIdRecommendedSkillGenerator(client);
+
+        var first = await generator.GenerateAsync("first-caller-token", firstInstance, CancellationToken.None);
+        var second = await generator.GenerateAsync("second-caller-token", secondInstance, CancellationToken.None);
+
+        first.Should().NotBeNull();
+        second.Should().BeEquivalentTo(first, options => options.WithStrictOrdering());
+        first!.Name.Should().Be("aevatar-connected-service");
+        first.DisplayName.Should().Be("Aevatar");
+        first.Tags.Should().Equal("aevatar");
+        first.Description.Should().Contain("Shared workflow APIs.");
+        var publicContent = first.InstructionsMarkdown + first.Description + first.DisplayName + string.Join(',', first.Tags);
+        publicContent.Should().NotContain(firstInstance.UserServiceId).And.NotContain(firstInstance.DisplaySlug)
+            .And.NotContain(firstInstance.Label).And.NotContain(secondInstance.Label)
+            .And.NotContain("private-instance.invalid").And.NotContain("first-caller-token")
+            .And.NotContain("untrusted-instance-catalog-slug");
+        firstInstance.Should().Be(original);
+        handler.Requests.Should().Equal(
+            (CatalogDocumentHandler.CatalogPath, "first-caller-token"),
+            (CatalogDocumentHandler.DocumentPath, "first-caller-token"),
+            (CatalogDocumentHandler.CatalogPath, "second-caller-token"),
+            (CatalogDocumentHandler.DocumentPath, "second-caller-token"));
+    }
+
+    [Fact]
+    public async Task GenerateAsync_AuthoritativeLocalReferences_PreservesOptionalRequestSchemaAndResponseSummary()
+    {
+        var handler = new CatalogDocumentHandler { DocumentBody = ReferencedOpenApi };
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
+
+        var skill = await new NyxIdRecommendedSkillGenerator(client)
+            .GenerateAsync("caller-token", CatalogInstance(), CancellationToken.None);
 
         skill.Should().NotBeNull();
-        var instructions = skill!.InstructionsMarkdown;
-        instructions.Should().Contain("POST /registrations")
+        skill!.InstructionsMarkdown.Should().Contain("POST /registrations")
             .And.Contain("service_ids").And.Contain("default_skill")
-            .And.NotContain("$ref");
+            .And.Contain("response: `404` - Registration not found")
+            .And.Contain("media_type: `application/json`")
+            .And.NotContain("error").And.NotContain("$ref");
+        var schemaBlock = skill.InstructionsMarkdown.Split("- request_body_schema:\n```json\n", StringSplitOptions.None)[1]
+            .Split("\n```", StringSplitOptions.None)[0];
+        var schema = JsonNode.Parse(schemaBlock)!;
+        schema["required"].Should().BeNull();
+        schema["properties"]!["service_ids"]!["default"].Should().BeNull();
+        schema["properties"]!["service_ids"]!["type"]!.GetValue<string>().Should().Be("array");
+        handler.Requests.Should().Equal(
+            (CatalogDocumentHandler.CatalogPath, "caller-token"),
+            (CatalogDocumentHandler.DocumentPath, "caller-token"));
+    }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task GenerateAsync_MissingCatalogIdentity_DoesNotReadInstanceDocument(string catalogId)
+    {
+        var handler = new CatalogDocumentHandler();
         using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
-        var inventory = await new NyxIdConnectedServiceInventoryReader(new NyxIdServiceInstanceClient(client))
-            .ReadAsync("caller-token", organizationToken: null);
-        var parsed = NyxIdMcpOperationCatalog.ParseCustomOpenApi(ReferencedOpenApi, inventory.Instances.Single(),
-            "test", DateTimeOffset.UtcNow, TimeSpan.FromMinutes(5));
-        var request = parsed.Services.Single().Endpoints.Single().RequestBodySchema!;
+        var instance = CatalogInstance();
+        instance.CatalogServiceId = catalogId;
+
+        (await new NyxIdRecommendedSkillGenerator(client).GenerateAsync("caller-token", instance, CancellationToken.None))
+            .Should().BeNull();
+
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("resource_type", "user_service")]
+    [InlineData("resource_type", "")]
+    [InlineData("id", "catalog-other")]
+    [InlineData("catalog_service_id", "catalog-other")]
+    [InlineData("catalog_service_slug", "another-catalog")]
+    [InlineData("slug", "")]
+    [InlineData("name", "")]
+    public async Task GenerateAsync_InvalidCatalogAuthority_DoesNotReadDocument(string field, string value)
+    {
+        var catalog = JsonNode.Parse(CatalogDocumentHandler.CatalogBody)!;
+        catalog[field] = value;
+        var handler = new CatalogDocumentHandler { CatalogResponseBody = catalog.ToJsonString() };
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
+
+        (await new NyxIdRecommendedSkillGenerator(client).GenerateAsync("caller-token", CatalogInstance(), CancellationToken.None))
+            .Should().BeNull();
+
+        handler.Requests.Should().Equal((CatalogDocumentHandler.CatalogPath, "caller-token"));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task GenerateAsync_CatalogReadFailure_DoesNotReadDocumentOrLeakResponse(HttpStatusCode status)
+    {
+        var handler = new CatalogDocumentHandler { CatalogStatus = status, CatalogResponseBody = "provider-secret" };
+        var logger = new RecordingLogger();
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
+
+        (await new NyxIdRecommendedSkillGenerator(client, logger).GenerateAsync("caller-token", CatalogInstance(), CancellationToken.None))
+            .Should().BeNull();
+
+        handler.Requests.Should().Equal((CatalogDocumentHandler.CatalogPath, "caller-token"));
+        string.Join('\n', logger.Messages).Should().NotContain("provider-secret").And.NotContain("caller-token");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task GenerateAsync_CatalogDocumentFailure_DoesNotFallBackToInstanceOverride(HttpStatusCode status)
+    {
+        var handler = new CatalogDocumentHandler { DocumentStatus = status, DocumentBody = "provider-secret" };
+        var logger = new RecordingLogger();
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
+
+        (await new NyxIdRecommendedSkillGenerator(client, logger).GenerateAsync("caller-token", CatalogInstance(), CancellationToken.None))
+            .Should().BeNull();
+
+        handler.Requests.Should().Equal(
+            (CatalogDocumentHandler.CatalogPath, "caller-token"),
+            (CatalogDocumentHandler.DocumentPath, "caller-token"));
+        string.Join('\n', logger.Messages).Should().NotContain("provider-secret").And.NotContain("caller-token");
+    }
+
+    [Theory]
+    [InlineData("{provider-secret")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("{\"openapi\":\"3.1.1\",\"paths\":{}}")]
+    public async Task GenerateAsync_InvalidCatalogDocument_DoesNotPublishPartialGuidance(string document)
+    {
+        var handler = new CatalogDocumentHandler { DocumentBody = document };
+        var logger = new RecordingLogger();
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
+
+        (await new NyxIdRecommendedSkillGenerator(client, logger).GenerateAsync("caller-token", CatalogInstance(), CancellationToken.None))
+            .Should().BeNull();
+
+        handler.Requests.Should().Equal(
+            (CatalogDocumentHandler.CatalogPath, "caller-token"),
+            (CatalogDocumentHandler.DocumentPath, "caller-token"));
+        string.Join('\n', logger.Messages).Should().NotContain("provider-secret");
+    }
+
+    [Fact]
+    public async Task ReadAsync_LocalReferences_PreservesOptionalNestedRequestSchema()
+    {
+        var handler = new DocumentHandler { DocumentBody = ReferencedOpenApi };
+        var services = await ReadAsync(handler, new RecordingLogger());
+
+        services.Should().NotBeEmpty();
+        var endpoint = services.Should().ContainSingle().Subject.Endpoints.Should().ContainSingle().Subject;
+        endpoint.Method.Should().Be("POST");
+        endpoint.PathTemplate.Should().Be("/registrations");
+        var request = endpoint.RequestBodySchema!;
+        request.ToJsonString().Should().Contain("service_ids").And.Contain("default_skill").And.NotContain("$ref");
         request["required"].Should().BeNull("omitted update fields must remain optional");
         request["properties"]!["service_ids"]!["default"].Should().BeNull("resolution must not insert empty selections");
         request["properties"]!["service_ids"]!["type"]!.GetValue<string>().Should().Be("array");
@@ -39,7 +196,7 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
     [InlineData("#/components/schemas/Missing")]
     [InlineData("https://outside.test/schema.json")]
     [InlineData("#/components/schemas/Update")]
-    public async Task GenerateAsync_InvalidReference_RejectsOnlyAffectedOperation(string reference)
+    public async Task ReadAsync_InvalidReference_RejectsOnlyAffectedOperation(string reference)
     {
         var document = JsonNode.Parse(ReferencedOpenApi)!;
         document["components"]!["schemas"]!["Update"]!["properties"]!["runtime_config"] =
@@ -48,10 +205,11 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
             {"get":{"responses":{"200":{"content":{"application/json":{"schema":{"type":"string"}}}}}}}
             """);
         var handler = new DocumentHandler { DocumentBody = document.ToJsonString() };
-        var skill = await GenerateAsync(handler, new RecordingLogger());
+        var services = await ReadAsync(handler, new RecordingLogger());
 
-        skill.Should().NotBeNull();
-        skill!.InstructionsMarkdown.Should().Contain("GET /healthy").And.NotContain("POST /registrations");
+        services.Should().NotBeEmpty();
+        services.SelectMany(static service => service.Endpoints).Should().ContainSingle()
+            .Which.PathTemplate.Should().Be("/healthy");
         handler.Requests.Should().HaveCount(2, "references must not trigger network fetches");
     }
 
@@ -97,7 +255,7 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
         """;
 
     [Fact]
-    public async Task GenerateAsync_GatewayOnlyInventory_ReadsDocumentWithoutDownstreamEndpoint()
+    public async Task ReadAsync_GatewayOnlyInventory_ReadsDocumentWithoutDownstreamEndpoint()
     {
         var handler = new DocumentHandler();
         using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
@@ -105,12 +263,12 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
             .ReadAsync("caller-token", organizationToken: null);
         var instance = inventory.Instances.Should().ContainSingle().Subject;
 
-        var skill = await new NyxIdRecommendedSkillGenerator(client)
-            .GenerateAsync("caller-token", instance, CancellationToken.None);
+        var services = await new NyxIdOpenApiDocumentReader(client, new RecordingLogger())
+            .ReadAsync("caller-token", instance, "document-test", CancellationToken.None);
 
-        skill.Should().NotBeNull();
-        skill!.InstructionsMarkdown.Should().Contain("GET /api/channels/me")
-            .And.Contain("GET /api/channels/registrations");
+        services.Should().NotBeEmpty();
+        services.SelectMany(static service => service.Endpoints).Select(static endpoint => endpoint.PathTemplate)
+            .Should().BeEquivalentTo("/api/channels/me", "/api/channels/registrations");
         handler.Requests.Should().Equal(
             ("/api/v1/keys", "caller-token"),
             ("/api/v1/proxy/services/us-aevatar/openapi.json", "caller-token"));
@@ -119,12 +277,12 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
     [Theory]
     [InlineData("https://nyx.test/api/v1/proxy/services/catalog-aevatar/openapi.json", "/api/v1/proxy/services/catalog-aevatar/openapi.json")]
     [InlineData("/api/v1/proxy/services/us-aevatar/openapi.json", "/api/v1/proxy/services/us-aevatar/openapi.json")]
-    public async Task GenerateAsync_GatewayDocument_UsesExplicitCatalogOrUserServiceIdentity(string url, string expectedPath)
+    public async Task ReadAsync_GatewayDocument_UsesExplicitCatalogOrUserServiceIdentity(string url, string expectedPath)
     {
         var handler = new DocumentHandler { InventoryJson = WithUrls(url), DocumentPath = expectedPath };
-        var skill = await GenerateAsync(handler, new RecordingLogger());
+        var services = await ReadAsync(handler, new RecordingLogger());
 
-        skill.Should().NotBeNull();
+        services.Should().NotBeEmpty();
         handler.Requests.Last().Should().Be((expectedPath, "caller-token"));
     }
 
@@ -132,7 +290,7 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
     [InlineData("/api/openapi.json", null)]
     [InlineData("api/openapi.json", null)]
     [InlineData("https://aevatar.test/api/openapi.json", "https://aevatar.test")]
-    public async Task GenerateAsync_DownstreamSpec_UsesExactInstanceProxy(string specUrl, string? endpointUrl)
+    public async Task ReadAsync_DownstreamSpec_UsesExactInstanceProxy(string specUrl, string? endpointUrl)
     {
         var handler = new DocumentHandler
         {
@@ -140,14 +298,14 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
             DocumentPath = "/api/v1/proxy/s/aevatar/api/openapi.json",
         };
 
-        var skill = await GenerateAsync(handler, new RecordingLogger());
+        var services = await ReadAsync(handler, new RecordingLogger());
 
-        skill.Should().NotBeNull();
+        services.Should().NotBeEmpty();
         handler.Requests.Last().Should().Be((handler.DocumentPath + "?_nyxid_via=us-aevatar", "caller-token"));
     }
 
     [Fact]
-    public async Task GenerateAsync_BothDocumentSources_UsesPublishedGatewayWithoutEndpointUrl()
+    public async Task ReadAsync_BothDocumentSources_UsesPublishedGatewayWithoutEndpointUrl()
     {
         var handler = new DocumentHandler
         {
@@ -156,7 +314,7 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
                 "https://aevatar.test/api/openapi.json"),
         };
 
-        (await GenerateAsync(handler, new RecordingLogger())).Should().NotBeNull();
+        (await ReadAsync(handler, new RecordingLogger())).Should().NotBeEmpty();
 
         handler.Requests.Should().Equal(
             ("/api/v1/keys", "caller-token"),
@@ -177,15 +335,15 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
     [InlineData(null, "/../api/openapi.json", null, "UnsafeProxyPath")]
     [InlineData(null, "/%2e%2e/api/openapi.json", null, "UnsafeProxyPath")]
     [InlineData(null, null, null, "DocumentUrlMissing")]
-    public async Task GenerateAsync_UnsafeOrMissingAddress_ReportsResolutionFailureWithoutHttp(
+    public async Task ReadAsync_UnsafeOrMissingAddress_ReportsResolutionFailureWithoutHttp(
         string? documentUrl, string? specUrl, string? endpointUrl, string failureCode)
     {
         var handler = new DocumentHandler { InventoryJson = WithUrls(documentUrl, specUrl, endpointUrl) };
         var logger = new RecordingLogger();
 
-        var skill = await GenerateAsync(handler, logger);
+        var services = await ReadAsync(handler, logger);
 
-        skill.Should().BeNull();
+        services.Should().BeEmpty();
         handler.Requests.Should().ContainSingle().Which.Path.Should().Be("/api/v1/keys");
         logger.Messages.Should().ContainSingle(message => message.Contains($"stage=AddressResolution code={failureCode}", StringComparison.Ordinal));
         string.Join('\n', logger.Messages).Should().NotContain("provider-secret").And.NotContain("caller-token");
@@ -197,14 +355,14 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
     [InlineData(HttpStatusCode.NotFound, "NotFound")]
     [InlineData(HttpStatusCode.InternalServerError, "HttpError")]
     [InlineData(HttpStatusCode.Redirect, "HttpError")]
-    public async Task GenerateAsync_HttpFailure_ReportsStatusWithoutLeakingResponse(HttpStatusCode status, string failureCode)
+    public async Task ReadAsync_HttpFailure_ReportsStatusWithoutLeakingResponse(HttpStatusCode status, string failureCode)
     {
         var handler = new DocumentHandler { DocumentStatus = status, DocumentBody = "provider-secret" };
         var logger = new RecordingLogger();
 
-        var skill = await GenerateAsync(handler, logger);
+        var services = await ReadAsync(handler, logger);
 
-        skill.Should().BeNull();
+        services.Should().BeEmpty();
         logger.Messages.Should().ContainSingle(message => message.Contains($"stage=Fetch code={failureCode}", StringComparison.Ordinal)
             && message.Contains($"httpStatus={(int)status}", StringComparison.Ordinal));
         string.Join('\n', logger.Messages).Should().NotContain("provider-secret").And.NotContain("caller-token");
@@ -216,63 +374,74 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
     [InlineData("{\"openapi\":\"3.1.1\",\"paths\":{\"/test\":{\"get\":{\"operationId\":\"read_test\",\"parameters\":[{\"name\":\"q\",\"in\":\"query\",\"schema\":{\"type\":\"string\",\"type\":\"string\"}}],\"responses\":{\"200\":{\"content\":{\"application/json\":{\"schema\":{\"type\":\"object\"}}}}}}}}}", "Parse", "InvalidDocument")]
     [InlineData("{\"openapi\":\"3.1.1\",\"paths\":{}}", "OperationSelection", "NoOperations")]
     [InlineData("{\"openapi\":\"3.1.1\",\"paths\":{\"/test\":{\"get\":false}}}", "OperationSelection", "NoAdmissibleOperations")]
-    public async Task GenerateAsync_InvalidOrEmptyContract_ReportsPreciseStage(string body, string stage, string failureCode)
+    public async Task ReadAsync_InvalidOrEmptyContract_ReportsPreciseStage(string body, string stage, string failureCode)
     {
         var handler = new DocumentHandler { DocumentBody = body };
         var logger = new RecordingLogger();
 
-        var skill = await GenerateAsync(handler, logger);
+        var services = await ReadAsync(handler, logger);
 
-        skill.Should().BeNull();
+        services.Should().BeEmpty();
         logger.Messages.Should().ContainSingle(message => message.Contains($"stage={stage} code={failureCode}", StringComparison.Ordinal));
         string.Join('\n', logger.Messages).Should().NotContain("provider-secret");
     }
 
     [Fact]
-    public async Task GenerateAsync_OversizedDocument_ReportsBoundedReadFailure()
+    public async Task ReadAsync_OversizedDocument_ReportsBoundedReadFailure()
     {
         var handler = new DocumentHandler { DocumentBody = new string('a', 1024 * 1024 + 1) };
         var logger = new RecordingLogger();
 
-        (await GenerateAsync(handler, logger)).Should().BeNull();
+        (await ReadAsync(handler, logger)).Should().BeEmpty();
 
         logger.Messages.Should().ContainSingle(message => message.Contains("stage=Fetch code=ResponseTooLarge", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task GenerateAsync_TransportFailure_LogsOnlyFailureCode()
+    public async Task ReadAsync_TransportFailure_LogsOnlyFailureCode()
     {
         var handler = new DocumentHandler { DocumentException = new HttpRequestException("provider-secret") };
         var logger = new RecordingLogger();
 
-        (await GenerateAsync(handler, logger)).Should().BeNull();
+        (await ReadAsync(handler, logger)).Should().BeEmpty();
 
         logger.Messages.Should().ContainSingle(message => message.Contains("stage=Fetch code=TransportFailure", StringComparison.Ordinal));
         string.Join('\n', logger.Messages).Should().NotContain("provider-secret").And.NotContain("caller-token");
     }
 
     [Fact]
-    public async Task GenerateAsync_CallerCancellation_PropagatesWithoutUnavailableDiagnostic()
+    public async Task ReadAsync_CallerCancellation_PropagatesWithoutUnavailableDiagnostic()
     {
         using var cancellation = new CancellationTokenSource();
         var handler = new DocumentHandler { CancelDocumentWith = cancellation };
         var logger = new RecordingLogger();
 
-        var act = () => GenerateAsync(handler, logger, cancellation.Token);
+        var act = () => ReadAsync(handler, logger, cancellation.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         logger.Messages.Should().BeEmpty();
     }
 
-    private static async Task<NyxIdGeneratedRecommendedSkill?> GenerateAsync(
+    private static async Task<IReadOnlyList<NyxIdMcpService>> ReadAsync(
         DocumentHandler handler, RecordingLogger logger, CancellationToken ct = default)
     {
         using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
         var inventory = await new NyxIdConnectedServiceInventoryReader(new NyxIdServiceInstanceClient(client))
             .ReadAsync("caller-token", organizationToken: null);
-        return await new NyxIdRecommendedSkillGenerator(client, logger)
-            .GenerateAsync("caller-token", inventory.Instances.Single(), ct);
+        return await new NyxIdOpenApiDocumentReader(client, logger)
+            .ReadAsync("caller-token", inventory.Instances.Single(), "document-test", ct);
     }
+
+    private static NyxIdServiceInstance CatalogInstance() => new()
+    {
+        UserServiceId = "us-diagnostic-instance",
+        DisplaySlug = "aevatar-local-diag-catalog",
+        Label = "Aevatar Local Diagnostic Catalog",
+        CatalogServiceId = "catalog-aevatar",
+        CatalogServiceSlug = "aevatar",
+        OpenapiDocumentUrl = "https://nyx.test/api/v1/proxy/services/us-diagnostic-instance/openapi.json",
+        OpenapiSpecUrl = "/private/openapi.json",
+    };
 
     private static string WithUrls(string? documentUrl, string? specUrl = null, string? endpointUrl = null)
     {
@@ -295,6 +464,37 @@ public sealed class NyxIdRecommendedSkillGeneratorTests
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
             Messages.Add(formatter(state, exception));
+    }
+
+    private sealed class CatalogDocumentHandler : HttpMessageHandler
+    {
+        public const string CatalogPath = "/api/v1/keys/catalog-aevatar";
+        public const string DocumentPath = "/api/v1/catalog-curation/services/catalog-aevatar/openapi.json";
+        public const string CatalogBody = """
+            {"resource_type":"catalog_service","id":"catalog-aevatar","catalog_service_id":"catalog-aevatar",
+             "slug":"aevatar","catalog_service_slug":"aevatar","name":"Aevatar","description":"Shared workflow APIs."}
+            """;
+
+        public List<(string Path, string? Token)> Requests { get; } = [];
+        public string CatalogResponseBody { get; init; } = CatalogBody;
+        public HttpStatusCode CatalogStatus { get; init; } = HttpStatusCode.OK;
+        public string DocumentBody { get; init; } = OpenApi;
+        public HttpStatusCode DocumentStatus { get; init; } = HttpStatusCode.OK;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add((request.RequestUri!.PathAndQuery, request.Headers.Authorization?.Parameter));
+            var (status, body) = request.RequestUri.AbsolutePath switch
+            {
+                CatalogPath => (CatalogStatus, CatalogResponseBody),
+                DocumentPath => (DocumentStatus, DocumentBody),
+                _ => (HttpStatusCode.Forbidden, "instance_document_must_not_be_read"),
+            };
+            return Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        }
     }
 
     private sealed class DocumentHandler : HttpMessageHandler

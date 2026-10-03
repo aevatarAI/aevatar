@@ -1,4 +1,5 @@
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.CatalogSkills;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Microsoft.Extensions.Logging;
@@ -12,6 +13,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
     private readonly OrnnSkillPublishingService _publishingService;
     private readonly NyxIdRecommendedSkillRefPersistenceService _persistenceService;
     private readonly NyxIdRecommendedSkillGenerator _skillGenerator;
+    private readonly OrnnSkillClient _skillClient;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, IReadOnlyList<NyxIdRecommendedSkillRef>> _createdRefs = new(StringComparer.Ordinal);
@@ -21,12 +23,14 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
         OrnnSkillPublishingService publishingService,
         NyxIdRecommendedSkillRefPersistenceService persistenceService,
         NyxIdRecommendedSkillGenerator skillGenerator,
+        OrnnSkillClient skillClient,
         ILogger<OrnnRecommendedSkillRefCreator>? logger = null)
     {
         _tokenSource = tokenSource ?? throw new ArgumentNullException(nameof(tokenSource));
         _publishingService = publishingService ?? throw new ArgumentNullException(nameof(publishingService));
         _persistenceService = persistenceService ?? throw new ArgumentNullException(nameof(persistenceService));
         _skillGenerator = skillGenerator ?? throw new ArgumentNullException(nameof(skillGenerator));
+        _skillClient = skillClient ?? throw new ArgumentNullException(nameof(skillClient));
         _logger = logger ?? NullLogger<OrnnRecommendedSkillRefCreator>.Instance;
     }
 
@@ -55,7 +59,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
             }
 
             var generatedSkill = await _skillGenerator
-                .GenerateAsync(documentAccessToken, instance, ct)
+                .GenerateAsync(serverToken, instance, ct)
                 .ConfigureAwait(false);
             if (generatedSkill is null)
             {
@@ -67,7 +71,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
 
             var cacheKey = BuildCacheKey(instance, generatedSkill);
             if (_createdRefs.TryGetValue(cacheKey, out var cachedRefs))
-                return await PersistCreatedRefsAsync(serverToken, instance, cachedRefs, generatedSkill, ct).ConfigureAwait(false);
+                return await PersistCreatedRefsAsync(serverToken, documentAccessToken, instance, cachedRefs, generatedSkill, ct).ConfigureAwait(false);
 
             var request = BuildPublishRequest(generatedSkill);
             var publishResult = await _publishingService.PublishAsync(serverToken, request, ct).ConfigureAwait(false);
@@ -97,7 +101,7 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
                 },
             };
             _createdRefs[cacheKey] = refs;
-            return await PersistCreatedRefsAsync(serverToken, instance, refs, generatedSkill, ct).ConfigureAwait(false);
+            return await PersistCreatedRefsAsync(serverToken, documentAccessToken, instance, refs, generatedSkill, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -114,11 +118,44 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
 
     private async Task<NyxIdRecommendedSkillRefCreationResult> PersistCreatedRefsAsync(
         string serverToken,
+        string consumerToken,
         NyxIdServiceInstance instance,
         IReadOnlyList<NyxIdRecommendedSkillRef> refs,
-        NyxIdGeneratedRecommendedSkill generatedSkill,
+        GeneratedCatalogSkillContent generatedSkill,
         CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(consumerToken))
+            return VerificationFailed();
+        var verifiedSkills = new List<NyxIdCreatedRecommendedSkill>(refs.Count);
+        try
+        {
+            foreach (var skillRef in refs)
+            {
+                var detailRead = await _skillClient.GetExactSkillDetailAsync(
+                    consumerToken, skillRef.SkillId, skillRef.LiteralVersion, ct).ConfigureAwait(false);
+                if (detailRead.Value is not { } detail || detail.Guid != skillRef.SkillId ||
+                    detail.Name != generatedSkill.Name || detail.Version != skillRef.LiteralVersion ||
+                    detail.SkillHash != skillRef.ManifestDigest || !NyxIdCatalogSkillClient.IsDigest(detail.SkillHash) || detail.IsPrivate is not false)
+                    return VerificationFailed(detailRead.ProxyStatus is 401 or 403);
+                var contentRead = await _skillClient.GetExactSkillJsonAsync(
+                    consumerToken, skillRef.SkillId, skillRef.LiteralVersion, ct).ConfigureAwait(false);
+                if (contentRead.Value is not { } content || content.Name != detail.Name || content.Version != skillRef.LiteralVersion)
+                    return VerificationFailed(contentRead.ProxyStatus is 401 or 403);
+                var documents = content.Files?.Where(file => file.Key == "SKILL.md" || file.Key == $"{detail.Name}/SKILL.md").ToArray();
+                if (documents is not { Length: 1 } || string.IsNullOrWhiteSpace(documents[0].Value))
+                    return VerificationFailed();
+                verifiedSkills.Add(new(skillRef.Clone(), detail.Name, detail.CreatedBy ?? string.Empty, documents[0].Value));
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return VerificationFailed();
+        }
+
         var persistenceResult = await _persistenceService.PersistRecommendedSkillRefsAsync(
             serverToken,
             instance,
@@ -135,22 +172,22 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
 
         return new NyxIdRecommendedSkillRefCreationResult(
             refs,
-            refs.Select(skillRef => new NyxIdCreatedRecommendedSkill(
-                    skillRef.Clone(),
-                    generatedSkill.Name,
-                    string.Empty,
-                    generatedSkill.InstructionsMarkdown))
-                .ToArray(),
+            verifiedSkills,
             persistenceResult.Status,
             persistenceResult.FailureCode);
     }
 
-    private static OrnnSkillPublishRequest BuildPublishRequest(NyxIdGeneratedRecommendedSkill skill) =>
+    private static NyxIdRecommendedSkillRefCreationResult VerificationFailed(bool denied = false) =>
+        NyxIdRecommendedSkillRefCreationResult.Empty(
+            denied ? NyxIdRecommendedSkillRefPersistenceStatus.ReadDenied : NyxIdRecommendedSkillRefPersistenceStatus.ReadUnavailable,
+            "ornn_publication_verification_failed");
+
+    private static OrnnSkillPublishRequest BuildPublishRequest(GeneratedCatalogSkillContent skill) =>
         new()
         {
             Name = skill.Name,
             Description = skill.Description,
-            Version = skill.Version,
+            Version = "1.0",
             Category = skill.Category,
             InstructionsMarkdown = skill.InstructionsMarkdown,
             Visibility = "public",
@@ -160,16 +197,14 @@ public sealed class OrnnRecommendedSkillRefCreator : INyxIdRecommendedSkillRefCr
 
     private static string BuildCacheKey(
         NyxIdServiceInstance instance,
-        NyxIdGeneratedRecommendedSkill skill) =>
+        GeneratedCatalogSkillContent skill) =>
         string.Join(
             '|',
             instance.UserServiceId,
             instance.CatalogServiceSlug,
             instance.DisplaySlug,
             skill.Name,
-            skill.Version,
+            "1.0",
             skill.Revision);
 
-    private static string FirstNonEmpty(params string?[] values) =>
-        values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim() ?? string.Empty;
 }

@@ -17,7 +17,7 @@ namespace Aevatar.AI.ToolProviders.Ornn;
 /// direct calls return HTML for any path; the NyxID-routed path is the canonical surface
 /// (issue #530 follow-up).
 /// </summary>
-public sealed class OrnnSkillClient
+public sealed partial class OrnnSkillClient
 {
     private readonly NyxIdApiClient _nyxApi;
     private readonly OrnnOptions _options;
@@ -807,6 +807,8 @@ public sealed class OrnnExactSkillDetail
     public string? Name { get; set; }
     public string? SkillHash { get; set; }
     public string? CreatedBy { get; set; }
+    public string? Version { get; set; }
+    public bool? IsPrivate { get; set; }
 }
 
 public sealed record OrnnExactSkillReadResult<T>(T? Value, int? ProxyStatus, string? FailureDetail)

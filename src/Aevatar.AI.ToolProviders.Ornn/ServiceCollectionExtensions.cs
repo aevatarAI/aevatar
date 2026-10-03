@@ -33,6 +33,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<OrnnSkillPackageBuilder>();
         services.TryAddSingleton<OrnnSkillPackageFormatValidator>();
         services.TryAddSingleton<OrnnSkillPublishingService>();
+        services.TryAddSingleton<Aevatar.AI.ToolProviders.NyxId.CatalogSkills.NyxIdCatalogSkillClient>();
         services.TryAddSingleton<NyxIdRecommendedSkillGenerator>();
         services.Replace(ServiceDescriptor.Singleton<INyxIdRecommendedSkillRefCreator>(sp =>
             sp.GetService<INyxIdClientCredentialsTokenSource>() is { } tokenSource &&
@@ -42,6 +43,7 @@ public static class ServiceCollectionExtensions
                     sp.GetRequiredService<OrnnSkillPublishingService>(),
                     persistenceService,
                     sp.GetRequiredService<NyxIdRecommendedSkillGenerator>(),
+                    sp.GetRequiredService<OrnnSkillClient>(),
                     sp.GetService<ILogger<OrnnRecommendedSkillRefCreator>>())
                 : EmptyNyxIdRecommendedSkillRefCreator.Instance));
         services.Replace(ServiceDescriptor.Singleton<IExactOrnnSkillResolver, OrnnExactAgentProfileSkillResolver>());

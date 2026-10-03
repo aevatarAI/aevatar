@@ -724,11 +724,8 @@ internal static class NyxIdMcpOperationCatalog
         }
     }
 
-    private static NyxIdMcpCatalogRead ParseCustomOpenApiPaths(
-        NyxIdServiceInstance serviceInstance,
-        JsonElement document,
-        JsonElement paths,
-        ExternalCapabilitySourceStamp source)
+    internal static (IReadOnlyList<NyxIdMcpEndpoint> Endpoints, IReadOnlyList<NyxIdMcpCatalogIssue> Issues, int CandidateCount)
+        ParseOpenApiOperations(string documentIdentity, string serviceSlug, JsonElement document, JsonElement paths)
     {
         var issues = new List<NyxIdMcpCatalogIssue>();
         var endpoints = new List<NyxIdMcpEndpoint>();
@@ -750,7 +747,7 @@ internal static class NyxIdMcpOperationCatalog
                     issues.Add(new NyxIdMcpCatalogIssue(
                         ExternalCapabilityDiscoveryDiagnosticCode.InvalidEndpointIdentity,
                         "The OpenAPI operation is not an object.",
-                        serviceInstance.UserServiceId));
+                        documentIdentity));
                     continue;
                 }
 
@@ -758,8 +755,8 @@ internal static class NyxIdMcpOperationCatalog
                 try
                 {
                     endpoint = ParseCustomOpenApiOperation(
-                        serviceInstance.UserServiceId,
-                        serviceInstance.DisplaySlug,
+                        documentIdentity,
+                        serviceSlug,
                         pathProperty.Name,
                         method,
                         pathParameters,
@@ -773,7 +770,7 @@ internal static class NyxIdMcpOperationCatalog
                     issues.Add(new NyxIdMcpCatalogIssue(
                         ExternalCapabilityDiscoveryDiagnosticCode.UnsupportedSchema,
                         "The OpenAPI operation contains an unsupported local reference.",
-                        serviceInstance.UserServiceId,
+                        documentIdentity,
                         ExactString(operationProperty.Value, "operationId") ??
                         "custom_" + ExternalWorkflowCapabilityContractDigest.Compute(method, pathProperty.Name)[..32]));
                     continue;
@@ -783,6 +780,17 @@ internal static class NyxIdMcpOperationCatalog
             }
         }
 
+        return (endpoints, issues, candidateCount);
+    }
+
+    private static NyxIdMcpCatalogRead ParseCustomOpenApiPaths(
+        NyxIdServiceInstance serviceInstance,
+        JsonElement document,
+        JsonElement paths,
+        ExternalCapabilitySourceStamp source)
+    {
+        var (endpoints, issues, candidateCount) = ParseOpenApiOperations(
+            serviceInstance.UserServiceId, serviceInstance.DisplaySlug, document, paths);
         var services = endpoints.Count == 0
             ? []
             : new[]

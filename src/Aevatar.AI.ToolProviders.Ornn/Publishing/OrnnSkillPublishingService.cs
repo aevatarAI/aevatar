@@ -26,27 +26,10 @@ public sealed class OrnnSkillPublishingService
         OrnnSkillPublishRequest request,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(accessToken))
-            return OrnnSkillPublishingResult.Failed("missing_access_token", "No NyxID access token available.");
-
-        var localValidation = await _validationPipeline.ValidateAsync(request, ct).ConfigureAwait(false);
-        if (!localValidation.IsValid)
-            return OrnnSkillPublishingResult.ValidationFailed(localValidation.Diagnostics);
-
-        var (package, buildValidation) = _packageBuilder.Build(request);
-        if (package is null)
-            return OrnnSkillPublishingResult.ValidationFailed(buildValidation.Diagnostics);
-
-        var formatValidation = await _formatValidator.ValidateAsync(accessToken, package.ZipBytes, ct).ConfigureAwait(false);
-        if (!formatValidation.IsValid)
-        {
-            if (!string.IsNullOrWhiteSpace(formatValidation.Error) && formatValidation.Violations.Count == 0)
-                return OrnnSkillPublishingResult.Failed("format_validation_unavailable", formatValidation.Error);
-
-            return OrnnSkillPublishingResult.FormatValidationFailed(
-                formatValidation.Violations,
-                formatValidation.Error);
-        }
+        var prepared = await PrepareAsync(accessToken, request, ct).ConfigureAwait(false);
+        if (prepared.Failure is not null)
+            return prepared.Failure;
+        var package = prepared.Package!;
 
         var publish = await _client.PublishSkillAsync(accessToken, package.ZipBytes, ct).ConfigureAwait(false);
         if (!publish.Succeeded)
@@ -73,6 +56,31 @@ public sealed class OrnnSkillPublishingService
             package.ZipBytes.Length,
             publish.RawResponse,
             ct).ConfigureAwait(false);
+    }
+
+    /// <summary>One package validation path for creating skills and updating exact existing skills.</summary>
+    public async Task<OrnnSkillPreparationResult> PrepareAsync(
+        string accessToken,
+        OrnnSkillPublishRequest request,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return new(null, OrnnSkillPublishingResult.Failed("missing_access_token", "No NyxID access token available."));
+        var localValidation = await _validationPipeline.ValidateAsync(request, ct).ConfigureAwait(false);
+        if (!localValidation.IsValid)
+            return new(null, OrnnSkillPublishingResult.ValidationFailed(localValidation.Diagnostics));
+        var (package, buildValidation) = _packageBuilder.Build(request);
+        if (package is null)
+            return new(null, OrnnSkillPublishingResult.ValidationFailed(buildValidation.Diagnostics));
+        var formatValidation = await _formatValidator.ValidateAsync(accessToken, package.ZipBytes, ct).ConfigureAwait(false);
+        if (!formatValidation.IsValid)
+        {
+            var failure = !string.IsNullOrWhiteSpace(formatValidation.Error) && formatValidation.Violations.Count == 0
+                ? OrnnSkillPublishingResult.Failed("format_validation_unavailable", formatValidation.Error)
+                : OrnnSkillPublishingResult.FormatValidationFailed(formatValidation.Violations, formatValidation.Error);
+            return new(null, failure);
+        }
+        return new(package, null);
     }
 
     private async Task<OrnnSkillPublishingResult> CompletePublishedSkillAsync(
@@ -222,6 +230,8 @@ public sealed class OrnnSkillPublishingService
         return null;
     }
 }
+
+public sealed record OrnnSkillPreparationResult(OrnnSkillPackageBuildResult? Package, OrnnSkillPublishingResult? Failure);
 
 public sealed record PublishedSkillSubject(string? Guid, string? Version, string? SkillHash)
 {
