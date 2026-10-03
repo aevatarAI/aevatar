@@ -1146,6 +1146,60 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         proxyRequest.BearerToken.Should().Be("strict-sender-token");
     }
 
+    [Theory]
+    [InlineData(System.Net.HttpStatusCode.OK, AgentToolReceiptStatus.Success)]
+    [InlineData(System.Net.HttpStatusCode.Forbidden, AgentToolReceiptStatus.Error)]
+    public async Task InvokeOperationAsync_WriteWithoutLocalApproval_PreservesProviderOutcome(
+        System.Net.HttpStatusCode responseStatus,
+        AgentToolReceiptStatus receiptStatus)
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspace(),
+            McpConfigResponse = GoogleWorkspaceMcpConfig()
+                .Replace("readDiningProfileContext", "updateDiningProfile", StringComparison.Ordinal)
+                .Replace("\"method\": \"GET\"", """
+                    "method": "POST",
+                    "execution_policy": {
+                      "risk": "write", "approval": "required", "enforcement_owner": "aevatar",
+                      "allowed_execution_modes": ["interactive"]
+                    }
+                    """, StringComparison.Ordinal),
+            ProxyResponseStatus = responseStatus,
+            ProxyResponseBody = responseStatus == System.Net.HttpStatusCode.OK
+                ? "{\"updated\":true}"
+                : "{\"error\":\"forbidden\"}",
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test", EnableAssistantConnectedServiceEffects = true };
+        var executionPort = CreateAdmittedExecutionPort([]);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            CreateSenderCapabilityIssuer());
+        var context = CreateRegistrationContext();
+        using var scope = AgentToolContextScope.Push(context);
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            """{"user_service_id":"user-service-1","operation_id":"updateDiningProfile","operation_arguments":{}}""",
+            context,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null));
+
+        tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.TerminalInvoked.Should().BeTrue();
+        outcome.Receipt.Status.Should().Be(receiptStatus, outcome.ResultJson);
+        outcome.Receipt.CallId.Should().Be(context.Request.CallId);
+        var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
+        proxyRequest.Method.Should().Be("POST");
+        proxyRequest.BearerToken.Should().Be("strict-sender-token");
+        handler.ExecutionContext!.Request.RequestId.Should().Be(context.Request.RequestId);
+        handler.ExecutionContext.Request.CallId.Should().Be($"{context.Request.CallId}:connected-operation");
+    }
+
     [Fact]
     public async Task InvokeOperationAsync_WithRegistrationAgentKeyWithoutSenderBinding_ExecutesExactOperationWithoutExposingEndpointTool()
     {
@@ -2307,6 +2361,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         public List<string?> DocumentTokens { get; } = [];
         public List<ProxyRequestRecord> ProxyRequests { get; } = [];
         public string ProxyResponseBody { get; init; } = "{\"ok\":true}";
+        public System.Net.HttpStatusCode ProxyResponseStatus { get; init; } = System.Net.HttpStatusCode.OK;
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -2338,7 +2393,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                     request.RequestUri?.Query ?? string.Empty,
                     request.Headers.Authorization?.Parameter ?? string.Empty,
                     apiKey));
-                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                return Task.FromResult(new HttpResponseMessage(ProxyResponseStatus)
                 {
                     Content = new StringContent(ProxyResponseBody),
                 });

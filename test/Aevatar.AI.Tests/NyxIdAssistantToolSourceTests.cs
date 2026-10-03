@@ -18,7 +18,6 @@ public sealed class NyxIdAssistantToolSourceTests
         "nyxid_require_service",
         "nyxid_request_key_create",
         "nyxid_request_key_rotate",
-        "nyxid_proxy",
         "nyxid_profile",
         "nyxid_mfa",
         "nyxid_services",
@@ -76,6 +75,8 @@ public sealed class NyxIdAssistantToolSourceTests
         var names = tools.Select(static tool => tool.Name).ToArray();
 
         names.Should().Equal(PinnedAssistantToolNames);
+        names.Should().NotContain("nyxid_proxy",
+            "the Assistant exposes admitted operations rather than a generic proxy");
         names.Should().NotContain(
             "nyxid_service_accounts",
             "NyxID restricts service-account reads to platform or organization administrators");

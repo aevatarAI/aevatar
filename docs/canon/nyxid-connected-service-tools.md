@@ -39,13 +39,42 @@ flowchart LR
     G -->|"Exact missing-doc error + eligible association"| C["Associated catalog document: same caller, one attempt"]
     C --> P
     D --> P
-    P --> S["Recommended skill generation"]
     P --> T["Dynamic discovery / fixed operation-ID invocation"]
 ```
 
-推荐技能生成、动态工具发现和固定 `operation_id` 调用复用同一无状态 reader。文档读取使用获取该 inventory 的 caller credential，包括 Channel sender token 或 registration Agent Key；Ornn 发布、权限设置及 NyxID catalog ref 回写继续使用 server credential。文档读取不会使用发布凭据代替用户实例的读取权限。已有 document-guided/raw invocation 不因此增加文档读取。
+动态工具发现和固定 `operation_id` 调用复用同一无状态 instance reader。文档读取使用获取该 inventory 的 caller credential，包括 Channel sender token 或 registration Agent Key；文档读取不会使用发布凭据代替用户实例的读取权限。推荐 skill 的创建与管理员更新则共用下述 catalog 权威契约生成路径，不把实例文档覆盖提升为公共契约。已有 document-guided/raw invocation 不因此增加文档读取。
 
 reader 不缓存文档，沿用 1 MiB 上限和既有 operation admission。调用者取消必须向上传播，不记录为服务不可用。无需新增配置项或修改 NyxID/Ornn API。
+
+### Catalog 推荐 skill 的公共内容与管理员更新
+
+创建与更新共用 `NyxIdRecommendedSkillGenerator`：按准确 catalog ID 读取权威 catalog 信息及其 OpenAPI，规范化为 catalog 级强类型契约，再交给纯正文生成器和共用包校验器。公共标题、描述、标签、正文和示例不接收实例 ID、实例 slug、实例标签、调用账号或凭据；版本由发布请求单独传入。指南要求执行时读取当前 inventory，以明确 catalog 关联选择实例，多个实例时明确选择，并优先只使用选中记录的 `user_service_id`。
+
+管理员更新入口为 `POST /api/admin/nyxid/catalog/{catalogServiceId}/recommended-skills/{skillId}:update`，请求体只有 `expectedVersion`、`newVersion`。`newVersion` 必须符合 Ornn 的递增 `major.minor` 规则。有效请求重新生成并对原 skill ID 发布新版本；没有正文差异比较、`unchanged` 或同名创建回退。
+
+Host 要求调用者已认证，且 `IPlatformAdminAuthorizer` 返回非空用户 ID、`IsElevated=true` 与 `GrantSource=AllowedUserId`；配置来自现有 `Aevatar:AdminAccess:AllowedUserIds`。系统发布身份仍须通过既有 NyxID client-credentials 配置获得实际 Ornn skill 管理权限和 catalog curation 权限；Aevatar 管理员身份不能代替这些下游权限。消费者可读性验证另用该管理员已有的 NyxID identity binding 换取短期 skill capability。缺少 binding 时返回 `verify_publication` 失败及已确认的发布信息，不自动创建 binding，也不切换 catalog 引用。
+
+更新不要求在 Ornn 发布前预检 catalog 写权限。NyxID 在实际 catalog 条件写入时校验当前发布身份的写权限；此前读取成功不作为写授权证明。如果新版本已发布但引用写入返回 401/403，本次响应报告 `persist_reference` 失败、已发布版本及摘要。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    H["授权 POST"] --> A["Application: 请求内编排"]
+    A --> G["共用 catalog 生成与包校验"]
+    G --> P["PUT 原 Ornn skill 新版本"]
+    P --> V["准确版本、public 与消费者可读性验证"]
+    V --> C["NyxID catalog CAS + 回读"]
+    C --> R["HTTP 200 updated"]
+    A --> F["失败响应: 阶段及已确认事实"]
+```
+
+`CatalogRecommendedSkillUpdateApplicationService` 在当前 HTTP 请求内依次执行目标与版本校验、生成、发布、发布验证、引用写入和回读。每次请求生成新的 UUID `operationId`，用于日志关联及 NyxID 条件写入的 `request_id`，不表示持久化操作身份。流程没有操作 Actor、event store、readmodel、后台 continuation、状态查询接口、`Idempotency-Key` 或恢复协议。请求取消后不再启动后续阶段；进程中断后不自动续办。
+
+只有准确发布、public/消费者可读性和 catalog 引用回读全部成功才返回 HTTP `200` 和 `status=updated`，不返回 `202` 或状态查询 `Location`。失败响应包含当前阶段、错误分类、下游状态，以及本次请求已经确认的发布版本、摘要和引用修订号；`publicationConfirmed` 与 `catalogReferenceUpdated` 表示已确认事实，`false` 不证明下游绝未发生写入。发布请求的结果不确定时返回 `status=uncertain`，不在本次请求内重发。响应不携带 `stateVersion` 或 `canResume`。
+
+引用写入使用 NyxID 已有 catalog curation 的 `base_revision + request_id` 条件更新。本次请求保留最初读取的完整推荐项及依赖，适配器只替换准确 skill ID 的版本与 `sha256`；写入前发现 revision 变化或下游 CAS 冲突即失败，不合并并发修改后覆盖。成功响应的 `manifestDigest` 映射外部 `sha256`，`skillsRevision` 来自 NyxID 权威回读，不在 Aevatar 递增。
+
+后续 POST 是独立更新请求，重新读取当前 catalog 和 Ornn 版本；不会复用上次发布结果，也不会自动补写失败的引用。如果上次已经发布新版本或结果不确定，管理员须先核对 Ornn 与 NyxID 的实际状态，再决定后续处置。相同 `newVersion` 已存在时按版本规则拒绝。
 
 ### 文档失败诊断
 

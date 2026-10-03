@@ -149,7 +149,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
     }
 
     [Fact]
-    public async Task BuildToolStepContinuation_WithRegistrationAgentKeyModeAndSenderBinding_RevalidatesWithSenderBearer()
+    public async Task BuildToolStepContinuation_WithRegistrationAgentKeyModeAndSenderBinding_PreservesRegistrationContextWithoutSenderBearer()
     {
         var capabilityIssuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
         capabilityIssuer
@@ -218,12 +218,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             authorizedStep,
             CancellationToken.None);
 
-        executedContext.Should().NotBeNull();
-        executedContext!.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
-        executedContext.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
-        executedContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
-        executedContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be("fresh-sender-token");
-        executedContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+        executedContext.Should().BeSameAs(staleAgentKeyContext);
+        await capabilityIssuer.DidNotReceiveWithAnyArgs()
+            .IssueByBindingIdAsync(default!, default!, default);
     }
 
     [Fact]

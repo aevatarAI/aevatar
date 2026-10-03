@@ -13,6 +13,8 @@ public sealed class AgentToolExecutionBoundaryTests
     private const string PortTypeName = "Aevatar.AI.Abstractions.ToolProviders.IAgentToolExecutionPort";
     private const string GrantTypeName = "Aevatar.AI.Abstractions.ToolProviders.AgentToolApprovalGrant";
     private const string ExecutorTypeName = "Aevatar.AI.Core.Tools.AdmittedAgentToolExecutor";
+    private const string ConnectedServiceOperationInvokerTypeName =
+        "Aevatar.AI.ToolProviders.NyxId.ConnectedServices.NyxIdConnectedServiceOperationInvoker";
     private const string AgentBaseTypeName = "Aevatar.AI.Core.AIGAgentBase<TState>";
     private const string RoleTypeName = "Aevatar.AI.Core.RoleGAgent";
     private const string ChannelTurnRunnerTypeName =
@@ -30,6 +32,13 @@ public sealed class AgentToolExecutionBoundaryTests
     private const string InventoryReaderTypeName =
         "Aevatar.AI.ToolProviders.NyxId.ConnectedServices.NyxIdConnectedServiceInventoryReader";
     private const int ExpectedExecutionSurfaceCount = 12;
+
+    // Temporary transition allowlist while the admitted executor is being retired.
+    private static readonly string[] AllowedRawTerminalTypes =
+    [
+        ExecutorTypeName,
+        ConnectedServiceOperationInvokerTypeName,
+    ];
 
     private static readonly string[] IgnorableNuGetWorkspaceDiagnosticCodes =
     [
@@ -59,7 +68,7 @@ public sealed class AgentToolExecutionBoundaryTests
     ];
 
     [Fact]
-    public async Task ServerOwnedAgentTools_ShouldHaveOneAdmittedTerminalAndAllKnownSurfaces()
+    public async Task ServerOwnedAgentTools_ShouldHaveExpectedTerminalsAndAllKnownSurfaces()
     {
         EnsureMSBuildRegistered();
         var loadFailures = new ConcurrentQueue<string>();
@@ -132,8 +141,15 @@ public sealed class AgentToolExecutionBoundaryTests
         Assert.True(unresolvedRawTerminals.Count == 0,
             "Every IAgentTool raw terminal invocation must bind to exactly one symbol; candidate=0 also fails:\n" +
             string.Join("\n", unresolvedRawTerminals));
-        Assert.Single(rawTerminals);
-        Assert.Equal(ExecutorTypeName, rawTerminals[0].EnclosingType);
+        Assert.Equal(2, rawTerminals.Count);
+        var actualRawTerminalTypes = rawTerminals
+            .Select(static site => site.EnclosingType)
+            .OrderBy(static type => type, StringComparer.Ordinal)
+            .ToArray();
+        var expectedRawTerminalTypes = AllowedRawTerminalTypes
+            .OrderBy(static type => type, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(expectedRawTerminalTypes, actualRawTerminalTypes);
 
         var typeIndex = await BuildTypeIndexAsync(productionProjects);
         AssertRequiredExecutionPortConstructor(RequireType(typeIndex, AgentBaseTypeName).Symbol);

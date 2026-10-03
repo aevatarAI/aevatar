@@ -50,20 +50,19 @@ public sealed class NyxIdOpenApiCatalogFallbackTests
     }
 
     [Fact]
-    public async Task GenerateAsync_MissingInstanceDocument_GeneratesGuidanceForOriginalInstance()
+    public async Task ReadAsync_MissingInstanceDocument_DoesNotMutateOriginalInstance()
     {
         var handler = new DocumentHandler();
         using var client = CreateClient(handler);
         var instance = await ReadInstanceAsync(client);
         var original = instance.Clone();
 
-        var skill = await new NyxIdRecommendedSkillGenerator(client)
-            .GenerateAsync("caller-token", instance, CancellationToken.None);
+        var services = await new NyxIdOpenApiDocumentReader(client, new RecordingLogger())
+            .ReadAsync("caller-token", instance, "catalog-test", CancellationToken.None);
 
-        skill.Should().NotBeNull();
-        skill!.InstructionsMarkdown.Should().Contain("GET /api/channels/me")
-            .And.Contain("`user_service_id` = `us-aevatar`")
-            .And.NotContain("`user_service_id` = `catalog-aevatar`");
+        var service = services.Should().ContainSingle().Subject;
+        service.UserServiceId.Should().Be("us-aevatar");
+        service.Endpoints.Should().ContainSingle().Which.PathTemplate.Should().Be("/api/channels/me");
         instance.Should().Be(original);
         AssertCatalogRequests(handler);
     }
