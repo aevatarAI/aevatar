@@ -1396,6 +1396,58 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeOperationAsync_WhenServiceSelectorIsNotVisible_ReturnsNonMutatingRetryGuidance()
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspaceRecommendedSkill(),
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var executionPort = CreateAdmittedExecutionPort([]);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            CreateSenderCapabilityIssuer());
+        var context = CreateSenderBindingContext();
+        using var scope = AgentToolContextScope.Push(context);
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            """
+            {
+              "user_service_id":"user-service-typo",
+              "document_request":{
+                "method":"GET",
+                "relative_path":"/calendar/v3/users/me/calendarList",
+                "skill_ref":{
+                  "source":"ornn",
+                  "skill_id":"11111111-1111-1111-1111-111111111111",
+                  "literal_version":"1.2",
+                  "manifest_digest":"sha256:000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+                },
+                "query":{"maxResults":"100"}
+              }
+            }
+            """,
+            context,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null));
+
+        using var document = JsonDocument.Parse(outcome.ResultJson);
+        document.RootElement.GetProperty("status").GetString().Should().Be("guidance");
+        document.RootElement.GetProperty("invoked").GetBoolean().Should().BeFalse();
+        document.RootElement.GetProperty("error").GetString().Should().Be("service_selector_not_visible");
+        document.RootElement.GetProperty("next_action").GetString().Should()
+            .Be("Retry with the exact user_service_id copied from the current-turn inventory.");
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        outcome.Receipt.SideEffectKind.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task InvokeOperationAsync_WithRecommendedSkillRefAndTypedOperationNotVisible_RequiresDocumentRequest()
     {
         var handler = new InventoryHandler

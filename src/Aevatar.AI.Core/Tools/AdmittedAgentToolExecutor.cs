@@ -852,7 +852,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             terminalOutcome.ResultJson,
             terminalOutcome.Receipt,
             argumentsJson,
-            terminalOutcome.ResolvedInvocationSemantics);
+            terminalOutcome.ResolvedInvocationSemantics,
+            terminalOutcome.ExternalDispatchState);
         var liveResultJson = ResolveLiveResultJson(tool, argumentsJson, terminalOutcome.ResultJson, receipt);
         var outcome = new AgentToolExecutionOutcome(
             AgentToolExecutionOutcomeKind.Executed,
@@ -1248,7 +1249,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 resultJson,
                 terminalOutcome.Receipt,
                 argumentsJson,
-                terminalOutcome.ResolvedInvocationSemantics);
+                terminalOutcome.ResolvedInvocationSemantics,
+                terminalOutcome.ExternalDispatchState);
             var liveResultJson = ResolveLiveResultJson(tool, argumentsJson, resultJson, receipt);
             outcome = new AgentToolExecutionOutcome(
                 AgentToolExecutionOutcomeKind.Executed,

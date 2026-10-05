@@ -887,7 +887,12 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 arguments.OperationId,
                 arguments.DocumentRequest is not null,
                 arguments.RawRequest is not null);
-            return OperationFailure(callId, result.FailureCode, arguments, result.SuggestedSkillRefs);
+            return OperationFailure(
+                callId,
+                result.FailureCode,
+                arguments,
+                result.SuggestedSkillRefs,
+                result.ExternalDispatchState);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -1520,7 +1525,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         string callId,
         string errorCode,
         OperationArguments? arguments = null,
-        IReadOnlyList<NyxIdRecommendedSkillRef>? suggestedSkillRefs = null)
+        IReadOnlyList<NyxIdRecommendedSkillRef>? suggestedSkillRefs = null,
+        AgentToolExternalDispatchState externalDispatchState = AgentToolExternalDispatchState.Unspecified)
     {
         var targetService = OperationTargetService(arguments);
         var errorMessage = OperationFailureMessage(errorCode, targetService);
@@ -1537,27 +1543,32 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             next_action = OperationFailureNextAction(errorCode),
             suggested_skill_refs = ToSuggestedSkillRefs(suggestedSkillRefs),
         });
-        return new AgentToolTerminalOutcome(resultJson, new AgentToolReceipt
-        {
-            CallId = callId ?? string.Empty,
-            ToolName = "nyxid_invoke_operation",
-            Status = guidanceOnly ? AgentToolReceiptStatus.Success : AgentToolReceiptStatus.Error,
-            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
-            ErrorCode = guidanceOnly ? string.Empty : errorCode,
-            ErrorMessage = guidanceOnly ? string.Empty : errorMessage,
-            ResultJson = resultJson,
-        });
+        return new AgentToolTerminalOutcome(
+            resultJson,
+            new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = "nyxid_invoke_operation",
+                Status = guidanceOnly ? AgentToolReceiptStatus.Success : AgentToolReceiptStatus.Error,
+                ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+                ErrorCode = guidanceOnly ? string.Empty : errorCode,
+                ErrorMessage = guidanceOnly ? string.Empty : errorMessage,
+                ResultJson = resultJson,
+            },
+            ExternalDispatchState: externalDispatchState);
     }
 
     private static string OperationTargetService(OperationArguments? arguments) =>
         FirstNonEmpty(arguments?.ServiceSlug, arguments?.UserServiceId);
 
     private static bool IsOperationGuidance(string errorCode) =>
-        string.Equals(errorCode, "document_request_required", StringComparison.Ordinal);
+        errorCode is "document_request_required" or "service_selector_not_visible";
 
     private static string? OperationFailureNextAction(string errorCode) => errorCode switch
     {
         "document_request_required" => "Call nyxid_invoke_operation again with document_request. Copy one suggested_skill_refs entry into document_request.skill_ref, set method and relative_path from the loaded recommended skill operation details, and do not use operation_id.",
+        "service_selector_not_visible" =>
+            "Retry with the exact user_service_id copied from the current-turn inventory.",
         _ => null,
     };
 
@@ -1580,6 +1591,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             $"The service '{targetService}' exposes this operation through a loaded recommended skill. Retry with document_request and the exact suggested skill_ref; do not use operation_id.",
         "document_request_required" =>
             "The selected NyxID service exposes this operation through a loaded recommended skill. Retry with document_request and the exact suggested skill_ref; do not use operation_id.",
+        "service_selector_not_visible" when !string.IsNullOrWhiteSpace(targetService) =>
+            $"The connected-service selector '{targetService}' is not visible in the current inventory. Retry with the exact user_service_id copied from the current-turn inventory.",
+        "service_selector_not_visible" =>
+            "The connected-service selector is not visible in the current inventory. Retry with the exact user_service_id copied from the current-turn inventory.",
         "operation_not_visible" when !string.IsNullOrWhiteSpace(targetService) =>
             $"The requested connected-service operation is not visible for service '{targetService}'. Verify the service is admitted for this channel, the operation id is current, and the service exposes the operation.",
         "operation_not_visible" =>

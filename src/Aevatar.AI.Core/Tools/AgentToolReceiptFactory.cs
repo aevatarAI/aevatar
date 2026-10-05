@@ -24,7 +24,8 @@ internal static class AgentToolReceiptFactory
         AgentToolCallSafety callSafety,
         string resultJson,
         string argumentsJson = "",
-        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics = null)
+        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics = null,
+        AgentToolExternalDispatchState externalDispatchState = AgentToolExternalDispatchState.Unspecified)
     {
         AgentToolReceipt? providerReceipt;
         try
@@ -49,7 +50,8 @@ internal static class AgentToolReceiptFactory
                 callSafety,
                 resultJson,
                 providerReceipt,
-                resolvedInvocationSemantics);
+                resolvedInvocationSemantics,
+                externalDispatchState);
         }
 
         return CreateUnknown(tool, callId, toolName, callSafety);
@@ -63,7 +65,8 @@ internal static class AgentToolReceiptFactory
         string resultJson,
         AgentToolReceipt? terminalReceipt,
         string argumentsJson = "",
-        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics = null)
+        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics = null,
+        AgentToolExternalDispatchState externalDispatchState = AgentToolExternalDispatchState.Unspecified)
     {
         if (terminalReceipt is null)
         {
@@ -74,7 +77,8 @@ internal static class AgentToolReceiptFactory
                 callSafety,
                 resultJson,
                 argumentsJson,
-                resolvedInvocationSemantics);
+                resolvedInvocationSemantics,
+                externalDispatchState);
         }
 
         try
@@ -86,7 +90,8 @@ internal static class AgentToolReceiptFactory
                 callSafety,
                 resultJson,
                 terminalReceipt,
-                resolvedInvocationSemantics);
+                resolvedInvocationSemantics,
+                externalDispatchState);
         }
         catch
         {
@@ -244,7 +249,8 @@ internal static class AgentToolReceiptFactory
         AgentToolCallSafety callSafety,
         string? resultJson,
         AgentToolReceipt receipt,
-        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics = null)
+        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics = null,
+        AgentToolExternalDispatchState externalDispatchState = AgentToolExternalDispatchState.Unspecified)
     {
         var normalized = receipt.Clone();
         normalized.CallId = callId ?? string.Empty;
@@ -254,7 +260,8 @@ internal static class AgentToolReceiptFactory
             normalized,
             tool,
             callSafety,
-            resolvedInvocationSemantics);
+            resolvedInvocationSemantics,
+            externalDispatchState);
         if (normalized.Status == AgentToolReceiptStatus.Unspecified)
         {
             normalized.ResultJson = UnknownResultJson;
@@ -282,8 +289,17 @@ internal static class AgentToolReceiptFactory
         AgentToolReceipt receipt,
         IAgentTool tool,
         AgentToolCallSafety callSafety,
-        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics)
+        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics,
+        AgentToolExternalDispatchState externalDispatchState)
     {
+        if (externalDispatchState == AgentToolExternalDispatchState.NotDispatched)
+        {
+            receipt.IsDestructive = false;
+            receipt.SideEffectKind = string.Empty;
+            receipt.Effect = AgentToolReceiptEffect.ReadOnly;
+            return;
+        }
+
         if (resolvedInvocationSemantics is null)
         {
             receipt.IsDestructive = receipt.IsDestructive || callSafety.IsDestructive;

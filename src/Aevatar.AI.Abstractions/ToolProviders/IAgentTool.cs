@@ -52,10 +52,18 @@ public sealed record AgentToolResolvedInvocationSemantics
     }
 }
 
+public enum AgentToolExternalDispatchState
+{
+    Unspecified = 0,
+    NotDispatched = 1,
+    Dispatched = 2,
+}
+
 public sealed record AgentToolTerminalOutcome(
     string ResultJson,
     AgentToolReceipt? Receipt = null,
-    AgentToolResolvedInvocationSemantics? ResolvedInvocationSemantics = null);
+    AgentToolResolvedInvocationSemantics? ResolvedInvocationSemantics = null,
+    AgentToolExternalDispatchState ExternalDispatchState = AgentToolExternalDispatchState.Unspecified);
 
 public interface IAgentToolLiveResultMapper
 {

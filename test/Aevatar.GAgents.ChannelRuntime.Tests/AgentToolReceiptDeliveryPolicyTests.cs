@@ -216,6 +216,42 @@ public sealed class AgentToolReceiptDeliveryPolicyTests
     }
 
     [Fact]
+    public void Build_WhenSelectorGuidancePrecedesCorrectedRead_ShouldKeepFinalNarrative()
+    {
+        var selectorGuidance = Receipt(
+            "call-invalid-selector",
+            AgentToolReceiptStatus.Success,
+            AgentToolReceiptEffect.ReadOnly,
+            toolName: "nyxid_invoke_operation");
+        selectorGuidance.ResultJson =
+            """{"status":"guidance","invoked":false,"error":"service_selector_not_visible"}""";
+        selectorGuidance.ErrorCode = string.Empty;
+        selectorGuidance.ErrorMessage = string.Empty;
+        var correctedRead = Receipt(
+            "call-corrected-read",
+            AgentToolReceiptStatus.Success,
+            AgentToolReceiptEffect.ReadOnly,
+            toolName: "nyxid_invoke_operation");
+        correctedRead.ResultJson = """{"status":"succeeded","data":{"items":[]}}""";
+        correctedRead.ErrorCode = string.Empty;
+        correctedRead.ErrorMessage = string.Empty;
+
+        const string narrative = "Google Workspace is connected and the calendar list is available.";
+        var delivery = AgentToolReceiptDeliveryPolicy.Build(
+            narrative,
+            outboundIntent: null,
+            appendedHistory: [],
+            receipts: [selectorGuidance, correctedRead],
+            toolCalls: [],
+            new AgentToolReceiptRenderer());
+
+        delivery.ReplyText.Should().Be(narrative);
+        delivery.ReplyText.Should().NotContain("[tool receipt] Failed");
+        delivery.AppendedHistory.Should().ContainSingle();
+        delivery.AppendedHistory[0].Content.Should().Be(narrative);
+    }
+
+    [Fact]
     public void Build_WhenSameCallIdBelongsToDifferentTools_ShouldKeepFailedMutation()
     {
         var failed = Receipt("call-1", AgentToolReceiptStatus.Error, AgentToolReceiptEffect.Mutating);

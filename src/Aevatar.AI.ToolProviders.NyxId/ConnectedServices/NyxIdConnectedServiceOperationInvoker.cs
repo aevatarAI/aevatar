@@ -33,15 +33,17 @@ public sealed record NyxIdConnectedServiceOperationInvokeResult(
     bool IsSuccess,
     AgentToolTerminalOutcome? Outcome,
     string FailureCode,
-    IReadOnlyList<NyxIdRecommendedSkillRef>? SuggestedSkillRefs = null)
+    IReadOnlyList<NyxIdRecommendedSkillRef>? SuggestedSkillRefs = null,
+    AgentToolExternalDispatchState ExternalDispatchState = AgentToolExternalDispatchState.Unspecified)
 {
     public static NyxIdConnectedServiceOperationInvokeResult Success(AgentToolTerminalOutcome outcome) =>
         new(true, outcome, string.Empty);
 
     public static NyxIdConnectedServiceOperationInvokeResult Failure(
         string failureCode,
-        IReadOnlyList<NyxIdRecommendedSkillRef>? suggestedSkillRefs = null) =>
-        new(false, null, failureCode, suggestedSkillRefs);
+        IReadOnlyList<NyxIdRecommendedSkillRef>? suggestedSkillRefs = null,
+        AgentToolExternalDispatchState externalDispatchState = AgentToolExternalDispatchState.Unspecified) =>
+        new(false, null, failureCode, suggestedSkillRefs, externalDispatchState);
 }
 
 public sealed class NyxIdConnectedServiceOperationInvoker
@@ -98,7 +100,11 @@ public sealed class NyxIdConnectedServiceOperationInvoker
                 .Where(binding => MatchesService(binding.Instance, invocation))
                 .ToArray();
             if (matchedBindings.Length == 0)
-                return NyxIdConnectedServiceOperationInvokeResult.Failure("operation_not_visible");
+            {
+                return NyxIdConnectedServiceOperationInvokeResult.Failure(
+                    "service_selector_not_visible",
+                    externalDispatchState: AgentToolExternalDispatchState.NotDispatched);
+            }
 
             if (invocation.DocumentRequest is not null)
             {
