@@ -7,7 +7,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ChannelConnectedServiceCredentialPolicyTests
 {
     [Fact]
-    public void Bound_sender_without_readable_bearer_uses_registration_agent_key_when_available()
+    public void Bound_sender_without_readable_bearer_fails_closed_even_when_registration_agent_key_is_available()
     {
         var context = AgentToolExecutionContext.Empty with
         {
@@ -20,10 +20,14 @@ public sealed class ChannelConnectedServiceCredentialPolicyTests
             senderToken: null,
             registrationAgentKey: "registration-key");
 
-        result.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
-        result.Credentials.NyxIdAccessToken.Should().Be("registration-key");
+        result.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+        result.Credentials.NyxIdAccessToken.Should().BeNull();
         result.Credentials.SenderNyxIdAccessToken.Should().BeNull();
-        result.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        result.Credentials.SourceReadableNyxIdAccessToken.Should().BeNull();
+        result.Credentials.NyxIdCredentialAuthority.Should()
+            .Be(AgentToolNyxIdCredentialAuthority.ToolExecutionContext);
+        result.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
+        result.DurableNyxIdCredential.Should().BeNull();
     }
 
     [Fact]

@@ -257,9 +257,11 @@ generator 和 Agent Profile catalog materializer 通过同一个注册项发现�
 中额外追加 inventory，形成另一份工具清单。`workspace.default` 已经从 `skill.runtime`
 继承 `use_skill`，其公共工具面不包含 channel inventory 或 NyxID management 工具。
 
-发现 inventory schema 必须具有 typed `SenderBinding.BindingId`。wrapper 在模型真正调用时
+发现 inventory schema 必须先由 Channel registration 的 typed `credential_source_mode` 选定
+唯一凭证 authority。`sender_binding` 模式要求 typed `SenderBinding.BindingId`，wrapper 在模型真正调用时
 才使用 verified sender token，或按该 binding 签发的窄 inventory capability，读取
-`/api/v1/keys`；不得替换为 bot-owner token、sandbox CLI login 或进程级 cache。Profile 的
+`/api/v1/keys`；`registration_agent_key` 模式要求可读取的 registration Agent Key，并用同一 Agent Key
+读取 inventory。两种模式都不得替换为 bot-owner token、sandbox CLI login 或进程级 cache。Profile 的
 maximum 和 recovery 都要包含 `use_skill`、`nyxid_service_inventory`；仅在 policy 中写入
 工具名不能把缺席于 route set 的工具变出来。自然语言 inventory 走
 `AgentRun -> ChatStreamAsync -> use_skill(skill="nyxid-service-discovery") -> nyxid_service_inventory({}) -> sender /keys -> streamed answer`，
@@ -267,9 +269,9 @@ maximum 和 recovery 都要包含 `use_skill`、`nyxid_service_inventory`；仅�
 
 Pinned NyxID Assistant route 不挂载 `nyxid_service_inventory`：该 route 的 caller inventory 读取由 read-only `nyxid_services`（list/show，读 `/api/v1/keys`）承担，不为同一事实并列第二个 model-visible 读取工具。kernel 与 floor prompt 对 inventory 读取的指引必须以 `nyxid_service_inventory` 出现在最终 tool schemas 为条件；缺席时指向当前实际存在的只读 management read，不得无条件指向单一工具名。
 
-Channel registration 采用 `registration_agent_key` 时，外层工具准入使用该 registration 的 Agent Key；内部 `nyxid_service_inventory_reader` 仍只读取绑定发送者的服务。切换到 verified sender token 或新签发的 inventory capability 时，wrapper 必须同时设置 `SenderNyxIdAccessToken`、`SourceReadableUserBearer` 类型与 `BearerToken` 来源，并移除外层 `DurableNyxIdCredential`。内部读取继续经过 `IAgentToolExecutionPort`，保留原 execution owner、sender binding、NyxID authority 与 request ID，使用独立的 `:inventory-read` call ID。不得仅替换 token 字符串后保留 registration Agent Key 的凭据描述，也不得通过放宽统一准入校验解决描述冲突。
+Channel registration 采用 `registration_agent_key` 时，外层工具准入与内部 `nyxid_service_inventory_reader` 都使用该 registration 的 Agent Key；sender binding 可以作为身份事实继续保留，但不得触发 sender token 签发或覆盖 Agent Key。采用 `sender_binding` 时，wrapper 必须同时设置 `SenderNyxIdAccessToken`、`SourceReadableUserBearer` 类型与 `BearerToken` 来源，并移除外层 `DurableNyxIdCredential`。内部读取继续经过 `IAgentToolExecutionPort`，保留原 execution owner、sender binding、NyxID authority 与 request ID，使用独立的 `:inventory-read` call ID。不得仅替换 token 字符串后保留另一模式的凭据描述，也不得通过放宽统一准入校验解决描述冲突。
 
-Channel connected-service 的授权主体在进入 discovery 前一次性确定：存在 verified `SenderBinding.BindingId` 时，inventory、OpenAPI/catalog discovery、operation admission 和 proxy execution 全部使用该 sender 的 request-local bearer；binding token exchange 失败或 binding 在请求期间变化时 fail closed，不降级到 registration Agent Key 或 bot-owner token。只有明确不存在 sender binding 时，Channel registration 的 Agent Key 才能作为业务 connected-service 的执行凭据。LLM provider credential 与这条业务服务凭据链路独立解析，不能通过 `LLMControlContext` 回填覆盖已选定的 sender authority。
+Channel connected-service 的授权主体在进入 discovery 前一次性确定，且 `credential_source_mode` 的优先级高于 sender binding 是否存在。`registration_agent_key` 模式下，inventory、OpenAPI/catalog discovery、recommended Skill 加载/补全、operation admission 和 proxy execution 全部使用 registration authority；Agent Key 缺失时保持该模式并 fail closed，不签发 sender token。`sender_binding` 模式下，上述路径全部使用该 sender 的 request-local bearer；binding token exchange 失败、撤销、过期、scope 不匹配或 binding 在请求期间变化时 fail closed，不降级到 registration Agent Key、Activity user token 或 bot-owner token。LLM provider credential 与这条业务服务凭据链路独立解析，不能通过 `LLMControlContext` 回填覆盖已选定的 connected-service authority。
 
 Registration 的 Service ID 白名单及其派生的 runtime Service/endpoint selectors 只约束 registration authority。Channel 已选定 sender bearer 时，目录物化不向 discovery 注入 registration selectors，也不以它们过滤 sender 已发现的操作；registration 为显式空白名单时亦如此。该分支必须同时具有 sender binding、有效的 `BearerToken / SourceReadableUserBearer / ToolExecutionContext` 凭据上下文，且没有 registration durable credential；仅存在 binding 不构成绕过 selectors 的依据。Sender 自身的 NyxID grant、exact inventory/catalog 交集、tool-set、tool visibility、catalog budget、operation admission 与执行授权仍然生效。Agent Key 路径继续执行原有 registration selectors、白名单和 grant 校验。
 

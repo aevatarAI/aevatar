@@ -22,12 +22,13 @@ using Xunit;
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 /// <summary>
-/// Pins the deferred-run sender-token re-mint (Layer B) of
-/// <see cref="AgentRunReplyGenerationExecutor"/>: with a persisted sender
-/// binding-id + tenant on the tool context, the executor re-mints the sender's
-/// short-lived NyxID token by binding id and overlays it onto the LLM control so
-/// it projects into the tool credentials. On <see cref="BindingRevokedException"/>
-/// it triggers a local binding reconcile and keeps the owner fallback intact.
+/// Pins the deferred-run Channel credential split of
+/// <see cref="AgentRunReplyGenerationExecutor"/>: LLM calls use the registration
+/// Agent Key, while a persisted sender binding and exact NyxID authority allow
+/// connected-service tools to re-mint the sender's short-lived bearer token. On
+/// <see cref="BindingRevokedException"/>
+/// it triggers a local binding reconcile, leaves connected-service authority
+/// empty, and keeps LLM credential resolution independent.
 /// A binding whose grant lacks a required service is preserved so <c>/init</c>
 /// can update that grant in place.
 /// Without a sender binding it touches neither broker nor reconciler.
@@ -39,6 +40,13 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
     [Fact]
     public async Task BuildInitialStepState_WithTypedNyxIdAuthority_ReMintsForExactAuthorityInsteadOfChannelIdentity()
     {
+        var vault = new InMemorySecretVault();
+        var stored = (await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-1",
+            "key-reg-1",
+            "registration-agent-key",
+            "test channel registration agent key"))).Reference;
         var broker = Substitute.For<INyxIdCapabilityBroker>();
         broker
             .IssueShortLivedByBindingIdAsync(
@@ -49,7 +57,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             .Returns(Task.FromResult(new CapabilityHandle { AccessToken = "fresh-sender-token" }));
         var reconciler = Substitute.For<IBindingRevocationReconciler>();
         var generator = new EchoStepPlanReplyGenerator();
-        var executor = CreateExecutor(generator, broker, reconciler);
+        var executor = CreateExecutor(generator, broker, reconciler, secretVault: vault);
 
         var state = await executor.BuildInitialStepStateAsync(
             BuildRequest(
@@ -60,16 +68,20 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
                 nyxIdAuthority: new AgentToolNyxIdAuthorityContext(
                     "LARK",
                     "tenant-authority-alpha",
-                    "ou-authority-alpha")),
+                    "ou-authority-alpha"),
+                workflowResultDeliveryCredential: new ChannelWorkflowResultDeliveryCredential
+                {
+                    SubjectId = "key-reg-1",
+                    SecretReference = stored.Clone(),
+                }),
             CancellationToken.None);
 
-        // The control passed to the generator (== BuildGenerationContext output)
-        // must carry the freshly minted sender token both as the LLM bearer and
-        // as the sender-scoped tool credential.
+        // LLM authority is registration-owned; the freshly minted sender token is
+        // confined to the connected-service tool context.
         generator.CapturedLlmControl.Should().NotBeNull();
-        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("fresh-sender-token");
-        generator.CapturedLlmControl.NyxIdOrgToken.Should().Be("fresh-sender-token");
-        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("registration-agent-key");
+        generator.CapturedLlmControl.NyxIdOrgToken.Should().BeNull();
+        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().BeNull();
 
         // And it must project into the resulting step-state tool credentials so
         // ToolCallCredentialPolicyMiddleware admits sender-credentialed tools.
@@ -92,7 +104,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
     }
 
     [Fact]
-    public async Task BuildInitialStepState_WithRegistrationAgentKeyModeAndSenderBinding_UsesAgentKeyForLlmAndSenderForConnectedServices()
+    public async Task BuildInitialStepState_WithRegistrationAgentKeyModeAndSenderBinding_UsesAgentKeyForLlmAndConnectedServices()
     {
         var vault = new InMemorySecretVault();
         var stored = (await vault.PutAsync(new StoreSecretRequest(
@@ -102,13 +114,6 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             "registration-agent-key",
             "test channel registration agent key"))).Reference;
         var broker = Substitute.For<INyxIdCapabilityBroker>();
-        broker
-            .IssueShortLivedByBindingIdAsync(
-                Arg.Any<ExternalSubjectRef>(),
-                SenderBindingId,
-                Arg.Any<CapabilityScope>(),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new CapabilityHandle { AccessToken = "fresh-sender-token" }));
         var generator = new EchoStepPlanReplyGenerator();
         var executor = CreateExecutor(generator, broker, Substitute.For<IBindingRevocationReconciler>(), secretVault: vault);
 
@@ -134,18 +139,197 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         control.SenderNyxIdAccessToken.Should().BeNull();
 
         generator.CapturedToolContext.Should().NotBeNull();
-        generator.CapturedToolContext!.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
-        generator.CapturedToolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
-        generator.CapturedToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
-        generator.CapturedToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be("fresh-sender-token");
-        generator.CapturedToolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
-        generator.CapturedToolContext.DurableNyxIdCredential.Should().BeNull();
+        generator.CapturedToolContext!.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        generator.CapturedToolContext.Credentials.NyxIdAccessToken.Should().Be("registration-agent-key");
+        generator.CapturedToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeNull();
+        generator.CapturedToolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
+        generator.CapturedToolContext.DurableNyxIdCredential.Should().NotBeNull();
 
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
-        toolContext.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
-        toolContext.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
-        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
-        toolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+        toolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        toolContext.Credentials.NyxIdAccessToken.Should().Be("registration-agent-key");
+        toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        toolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeNull();
+        toolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
+        toolContext.DurableNyxIdCredential.Should().NotBeNull();
+        await broker.DidNotReceiveWithAnyArgs()
+            .IssueShortLivedByBindingIdAsync(default!, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task BuildInitialAndContinuation_WithSenderBindingMode_UseRegistrationAgentKeyForLlmAndSenderForConnectedServices()
+    {
+        var vault = new InMemorySecretVault();
+        var stored = (await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-1",
+            "key-reg-1",
+            "registration-agent-key",
+            "test channel registration agent key"))).Reference;
+        var broker = Substitute.For<INyxIdCapabilityBroker>();
+        broker
+            .IssueShortLivedByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                SenderBindingId,
+                Arg.Any<CapabilityScope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CapabilityHandle { AccessToken = "fresh-sender-token" }));
+        var generator = new EchoStepPlanReplyGenerator(disableTools: false);
+        var executor = CreateExecutor(
+            generator,
+            broker,
+            Substitute.For<IBindingRevocationReconciler>(),
+            secretVault: vault);
+        var workItem = BuildRequest(
+            senderBindingId: SenderBindingId,
+            senderTenant: "tenant-authority-alpha",
+            credentialSourceMode: ChannelBotRuntimeCredentialSourceMode.SenderBinding,
+            workflowResultDeliveryCredential: new ChannelWorkflowResultDeliveryCredential
+            {
+                SubjectId = "key-reg-1",
+                SecretReference = stored.Clone(),
+            });
+
+        var state = await executor.BuildInitialStepStateAsync(workItem, CancellationToken.None);
+
+        AssertAgentKeyLlmWithSenderToolCredential(generator.CapturedLlmControl, generator.CapturedToolContext);
+        AssertAgentKeyLlmWithSenderToolCredential(
+            AgentRunReplyStepMappers.LlmControlFromProto(state),
+            AgentToolExecutionContextMapper.FromPayload(state.ToolContext));
+
+        await ExecuteContinuationAsync(executor, workItem, state);
+
+        AssertAgentKeyLlmWithSenderToolCredential(generator.CapturedLlmControl, generator.CapturedToolContext);
+    }
+
+    [Fact]
+    public async Task BuildInitialAndContinuation_WithSenderBindingModeAndUnboundSender_DoNotProjectAgentKeyToTools()
+    {
+        var vault = new InMemorySecretVault();
+        var stored = (await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-1",
+            "key-reg-1",
+            "registration-agent-key",
+            "test channel registration agent key"))).Reference;
+        var generator = new EchoStepPlanReplyGenerator(disableTools: false);
+        var executor = CreateExecutor(
+            generator,
+            broker: null,
+            Substitute.For<IBindingRevocationReconciler>(),
+            secretVault: vault);
+        var workItem = BuildRequest(
+            senderBindingId: null,
+            senderTenant: null,
+            llmControl: new LLMControlContext(
+                "owner-token",
+                "owner-org-token",
+                SenderNyxIdAccessToken: null,
+                ModelOverride: null,
+                NyxIdRoutePreference: null,
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: null),
+            credentialSourceMode: ChannelBotRuntimeCredentialSourceMode.SenderBinding,
+            workflowResultDeliveryCredential: new ChannelWorkflowResultDeliveryCredential
+            {
+                SubjectId = "key-reg-1",
+                SecretReference = stored.Clone(),
+            });
+        workItem.Request.Activity!.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "activity-user-token",
+        };
+
+        var state = await executor.BuildInitialStepStateAsync(workItem, CancellationToken.None);
+
+        generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("registration-agent-key");
+        generator.CapturedLlmControl.NyxIdOrgToken.Should().BeNull();
+        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedToolContext.Should().NotBeNull();
+        generator.CapturedToolContext!.Credentials.NyxIdAccessToken.Should().Be("activity-user-token");
+        generator.CapturedToolContext.Credentials.NyxIdOrgToken.Should().Be("activity-user-token");
+        generator.CapturedToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedToolContext.Credentials.NyxIdAccessToken.Should().NotBe("registration-agent-key");
+        var persistedToolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
+        persistedToolContext.Credentials.NyxIdAccessToken.Should().Be("activity-user-token");
+        persistedToolContext.Credentials.NyxIdAccessToken.Should().NotBe("registration-agent-key");
+
+        await ExecuteContinuationAsync(executor, workItem, state);
+
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("registration-agent-key");
+        generator.CapturedLlmControl.NyxIdOrgToken.Should().BeNull();
+        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedToolContext!.Credentials.NyxIdAccessToken.Should().Be("activity-user-token");
+        generator.CapturedToolContext.Credentials.NyxIdAccessToken.Should().NotBe("registration-agent-key");
+    }
+
+    [Fact]
+    public async Task BuildInitialAndContinuation_WithSenderBindingModeAndMissingAgentKey_FailLlmClosedWithoutChangingSenderToolCredential()
+    {
+        var broker = Substitute.For<INyxIdCapabilityBroker>();
+        broker
+            .IssueShortLivedByBindingIdAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                SenderBindingId,
+                Arg.Any<CapabilityScope>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CapabilityHandle { AccessToken = "fresh-sender-token" }));
+        var generator = new EchoStepPlanReplyGenerator(disableTools: false);
+        var executor = CreateExecutor(
+            generator,
+            broker,
+            Substitute.For<IBindingRevocationReconciler>(),
+            secretVault: new InMemorySecretVault());
+        var workItem = BuildRequest(
+            senderBindingId: SenderBindingId,
+            senderTenant: "tenant-authority-alpha",
+            llmControl: new LLMControlContext(
+                "owner-token",
+                "owner-org-token",
+                "stale-sender-token",
+                ModelOverride: null,
+                NyxIdRoutePreference: null,
+                MaxToolRoundsOverride: null,
+                UserMemoryPrompt: null),
+            credentialSourceMode: ChannelBotRuntimeCredentialSourceMode.SenderBinding,
+            workflowResultDeliveryCredential: new ChannelWorkflowResultDeliveryCredential
+            {
+                SubjectId = "key-reg-1",
+                SecretReference = new SecretReference
+                {
+                    Ref = "missing-agent-key",
+                    Purpose = CredentialSecretPurposes.ChannelNyxIdAgentKey,
+                    OwnerScopeKey = "scope-1",
+                },
+            });
+        workItem.Request.Activity!.TransportExtras = new TransportExtras
+        {
+            NyxUserAccessToken = "activity-user-token",
+        };
+
+        var state = await executor.BuildInitialStepStateAsync(workItem, CancellationToken.None);
+
+        generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().BeNull();
+        generator.CapturedLlmControl.NyxIdOrgToken.Should().BeNull();
+        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedToolContext.Should().NotBeNull();
+        generator.CapturedToolContext!.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        var persistedControl = AgentRunReplyStepMappers.LlmControlFromProto(state);
+        persistedControl.NyxIdAccessToken.Should().BeNull();
+        persistedControl.NyxIdOrgToken.Should().BeNull();
+        persistedControl.SenderNyxIdAccessToken.Should().BeNull();
+
+        await ExecuteContinuationAsync(executor, workItem, state);
+
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().BeNull();
+        generator.CapturedLlmControl.NyxIdOrgToken.Should().BeNull();
+        generator.CapturedLlmControl.SenderNyxIdAccessToken.Should().BeNull();
+        generator.CapturedToolContext!.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        generator.CapturedToolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
     }
 
     [Fact]
@@ -226,6 +410,13 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
     [Fact]
     public async Task BuildInitialStepState_WhenBindingRevoked_ReconcilesAndKeepsTokenEmpty()
     {
+        var vault = new InMemorySecretVault();
+        var stored = (await vault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey,
+            "scope-1",
+            "key-reg-1",
+            "registration-agent-key",
+            "test channel registration agent key"))).Reference;
         var subjectSeen = new ExternalSubjectRef { Platform = "lark", Tenant = "ou_tenant_x", ExternalUserId = "ou_user_y" };
         var broker = Substitute.For<INyxIdCapabilityBroker>();
         broker
@@ -247,17 +438,32 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
                 return Task.CompletedTask;
             });
         var generator = new EchoStepPlanReplyGenerator();
-        var executor = CreateExecutor(generator, broker, reconciler);
+        var executor = CreateExecutor(generator, broker, reconciler, secretVault: vault);
 
         var state = await executor.BuildInitialStepStateAsync(
-            BuildRequest(senderBindingId: SenderBindingId, senderTenant: "ou_tenant_x"),
+            BuildRequest(
+                senderBindingId: SenderBindingId,
+                senderTenant: "ou_tenant_x",
+                workflowResultDeliveryCredential: new ChannelWorkflowResultDeliveryCredential
+                {
+                    SubjectId = "key-reg-1",
+                    SecretReference = stored.Clone(),
+                }),
             CancellationToken.None);
 
-        // Token must remain empty (no owner credential smuggled into the sender slot).
+        // LLM authority remains registration-owned, but the failed sender authority
+        // is fail-closed for connected services and never adopts the Agent Key.
         generator.CapturedLlmControl.Should().NotBeNull();
+        generator.CapturedLlmControl!.NyxIdAccessToken.Should().Be("registration-agent-key");
         generator.CapturedLlmControl!.SenderNyxIdAccessToken.Should().BeNull();
         var toolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
+        toolContext.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
+        toolContext.Credentials.NyxIdAccessToken.Should().BeNull();
         toolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        toolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeNull();
+        toolContext.Credentials.NyxIdCredentialKind.Should()
+            .Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+        toolContext.DurableNyxIdCredential.Should().BeNull();
 
         // Reconcile fires (best-effort, fire-and-forget) with the invalid_grant reason.
         // WaitAsync gives a deterministic one-shot timeout (throws TimeoutException if the
@@ -503,6 +709,41 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
             secretVault: secretVault,
             connectedServiceCapabilityIssuer: connectedServiceCapabilityIssuer);
 
+    private static void AssertAgentKeyLlmWithSenderToolCredential(
+        LLMControlContext? control,
+        AgentToolExecutionContext? toolContext)
+    {
+        control.Should().NotBeNull();
+        control!.NyxIdAccessToken.Should().Be("registration-agent-key");
+        control.NyxIdOrgToken.Should().BeNull();
+        control.SenderNyxIdAccessToken.Should().BeNull();
+        toolContext.Should().NotBeNull();
+        toolContext!.Credentials.NyxIdAccessToken.Should().Be("fresh-sender-token");
+        toolContext.Credentials.NyxIdOrgToken.Should().BeNull();
+        toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("fresh-sender-token");
+        toolContext.Credentials.SourceReadableNyxIdAccessToken.Should().Be("fresh-sender-token");
+        toolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.SourceReadableUserBearer);
+        toolContext.Credentials.NyxIdCredentialAuthority.Should()
+            .Be(AgentToolNyxIdCredentialAuthority.ToolExecutionContext);
+    }
+
+    private static async Task ExecuteContinuationAsync(
+        AgentRunReplyGenerationExecutor executor,
+        AgentRunReplyGenerationExecutionRequest workItem,
+        AgentRunReplyStepState state)
+    {
+        var persistedState = AgentRunReplyStepCredentials.StripRuntimeCredentials(state);
+        await executor.BuildLlmStepExecutionAsync(
+            new AgentRunReplyStepExecutionRequest(
+                workItem.RunId,
+                workItem.RunActorId,
+                workItem.Attempt,
+                persistedState.NextStepIndex,
+                workItem.Request.Clone(),
+                persistedState),
+            CancellationToken.None);
+    }
+
     private static AgentRunReplyGenerationExecutionRequest BuildRequest(
         string? senderBindingId,
         string? senderTenant,
@@ -567,6 +808,13 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
     /// </summary>
     private sealed class EchoStepPlanReplyGenerator : IAgentRunStepConversationReplyGenerator
     {
+        private readonly bool _disableTools;
+
+        public EchoStepPlanReplyGenerator(bool disableTools = true)
+        {
+            _disableTools = disableTools;
+        }
+
         public LLMControlContext? CapturedLlmControl { get; private set; }
         public AgentToolExecutionContext? CapturedToolContext { get; private set; }
 
@@ -599,7 +847,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
                 projectedToolContext,
                 InitialMessages: [],
                 MaxToolRounds: 1,
-                DisableTools: true);
+                DisableTools: _disableTools);
             return Task.FromResult(plan);
         }
 

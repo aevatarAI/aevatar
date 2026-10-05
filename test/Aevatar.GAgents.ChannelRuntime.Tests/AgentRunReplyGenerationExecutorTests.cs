@@ -395,13 +395,10 @@ public sealed class AgentRunReplyGenerationExecutorTests
             nyxIdOptions, nyxIdClient, new NyxIdServiceInstanceClient(nyxIdClient));
         var fixture = CreateProfiledChannelExecutor(secretVault: secretVault, connectedServiceSource: source);
         var senderToken = senderTokenAvailable ? "bound-sender-token" : null;
-        var hasSenderConnectedServiceBearer = senderBound && senderTokenAvailable;
-        var expectedToolToken = hasSenderConnectedServiceBearer ? "bound-sender-token" : "channel-agent-key-token";
+        const string expectedToolToken = "channel-agent-key-token";
         const string expectedLlmToken = "channel-agent-key-token";
         string[] expectedServiceIds = [];
-        var expectedCredentialKind = hasSenderConnectedServiceBearer
-            ? AgentToolNyxIdCredentialKind.SourceReadableUserBearer
-            : AgentToolNyxIdCredentialKind.AgentKey;
+        const AgentToolNyxIdCredentialKind expectedCredentialKind = AgentToolNyxIdCredentialKind.AgentKey;
         const AgentToolNyxIdCredentialAuthority expectedCredentialAuthority =
             AgentToolNyxIdCredentialAuthority.ToolExecutionContext;
         var request = fixture.Request.Clone();
@@ -472,31 +469,21 @@ public sealed class AgentRunReplyGenerationExecutorTests
         persistedToolContext.Channel.WorkflowResultDeliveryCredential!.SecretReference.Should().Be(stored.Reference);
         persistedToolContext.Credentials.NyxIdAccessToken.Should().Be(expectedToolToken);
         persistedToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
-        persistedToolContext.Credentials.SenderNyxIdAccessToken.Should()
-            .Be(hasSenderConnectedServiceBearer ? "bound-sender-token" : null);
-        persistedToolContext.Credentials.SourceReadableNyxIdAccessToken.Should()
-            .Be(hasSenderConnectedServiceBearer ? "bound-sender-token" : null);
+        persistedToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        persistedToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeNull();
         persistedToolContext.Credentials.NyxIdCredentialKind.Should().Be(expectedCredentialKind);
         persistedToolContext.Credentials.NyxIdCredentialAuthority.Should()
             .Be(expectedCredentialAuthority);
-        if (hasSenderConnectedServiceBearer)
-        {
-            persistedToolContext.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
-            persistedToolContext.DurableNyxIdCredential.Should().BeNull();
-        }
-        else
-        {
-            persistedToolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
-            persistedToolContext.DurableNyxIdCredential.Should().NotBeNull();
-            persistedToolContext.DurableNyxIdCredential!.Ref.Should().Be(stored.Reference.Ref);
-            persistedToolContext.DurableNyxIdCredential.Purpose.Should().Be(
-                CredentialSecretPurposes.ChannelNyxIdAgentKey);
-            persistedToolContext.DurableNyxIdCredential.OwnerScopeKey.Should().Be("scope-channel-alpha");
-            persistedToolContext.DurableNyxIdCredential.SubjectId.Should().Be("agent-key-channel-alpha");
-            persistedToolContext.DurableNyxIdCredential.SourceKind.Should()
-                .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
-            persistedToolContext.DurableNyxIdCredential.SecretReference.Should().Be(stored.Reference);
-        }
+        persistedToolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        persistedToolContext.DurableNyxIdCredential.Should().NotBeNull();
+        persistedToolContext.DurableNyxIdCredential!.Ref.Should().Be(stored.Reference.Ref);
+        persistedToolContext.DurableNyxIdCredential.Purpose.Should().Be(
+            CredentialSecretPurposes.ChannelNyxIdAgentKey);
+        persistedToolContext.DurableNyxIdCredential.OwnerScopeKey.Should().Be("scope-channel-alpha");
+        persistedToolContext.DurableNyxIdCredential.SubjectId.Should().Be("agent-key-channel-alpha");
+        persistedToolContext.DurableNyxIdCredential.SourceKind.Should()
+            .Be(DurableCallerCredentialSourceKind.ChannelRegistration);
+        persistedToolContext.DurableNyxIdCredential.SecretReference.Should().Be(stored.Reference);
 
         handler.Requests.Clear();
         var persistedState = AgentRunReplyStepCredentials.StripRuntimeCredentials(state);
@@ -533,7 +520,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task BuildInitialStepState_WhenRegistrationAgentKeyCannotResolve_ShouldClearAllNyxIdCredentials()
+    public async Task BuildInitialStepState_WhenRegistrationAgentKeyCannotResolve_ShouldPreserveFailClosedRegistrationAuthority()
     {
         var fixture = CreateProfiledChannelExecutor();
         var request = fixture.Request.Clone();
@@ -594,7 +581,14 @@ public sealed class AgentRunReplyGenerationExecutorTests
         control.NyxIdOrgToken.Should().BeNull();
         control.SenderNyxIdAccessToken.Should().BeNull();
         var persistedToolContext = AgentToolExecutionContextMapper.FromPayload(state.ToolContext);
-        persistedToolContext.Credentials.Should().Be(AgentToolCredentials.Empty);
+        persistedToolContext.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
+        persistedToolContext.Credentials.NyxIdAccessToken.Should().BeNull();
+        persistedToolContext.Credentials.NyxIdOrgToken.Should().BeNull();
+        persistedToolContext.Credentials.SenderNyxIdAccessToken.Should().BeNull();
+        persistedToolContext.Credentials.SourceReadableNyxIdAccessToken.Should().BeNull();
+        persistedToolContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
+        persistedToolContext.Credentials.NyxIdCredentialAuthority.Should()
+            .Be(AgentToolNyxIdCredentialAuthority.ToolExecutionContext);
         persistedToolContext.DurableNyxIdCredential.Should().BeNull();
     }
 

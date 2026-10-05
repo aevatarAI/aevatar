@@ -437,11 +437,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         handler.Authorization.Should().BeNull();
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task ExecuteAsync_ThroughRealAdmission_WithSenderBinding_PrefersSenderInventoryCapability(
-        bool registrationAgentKeyMode)
+    [Fact]
+    public async Task ExecuteAsync_ThroughRealAdmission_WithSenderBindingMode_UsesSenderInventoryCapability()
     {
         var handler = new InventoryHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -452,7 +449,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 Arg.Any<CancellationToken>())
             .Returns(new CapabilityHandle
             {
-                AccessToken = registrationAgentKeyMode ? "inventory-access-token" : "strict-sender-token",
+                AccessToken = "strict-sender-token",
                 Scope = "proxy",
             });
         var auditRecords = new List<AuditRecord>();
@@ -462,15 +459,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             issuer);
-        var outerContext = CreateRegistrationContext();
-        if (!registrationAgentKeyMode)
-        {
-            outerContext = outerContext with
-            {
-                Credentials = new AgentToolCredentials(
-                    "bot-owner-token", "bot-owner-org-token", "strict-sender-token"),
-            };
-        }
+        var outerContext = CreateSenderBindingContext();
         using var scope = AgentToolContextScope.Push(outerContext);
         var tool = InventoryTool(await source.DiscoverToolsAsync());
 
@@ -481,7 +470,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         outcome.ResultJson.Should().Contain("GitHub");
         outcome.AuditCompleted.Should().BeTrue();
         handler.RequestPath.Should().Be("/api/v1/keys");
-        var expectedToken = registrationAgentKeyMode ? "inventory-access-token" : "strict-sender-token";
+        const string expectedToken = "strict-sender-token";
         handler.Authorization.Should().Be($"Bearer {expectedToken}");
         handler.ExecutionContext.Should().NotBeNull();
         var readContext = handler.ExecutionContext!;
@@ -532,7 +521,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             issuer);
-        var context = CreateRegistrationContext() with
+        var context = CreateSenderBindingContext() with
         {
             Credentials = new AgentToolCredentials(
                 "bot-owner-token", "bot-owner-org-token", "strict-sender-token"),
@@ -569,7 +558,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             issuer);
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext() with
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext() with
         {
             Credentials = new AgentToolCredentials(null, null, "strict-sender-token"),
         });
@@ -628,8 +617,11 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         handler.RequestPath.Should().BeNull("tool discovery must not read live inventory");
     }
 
-    [Fact]
-    public async Task ExecuteAsync_WithRegistrationAgentKeyWithoutSenderBinding_ReadsAgentKeyInventory()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExecuteAsync_WithRegistrationAgentKey_ReadsAgentKeyInventoryWithoutIssuingSenderCapability(
+        bool hasSenderBinding)
     {
         var handler = new InventoryHandler { KeysResponse = KeysWithRecommendedSkill("sha256:" + new string('0', 64)) };
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -641,7 +633,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             issuer);
-        var context = CreateRegistrationContext(hasSenderBinding: false);
+        var context = CreateRegistrationContext(hasSenderBinding);
         using var scope = AgentToolContextScope.Push(context);
         var tool = InventoryTool(await source.DiscoverToolsAsync());
 
@@ -658,7 +650,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         handler.ExecutionContext.Should().NotBeNull();
         handler.ExecutionContext!.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
         handler.ExecutionContext.Credentials.NyxIdCredentialKind.Should().Be(AgentToolNyxIdCredentialKind.AgentKey);
-        handler.ExecutionContext.SenderBinding.BindingId.Should().BeNull();
+        handler.ExecutionContext.SenderBinding.BindingId.Should()
+            .Be(hasSenderBinding ? "bnd-sender-1" : null);
         await issuer.DidNotReceiveWithAnyArgs().IssueByBindingIdAsync(default!, default!, default);
         auditRecords.Where(record => record.LifecyclePhase == AuditLifecyclePhase.Terminal)
             .Select(record => record.OperationName)
@@ -725,7 +718,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer("sender-inventory-token"),
             recommendedSkillRefCreator: creator);
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding));
+        using var scope = AgentToolContextScope.Push(
+            hasSenderBinding ? CreateSenderBindingContext() : CreateRegistrationContext(hasSenderBinding: false));
         var tool = InventoryTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync("{}");
@@ -864,7 +858,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer("user-token"));
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync("""
@@ -977,21 +971,25 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         proxyRequest.BearerToken.Should().Be("registration-agent-key");
     }
 
-    [Fact]
-    public async Task EnsureRecommendedSkillRefsAsync_WhenRefsAlreadyExist_ReturnsCurrentRefsWithoutCreating()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnsureRecommendedSkillRefsAsync_WithRegistrationAgentKeyAndExistingRefs_DoesNotIssueSenderCapability(
+        bool hasSenderBinding)
     {
         var handler = new InventoryHandler { KeysResponse = KeysWithRecommendedSkill("sha256:" + new string('0', 64)) };
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var executionPort = new RecordingExecutionPort();
         var creator = new RecordingRecommendedSkillRefCreator([]);
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             executionPort,
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
-            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>(),
+            issuer,
             recommendedSkillRefCreator: creator,
             clientCredentialsTokenSource: new StaticTokenSource("client-credentials-token"));
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding));
         var tool = EnsureRecommendedSkillRefsTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync("""{"user_service_id":"user-service-1"}""");
@@ -1004,6 +1002,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         executionPort.Requests.Should().ContainSingle()
             .Which.Tool.Name.Should().Be("nyxid_recommended_skill_refs_provisioner");
         handler.Authorization.Should().Be("Bearer client-credentials-token");
+        await issuer.DidNotReceiveWithAnyArgs().IssueByBindingIdAsync(default!, default!, default);
     }
 
     [Theory]
@@ -1038,7 +1037,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             CreateSenderCapabilityIssuer("sender-inventory-token"),
             recommendedSkillRefCreator: creator,
             clientCredentialsTokenSource: new StaticTokenSource("client-credentials-token"));
-        var context = CreateRegistrationContext(hasSenderBinding);
+        var context = hasSenderBinding
+            ? CreateSenderBindingContext()
+            : CreateRegistrationContext(hasSenderBinding: false);
         using var scope = AgentToolContextScope.Push(context);
         var tool = EnsureRecommendedSkillRefsTool(await source.DiscoverToolsAsync());
 
@@ -1118,7 +1119,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer());
-        var context = CreateRegistrationContext();
+        var context = CreateSenderBindingContext();
         using var scope = AgentToolContextScope.Push(context);
         var tool = OperationTool(await source.DiscoverToolsAsync());
         handler.McpConfigResponse = GoogleWorkspaceMcpConfig();
@@ -1177,7 +1178,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer());
-        var context = CreateRegistrationContext();
+        var context = CreateSenderBindingContext();
         using var scope = AgentToolContextScope.Push(context);
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
@@ -1200,8 +1201,11 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         handler.ExecutionContext.Request.CallId.Should().Be($"{context.Request.CallId}:connected-operation");
     }
 
-    [Fact]
-    public async Task InvokeOperationAsync_WithRegistrationAgentKeyWithoutSenderBinding_ExecutesExactOperationWithoutExposingEndpointTool()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvokeOperationAsync_WithRegistrationAgentKey_ExecutesWithAgentKeyWithoutIssuingSenderCapability(
+        bool hasSenderBinding)
     {
         var handler = new InventoryHandler
         {
@@ -1212,12 +1216,13 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         var auditRecords = new List<AuditRecord>();
         var executionPort = CreateAdmittedExecutionPort(auditRecords);
+        var issuer = Substitute.For<INyxIdConnectedServiceCapabilityIssuer>();
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             executionPort,
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
-            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>());
-        var context = CreateRegistrationContext(hasSenderBinding: false);
+            issuer);
+        var context = CreateRegistrationContext(hasSenderBinding);
         using var scope = AgentToolContextScope.Push(context);
         var tools = await source.DiscoverToolsAsync();
         var tool = OperationTool(tools);
@@ -1245,6 +1250,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         proxyRequest.Path.Should().Contain("/profile/dining");
         proxyRequest.Query.Should().Contain("alt=media");
         proxyRequest.BearerToken.Should().Be("registration-agent-key");
+        await issuer.DidNotReceiveWithAnyArgs().IssueByBindingIdAsync(default!, default!, default);
     }
 
     [Theory]
@@ -1316,7 +1322,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer());
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
         var outcome = await tool.ExecuteWithOutcomeAsync(
@@ -1356,7 +1362,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer());
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
         var outcome = await tool.ExecuteWithOutcomeAsync(
@@ -1402,7 +1408,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer());
-        var context = CreateRegistrationContext();
+        var context = CreateSenderBindingContext();
         using var scope = AgentToolContextScope.Push(context);
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
@@ -1489,7 +1495,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             issuer);
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext() with
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext() with
         {
             Credentials = new AgentToolCredentials(
                 "bot-owner-token", "bot-owner-org-token", "strict-sender-token"),
@@ -1596,7 +1602,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer());
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync("""
@@ -1634,7 +1640,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer());
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync("""
@@ -1675,7 +1681,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer());
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync($$"""
@@ -1710,7 +1716,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             options,
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             CreateSenderCapabilityIssuer());
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext());
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext());
         var tool = OperationTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync("""{"operation_id":"readDiningProfileContext"}""");
@@ -1748,7 +1754,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             issuer,
             exactSkillFetcher: fetcher);
-        var context = CreateRegistrationContext() with
+        var context = CreateSenderBindingContext() with
         {
             Credentials = new AgentToolCredentials(null, null, "strict-sender-token"),
         };
@@ -1786,8 +1792,11 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             "nyxid_recommended_skill_reader");
     }
 
-    [Fact]
-    public async Task LoadRecommendedSkillAsync_WithRegistrationAgentKeyWithoutSenderBinding_LoadsExactOrnnMainDocument()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LoadRecommendedSkillAsync_WithRegistrationAgentKey_LoadsWithAgentKeyWithoutIssuingSenderCapability(
+        bool hasSenderBinding)
     {
         var manifestDigest = "sha256:" + new string('0', 64);
         var handler = new InventoryHandler { KeysResponse = KeysWithRecommendedSkill(manifestDigest) };
@@ -1808,7 +1817,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             issuer,
             exactSkillFetcher: fetcher);
-        var context = CreateRegistrationContext(hasSenderBinding: false);
+        var context = CreateRegistrationContext(hasSenderBinding);
         using var scope = AgentToolContextScope.Push(context);
         var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
         var arguments = $$"""
@@ -1831,7 +1840,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         handler.RequestPath.Should().Be("/api/v1/keys");
         handler.Authorization.Should().Be("Bearer registration-agent-key");
         handler.ExecutionContext.Should().NotBeNull();
-        handler.ExecutionContext!.SenderBinding.BindingId.Should().BeNull();
+        handler.ExecutionContext!.SenderBinding.BindingId.Should()
+            .Be(hasSenderBinding ? "bnd-sender-1" : null);
         fetcher.ObservedToken.Should().Be("registration-agent-key");
         fetcher.ObservedRef.Should().BeEquivalentTo(new ExactRemoteSkillRef
         {
@@ -1878,7 +1888,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             CreateSenderCapabilityIssuer("sender-inventory-token"),
             exactSkillFetcher: fetcher,
             recommendedSkillRefCreator: creator);
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding));
+        using var scope = AgentToolContextScope.Push(
+            hasSenderBinding ? CreateSenderBindingContext() : CreateRegistrationContext(hasSenderBinding: false));
         var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync($$"""
@@ -1939,7 +1950,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             CreateSenderCapabilityIssuer("sender-inventory-token"),
             exactSkillFetcher: fetcher,
             recommendedSkillRefCreator: creator);
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding));
+        using var scope = AgentToolContextScope.Push(
+            hasSenderBinding ? CreateSenderBindingContext() : CreateRegistrationContext(hasSenderBinding: false));
         var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
 
         var result = await tool.ExecuteAsync($$"""
@@ -2066,7 +2078,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
             issuer,
             exactSkillFetcher: fetcher);
-        using var scope = AgentToolContextScope.Push(CreateRegistrationContext() with
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext() with
         {
             Credentials = new AgentToolCredentials(null, null, "strict-sender-token"),
         });
@@ -2152,6 +2164,21 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             ? context
             : context with { SenderBinding = AgentToolSenderBindingContext.Empty };
     }
+
+    private static AgentToolExecutionContext CreateSenderBindingContext(
+        string senderToken = "strict-sender-token") =>
+        CreateRegistrationContext(hasSenderBinding: true) with
+        {
+            CredentialSource = AgentToolCredentialSource.BearerToken,
+            Credentials = new AgentToolCredentials(
+                senderToken,
+                NyxIdOrgToken: null,
+                SenderNyxIdAccessToken: senderToken,
+                NyxIdCredentialKind: AgentToolNyxIdCredentialKind.SourceReadableUserBearer,
+                SourceReadableNyxIdAccessToken: senderToken,
+                NyxIdCredentialAuthority: AgentToolNyxIdCredentialAuthority.ToolExecutionContext),
+            DurableNyxIdCredential = null,
+        };
 
     private const string DiningProfileOpenApi = """
         {

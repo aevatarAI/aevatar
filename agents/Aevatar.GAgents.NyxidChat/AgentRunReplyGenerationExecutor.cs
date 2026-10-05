@@ -1797,27 +1797,29 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         var toolContext = AgentToolExecutionContextMapper.FromPayload(request.ToolContext);
 
         // Re-mint the sender's short-lived NyxID token here, in the deferred reply
-        // run. The synchronous inbound path mints a sender token but ConversationGAgent
-        // strips transient credentials before persisting NeedsLlmReplyEvent, so by the
-        // time this deferred run executes the token is gone. The binding-id + exact
-        // typed NyxID authority survive as identity facts, so we re-mint by binding id
-        // and overlay the fresh token onto LlmControl; ToToolContext then projects it
-        // into ToolContext.Credentials so sender-credentialed mutation tools (use_skill)
-        // run under the sender's own NyxID instead of being denied. Owner fallback is
-        // derived below with the sender token cleared, so a failed/empty re-mint still
-        // leaves the bot-owner LLM path intact.
+        // run. The token is used only to prepare connected-service tool authority.
+        // Channel LLM authority is resolved independently from the registration Agent
+        // Key below, regardless of credential_source_mode.
+        var isChannelRuntimeRequest = request.ChannelRuntimeConfig is not null;
         var registrationAgentKeyMode = request.ChannelRuntimeConfig?.CredentialSourceMode ==
                                        ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
         var hasSenderBinding = !string.IsNullOrWhiteSpace(toolContext.SenderBinding.BindingId);
-        control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
-        var senderConnectedServiceToken = NormalizeOptional(control.SenderNyxIdAccessToken);
-        var hasSenderConnectedServiceBearer = hasSenderBinding && senderConnectedServiceToken is not null;
-        if (hasSenderConnectedServiceBearer)
+        if (!registrationAgentKeyMode)
         {
-            toolContext = ChannelConnectedServiceCredentialPolicy.Apply(
-                toolContext,
-                senderConnectedServiceToken,
-                registrationAgentKey: null);
+            control = await ApplySenderTokenAsync(request, toolContext, control, ct).ConfigureAwait(false);
+            if (hasSenderBinding)
+            {
+                toolContext = ChannelConnectedServiceCredentialPolicy.Apply(
+                    toolContext,
+                    NormalizeOptional(control.SenderNyxIdAccessToken),
+                    registrationAgentKey: null);
+            }
+        }
+
+        if (isChannelRuntimeRequest && !registrationAgentKeyMode)
+        {
+            var toolCredentialControl = OverlayActivityUserToken(request, control);
+            toolContext = toolCredentialControl.ToToolContext(toolContext);
         }
 
         var agentKeyOverlay = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
@@ -1826,19 +1828,22 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 control,
                 ct)
             .ConfigureAwait(false);
-        if (registrationAgentKeyMode)
+        if (isChannelRuntimeRequest)
             control = agentKeyOverlay.Control;
-        if (registrationAgentKeyMode && !hasSenderConnectedServiceBearer)
+        if (registrationAgentKeyMode)
         {
-            toolContext = agentKeyOverlay.AgentKey is null
-                ? ClearNyxIdCredentials(toolContext)
-                : ApplyChannelRegistrationAgentKeyToolCredential(toolContext, agentKeyOverlay.AgentKey);
+            toolContext = ApplyChannelRegistrationAgentKeyToolCredential(
+                toolContext,
+                agentKeyOverlay.AgentKey);
         }
+        if (isChannelRuntimeRequest && agentKeyOverlay.AgentKey is not null)
+            toolContext = ProtectChannelToolCredentialAuthority(toolContext);
 
         var ownerFallbackControl = control with { SenderNyxIdAccessToken = null };
         var ownerFallbackToolContext = ClearSenderBinding(toolContext);
 
-        control = OverlayActivityUserToken(request, control);
+        if (!isChannelRuntimeRequest)
+            control = OverlayActivityUserToken(request, control);
         toolContext = control.ToToolContext(toolContext);
 
         return new ReplyGenerationContext(
@@ -1881,7 +1886,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             return control;
 
         // Once a refresh is attempted, a stale token must not survive a failed
-        // exchange or a changed binding. The LLM fallback remains independent.
+        // exchange or a changed binding. Connected-service authority remains
+        // sender-owned and fail-closed; LLM credential resolution is independent.
         control = control with { SenderNyxIdAccessToken = null };
 
         if (!TryRebuildSenderSubject(toolContext, out var subject))
@@ -1907,7 +1913,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             if (accessToken is null)
             {
                 _logger.LogWarning(
-                    "Sender NyxID token re-mint returned an empty token; deferred reply run keeps owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                    "Sender NyxID token re-mint returned an empty token; connected-service authority remains fail-closed and LLM credential resolution continues independently. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
                     request.CorrelationId,
                     subject.Platform,
                     subject.Tenant,
@@ -1933,7 +1939,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             // Best-effort, off the reply path: never await or block the turn.
             _logger.LogWarning(
                 ex,
-                "Sender NyxID binding revoked at NyxID during deferred re-mint; reconciling local binding and keeping owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                "Sender NyxID binding revoked at NyxID during deferred re-mint; reconciling local binding while connected-service authority remains fail-closed. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
                 request.CorrelationId,
                 subject.Platform,
                 subject.Tenant,
@@ -1945,7 +1951,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             _logger.LogWarning(
                 ex,
-                "Sender NyxID binding lacks a required service during deferred re-mint; preserving it until /init service authorization renewal succeeds and keeping owner fallback. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                "Sender NyxID binding lacks a required service during deferred re-mint; preserving it until /init service authorization renewal succeeds while connected-service authority remains fail-closed. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
                 request.CorrelationId,
                 subject.Platform,
                 subject.Tenant,
@@ -1956,7 +1962,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         {
             _logger.LogWarning(
                 ex,
-                "Failed to re-mint sender NyxID token in deferred reply run; falling back to bot owner LLM config. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
+                "Failed to re-mint sender NyxID token in deferred reply run; connected-service authority remains fail-closed and LLM credential resolution continues independently. correlation={CorrelationId} subject={Platform}:{Tenant}:{User}",
                 request.CorrelationId,
                 subject.Platform,
                 subject.Tenant,
@@ -1966,10 +1972,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
     }
 
     // Re-supplies runtime credentials onto the token-less per-step control/tool-context read from the
-    // persisted (stripped) step-state. The transient request carries the typed credential set, the
-    // Activity user token may override its owner token, and sender authority is re-minted from the
-    // retained binding identity. On the owner-fallback step the run actor has cleared the Activity
-    // token and sender binding, so request.LlmControl supplies the bot-owner token.
+    // persisted (stripped) step-state. Channel LLM credentials always come from the registration Agent
+    // Key, while sender/activity credentials remain confined to connected-service tool execution.
     private async Task<(LLMControlContext Control, AgentToolExecutionContext ToolContext)> ReSupplyRuntimeCredentialsAsync(
         NeedsLlmReplyEvent request,
         LLMControlContext stepControl,
@@ -2003,18 +2007,30 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             },
         };
         var requestControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+        var isChannelRuntimeRequest = request.ChannelRuntimeConfig is not null;
         var registrationAgentKeyMode = request.ChannelRuntimeConfig?.CredentialSourceMode ==
                                        ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey;
         var hasSenderBinding = !string.IsNullOrWhiteSpace(planToolContext.SenderBinding.BindingId);
-        requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct).ConfigureAwait(false);
-        var senderConnectedServiceToken = NormalizeOptional(requestControl.SenderNyxIdAccessToken);
-        var hasSenderConnectedServiceBearer = hasSenderBinding && senderConnectedServiceToken is not null;
-        if (hasSenderConnectedServiceBearer)
+        var hasSenderConnectedServiceBearer = false;
+        if (!registrationAgentKeyMode)
         {
-            planToolContext = ChannelConnectedServiceCredentialPolicy.Apply(
-                planToolContext,
-                senderConnectedServiceToken,
-                registrationAgentKey: null);
+            requestControl = await ApplySenderTokenAsync(request, planToolContext, requestControl, ct)
+                .ConfigureAwait(false);
+            var senderConnectedServiceToken = NormalizeOptional(requestControl.SenderNyxIdAccessToken);
+            hasSenderConnectedServiceBearer = hasSenderBinding && senderConnectedServiceToken is not null;
+            if (hasSenderBinding)
+            {
+                planToolContext = ChannelConnectedServiceCredentialPolicy.Apply(
+                    planToolContext,
+                    senderConnectedServiceToken,
+                    registrationAgentKey: null);
+            }
+        }
+
+        if (isChannelRuntimeRequest && !registrationAgentKeyMode)
+        {
+            var toolCredentialControl = OverlayActivityUserToken(request, requestControl);
+            planToolContext = toolCredentialControl.ToToolContext(planToolContext);
         }
 
         var agentKeyOverlay = await ApplyChannelRegistrationAgentKeyLlmCredentialAsync(
@@ -2023,40 +2039,47 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 requestControl,
                 ct)
             .ConfigureAwait(false);
-        if (registrationAgentKeyMode)
+        if (isChannelRuntimeRequest)
             requestControl = agentKeyOverlay.Control;
-        if (registrationAgentKeyMode && !hasSenderConnectedServiceBearer)
+        if (registrationAgentKeyMode)
         {
-            planToolContext = agentKeyOverlay.AgentKey is null
-                ? ClearNyxIdCredentials(planToolContext)
-                : ApplyChannelRegistrationAgentKeyToolCredential(
-                    planToolContext,
-                    agentKeyOverlay.AgentKey);
+            planToolContext = ApplyChannelRegistrationAgentKeyToolCredential(
+                planToolContext,
+                agentKeyOverlay.AgentKey);
         }
+        if (isChannelRuntimeRequest && agentKeyOverlay.AgentKey is not null)
+            planToolContext = ProtectChannelToolCredentialAuthority(planToolContext);
 
-        requestControl = OverlayActivityUserToken(request, requestControl);
+        if (!isChannelRuntimeRequest)
+            requestControl = OverlayActivityUserToken(request, requestControl);
 
         var control = stepControl with
         {
             NyxIdAccessToken = NormalizeOptional(requestControl.NyxIdAccessToken) ??
-                               (registrationAgentKeyMode ? null : planToolContext.Credentials.NyxIdAccessToken) ??
-                               (registrationAgentKeyMode ? null : stepControl.NyxIdAccessToken),
-            NyxIdOrgToken = hasSenderConnectedServiceBearer
+                               (isChannelRuntimeRequest ? null : planToolContext.Credentials.NyxIdAccessToken) ??
+                               (isChannelRuntimeRequest ? null : stepControl.NyxIdAccessToken),
+            NyxIdOrgToken = isChannelRuntimeRequest
                 ? NormalizeOptional(requestControl.NyxIdOrgToken)
-                : registrationAgentKeyMode ? null : NormalizeOptional(requestControl.NyxIdOrgToken) ??
-                                             planToolContext.Credentials.NyxIdOrgToken ??
-                                             stepControl.NyxIdOrgToken,
-            SenderNyxIdAccessToken = hasSenderConnectedServiceBearer
+                : hasSenderConnectedServiceBearer
+                    ? NormalizeOptional(requestControl.NyxIdOrgToken)
+                    : NormalizeOptional(requestControl.NyxIdOrgToken) ??
+                      planToolContext.Credentials.NyxIdOrgToken ??
+                      stepControl.NyxIdOrgToken,
+            SenderNyxIdAccessToken = isChannelRuntimeRequest
                 ? NormalizeOptional(requestControl.SenderNyxIdAccessToken)
-                : registrationAgentKeyMode ? null : NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
-                                             planToolContext.Credentials.SenderNyxIdAccessToken ??
-                                             stepControl.SenderNyxIdAccessToken,
+                : hasSenderConnectedServiceBearer
+                    ? NormalizeOptional(requestControl.SenderNyxIdAccessToken)
+                    : NormalizeOptional(requestControl.SenderNyxIdAccessToken) ??
+                      planToolContext.Credentials.SenderNyxIdAccessToken ??
+                      stepControl.SenderNyxIdAccessToken,
         };
         var toolContext = control.ToToolContext(planToolContext);
-        var activityUserToken = registrationAgentKeyMode || hasSenderConnectedServiceBearer
+        var activityUserToken = registrationAgentKeyMode || hasSenderBinding
             ? null
             : NormalizeOptional(request.Activity?.TransportExtras?.NyxUserAccessToken);
-        var requestToolContextOwnsCredential = !hasSenderConnectedServiceBearer && requestCredentials.NyxIdCredentialAuthority ==
+        var requestToolContextOwnsCredential = !registrationAgentKeyMode &&
+                                               !hasSenderBinding &&
+                                               requestCredentials.NyxIdCredentialAuthority ==
                                                AgentToolNyxIdCredentialAuthority.ToolExecutionContext;
         var executionAccessToken = activityUserToken ??
                                    (requestToolContextOwnsCredential
@@ -2132,8 +2155,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         LLMControlContext control,
         CancellationToken ct)
     {
-        if (request.ChannelRuntimeConfig?.CredentialSourceMode !=
-            ChannelBotRuntimeCredentialSourceMode.RegistrationAgentKey)
+        if (request.ChannelRuntimeConfig is null)
         {
             return new ChannelRegistrationAgentKeyCredentialOverlay(control, null);
         }
@@ -2168,9 +2190,11 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
     private static AgentToolExecutionContext ApplyChannelRegistrationAgentKeyToolCredential(
         AgentToolExecutionContext toolContext,
-        string agentKey)
+        string? agentKey)
     {
-        var durableCredential = BuildChannelRegistrationDurableCredential(toolContext);
+        var durableCredential = agentKey is null
+            ? null
+            : BuildChannelRegistrationDurableCredential(toolContext);
         return toolContext with
         {
             CredentialSource = AgentToolCredentialSource.ChannelRegistration,
@@ -2179,7 +2203,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             {
                 NyxIdAccessToken = agentKey,
                 NyxIdOrgToken = null,
-                SenderNyxIdAccessToken = toolContext.Credentials.SenderNyxIdAccessToken,
+                SenderNyxIdAccessToken = null,
                 SourceReadableNyxIdAccessToken = null,
                 NyxIdCredentialKind = AgentToolNyxIdCredentialKind.AgentKey,
                 NyxIdCredentialAuthority = AgentToolNyxIdCredentialAuthority.ToolExecutionContext,
@@ -2400,12 +2424,14 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Credentials = context.Credentials with { SenderNyxIdAccessToken = null },
         };
 
-    private static AgentToolExecutionContext ClearNyxIdCredentials(AgentToolExecutionContext context) =>
+    private static AgentToolExecutionContext ProtectChannelToolCredentialAuthority(
+        AgentToolExecutionContext context) =>
         context with
         {
-            CredentialSource = AgentToolCredentialSource.Unspecified,
-            DurableNyxIdCredential = null,
-            Credentials = AgentToolCredentials.Empty,
+            Credentials = context.Credentials with
+            {
+                NyxIdCredentialAuthority = AgentToolNyxIdCredentialAuthority.ToolExecutionContext,
+            },
         };
 
     private static LLMControlContext UseServerDefaultRouting(LLMControlContext control) =>

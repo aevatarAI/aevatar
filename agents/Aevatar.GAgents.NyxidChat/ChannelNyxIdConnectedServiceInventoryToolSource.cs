@@ -13,10 +13,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.GAgents.NyxidChat;
 
 /// <summary>
-/// Channel-only connected-service inventory source. It binds discovery to the
-/// channel sender: a verified sender-route token is reused when available;
-/// otherwise a narrow request-local inventory capability is re-issued from the
-/// sender's typed binding identity. Ambient bot-owner credentials are never used.
+/// Channel-only connected-service inventory source. The prepared tool context
+/// selects exactly one authority: registration Agent Key or sender binding.
+/// Sender capability failures are terminal and never fall back across modes.
 /// </summary>
 public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentToolSource
 {
@@ -78,12 +77,17 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         AgentToolExecutionContext context,
         string? bindingId)
     {
+        if (IsRegistrationAgentKeyContext(context))
+        {
+            return ResolveRegistrationAgentKey(context) is not null &&
+                   _options is not null &&
+                   _apiClientFactory is not null;
+        }
+
         if (bindingId is not null)
             return true;
 
-        return IsRegistrationAgentKeyContext(context) &&
-               _options is not null &&
-               _apiClientFactory is not null;
+        return false;
     }
 
     private bool CanInvokeConnectedOperation(
@@ -93,16 +97,23 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         if (_options is null || _apiClientFactory is null)
             return false;
 
+        if (IsRegistrationAgentKeyContext(context))
+            return ResolveRegistrationAgentKey(context) is not null;
+
         if (bindingId is not null)
             return _capabilityIssuer is not null;
 
-        return IsRegistrationAgentKeyContext(context);
+        return false;
     }
 
     private static bool IsRegistrationAgentKeyContext(AgentToolExecutionContext context) =>
         context.CredentialSource == AgentToolCredentialSource.ChannelRegistration &&
-        context.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.AgentKey &&
-        !string.IsNullOrWhiteSpace(context.Credentials.NyxIdAccessToken);
+        context.Credentials.NyxIdCredentialKind == AgentToolNyxIdCredentialKind.AgentKey;
+
+    private static string? ResolveRegistrationAgentKey(AgentToolExecutionContext context) =>
+        IsRegistrationAgentKeyContext(context)
+            ? Normalize(context.Credentials.NyxIdAccessToken)
+            : null;
 
     private async Task<string> ExecuteInventoryAsync(string argumentsJson, CancellationToken ct)
     {
@@ -112,6 +123,20 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         var context = AgentToolRequestContext.Current;
         if (context is null)
             return InventoryFailure("inventory_capability_unavailable");
+
+        if (IsRegistrationAgentKeyContext(context))
+        {
+            var agentKey = ResolveRegistrationAgentKey(context);
+            if (agentKey is null)
+                return InventoryFailure("inventory_capability_unavailable");
+
+            return await ExecuteWithRegistrationAgentKeyAsync(
+                    context,
+                    agentKey,
+                    argumentsJson,
+                    ct)
+                .ConfigureAwait(false);
+        }
 
         var bindingId = Normalize(context.SenderBinding.BindingId);
         if (bindingId is not null)
@@ -149,12 +174,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                     subject.Platform,
                     subject.Tenant,
                     subject.ExternalUserId);
-                return await ExecuteWithRegistrationAgentKeyOrFailureAsync(
-                        context,
-                        argumentsJson,
-                        "inventory_binding_revoked",
-                        ct)
-                    .ConfigureAwait(false);
+                return InventoryFailure("inventory_binding_revoked");
             }
             catch (BindingScopeMismatchException ex)
             {
@@ -164,12 +184,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                     subject.Platform,
                     subject.Tenant,
                     subject.ExternalUserId);
-                return await ExecuteWithRegistrationAgentKeyOrFailureAsync(
-                        context,
-                        argumentsJson,
-                        "inventory_scope_unavailable",
-                        ct)
-                    .ConfigureAwait(false);
+                return InventoryFailure("inventory_scope_unavailable");
             }
             catch (Exception ex)
             {
@@ -179,43 +194,11 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                     subject.Platform,
                     subject.Tenant,
                     subject.ExternalUserId);
-                return await ExecuteWithRegistrationAgentKeyOrFailureAsync(
-                        context,
-                        argumentsJson,
-                        "inventory_capability_unavailable",
-                        ct)
-                    .ConfigureAwait(false);
+                return InventoryFailure("inventory_capability_unavailable");
             }
         }
 
-        if (IsRegistrationAgentKeyContext(context))
-        {
-            return await ExecuteWithRegistrationAgentKeyAsync(
-                    context,
-                    context.Credentials.NyxIdAccessToken!,
-                    argumentsJson,
-                    ct)
-                .ConfigureAwait(false);
-        }
-
         return InventoryFailure("inventory_capability_unavailable");
-    }
-
-    private async Task<string> ExecuteWithRegistrationAgentKeyOrFailureAsync(
-        AgentToolExecutionContext context,
-        string argumentsJson,
-        string failureCode,
-        CancellationToken ct)
-    {
-        if (!IsRegistrationAgentKeyContext(context))
-            return InventoryFailure(failureCode);
-
-        return await ExecuteWithRegistrationAgentKeyAsync(
-                context,
-                context.Credentials.NyxIdAccessToken!,
-                argumentsJson,
-                ct)
-            .ConfigureAwait(false);
     }
 
     private async Task<string> ExecuteWithSenderTokenAsync(
@@ -233,8 +216,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 new NyxIdServiceInstanceClient(_apiClientFactory.CreateClient()));
             var senderContext = context with
             {
-                // This read is authorized by the bound sender, independently of
-                // the registration Agent Key that admitted the outer tool call.
+                // This read is authorized by a fresh capability for the exact
+                // bound sender; no registration credential participates.
                 CredentialSource = AgentToolCredentialSource.BearerToken,
                 DurableNyxIdCredential = null,
                 Credentials = new AgentToolCredentials(
@@ -340,6 +323,20 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         if (_exactSkillFetcher is null)
             return RecommendedSkillFailure("exact_skill_loader_unavailable");
 
+        if (IsRegistrationAgentKeyContext(context))
+        {
+            var agentKey = ResolveRegistrationAgentKey(context);
+            if (agentKey is null)
+                return RecommendedSkillFailure("inventory_capability_unavailable");
+
+            return await ExecuteRecommendedSkillLoadWithRegistrationAgentKeyAsync(
+                    context,
+                    agentKey,
+                    arguments,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
         var bindingId = Normalize(context.SenderBinding.BindingId);
         if (bindingId is not null)
         {
@@ -375,16 +372,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 _logger.LogWarning(ex, "NyxID recommended skill capability issue failed");
                 return RecommendedSkillFailure("inventory_capability_unavailable");
             }
-        }
-
-        if (IsRegistrationAgentKeyContext(context))
-        {
-            return await ExecuteRecommendedSkillLoadWithRegistrationAgentKeyAsync(
-                    context,
-                    context.Credentials.NyxIdAccessToken!,
-                    arguments,
-                    ct)
-                .ConfigureAwait(false);
         }
 
         return RecommendedSkillFailure("inventory_capability_unavailable");
@@ -570,6 +557,18 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         if (_recommendedSkillRefCreator is null)
             return EnsureRecommendedSkillRefsFailure("recommended_skill_ref_creator_unavailable");
 
+        if (IsRegistrationAgentKeyContext(context))
+        {
+            if (ResolveRegistrationAgentKey(context) is null)
+                return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
+
+            return await ExecuteEnsureRecommendedSkillRefsWithClientCredentialsAsync(
+                    context,
+                    arguments,
+                    ct)
+                .ConfigureAwait(false);
+        }
+
         var bindingId = Normalize(context.SenderBinding.BindingId);
         if (bindingId is not null)
         {
@@ -605,15 +604,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 _logger.LogWarning(ex, "NyxID recommended skill ref ensure capability issue failed");
                 return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
             }
-        }
-
-        if (IsRegistrationAgentKeyContext(context))
-        {
-            return await ExecuteEnsureRecommendedSkillRefsWithClientCredentialsAsync(
-                    context,
-                    arguments,
-                    ct)
-                .ConfigureAwait(false);
         }
 
         return EnsureRecommendedSkillRefsFailure("inventory_capability_unavailable");
@@ -793,6 +783,14 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         if (context is null)
             return OperationFailure(callId, "operation_context_unavailable", arguments);
 
+        if (IsRegistrationAgentKeyContext(context))
+        {
+            if (ResolveRegistrationAgentKey(context) is null)
+                return OperationFailure(callId, "inventory_capability_unavailable", arguments);
+
+            return await ExecuteOperationWithContextAsync(context, callId, arguments, ct).ConfigureAwait(false);
+        }
+
         var bindingId = Normalize(context.SenderBinding.BindingId);
         if (bindingId is not null)
         {
@@ -838,9 +836,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 return OperationFailure(callId, "inventory_capability_unavailable", arguments);
             }
         }
-
-        if (IsRegistrationAgentKeyContext(context))
-            return await ExecuteOperationWithContextAsync(context, callId, arguments, ct).ConfigureAwait(false);
 
         return OperationFailure(callId, "inventory_capability_unavailable", arguments);
     }
