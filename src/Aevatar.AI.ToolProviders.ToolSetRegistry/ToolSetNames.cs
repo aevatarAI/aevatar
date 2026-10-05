@@ -5,6 +5,7 @@ public static class ToolSetNames
     public const string ChatCore = "chat.core";
     public const string WebRuntime = "web.runtime";
     public const string SkillRuntime = "skill.runtime";
+    public const string SkillInspection = "skill.inspection";
     public const string SkillAuthoring = "skill.authoring";
     public const string AevatarInvoke = "aevatar.invoke";
     public const string AevatarObserve = "aevatar.observe";

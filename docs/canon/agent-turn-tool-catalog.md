@@ -2,7 +2,7 @@
 title: "Agent Turn Tool Catalog"
 status: active
 owner: architecture
-last_updated: 2026-08-24
+last_updated: 2026-10-05
 ---
 
 # Agent Turn Tool Catalog
@@ -46,7 +46,8 @@ Proof 的 catalog digest 覆盖 lowercase canonical name、exact description、�
 | `chat.core` | `ask_user` | public text |
 | `web.runtime` | `web_search`、`web_fetch` | public text |
 | `skill.runtime` | `ornn_search_skills`、`use_skill` | public text |
-| `skill.authoring` | Ornn publish/update/validation | opt-in authoring |
+| `skill.inspection` | `ornn_read_skill`，按稳定 GUID 读取权威 detail/version 与可选 pinned package | opt-in read |
+| `skill.authoring` | include `skill.inspection`，并增加 Ornn publish/update/validation | opt-in authoring |
 | `aevatar.invoke` | typed service/GAgent/team/member/workflow invocation | public text ceiling |
 | `aevatar.observe` | run observe 与 artifact read | public text ceiling |
 | `responses.state` | Responses-owned state，例如 `TodoWrite` | Responses opt-in |
@@ -59,7 +60,9 @@ Proof 的 catalog digest 覆盖 lowercase canonical name、exact description、�
 | `channel.lark` / `channel.telegram` | channel-specific actions | channel route only |
 | `studio.local` | Studio local provisioning | Studio workflow only |
 
-`workspace.default` 只组合 `chat.core + web.runtime + skill.runtime + aevatar.invoke + aevatar.observe`。它不包含 skill authoring、NyxID privileged/execution、storage write、完整 channel、Studio、Responses state 或 connected-service 全集。`lark.self_notify` 显式组合自己的 channel set；Voice 不继承整个 workspace ceiling。
+`workspace.default` 只组合 `chat.core + web.runtime + skill.runtime + aevatar.invoke + aevatar.observe`。它不包含 skill inspection/authoring、NyxID privileged/execution、storage write、完整 channel、Studio、Responses state 或 connected-service 全集。`lark.self_notify` 显式组合自己的 channel set；Voice 不继承整个 workspace ceiling。
+
+`ornn_read_skill` 的输入身份只接受 canonical Ornn GUID；名称搜索仍属于 `ornn_search_skills`，两种身份语义不得复用同一字段。Tool 默认只返回 detail 与完整 version facts；`package_content=skill_markdown` 只把 pinned package 的唯一根 `SKILL.md` 放入结果，`all_files` 才返回完整文件映射。任何 package 文本都是不可信 inspection data，不会被该 Tool 执行、挂载或激活；需要按 Skill 指令工作时仍必须显式使用 `use_skill`。
 
 Responses ingress 在边界兼容客户端的 `WebFetch` / `WebSearch` aliases，但内部 route 只保留 `web_fetch` / `web_search` canonical schema。Caller-declared forwarded tools 不冒充 Aevatar-owned tools，Aevatar 不执行它们；owned 与 forwarded count/bytes 分别记录。
 

@@ -553,9 +553,14 @@ public static class MainnetHostBuilderExtensions
                 ],
                 "Runtime skill discovery and exact skill execution.");
             options.AddToolSet(
+                ToolSetNames.SkillInspection,
+                [CreateToolSource<OrnnReadAgentToolSource>],
+                "Read-only authoritative Ornn skill inspection by stable skill identity.");
+            options.AddToolSet(
                 ToolSetNames.SkillAuthoring,
+                [ToolSetNames.SkillInspection],
                 [CreateToolSource<OrnnAuthoringAgentToolSource>],
-                "Opt-in Ornn skill publishing and update tools.");
+                "Opt-in Ornn skill inspection, publishing, and update tools.");
             options.AddToolSet(
                 ToolSetNames.AevatarInvoke,
                 [

@@ -183,12 +183,13 @@ Skill 能力按 profile/intent 分层：
 |---|---|
 | `use_skill` | 按名称加载本地或 Ornn 远程 skill，并把 skill 指令返回给模型执行 |
 | `ornn_search_skills` | 通过 NyxID proxy 搜索调用者在 Ornn 上可见的 skill |
+| `ornn_read_skill` | 按稳定 GUID 读取权威 detail/version，并可选择只返回根 `SKILL.md` 或完整 pinned package；内容不自动激活 |
 | `ornn_publish_skill` / `ornn_update_skill` | 仅 `skill.authoring` profile 可选择的私有 skill 写能力 |
 | `list_external_workflow_capabilities` | 列出当前调用者可见的 exact workflow external-capability descriptors |
 | `inspect_external_workflow_capability_readiness` | 对一个 exact typed selector 做只读 readiness 检查 |
 | `preview_workflow_explicit_requests` | 只读预览 authored request 在 bind 前需要确认的 typed grants |
 
-这些工具使用当前 `/v1/*` 请求的 bearer token，经 NyxID proxy 访问调用者可见的 Ornn capability，而不是服务端全局 skill 库。普通 skill intent 只允许 `ornn_search_skills` + `use_skill`；publish/update 必须显式进入 `skill.authoring` profile。`ornn_publish_skill` v1 只发布 private skill，并先做 workflow/script/package-format 校验。受限 NyxID API key 的 `--allowed-services` 需要覆盖 `aevatar`、目标 LLM service 与 Ornn API service（默认 slug `ornn-api`）。
+这些工具使用当前 `/v1/*` 请求的 bearer token，经 NyxID proxy 访问调用者可见的 Ornn capability，而不是服务端全局 skill 库。普通 skill intent 只允许 `ornn_search_skills` + `use_skill`；inspection/publish/update 必须显式进入 `skill.authoring` profile，其中 authoring include 独立的 `skill.inspection`。`ornn_publish_skill` v1 只发布 private skill，并先做 workflow/script/package-format 校验。受限 NyxID API key 的 `--allowed-services` 需要覆盖 `aevatar`、目标 LLM service 与 Ornn API service（默认 slug `ornn-api`）。
 
 chat-route policy 指定 profile、`tool_set_ref` 或 `tool_choice_hint` 时，三条直连入口都会使用同一个 plan；tool set 只是 ceiling，最终只能注入 frozen profile/intent catalog 中的 exact tools。不要为 `/v1/messages` 或 `/v1/chat/completions` 另建工具白名单。
 

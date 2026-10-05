@@ -11,7 +11,7 @@ namespace Aevatar.GAgents.NyxidChat;
 
 /// <summary>
 /// Resolves the transient token used by the remote-skill tools
-/// (<c>use_skill</c>, <c>ornn_search_skills</c>). Explicit sender-triggered
+/// (<c>use_skill</c>, <c>ornn_search_skills</c>, <c>ornn_read_skill</c>). Explicit sender-triggered
 /// turns use only the verified sender token or a capability issued for the
 /// exact typed NyxID authority. A registration default-skill turn uses only
 /// the registration's validated Channel Agent Key. Neither path falls through

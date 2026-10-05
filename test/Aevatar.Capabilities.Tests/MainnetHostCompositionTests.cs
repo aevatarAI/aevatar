@@ -1129,6 +1129,7 @@ public sealed class MainnetHostCompositionTests
             ToolSetNames.NyxIdPrivileged,
             ToolSetNames.ResponsesState,
             ToolSetNames.SkillAuthoring,
+            ToolSetNames.SkillInspection,
             ToolSetNames.SkillRuntime,
             ToolSetNames.StorageRead,
             ToolSetNames.StorageWrite,
@@ -1166,7 +1167,23 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().NotContain(source => source is TelegramAgentToolSource);
         workspace.Sources.Should().NotContain(source => source is ChronoStorageReadAgentToolSource);
         workspace.Sources.Should().NotContain(source => source is ChronoStorageWriteAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source is OrnnReadAgentToolSource);
         workspace.Sources.Should().NotContain(source => source is OrnnAuthoringAgentToolSource);
+
+        var skillInspection = registry.Resolve(ToolSetNames.SkillInspection);
+        skillInspection.IsSuccess.Should().BeTrue(skillInspection.Error?.Message);
+        skillInspection.Sources.Should().ContainSingle(source => source is OrnnReadAgentToolSource);
+        var skillInspectionTools = await AgentToolDiscoveryService.Instance.DiscoverAsync(
+            skillInspection.Sources,
+            AgentToolExecutionContext.Empty);
+        skillInspectionTools.IsSuccess.Should().BeTrue(skillInspectionTools.Failure?.Detail);
+        skillInspectionTools.Tools.Select(static tool => tool.Name).Should().Equal("ornn_read_skill");
+
+        var skillAuthoring = registry.Resolve(ToolSetNames.SkillAuthoring);
+        skillAuthoring.IsSuccess.Should().BeTrue(skillAuthoring.Error?.Message);
+        skillAuthoring.Sources.Select(static source => source.GetType()).Should().Equal(
+            typeof(OrnnReadAgentToolSource),
+            typeof(OrnnAuthoringAgentToolSource));
         var baselineDiscovery = await AgentToolDiscoveryService.Instance.DiscoverAsync(
             workspace.Sources,
             AgentToolExecutionContext.Empty);
@@ -1239,10 +1256,16 @@ public sealed class MainnetHostCompositionTests
         channelReply.Sources.Select(static source => source.GetType()).Should().Equal(
             workspace.Sources.Select(static source => source.GetType()).Concat(
             [
+                typeof(OrnnReadAgentToolSource),
                 typeof(OrnnAuthoringAgentToolSource),
                 typeof(NyxIdConnectLinksToolSource),
                 typeof(ChannelNyxIdConnectedServiceInventoryToolSource),
             ]));
+        var channelReplyDiscovery = await AgentToolDiscoveryService.Instance.DiscoverAsync(
+            channelReply.Sources,
+            AgentToolExecutionContext.Empty);
+        channelReplyDiscovery.IsSuccess.Should().BeTrue(channelReplyDiscovery.Failure?.Detail);
+        channelReplyDiscovery.Tools.Select(static tool => tool.Name).Should().Contain("ornn_read_skill");
         channelReply.Sources.Should().NotContain(source => source is NyxIdConnectedServiceToolSource,
             "the default Channel route exposes the fixed connected-service tools");
         channelReply.Sources.Select(static source => source.GetType()).Should()

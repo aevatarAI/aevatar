@@ -52,7 +52,7 @@ reader 不缓存文档，沿用 1 MiB 上限和既有 operation admission。调�
 
 管理员更新入口为 `POST /api/admin/nyxid/catalog/{catalogServiceId}/recommended-skills/{skillId}:update`，请求体只有 `expectedVersion`、`newVersion`。`newVersion` 必须符合 Ornn 的递增 `major.minor` 规则。有效请求重新生成并对原 skill ID 发布新版本；没有正文差异比较、`unchanged` 或同名创建回退。
 
-Host 要求调用者已认证，且 `IPlatformAdminAuthorizer` 返回非空用户 ID、`IsElevated=true` 与 `GrantSource=AllowedUserId`；配置来自现有 `Aevatar:AdminAccess:AllowedUserIds`。系统发布身份仍须通过既有 NyxID client-credentials 配置获得实际 Ornn skill 管理权限和 catalog curation 权限；Aevatar 管理员身份不能代替这些下游权限。消费者可读性验证另用该管理员已有的 NyxID identity binding 换取短期 skill capability。缺少 binding 时返回 `verify_publication` 失败及已确认的发布信息，不自动创建 binding，也不切换 catalog 引用。
+Host 要求调用者已认证，且 `IPlatformAdminAuthorizer` 返回非空用户 ID、`IsElevated=true` 与 `GrantSource=AllowedUserId`；配置来自现有 `Aevatar:AdminAccess:AllowedUserIds`。系统发布身份仍须通过既有 NyxID client-credentials 配置获得实际 Ornn skill 管理权限和 catalog curation 权限；Aevatar 管理员身份不能代替这些下游权限。消费者可读性验证使用本次管理员 HTTP 请求中已通过管理员授权的 bearer，并要求该 bearer 对 Ornn 具有实际 skill 读取权限；不要求 Aevatar native identity binding。管理员 bearer 只用于发布后的 `/api/v1/me` 身份确认及准确 skill detail/json 读取，发布、公开化和 catalog 引用写入仍使用配置的 publisher credential。
 
 更新不要求在 Ornn 发布前预检 catalog 写权限。NyxID 在实际 catalog 条件写入时校验当前发布身份的写权限；此前读取成功不作为写授权证明。如果新版本已发布但引用写入返回 401/403，本次响应报告 `persist_reference` 失败、已发布版本及摘要。
 
@@ -252,7 +252,9 @@ Milestone 40 使用 ADR-0048 的 Tier B approval fallback。turn actor 提交准
 
 只读 `nyxid_service_inventory` 由 `ChannelNyxIdConnectedServiceInventoryToolSource` 注册到
 `channel.reply.default`。Mainnet Host 在 `MainnetHostBuilderExtensions.cs` 的
-`AddToolSetRegistry` 中组合 `workspace.default` 与该 sender wrapper；普通 channel reply
+`AddToolSetRegistry` 中组合 `workspace.default`、`skill.authoring`、`nyxid.connect_links`
+与该 sender wrapper；其中 `skill.authoring` include `skill.inspection`，提供只读
+`ornn_read_skill`。普通 channel reply
 generator 和 Agent Profile catalog materializer 通过同一个注册项发现工具，禁止在 generator
 中额外追加 inventory，形成另一份工具清单。`workspace.default` 已经从 `skill.runtime`
 继承 `use_skill`，其公共工具面不包含 channel inventory 或 NyxID management 工具。
@@ -262,7 +264,7 @@ generator 和 Agent Profile catalog materializer 通过同一个注册项发现�
 才使用 verified sender token，或按该 binding 签发的窄 inventory capability，读取
 `/api/v1/keys`；`registration_agent_key` 模式要求可读取的 registration Agent Key，并用同一 Agent Key
 读取 inventory。两种模式都不得替换为 bot-owner token、sandbox CLI login 或进程级 cache。Profile 的
-maximum 和 recovery 都要包含 `use_skill`、`nyxid_service_inventory`；仅在 policy 中写入
+maximum 和 recovery 都要包含 `use_skill`、`ornn_read_skill`、`nyxid_service_inventory`；仅在 policy 中写入
 工具名不能把缺席于 route set 的工具变出来。自然语言 inventory 走
 `AgentRun -> ChatStreamAsync -> use_skill(skill="nyxid-service-discovery") -> nyxid_service_inventory({}) -> sender /keys -> streamed answer`，
 不引入 phrase matcher、direct query adapter 或 `code_execute`。

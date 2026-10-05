@@ -81,6 +81,7 @@ public sealed class ServiceCollectionExtensionsTests
 
         provider.GetRequiredService<OrnnAuthoringAgentToolSource>().Should().NotBeNull();
         provider.GetRequiredService<OrnnPublishAgentToolSource>().Should().NotBeNull();
+        provider.GetRequiredService<OrnnReadAgentToolSource>().Should().NotBeNull();
         provider.GetRequiredService<OrnnSearchAgentToolSource>().Should().NotBeNull();
     }
 
@@ -101,11 +102,12 @@ public sealed class ServiceCollectionExtensionsTests
         provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should().Be("https://nyx.example");
         provider.GetRequiredService<OrnnAuthoringAgentToolSource>().Should().NotBeNull();
         provider.GetRequiredService<OrnnPublishAgentToolSource>().Should().NotBeNull();
+        provider.GetRequiredService<OrnnReadAgentToolSource>().Should().NotBeNull();
         provider.GetRequiredService<OrnnSearchAgentToolSource>().Should().NotBeNull();
     }
 
     [Fact]
-    public async Task OrnnToolSources_ShouldKeepRuntimeSearchSeparateFromAuthoring()
+    public async Task OrnnToolSources_ShouldKeepRuntimeSearchAndInspectionSeparateFromAuthoring()
     {
         var services = new ServiceCollection();
         services.AddSingleton(new NyxIdApiClient(
@@ -115,6 +117,8 @@ public sealed class ServiceCollectionExtensionsTests
 
         await using var provider = services.BuildServiceProvider();
         var searchTools = await provider.GetRequiredService<OrnnSearchAgentToolSource>()
+            .DiscoverToolsAsync();
+        var readTools = await provider.GetRequiredService<OrnnReadAgentToolSource>()
             .DiscoverToolsAsync();
         var authoringTools = await provider.GetRequiredService<OrnnAuthoringAgentToolSource>()
             .DiscoverToolsAsync();
@@ -127,6 +131,9 @@ public sealed class ServiceCollectionExtensionsTests
         searchTools.Should().NotContain(candidate =>
             candidate.Name == "ornn_publish_skill" ||
             candidate.Name == "ornn_update_skill");
+        var readTool = readTools.Should().ContainSingle().Which;
+        readTool.Name.Should().Be("ornn_read_skill");
+        readTool.IsReadOnly.Should().BeTrue();
         authoringTools.Select(static candidate => candidate.Name).Should().Equal(
             "ornn_publish_skill",
             "ornn_update_skill");
@@ -149,6 +156,8 @@ public sealed class ServiceCollectionExtensionsTests
         provider.GetServices<IAgentToolSource>().Should().BeEmpty();
         provider.GetServices<OrnnSearchAgentToolSource>().Should().ContainSingle()
             .Which.Should().BeSameAs(provider.GetRequiredService<OrnnSearchAgentToolSource>());
+        provider.GetServices<OrnnReadAgentToolSource>().Should().ContainSingle()
+            .Which.Should().BeSameAs(provider.GetRequiredService<OrnnReadAgentToolSource>());
         provider.GetServices<OrnnAuthoringAgentToolSource>().Should().ContainSingle()
             .Which.Should().BeSameAs(provider.GetRequiredService<OrnnAuthoringAgentToolSource>());
     }

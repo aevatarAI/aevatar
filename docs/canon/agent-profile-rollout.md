@@ -109,15 +109,21 @@ alias 继续遵守同一 boundary 规则。
 
 ## Channel reply 与发送者 inventory
 
-`channel.reply` 推荐使用 `channel.reply.default`：Host 组合 `workspace.default` 与
-`ChannelNyxIdConnectedServiceInventoryToolSource`。`use_skill` 来自 workspace 的
-`skill.runtime`，`nyxid_service_inventory` 来自 channel sender wrapper。
+`channel.reply` 推荐使用 `channel.reply.default`：Host 组合 `workspace.default`、
+`skill.authoring`、`nyxid.connect_links` 与
+`ChannelNyxIdConnectedServiceInventoryToolSource`。`skill.authoring` include 独立的
+`skill.inspection`，因此 Channel 可以使用通用只读 `ornn_read_skill`，同时保持
+`workspace.default` 不变。`use_skill` 来自 workspace 的 `skill.runtime`，
+`nyxid_service_inventory` 来自 channel sender wrapper。
 `nyxid_services` 属于 NyxID Assistant 的 management surface，不包含在该 channel set 中。
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
     W["workspace.default"] --> C["channel.reply.default"]
+    I["skill.inspection"] --> A["skill.authoring"]
+    A --> C
+    L["nyxid.connect_links"] --> C
     S["Sender inventory source"] --> C
     C --> G["Ordinary channel generator"]
     C --> M["Profile catalog materializer"]
@@ -133,7 +139,9 @@ clone 上移除；不能把它当成显式 channel policy。显式 projected rou
 route 不一致时在模型执行前 fail closed。未绑定 Profile 的 channel AgentRun 仍为
 restricted-empty catalog。
 
-`workspace.default` 继续作为 channel Profile 可选的较窄工具上限；已封存的旧版本和旧
+`ornn_read_skill` 只有同时存在于 route ceiling 与 sealed maximum/recovery allowlist 时才会进入
+Channel turn；只注册 source 或只写 policy 名称都不会产生工具权限。它返回的 package 文本仅用于
+检查，不会像 `use_skill` 一样激活指令。`workspace.default` 继续作为 channel Profile 可选的较窄工具上限；已封存的旧版本和旧
 Conversation 可继续运行。它不会被 alias 或自动升级为 `channel.reply.default`。
 只有更新并发布 Profile route，才会让新 Conversation 使用新工具面。
 
@@ -143,7 +151,8 @@ Conversation 可继续运行。它不会被 alias 或自动升级为 `channel.re
 2. 回读当前 Profile draft，复制为独立 candidate Profile（不同 `profileId` / slug，例如
    `channel-reply-inventory`）。保留 instructions、members、workflow policies 和预算，
    把 candidate 的 `routeToolSetRef` 改为 `channel.reply.default`，确保 maximum 和
-   recovery 的 `toolNames` 同时包含 `use_skill`、`nyxid_service_inventory`，移除无效的
+   recovery 的 `toolNames` 同时包含 `use_skill`、`ornn_read_skill`、
+   `nyxid_service_inventory`，移除无效的
    `nyxid_services` 名称。validate、publish candidate，并回读确认 published revision。
 3. 回读 `channel.reply` system binding，使用它自己的最新 authority version 切换到 candidate，
    按 `500 -> 2500 -> 10000` 推进 cohort。每步都观察 committed mutation outcome；Profile

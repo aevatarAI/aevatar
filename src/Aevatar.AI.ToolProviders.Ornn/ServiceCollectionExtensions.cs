@@ -49,8 +49,10 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IExactOrnnSkillResolver, OrnnExactAgentProfileSkillResolver>());
         services.TryAddSingleton<OrnnPublishSkillTool>();
         services.TryAddSingleton<OrnnUpdateSkillTool>();
+        services.TryAddSingleton<OrnnReadSkillTool>();
         services.TryAddSingleton<IRemoteSkillFetcher, OrnnRemoteSkillFetcher>();
         services.TryAddSingleton<OrnnSearchAgentToolSource>();
+        services.TryAddSingleton<OrnnReadAgentToolSource>();
         services.TryAddSingleton<OrnnPublishAgentToolSource>();
         services.TryAddSingleton<OrnnAuthoringAgentToolSource>();
         return services;

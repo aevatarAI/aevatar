@@ -33,4 +33,11 @@ public sealed class OrnnSkillVersion
 {
     public string? Version { get; set; }
     public string? SkillHash { get; set; }
+    public string? CreatedBy { get; set; }
+    public string? CreatedByEmail { get; set; }
+    public string? CreatedByDisplayName { get; set; }
+    public string? CreatedOn { get; set; }
+    public bool? IsDeprecated { get; set; }
+    public string? DeprecationNote { get; set; }
+    public string? ReleaseNotes { get; set; }
 }

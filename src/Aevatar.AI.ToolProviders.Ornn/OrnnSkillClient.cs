@@ -805,10 +805,22 @@ public sealed class OrnnExactSkillDetail
 {
     public string? Guid { get; set; }
     public string? Name { get; set; }
+    public string? Description { get; set; }
+    public OrnnSkillMetadata? Metadata { get; set; }
+    public List<string>? Tags { get; set; }
     public string? SkillHash { get; set; }
+    public string? OwnerId { get; set; }
     public string? CreatedBy { get; set; }
+    public string? CreatedByEmail { get; set; }
+    public string? CreatedByDisplayName { get; set; }
+    public string? CreatedOn { get; set; }
+    public string? UpdatedOn { get; set; }
     public string? Version { get; set; }
     public bool? IsPrivate { get; set; }
+    public List<string>? SharedWithUsers { get; set; }
+    public List<string>? SharedWithOrgs { get; set; }
+    public bool? IsDeprecated { get; set; }
+    public string? DeprecationNote { get; set; }
 }
 
 public sealed record OrnnExactSkillReadResult<T>(T? Value, int? ProxyStatus, string? FailureDetail)
