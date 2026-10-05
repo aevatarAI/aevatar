@@ -1,9 +1,17 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.Audit;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using FluentAssertions;
+using FluentAssertions.Execution;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 
@@ -148,6 +156,559 @@ public sealed class OrnnReadSkillToolTests
         files.GetProperty("SKILL.md").GetString().Should().Be("# Skill Alpha");
         files.GetProperty("scripts/run.sh").GetString().Should().Be("echo ok");
         files.EnumerateObject().Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AllFiles_WithNamedPackageRoot_ShouldReturnPackageRelativeFileMap()
+    {
+        const string packageName = "dinner-booking-c45cbf15-merchant-assistant";
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson("1.2", Hash12, name: packageName)),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(VersionsJson(("1.2", Hash12, false))),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(PackageJson(
+                packageName,
+                "1.2",
+                $$"""
+                {"{{packageName}}/SKILL.md":"# Skill Alpha","{{packageName}}/references/rules.md":"Rules"}
+                """)));
+        var tool = CreateTool(handler);
+
+        using var _ = BeginTokenScope();
+        var resultJson = await tool.ExecuteAsync($$"""
+            {"skill_id":"{{SkillId}}","version":"1.2","package_content":"all_files"}
+            """);
+
+        using var result = JsonDocument.Parse(resultJson);
+        result.RootElement.GetProperty("status").GetString().Should().Be("success");
+        var files = result.RootElement.GetProperty("package").GetProperty("files");
+        files.GetProperty("SKILL.md").GetString().Should().Be("# Skill Alpha");
+        files.GetProperty("references/rules.md").GetString().Should().Be("Rules");
+        files.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("SKILL.md", "references/rules.md");
+    }
+
+    [Theory]
+    [InlineData("{\"/SKILL.md\":\"absolute\"}")]
+    [InlineData("{\"SKILL.md\":\"root\",\"skill-alpha/references/guide.md\":\"mixed\"}")]
+    public async Task ExecuteAsync_UnsafeOrMixedPackageRoot_ShouldFailClosed(string filesJson)
+    {
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson("1.2", Hash12)),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(VersionsJson(("1.2", Hash12, false))),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(PackageJson("skill-alpha", "1.2", filesJson)));
+        var tool = CreateTool(handler);
+
+        using var _ = BeginTokenScope();
+        var resultJson = await tool.ExecuteAsync($$"""
+            {"skill_id":"{{SkillId}}","version":"1.2","package_content":"all_files"}
+            """);
+
+        ReadErrorCode(resultJson).Should().Be("invalid_package");
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_VerifiedSuccess_ShouldReturnReadOnlySkillEvidence()
+    {
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson("1.2", Hash12)),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(VersionsJson(("1.2", Hash12, false))));
+        var tool = CreateTool(handler);
+        var argumentsJson = $$"""{"skill_id":"{{SkillId}}","version":"1.2"}""";
+
+        using var _ = BeginTokenScope();
+        var resultJson = await tool.ExecuteAsync(argumentsJson);
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-read",
+            tool.Name,
+            argumentsJson,
+            resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.NeverRequire);
+        receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        receipt.IsDestructive.Should().BeFalse();
+        receipt.SideEffectKind.Should().BeEmpty();
+        receipt.SubjectKind.Should().Be("ornn.skill");
+        receipt.SubjectId.Should().Be(SkillId);
+        receipt.SubjectVersion.Should().Be("1.2");
+        receipt.SubjectHash.Should().Be(Hash12);
+        receipt.ResultJson.Should().Be(resultJson);
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_StructuredError_ShouldPreserveSafeFailureEvidence()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson(
+            "{\"data\":null,\"error\":{\"code\":\"UPSTREAM\",\"message\":\"denied\"}}",
+            HttpStatusCode.Forbidden);
+        var tool = CreateTool(handler);
+        var argumentsJson = $$"""{"skill_id":"{{SkillId}}"}""";
+
+        using var _ = BeginTokenScope();
+        var resultJson = await tool.ExecuteAsync(argumentsJson);
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-read",
+            tool.Name,
+            argumentsJson,
+            resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        receipt.SubjectKind.Should().Be("ornn.skill");
+        receipt.SubjectId.Should().Be(SkillId);
+        receipt.ErrorCode.Should().Be("permission_denied");
+        receipt.ErrorMessage.Should().Be("The current NyxID caller cannot read the requested Ornn data.");
+        receipt.FailureOutcome.Should().Be(AgentToolFailureOutcome.CalleeConfirmed);
+        receipt.ResultJson.Should().Be(resultJson);
+        receipt.ResultJson.Should().Contain("\"http_status\":403");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_MalformedOrInconsistentResult_ShouldRemainUnverified()
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("{}"));
+        var argumentsJson = $$"""{"skill_id":"{{SkillId}}","version":"1.2"}""";
+        var inconsistentResult = $$"""
+            {
+              "result_type": "ornn_read_skill",
+              "status": "success",
+              "content_scope": "none",
+              "resolved_version": "1.2",
+              "detail": {
+                "skill_id": "{{SkillId}}",
+                "version": "1.2",
+                "skill_hash": "{{Hash12}}"
+              },
+              "versions": [
+                { "version": "1.2", "skill_hash": "{{Hash13}}" }
+              ],
+              "package": null,
+              "package_diagnostics": null
+            }
+            """;
+        var staleLatestResult = $$"""
+            {
+              "result_type": "ornn_read_skill",
+              "status": "success",
+              "content_scope": "none",
+              "resolved_version": "1.2",
+              "detail": {
+                "skill_id": "{{SkillId}}",
+                "version": "1.2",
+                "skill_hash": "{{Hash12}}"
+              },
+              "versions": [
+                { "version": "1.2", "skill_hash": "{{Hash12}}" },
+                { "version": "1.3", "skill_hash": "{{Hash13}}" }
+              ],
+              "package": null,
+              "package_diagnostics": null
+            }
+            """;
+
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                "not-json")
+            .Should().BeNull();
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                inconsistentResult)
+            .Should().BeNull();
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                $$"""{"skill_id":"{{SkillId}}"}""",
+                staleLatestResult)
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateResultReceipt_InvalidSkillHashFacts_ShouldRemainUnverified()
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("{}"));
+        var argumentsJson = $$"""{"skill_id":"{{SkillId}}","version":"1.2"}""";
+        var invalidResolvedHash = $$"""
+            {
+              "result_type": "ornn_read_skill",
+              "status": "success",
+              "content_scope": "none",
+              "resolved_version": "1.2",
+              "detail": {
+                "skill_id": "{{SkillId}}",
+                "version": "1.2",
+                "skill_hash": "not-a-hash"
+              },
+              "versions": [
+                { "version": "1.2", "skill_hash": "not-a-hash" }
+              ],
+              "package": null,
+              "package_diagnostics": null
+            }
+            """;
+        var invalidHistoricalHash = $$"""
+            {
+              "result_type": "ornn_read_skill",
+              "status": "success",
+              "content_scope": "none",
+              "resolved_version": "1.2",
+              "detail": {
+                "skill_id": "{{SkillId}}",
+                "version": "1.2",
+                "skill_hash": "{{Hash12}}"
+              },
+              "versions": [
+                { "version": "1.0", "skill_hash": "not-a-hash" },
+                { "version": "1.2", "skill_hash": "{{Hash12}}" }
+              ],
+              "package": null,
+              "package_diagnostics": null
+            }
+            """;
+
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                invalidResolvedHash)
+            .Should().BeNull();
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                invalidHistoricalHash)
+            .Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("skill_markdown")]
+    [InlineData("all_files")]
+    public async Task CreateResultReceipt_VerifiedPackage_ShouldReturnReadOnlySkillEvidence(
+        string packageContent)
+    {
+        var (tool, argumentsJson, resultJson) = await ExecutePackageReadAsync(packageContent);
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-read",
+            tool.Name,
+            argumentsJson,
+            resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SubjectId.Should().Be(SkillId);
+        receipt.SubjectVersion.Should().Be("1.2");
+        receipt.SubjectHash.Should().Be(Hash12);
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_AllFilesWithNonStringFile_ShouldRemainUnverified()
+    {
+        var (tool, argumentsJson, resultJson) = await ExecutePackageReadAsync("all_files");
+        var forgedResult = JsonNode.Parse(resultJson)!;
+        forgedResult["package"]!["files"]!["references/rules.md"] = 42;
+
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                forgedResult.ToJsonString())
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_AllFilesWithMismatchedDiagnostics_ShouldRemainUnverified()
+    {
+        var (tool, argumentsJson, resultJson) = await ExecutePackageReadAsync("all_files");
+        var forgedResult = JsonNode.Parse(resultJson)!;
+        forgedResult["package_diagnostics"]!["total_file_bytes"] = 1;
+
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                forgedResult.ToJsonString())
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_SkillMarkdownWithIncompleteDiagnostics_ShouldRemainUnverified()
+    {
+        var (tool, argumentsJson, resultJson) = await ExecutePackageReadAsync("skill_markdown");
+        var forgedResult = JsonNode.Parse(resultJson)!;
+        forgedResult["package_diagnostics"] = new JsonObject();
+
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                forgedResult.ToJsonString())
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_SkillMarkdownWithMismatchedRootBytes_ShouldRemainUnverified()
+    {
+        var (tool, argumentsJson, resultJson) = await ExecutePackageReadAsync("skill_markdown");
+        var forgedResult = JsonNode.Parse(resultJson)!;
+        forgedResult["package_diagnostics"]!["root_skill_bytes"] = 0;
+
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                forgedResult.ToJsonString())
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_SkillMarkdownWithImpossibleDiagnostics_ShouldRemainUnverified()
+    {
+        var (tool, argumentsJson, resultJson) = await ExecutePackageReadAsync("skill_markdown");
+        var result = JsonNode.Parse(resultJson)!;
+        var rootSkillBytes = result["package_diagnostics"]!["root_skill_bytes"]!.GetValue<int>();
+
+        var missingNonEmptyFileBytes = result.DeepClone();
+        missingNonEmptyFileBytes["package_diagnostics"]!["total_file_bytes"] = rootSkillBytes;
+
+        var rootClaimedLargerThanItIs = result.DeepClone();
+        rootClaimedLargerThanItIs["package_diagnostics"]!["largest_file_bytes"] = rootSkillBytes + 1;
+
+        var totalExceedsLargestFileBound = result.DeepClone();
+        totalExceedsLargestFileBound["package_diagnostics"]!["total_file_bytes"] = 100;
+
+        using var scope = new AssertionScope();
+        foreach (var forgedResult in new[]
+                 {
+                     missingNonEmptyFileBytes,
+                     rootClaimedLargerThanItIs,
+                     totalExceedsLargestFileBound,
+                 })
+        {
+            ((IAgentTool)tool).CreateResultReceipt(
+                    "call-read",
+                    tool.Name,
+                    argumentsJson,
+                    forgedResult.ToJsonString())
+                .Should().BeNull();
+        }
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_SkillMarkdownAboveKnownRootBound_ShouldRemainUnverified()
+    {
+        var (tool, argumentsJson, resultJson) = await ExecutePackageReadAsync("skill_markdown");
+        var forgedResult = JsonNode.Parse(resultJson)!;
+        var diagnostics = forgedResult["package_diagnostics"]!;
+        var rootSkillBytes = diagnostics["root_skill_bytes"]!.GetValue<int>();
+        var largestFileBytes = rootSkillBytes + 7;
+        diagnostics["largest_file_path"] = "references/rules.md";
+        diagnostics["largest_file_bytes"] = largestFileBytes;
+        diagnostics["total_file_bytes"] = rootSkillBytes + largestFileBytes + 1;
+
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                forgedResult.ToJsonString())
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateResultReceipt_UnknownErrorCode_ShouldRemainUnverified()
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("{}"));
+        var argumentsJson = $$"""{"skill_id":"{{SkillId}}"}""";
+        const string resultJson = """
+            {
+              "result_type": "ornn_read_skill",
+              "status": "error",
+              "error": {
+                "code": "invented",
+                "message": "invented",
+                "http_status": null
+              }
+            }
+            """;
+
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                resultJson)
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateResultReceipt_KnownErrorWithWrongMessage_ShouldRemainUnverified()
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("{}"));
+        var argumentsJson = $$"""{"skill_id":"{{SkillId}}"}""";
+        const string resultJson = """
+            {
+              "result_type": "ornn_read_skill",
+              "status": "error",
+              "error": {
+                "code": "permission_denied",
+                "message": "invented",
+                "http_status": 403
+              }
+            }
+            """;
+
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                resultJson)
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateResultReceipt_KnownErrorWithSuccessHttpStatus_ShouldRemainUnverified()
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("{}"));
+        var argumentsJson = $$"""{"skill_id":"{{SkillId}}"}""";
+        const string resultJson = """
+            {
+              "result_type": "ornn_read_skill",
+              "status": "error",
+              "error": {
+                "code": "upstream_failure",
+                "message": "The Ornn skill snapshot request failed.",
+                "http_status": 200
+              }
+            }
+            """;
+
+        ((IAgentTool)tool).CreateResultReceipt(
+                "call-read",
+                tool.Name,
+                argumentsJson,
+                resultJson)
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void CreateResultReceipt_FailureIncompatibleWithArguments_ShouldRemainUnverified()
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("{}"));
+        var metadataOnlyArguments = $$"""{"skill_id":"{{SkillId}}"}""";
+        var exactArguments = $$"""{"skill_id":"{{SkillId}}","version":"1.2"}""";
+
+        var incompatibleFailures = new[]
+        {
+            (
+                metadataOnlyArguments,
+                FailureResultJson(
+                    "invalid_package",
+                    "The pinned Ornn package does not contain files.")),
+            (
+                metadataOnlyArguments,
+                FailureResultJson(
+                    "package_download_failed",
+                    "The pinned Ornn package could not be downloaded.",
+                    500)),
+            (
+                metadataOnlyArguments,
+                FailureResultJson(
+                    "invalid_response",
+                    "Ornn returned no pinned package data.")),
+            (
+                metadataOnlyArguments,
+                FailureResultJson(
+                    "identity_mismatch",
+                    "The pinned Ornn package identity does not match the resolved detail.")),
+            (
+                exactArguments,
+                FailureResultJson(
+                    "snapshot_changed",
+                    "The latest Ornn skill changed while the snapshot was being read.")),
+            (
+                metadataOnlyArguments,
+                FailureResultJson(
+                    "integrity_mismatch",
+                    "The exact Ornn detail hash does not match the version listing.")),
+        };
+
+        using var scope = new AssertionScope();
+        foreach (var (argumentsJson, resultJson) in incompatibleFailures)
+        {
+            ((IAgentTool)tool).CreateResultReceipt(
+                    "call-read",
+                    tool.Name,
+                    argumentsJson,
+                    resultJson)
+                .Should().BeNull();
+        }
+    }
+
+    [Fact]
+    public async Task CreateResultReceipt_KnownValidationError_ShouldReturnErrorReceipt()
+    {
+        var tool = CreateTool(OrnnTestHttpMessageHandler.ReturningJson("{}"));
+        const string argumentsJson = "{}";
+        var resultJson = await tool.ExecuteAsync(argumentsJson);
+
+        var receipt = ((IAgentTool)tool).CreateResultReceipt(
+            "call-read",
+            tool.Name,
+            argumentsJson,
+            resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.SubjectKind.Should().BeEmpty();
+        receipt.ErrorCode.Should().Be("invalid_arguments");
+        receipt.ErrorMessage.Should().Be("skill_id must be a non-empty canonical GUID.");
+    }
+
+    [Fact]
+    public async Task AdmittedExecutor_VerifiedRead_ShouldPreserveSuccessfulToolResult()
+    {
+        const string packageName = "dinner-booking-c45cbf15-merchant-assistant";
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson("1.2", Hash12, name: packageName)),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(VersionsJson(("1.2", Hash12, false))),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(PackageJson(
+                packageName,
+                "1.2",
+                $$"""
+                {"{{packageName}}/SKILL.md":"# Skill Alpha","{{packageName}}/references/rules.md":"Rules"}
+                """)));
+        var tool = CreateTool(handler);
+        var argumentsJson = $$"""
+            {"skill_id":"{{SkillId}}","version":"1.2","package_content":"all_files"}
+            """;
+        var executor = new AdmittedAgentToolExecutor(
+            new StartedAdmissionLedger(),
+            new AppendedAuditTrail(),
+            new StableIdentityHasher());
+        var context = AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-read", "call-read"),
+            Credentials = new AgentToolCredentials("caller-token", null, null),
+            ExecutionOwner = AgentToolExecutionOwners.Actor("actor-read"),
+        };
+
+        var outcome = await executor.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            argumentsJson,
+            context,
+            AgentToolApprovalContinuationMode.None,
+            null));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.SubjectId.Should().Be(SkillId);
+        outcome.ResultJson.Should().Contain("\"status\":\"success\"");
+        outcome.ResultJson.Should().Contain("references/rules.md");
+        outcome.ResultJson.Should().NotContain("The tool outcome could not be verified.");
     }
 
     [Theory]
@@ -433,6 +994,42 @@ public sealed class OrnnReadSkillToolTests
         return result.RootElement.GetProperty("error").GetProperty("code").GetString()!;
     }
 
+    private static string FailureResultJson(
+        string code,
+        string message,
+        int? httpStatus = null) =>
+        JsonSerializer.Serialize(new
+        {
+            result_type = "ornn_read_skill",
+            status = "error",
+            error = new
+            {
+                code,
+                message,
+                http_status = httpStatus,
+            },
+        });
+
+    private static async Task<(OrnnReadSkillTool Tool, string ArgumentsJson, string ResultJson)>
+        ExecutePackageReadAsync(string packageContent)
+    {
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson("1.2", Hash12)),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(VersionsJson(("1.2", Hash12, false))),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(PackageJson(
+                "skill-alpha",
+                "1.2",
+                "{\"SKILL.md\":\"# Skill Alpha\",\"references/rules.md\":\"Rules\"}")));
+        var tool = CreateTool(handler);
+        var argumentsJson = $$"""
+            {"skill_id":"{{SkillId}}","version":"1.2","package_content":"{{packageContent}}"}
+            """;
+
+        using var _ = BeginTokenScope();
+        var resultJson = await tool.ExecuteAsync(argumentsJson);
+        return (tool, argumentsJson, resultJson);
+    }
+
     private sealed class RecordingTokenResolver(string token) : IRemoteSkillAccessTokenResolver
     {
         public string? RequestedSkill { get; private set; }
@@ -444,5 +1041,34 @@ public sealed class OrnnReadSkillToolTests
             RequestedSkill = skillName;
             return Task.FromResult(RemoteSkillAccessTokenResolution.Resolved(token));
         }
+    }
+
+    private sealed class StartedAdmissionLedger : IAgentToolAdmissionLedger
+    {
+        public Task<AgentToolAdmissionResult> TryStartAsync(
+            AgentToolAdmissionFact fact,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new AgentToolAdmissionResult(AgentToolAdmissionStatus.Started));
+        }
+    }
+
+    private sealed class AppendedAuditTrail : IAuditTrailAppender
+    {
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+        }
+    }
+
+    private sealed class StableIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("actor-hash", "key-1");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) => true;
     }
 }
