@@ -16,6 +16,12 @@ public sealed class NyxIdCatalogSkillContentReader(NyxIdCatalogSkillClient catal
     {
         var catalog = await catalogs.ReadCatalogAsync(token, catalogServiceId, ct).ConfigureAwait(false);
         var body = await catalogs.ReadOpenApiAsync(token, catalog.Id, ct).ConfigureAwait(false);
+        return Parse(catalog, body);
+    }
+
+    /// <summary>Normalizes a document already read by the catalog or temporary local document adapter.</summary>
+    public CatalogSkillContentInput Parse(NyxIdCatalogSkillDescriptor catalog, string body)
+    {
         try
         {
             using var document = JsonDocument.Parse(body);

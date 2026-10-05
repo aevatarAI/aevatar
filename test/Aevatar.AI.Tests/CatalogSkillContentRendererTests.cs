@@ -49,6 +49,26 @@ public sealed class CatalogSkillContentRendererTests
     }
 
     [Fact]
+    public void Render_IntegerQueryParameterDocumentsStringTransportEncoding()
+    {
+        var operation = Operation("list_items", "/items", "GET", NyxIdOperationRisk.ReadOnly) with
+        {
+            Parameters = [new("limit", ParameterLocation.Query, false,
+                Value.Parser.ParseJson("""{"type":"integer","minimum":1,"maximum":100}"""), "Maximum items to return.")],
+        };
+
+        var content = new CatalogSkillContentRenderer().Render(Input(operation));
+
+        content.InstructionsMarkdown.Should().Contain("query.limit optional")
+            .And.Contain("Maximum items to return.")
+            .And.Contain("\"type\": \"integer\"")
+            .And.Contain("`query` and `headers` are transport string maps")
+            .And.Contain("Encode every query and header value as a JSON string")
+            .And.Contain("Preserve native JSON types only in `body`")
+            .And.Contain("""`"query":{"limit":"100","include_inactive":"false"}`""");
+    }
+
+    [Fact]
     public void Render_PreservesBusinessServiceSlugAndCompleteRequestSchemaAndResponseSummary()
     {
         var description = new string('x', 1800);

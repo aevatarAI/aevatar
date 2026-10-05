@@ -9,6 +9,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.CatalogSkills;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Authentication.Abstractions;
@@ -153,6 +154,12 @@ public sealed class MainnetSettingsEndpointSecurityTests
             EnableAssistantConnectedServiceEffects = true,
         };
         using var api = new NyxIdApiClient(options, new HttpClient(handler));
+        var catalogReader = new NyxIdCatalogSkillContentReader(new NyxIdCatalogSkillClient(api),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        var catalogInput = catalogReader.Parse(new("catalog-aevatar", "aevatar", "Aevatar", null), json);
+        var guidance = new CatalogSkillContentRenderer().Render(catalogInput);
+        guidance.InstructionsMarkdown.Should().Contain("GET /api/channels/me")
+            .And.NotContain(":update-from-local-openapi");
         var source = new NyxIdConnectedServiceToolSource(options, api, new NyxIdServiceInstanceClient(api));
         using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
