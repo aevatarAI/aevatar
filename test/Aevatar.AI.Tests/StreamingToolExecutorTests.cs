@@ -79,6 +79,55 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
+    public async Task FrozenReadOnlyAdmissions_ShouldOverrideConservativeStaticToolClassification()
+    {
+        var admission = new AgentToolOperationAdmission(
+            "usvc-read",
+            "api-read",
+            new AgentToolOperationIdentity.PublishedEndpoint("endpoint-read"),
+            AgentToolOperationAuthorizationBasis.PublishedContract,
+            "GET",
+            "/items",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            [],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly,
+            new AgentToolOperationExecutionPolicy(
+                AgentToolOperationRisk.ReadOnly,
+                AgentToolOperationApproval.None,
+                AgentToolOperationEnforcementOwner.Aevatar,
+                [AgentToolOperationExecutionMode.Interactive]),
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222");
+        var tool = new OwnedAdmissionTool(admission);
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var executionPort = new HoldingReadExecutionPort();
+        var executor = NewStreamingToolExecutor(tools, toolExecutionPort: executionPort);
+        using var executionState = executor.CreateExecutionState();
+
+        await AddToolAsync(executor, executionState, new ToolCall
+        {
+            Id = "tc-admitted-read-1",
+            Name = tool.Name,
+            ArgumentsJson = "{}",
+        });
+        await AddToolAsync(executor, executionState, new ToolCall
+        {
+            Id = "tc-admitted-read-2",
+            Name = tool.Name,
+            ArgumentsJson = "{}",
+        });
+
+        var startedBeforeRelease = executionPort.StartedCallIds.ToArray();
+        executionPort.Release();
+        await foreach (var _ in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+        {
+        }
+
+        startedBeforeRelease.Should().Equal("tc-admitted-read-1", "tc-admitted-read-2");
+    }
+
+    [Fact]
     public async Task NonReadOnlyTools_ShouldExecuteSerially()
     {
         var concurrentCount = 0;
@@ -253,6 +302,43 @@ public class StreamingToolExecutorTests
         results[1].Result.Should().Contain("prior tool error");
         results[1].Receipt.Should().NotBeNull();
         results[1].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+    }
+
+    [Fact]
+    public async Task ResolvedReadOnlyFailure_ShouldNotSkipSubsequentConservativelyQueuedTool()
+    {
+        var tools = new ToolManager();
+        tools.Register(new ConcurrencyTrackingTool(
+            "dynamic-operation",
+            isReadOnly: false,
+            _ => "unused"));
+        var executionPort = new ReadFailureThenSuccessExecutionPort();
+        var executor = NewStreamingToolExecutor(tools, toolExecutionPort: executionPort);
+        using var executionState = executor.CreateExecutionState();
+
+        await AddToolAsync(executor, executionState, new ToolCall
+        {
+            Id = "tc-read-fail",
+            Name = "dynamic-operation",
+            ArgumentsJson = "{}",
+        });
+        await AddToolAsync(executor, executionState, new ToolCall
+        {
+            Id = "tc-read-next",
+            Name = "dynamic-operation",
+            ArgumentsJson = "{}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        executionPort.ExecutedCallIds.Should().Equal("tc-read-fail", "tc-read-next");
+        results.Should().HaveCount(2);
+        results[0].IsError.Should().BeTrue();
+        results[0].Receipt!.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        results[1].IsError.Should().BeFalse();
+        results[1].Result.Should().NotContain("prior tool error");
     }
 
     [Fact]
@@ -1324,6 +1410,86 @@ public class StreamingToolExecutorTests
             AgentToolExecutionRequest request,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("boom");
+    }
+
+    private sealed class ReadFailureThenSuccessExecutionPort : IAgentToolExecutionPort
+    {
+        public List<string> ExecutedCallIds { get; } = [];
+
+        public Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            var callId = request.ExecutionContext.Request.CallId ?? string.Empty;
+            ExecutedCallIds.Add(callId);
+            var isFirst = ExecutedCallIds.Count == 1;
+            var resultJson = isFirst
+                ? """{"error":"read_failed"}"""
+                : """{"status":"ok"}""";
+            var receipt = new AgentToolReceipt
+            {
+                CallId = callId,
+                ToolName = request.Tool.Name,
+                Status = isFirst
+                    ? AgentToolReceiptStatus.Error
+                    : AgentToolReceiptStatus.Success,
+                Effect = AgentToolReceiptEffect.ReadOnly,
+                ErrorCode = isFirst ? "READ_FAILED" : string.Empty,
+                ErrorMessage = isFirst ? "The read request failed." : string.Empty,
+                ResultJson = resultJson,
+                FailureOutcome = isFirst
+                    ? AgentToolFailureOutcome.CalleeConfirmed
+                    : AgentToolFailureOutcome.Unspecified,
+            };
+            return Task.FromResult(new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                resultJson,
+                receipt,
+                IsMutation: false,
+                FailureCode: receipt.ErrorCode,
+                SafeMessage: receipt.ErrorMessage,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true));
+        }
+    }
+
+    private sealed class HoldingReadExecutionPort : IAgentToolExecutionPort
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<string> StartedCallIds { get; } = [];
+
+        public void Release() => _release.TrySetResult();
+
+        public async Task<AgentToolExecutionOutcome> ExecuteAsync(
+            AgentToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            var callId = request.ExecutionContext.Request.CallId ?? string.Empty;
+            StartedCallIds.Add(callId);
+            await _release.Task.WaitAsync(ct);
+            const string resultJson = """{"status":"ok"}""";
+            return new AgentToolExecutionOutcome(
+                AgentToolExecutionOutcomeKind.Executed,
+                resultJson,
+                new AgentToolReceipt
+                {
+                    CallId = callId,
+                    ToolName = request.Tool.Name,
+                    Status = AgentToolReceiptStatus.Success,
+                    Effect = AgentToolReceiptEffect.ReadOnly,
+                    ResultJson = resultJson,
+                },
+                IsMutation: false,
+                FailureCode: string.Empty,
+                SafeMessage: string.Empty,
+                AgentToolExecutionFailureStage.None,
+                TerminalInvoked: true,
+                Retryable: false,
+                AuditCompleted: true);
+        }
     }
 
     private sealed class CountingHook : IAIGAgentExecutionHook

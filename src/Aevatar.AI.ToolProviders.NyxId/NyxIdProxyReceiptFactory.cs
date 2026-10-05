@@ -15,13 +15,14 @@ internal static class NyxIdProxyReceiptFactory
         string? serviceLabel,
         string? resourceUri,
         string resultJson,
-        bool proxyRequestFailed = true)
+        bool proxyRequestFailed = true,
+        int httpStatus = 0)
     {
         var normalizedUserServiceId = NormalizeUserServiceId(userServiceId);
         if (!proxyRequestFailed)
             return CreateSuccess(callId, toolName, normalizedUserServiceId, resultJson);
 
-        if (!NyxIdApiClient.TryParseProxyError(resultJson, out var error) || error is null)
+        if (!NyxIdApiClient.TryParseProxyError(resultJson, httpStatus, out var error) || error is null)
             return CreateSuccess(callId, toolName, normalizedUserServiceId, resultJson);
 
         var normalizedSlug = NormalizeSlug(serviceSlug);

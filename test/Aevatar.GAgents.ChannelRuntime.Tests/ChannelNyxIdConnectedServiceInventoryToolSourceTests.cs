@@ -1147,6 +1147,51 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         proxyRequest.BearerToken.Should().Be("strict-sender-token");
     }
 
+    [Fact]
+    public async Task InvokeOperationAsync_ReadScopeDenial_PreservesResolvedReadOnlyEffect()
+    {
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspace(),
+            McpConfigResponse = GoogleWorkspaceMcpConfig(),
+            ProxyResponseStatus = System.Net.HttpStatusCode.Forbidden,
+            ProxyResponseBody =
+                """{"error":"api_key_scope_forbidden","error_code":1042,"message":"scope denied"}""",
+        };
+        handler.OpenApiResponsesByPath["/api/v1/proxy/s/api-google-workspace/openapi.json"] = DiningProfileOpenApi;
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var executionPort = CreateAdmittedExecutionPort([]);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            CreateSenderCapabilityIssuer());
+        var context = CreateSenderBindingContext();
+        using var scope = AgentToolContextScope.Push(context);
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            """
+            {
+              "service_slug":"api-google-workspace",
+              "operation_id":"readDiningProfileContext",
+              "operation_arguments":{"query":{"alt":"media"}}
+            }
+            """,
+            context,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null));
+
+        outcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Error, outcome.ResultJson);
+        outcome.Receipt.ErrorCode.Should().Be("NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN");
+        outcome.Receipt.Effect.Should().Be(AgentToolReceiptEffect.ReadOnly);
+        outcome.Receipt.IsDestructive.Should().BeFalse();
+        outcome.Receipt.SideEffectKind.Should().BeEmpty();
+        handler.ProxyRequests.Should().ContainSingle().Which.Method.Should().Be("GET");
+    }
+
     [Theory]
     [InlineData(System.Net.HttpStatusCode.OK, AgentToolReceiptStatus.Success)]
     [InlineData(System.Net.HttpStatusCode.Forbidden, AgentToolReceiptStatus.Error)]
@@ -1194,6 +1239,8 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         outcome.TerminalInvoked.Should().BeTrue();
         outcome.Receipt.Status.Should().Be(receiptStatus, outcome.ResultJson);
         outcome.Receipt.CallId.Should().Be(context.Request.CallId);
+        outcome.Receipt.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
+        outcome.Receipt.SideEffectKind.Should().Be("connected_service_operation");
         var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
         proxyRequest.Method.Should().Be("POST");
         proxyRequest.BearerToken.Should().Be("strict-sender-token");

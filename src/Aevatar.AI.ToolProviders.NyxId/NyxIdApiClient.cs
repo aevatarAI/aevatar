@@ -122,7 +122,13 @@ public sealed partial class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     private readonly bool _ownsHttpClient;
     private readonly bool _allowPublicTransportFallback;
 
-    internal static bool TryParseProxyError(string? response, out NyxIdProxyError? error)
+    internal static bool TryParseProxyError(string? response, out NyxIdProxyError? error) =>
+        TryParseProxyError(response, fallbackHttpStatus: 0, out error);
+
+    internal static bool TryParseProxyError(
+        string? response,
+        int fallbackHttpStatus,
+        out NyxIdProxyError? error)
     {
         error = null;
         if (string.IsNullOrWhiteSpace(response))
@@ -162,7 +168,7 @@ public sealed partial class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 return true;
             }
 
-            return TryParseProxyErrorBody(outer, 0, out error);
+            return TryParseProxyErrorBody(outer, fallbackHttpStatus, out error);
         }
         catch (JsonException)
         {

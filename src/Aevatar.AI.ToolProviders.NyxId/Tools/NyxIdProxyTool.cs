@@ -594,7 +594,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool, IAgentToolCapabilityDesc
                 serviceLabel: null,
                 request.Path,
                 response.Content,
-                proxyRequestFailed: true);
+                proxyRequestFailed: true,
+                httpStatus: response.HttpStatus);
         if (IsExactApprovalFailedReceipt(receipt))
         {
             receipt!.NyxIdApprovalTerminalOutcome = await ReadApprovalTerminalOutcomeAsync(

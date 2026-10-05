@@ -35,7 +35,10 @@ internal static class AgentToolReceiptDeliveryPolicy
                 EnsureFinalAssistantText(history, baseReplyText));
 
         var reconciled = Reconcile(receipts);
-        var renderedReceipts = renderer.Render(reconciled, toolCalls ?? []).Trim();
+        var visibleReceipts = string.IsNullOrWhiteSpace(baseReplyText)
+            ? reconciled
+            : reconciled.Where(static receipt => !IsRecoverableReadOnlyServiceScopeDenial(receipt)).ToArray();
+        var renderedReceipts = renderer.Render(visibleReceipts, toolCalls ?? []).Trim();
         if (HasBlockingMutation(reconciled))
         {
             var deterministicText = string.IsNullOrWhiteSpace(renderedReceipts)
@@ -106,6 +109,15 @@ internal static class AgentToolReceiptDeliveryPolicy
             AgentToolReceiptStatus.Denied or
             AgentToolReceiptStatus.AuthorizationRequired or
             AgentToolReceiptStatus.Unspecified;
+
+    private static bool IsRecoverableReadOnlyServiceScopeDenial(AgentToolReceipt receipt) =>
+        receipt.Effect == AgentToolReceiptEffect.ReadOnly &&
+        receipt.Status == AgentToolReceiptStatus.Error &&
+        receipt.FailureOutcome == AgentToolFailureOutcome.CalleeConfirmed &&
+        string.Equals(
+            receipt.ErrorCode,
+            "NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN",
+            StringComparison.Ordinal);
 
     private static IReadOnlyList<ConversationHistoryEntry> ReplaceBlockingAssistantNarratives(
         IReadOnlyList<ConversationHistoryEntry> source,

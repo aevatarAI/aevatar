@@ -159,7 +159,7 @@ public sealed class StreamingToolExecutor
         var tracked = new ToolExecutionEntry(
             Operation: operation,
             Tool: tool,
-            IsConcurrencySafe: tool?.IsReadOnly == true && tool.IsDestructive == false);
+            IsConcurrencySafe: ResolveConcurrencySafety(operation, tool));
 
         state.Tools.Add(tracked);
         if (state.Discarded)
@@ -173,6 +173,19 @@ public sealed class StreamingToolExecutor
         }
 
         Advance(state);
+    }
+
+    private static bool ResolveConcurrencySafety(
+        PreparedChatToolOperation operation,
+        IAgentTool? tool)
+    {
+        if (operation.ExecutionContext.OperationAdmission is { } admission)
+        {
+            return AgentToolResolvedInvocationSemantics.FromAdmission(admission).Risk ==
+                   AgentToolOperationRisk.ReadOnly;
+        }
+
+        return tool?.IsReadOnly == true && !tool.IsDestructive;
     }
 
     /// <summary>
@@ -294,7 +307,7 @@ public sealed class StreamingToolExecutor
 
                 tracked.Status = ToolStatus.Completed;
                 tracked.Result = completion.Result;
-                if (completion.Result.IsError || completion.SchedulerFault)
+                if (completion.SchedulerFault || BlocksQueuedExecution(completion.Result))
                     state.HasErrored = true;
             }
 
@@ -349,6 +362,15 @@ public sealed class StreamingToolExecutor
             return true;
 
         return isConcurrencySafe && executing.All(static tracked => tracked.IsConcurrencySafe);
+    }
+
+    private static bool BlocksQueuedExecution(ToolExecutionResult result)
+    {
+        if (!result.IsError)
+            return false;
+
+        return result.Receipt is null ||
+               AgentToolReceiptEffectPolicy.IsMutatingOrLegacyEffectCapable(result.Receipt);
     }
 
     private static void PublishAvailableResults(ExecutionState state)

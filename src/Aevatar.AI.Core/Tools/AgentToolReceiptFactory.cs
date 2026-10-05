@@ -23,7 +23,8 @@ internal static class AgentToolReceiptFactory
         string toolName,
         AgentToolCallSafety callSafety,
         string resultJson,
-        string argumentsJson = "")
+        string argumentsJson = "",
+        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics = null)
     {
         AgentToolReceipt? providerReceipt;
         try
@@ -40,7 +41,16 @@ internal static class AgentToolReceiptFactory
         }
 
         if (providerReceipt is not null)
-            return NormalizeProviderResultReceipt(tool, callId, toolName, callSafety, resultJson, providerReceipt);
+        {
+            return NormalizeProviderResultReceipt(
+                tool,
+                callId,
+                toolName,
+                callSafety,
+                resultJson,
+                providerReceipt,
+                resolvedInvocationSemantics);
+        }
 
         return CreateUnknown(tool, callId, toolName, callSafety);
     }
@@ -52,10 +62,20 @@ internal static class AgentToolReceiptFactory
         AgentToolCallSafety callSafety,
         string resultJson,
         AgentToolReceipt? terminalReceipt,
-        string argumentsJson = "")
+        string argumentsJson = "",
+        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics = null)
     {
         if (terminalReceipt is null)
-            return CreateResult(tool, callId, toolName, callSafety, resultJson, argumentsJson);
+        {
+            return CreateResult(
+                tool,
+                callId,
+                toolName,
+                callSafety,
+                resultJson,
+                argumentsJson,
+                resolvedInvocationSemantics);
+        }
 
         try
         {
@@ -65,7 +85,8 @@ internal static class AgentToolReceiptFactory
                 toolName,
                 callSafety,
                 resultJson,
-                terminalReceipt);
+                terminalReceipt,
+                resolvedInvocationSemantics);
         }
         catch
         {
@@ -222,19 +243,18 @@ internal static class AgentToolReceiptFactory
         string toolName,
         AgentToolCallSafety callSafety,
         string? resultJson,
-        AgentToolReceipt receipt)
+        AgentToolReceipt receipt,
+        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics = null)
     {
         var normalized = receipt.Clone();
         normalized.CallId = callId ?? string.Empty;
         normalized.ToolName = string.IsNullOrWhiteSpace(toolName) ? tool.Name ?? string.Empty : toolName;
         normalized.ApprovalMode = MapApprovalMode(tool.ApprovalMode);
-        normalized.IsDestructive = normalized.IsDestructive || callSafety.IsDestructive;
-        normalized.SideEffectKind = string.IsNullOrWhiteSpace(normalized.SideEffectKind)
-            ? NormalizeSideEffectKind(tool.SideEffectKind)
-            : NormalizeSideEffectKind(normalized.SideEffectKind);
-        normalized.Effect = AgentToolReceiptEffectPolicy.FromCallSafety(
+        ApplyInvocationEffectClassification(
+            normalized,
+            tool,
             callSafety,
-            normalized.SideEffectKind);
+            resolvedInvocationSemantics);
         if (normalized.Status == AgentToolReceiptStatus.Unspecified)
         {
             normalized.ResultJson = UnknownResultJson;
@@ -256,5 +276,34 @@ internal static class AgentToolReceiptFactory
             normalized.ResultJson = resultJson ?? string.Empty;
         }
         return normalized;
+    }
+
+    private static void ApplyInvocationEffectClassification(
+        AgentToolReceipt receipt,
+        IAgentTool tool,
+        AgentToolCallSafety callSafety,
+        AgentToolResolvedInvocationSemantics? resolvedInvocationSemantics)
+    {
+        if (resolvedInvocationSemantics is null)
+        {
+            receipt.IsDestructive = receipt.IsDestructive || callSafety.IsDestructive;
+            receipt.SideEffectKind = string.IsNullOrWhiteSpace(receipt.SideEffectKind)
+                ? NormalizeSideEffectKind(tool.SideEffectKind)
+                : NormalizeSideEffectKind(receipt.SideEffectKind);
+            receipt.Effect = AgentToolReceiptEffectPolicy.FromCallSafety(
+                callSafety,
+                receipt.SideEffectKind);
+            return;
+        }
+
+        var isReadOnly = resolvedInvocationSemantics.Risk == AgentToolOperationRisk.ReadOnly;
+        receipt.IsDestructive =
+            resolvedInvocationSemantics.Risk == AgentToolOperationRisk.Destructive;
+        receipt.SideEffectKind = isReadOnly
+            ? string.Empty
+            : NormalizeSideEffectKind(tool.SideEffectKind);
+        receipt.Effect = isReadOnly
+            ? AgentToolReceiptEffect.ReadOnly
+            : AgentToolReceiptEffect.Mutating;
     }
 }

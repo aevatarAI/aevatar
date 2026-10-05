@@ -851,7 +851,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
             callSafety,
             terminalOutcome.ResultJson,
             terminalOutcome.Receipt,
-            argumentsJson);
+            argumentsJson,
+            terminalOutcome.ResolvedInvocationSemantics);
         var liveResultJson = ResolveLiveResultJson(tool, argumentsJson, terminalOutcome.ResultJson, receipt);
         var outcome = new AgentToolExecutionOutcome(
             AgentToolExecutionOutcomeKind.Executed,
@@ -1246,7 +1247,8 @@ public sealed class AdmittedAgentToolExecutor : IAgentToolExecutionPort
                 callSafety,
                 resultJson,
                 terminalOutcome.Receipt,
-                argumentsJson);
+                argumentsJson,
+                terminalOutcome.ResolvedInvocationSemantics);
             var liveResultJson = ResolveLiveResultJson(tool, argumentsJson, resultJson, receipt);
             outcome = new AgentToolExecutionOutcome(
                 AgentToolExecutionOutcomeKind.Executed,

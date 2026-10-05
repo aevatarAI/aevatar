@@ -241,6 +241,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             SourceReadableNyxIdAccessToken = sourceReadableToken,
         };
         var operationAdmission = ResolveOperationAdmission(argumentsJson);
+        var resolvedInvocationSemantics =
+            AgentToolResolvedInvocationSemantics.FromAdmission(operationAdmission);
         using var scope = AgentToolContextScope.Push(current with
         {
             Credentials = credentials,
@@ -264,9 +266,13 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             toolName,
             argumentsJson,
             outcome.ResultJson);
-        return IsReadOnly
+        var terminalOutcome = IsReadOnly
             ? BuildReadOutcome(callId, toolName, outcome.ResultJson, receipt)
             : BuildEffectOutcome(callId, toolName, receipt);
+        return terminalOutcome with
+        {
+            ResolvedInvocationSemantics = resolvedInvocationSemantics,
+        };
     }
 
     private AgentToolTerminalOutcome BuildReadOutcome(

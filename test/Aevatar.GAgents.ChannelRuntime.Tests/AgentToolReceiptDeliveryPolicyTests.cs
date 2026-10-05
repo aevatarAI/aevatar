@@ -142,6 +142,62 @@ public sealed class AgentToolReceiptDeliveryPolicyTests
     }
 
     [Fact]
+    public void Build_WhenReadOnlyServiceScopeDenialIsCalleeConfirmed_ShouldKeepRecoveryNarrativeOnly()
+    {
+        const string recoveryNarrative =
+            "Send `/init` in this Telegram chat and update Google Workspace authorization.";
+        var receipt = Receipt(
+            "call-google",
+            AgentToolReceiptStatus.Error,
+            AgentToolReceiptEffect.ReadOnly,
+            toolName: "nyxid_invoke_operation");
+        receipt.ErrorCode = "NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN";
+        receipt.ErrorMessage = "The NyxID caller credential is not authorized for this service.";
+        receipt.FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed;
+
+        var delivery = AgentToolReceiptDeliveryPolicy.Build(
+            recoveryNarrative,
+            outboundIntent: null,
+            appendedHistory: [],
+            receipts: [receipt],
+            toolCalls: [],
+            new AgentToolReceiptRenderer());
+
+        delivery.ReplyText.Should().Be(recoveryNarrative);
+        delivery.ReplyText.Should().NotContain("[tool receipt]");
+        delivery.AppendedHistory.Should().ContainSingle();
+        delivery.AppendedHistory[0].Content.Should().Be(recoveryNarrative);
+    }
+
+    [Fact]
+    public void Build_WhenMutatingServiceScopeDenialIsCalleeConfirmed_ShouldReplaceRecoveryNarrative()
+    {
+        const string recoveryNarrative =
+            "Send `/init` in this Telegram chat and update Google Workspace authorization.";
+        var receipt = Receipt(
+            "call-google",
+            AgentToolReceiptStatus.Error,
+            AgentToolReceiptEffect.Mutating,
+            toolName: "nyxid_invoke_operation");
+        receipt.ErrorCode = "NYXID_PROXY_SERVICE_SCOPE_FORBIDDEN";
+        receipt.ErrorMessage = "The NyxID caller credential is not authorized for this service.";
+        receipt.FailureOutcome = AgentToolFailureOutcome.CalleeConfirmed;
+
+        var delivery = AgentToolReceiptDeliveryPolicy.Build(
+            recoveryNarrative,
+            outboundIntent: null,
+            appendedHistory: [],
+            receipts: [receipt],
+            toolCalls: [],
+            new AgentToolReceiptRenderer());
+
+        delivery.ReplyText.Should().NotContain(recoveryNarrative);
+        delivery.ReplyText.Should().StartWith("[tool receipt] Failed: nyxid_invoke_operation");
+        delivery.AppendedHistory.Should().ContainSingle();
+        delivery.AppendedHistory[0].Content.Should().Be(delivery.ReplyText);
+    }
+
+    [Fact]
     public void Build_WhenSameCallHasLaterSuccess_ShouldUseTerminalSuccessAndKeepNarrative()
     {
         var delivery = AgentToolReceiptDeliveryPolicy.Build(

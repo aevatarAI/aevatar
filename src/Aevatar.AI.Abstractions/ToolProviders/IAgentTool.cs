@@ -9,9 +9,53 @@ public sealed record AgentToolCallSafety(
     bool IsReadOnly,
     bool IsDestructive);
 
+public sealed record AgentToolResolvedInvocationSemantics
+{
+    private AgentToolResolvedInvocationSemantics(
+        AgentToolOperationRisk risk,
+        string httpMethod,
+        string operationSelectorDigest)
+    {
+        Risk = risk;
+        HttpMethod = httpMethod;
+        OperationSelectorDigest = operationSelectorDigest;
+    }
+
+    public AgentToolOperationRisk Risk { get; }
+    public string HttpMethod { get; }
+    public string OperationSelectorDigest { get; }
+
+    public static AgentToolResolvedInvocationSemantics FromAdmission(
+        AgentToolOperationAdmission admission)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+        ArgumentNullException.ThrowIfNull(admission.ExecutionPolicy);
+
+        var risk = admission.ExecutionPolicy.Risk;
+        var methodMatchesRisk = risk switch
+        {
+            AgentToolOperationRisk.ReadOnly => admission.HttpMethod is "GET" or "HEAD" or "OPTIONS",
+            AgentToolOperationRisk.Write => admission.HttpMethod is "POST" or "PUT" or "PATCH",
+            AgentToolOperationRisk.Destructive => admission.HttpMethod == "DELETE",
+            _ => false,
+        };
+        if (!methodMatchesRisk)
+        {
+            throw new InvalidOperationException(
+                "Resolved invocation semantics require a canonical HTTP method that matches the admitted operation risk.");
+        }
+
+        return new AgentToolResolvedInvocationSemantics(
+            risk,
+            admission.HttpMethod,
+            AgentToolOperationSelector.ComputeDigest(admission));
+    }
+}
+
 public sealed record AgentToolTerminalOutcome(
     string ResultJson,
-    AgentToolReceipt? Receipt = null);
+    AgentToolReceipt? Receipt = null,
+    AgentToolResolvedInvocationSemantics? ResolvedInvocationSemantics = null);
 
 public interface IAgentToolLiveResultMapper
 {
