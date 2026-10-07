@@ -9,6 +9,9 @@ namespace Aevatar.GAgents.NyxidChat;
 
 internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
 {
+    private static readonly IReadOnlyDictionary<string, string> EmptyMetadata =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
     private readonly ILogger<ChannelContextMiddleware> _logger;
 
     public ChannelContextMiddleware(ILogger<ChannelContextMiddleware> logger)
@@ -24,15 +27,7 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
 
     private void TryInjectChannelContext(LLMCallContext context)
     {
-        var metadata = context.Request.Metadata;
-        if (metadata is null || metadata.Count == 0)
-            return;
-
-        if (!metadata.TryGetValue(ChannelMetadataKeys.Platform, out var platform) ||
-            string.IsNullOrWhiteSpace(platform))
-        {
-            return;
-        }
+        var metadata = context.Request.Metadata ?? EmptyMetadata;
 
         var messages = context.Request.Messages;
         if (messages is null || messages.Count == 0)
@@ -51,7 +46,7 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
         {
             var channelContext = BuildChannelContextSection(
                 metadata,
-                context.Request.ToolContext?.Channel.IdentityHints);
+                context.Request.ToolContext?.Channel);
             if (string.IsNullOrWhiteSpace(channelContext))
                 return;
 
@@ -77,17 +72,30 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
 
     internal static string BuildChannelContextSection(
         IReadOnlyDictionary<string, string> metadata,
-        IReadOnlyList<AgentToolChannelIdentityHint>? identityHints = null)
+        AgentToolChannelContext? channel = null)
     {
-        if (metadata.Count == 0 ||
-            !metadata.TryGetValue(ChannelMetadataKeys.Platform, out var platform) ||
-            string.IsNullOrWhiteSpace(platform))
-        {
+        var platform = ResolveIdentity(channel?.Platform, metadata, ChannelMetadataKeys.Platform);
+        if (platform is null)
             return string.Empty;
-        }
 
-        static string Resolve(IReadOnlyDictionary<string, string> values, string key) =>
-            values.TryGetValue(key, out var value) ? JsonSerializer.Serialize(value ?? string.Empty) : "\"\"";
+        static string? Normalize(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+        static string? ResolveIdentity(
+            string? typedValue,
+            IReadOnlyDictionary<string, string> values,
+            string key) =>
+            // Typed runtime identity is authoritative. Metadata is retained only for legacy
+            // direct-reply callers; AgentRun strips these owned keys before prompt construction.
+            Normalize(typedValue) ??
+            (values.TryGetValue(key, out var value) ? Normalize(value) : null);
+
+        static string ResolveDisplay(IReadOnlyDictionary<string, string> values, string key) =>
+            values.TryGetValue(key, out var value)
+                ? JsonSerializer.Serialize(value ?? string.Empty)
+                : "\"\"";
+
+        static string Render(string? value) => JsonSerializer.Serialize(value ?? string.Empty);
 
         static IEnumerable<string> BuildIdentityHintLines(IReadOnlyList<AgentToolChannelIdentityHint>? hints)
         {
@@ -111,10 +119,15 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
         var lines = new List<string>
         {
             "<channel-context>",
-            $"platform: {Resolve(metadata, ChannelMetadataKeys.Platform)}",
-            $"chat_type: {Resolve(metadata, ChannelMetadataKeys.ChatType)}",
-            $"sender_id: {Resolve(metadata, ChannelMetadataKeys.SenderId)}",
-            $"sender_name: {Resolve(metadata, ChannelMetadataKeys.SenderName)}",
+            $"platform: {Render(platform)}",
+            $"chat_type: {ResolveDisplay(metadata, ChannelMetadataKeys.ChatType)}",
+            $"sender_id: {Render(ResolveIdentity(channel?.SenderId, metadata, ChannelMetadataKeys.SenderId))}",
+            $"sender_name: {ResolveDisplay(metadata, ChannelMetadataKeys.SenderName)}",
+            $"registration_scope_id: {Render(ResolveIdentity(
+                channel?.RegistrationScopeId,
+                metadata,
+                ChannelMetadataKeys.RegistrationScopeId))}",
+            $"bot_registration_id: {Render(Normalize(channel?.BotRegistrationId))}",
         };
 
         // Only emit the mentions line when the message actually mentioned someone, so turns with no
@@ -127,10 +140,16 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
             lines.Add($"mentions: {mentions}");
         }
 
-        lines.Add($"conversation_id: {Resolve(metadata, ChannelMetadataKeys.ConversationId)}");
-        lines.Add($"platform_message_id: {Resolve(metadata, ChannelMetadataKeys.PlatformMessageId)}");
+        lines.Add($"conversation_id: {ResolveDisplay(metadata, ChannelMetadataKeys.ConversationId)}");
+        lines.Add(
+            $"message_id: {Render(ResolveIdentity(channel?.MessageId, metadata, ChannelMetadataKeys.MessageId))}");
+        lines.Add(
+            $"platform_message_id: {Render(ResolveIdentity(
+                channel?.PlatformMessageId,
+                metadata,
+                ChannelMetadataKeys.PlatformMessageId))}");
 
-        var identityHintLines = BuildIdentityHintLines(identityHints).ToList();
+        var identityHintLines = BuildIdentityHintLines(channel?.IdentityHints).ToList();
         if (identityHintLines.Count > 0)
         {
             lines.Add("identity_hints:");

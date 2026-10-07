@@ -2268,6 +2268,57 @@ public sealed class ConversationReplyGeneratorTests
             .Should().Contain("per-step context-aware");
     }
 
+    [Fact]
+    public async Task BuildStepPlanAsync_WithStrippedMetadata_RendersTypedChannelRuntimeIdentity()
+    {
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory(),
+            BuiltInPromptFloorProvider);
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                "telegram",
+                "sender-runtime-1",
+                "registration-scope-runtime-1",
+                "message-runtime-1",
+                "platform-message-runtime-1",
+                BotRegistrationId: "bot-registration-runtime-1"),
+        };
+
+        var plan = await generator.BuildStepPlanAsync(
+            new ChatActivity
+            {
+                Id = "message-runtime-1",
+                ChannelId = ChannelId.From("telegram"),
+                Conversation = new ConversationReference { CanonicalKey = "telegram:dm:sender-runtime-1" },
+                Content = new MessageContent { Text = "book a table" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.ChatType] = "private",
+                [ChannelMetadataKeys.SenderName] = "Runtime Sender",
+                [ChannelMetadataKeys.ConversationId] = "conversation-runtime-1",
+            },
+            llmControl: null,
+            toolContext,
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        var systemPrompt = plan.InitialMessages.First(message => message.Role == "system").Content;
+        systemPrompt.Should().Contain("<channel-context>");
+        systemPrompt.Should().Contain("platform: \"telegram\"");
+        systemPrompt.Should().Contain("sender_id: \"sender-runtime-1\"");
+        systemPrompt.Should().Contain("registration_scope_id: \"registration-scope-runtime-1\"");
+        systemPrompt.Should().Contain("bot_registration_id: \"bot-registration-runtime-1\"");
+        systemPrompt.Should().Contain("message_id: \"message-runtime-1\"");
+        systemPrompt.Should().Contain("platform_message_id: \"platform-message-runtime-1\"");
+        systemPrompt.Should().Contain("chat_type: \"private\"");
+        systemPrompt.Should().Contain("sender_name: \"Runtime Sender\"");
+        systemPrompt.Should().Contain("conversation_id: \"conversation-runtime-1\"");
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

@@ -2548,7 +2548,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions));
         var channelContext = ChannelContextMiddleware.BuildChannelContextSection(
             metadata,
-            toolContext.Channel.IdentityHints);
+            toolContext.Channel);
         AppendRuntimeFact(runtimeFacts, channelContext);
 
         if (_localSkillCatalog is not null && _localSkillCatalog.Count > 0)

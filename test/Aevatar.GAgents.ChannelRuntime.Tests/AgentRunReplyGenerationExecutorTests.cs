@@ -744,6 +744,34 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task ChannelRuntimeCatalog_WhenInstructionsAreEmpty_ShouldStillExposeRegistrationProof()
+    {
+        var materializer = new ChannelRuntimeToolCatalogMaterializer(new RecordingToolSetRegistry());
+        var runtimeConfig = new ChannelRuntimeConfigProof
+        {
+            RegistrationId = "bot-reg-proof-1",
+            ConfigRevision = 11,
+            ConfigDigest = "sha256:config-proof-1",
+            DefaultSkillName = "testmerchant-52025970-merchant-assistant",
+            DefaultSkillVersion = "1.0",
+            RegistrationOwnerScopeId = "owner-scope-proof-1",
+        };
+
+        var catalog = await materializer.MaterializeAsync(
+            runtimeConfig,
+            [],
+            AgentToolExecutionContext.Empty,
+            CancellationToken.None);
+
+        catalog.ProfilePromptLayer.Should().NotBeNull();
+        catalog.ProfilePromptLayer!.Content.Should().Contain("Channel registration: bot-reg-proof-1");
+        catalog.ProfilePromptLayer.Content.Should().Contain("Registration owner scope: owner-scope-proof-1");
+        catalog.ProfilePromptLayer.Content.Should()
+            .Contain("Default skill: testmerchant-52025970-merchant-assistant@1.0");
+        catalog.ProfilePromptLayer.Content.Should().NotContain("Instructions:");
+    }
+
+    [Fact]
     public async Task ChannelRuntimeCatalog_WhenExplicitRegistrationHasNoRuntimeSelectors_ShouldNotExposeConnectedOperations()
     {
         var routeTool = new CountingTool("route_tool");

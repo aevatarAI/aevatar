@@ -124,6 +124,9 @@ message ChannelRuntimeConfigProof {
   aevatar.ai.AgentTurnToolCatalogProofPayload exposed_tool_catalog = 11;
   string instructions = 12;
   ChannelRegistrationAuthorizationMode authorization_mode = 13;
+  // NyxID owner scope that owns the channel-bot registration. This is a
+  // stable identity fact only; credentials and binding identifiers stay out.
+  string registration_owner_scope_id = 14;
 }
 
 // Domain events for ChannelBotRegistrationGAgent

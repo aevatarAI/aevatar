@@ -136,7 +136,8 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
             ("credential_source_mode", 10),
             ("exposed_tool_catalog", 11),
             ("instructions", 12),
-            ("authorization_mode", 13));
+            ("authorization_mode", 13),
+            ("registration_owner_scope_id", 14));
         ChannelRuntimeConfigProof.Descriptor.FindFieldByName("agent_key_grant")
             .Should().BeNull();
 
@@ -152,6 +153,20 @@ public sealed class ChannelBotRegistrationProtoCompatibilityTests
         roundTripped.AllowAllServices.Should().BeFalse();
         roundTripped.HasAllowAllNodes.Should().BeTrue();
         roundTripped.AllowAllNodes.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ChannelRuntimeConfigProofBuilder_ShouldCarryRegistrationOwnerScope()
+    {
+        var registration = new ChannelBotRegistrationEntry
+        {
+            Id = "reg-1",
+            NyxChannelBotOwnerScopeId = "owner-scope-1",
+        };
+
+        var proof = ChannelRuntimeConfigProofBuilder.Build(registration, configRevision: 7);
+
+        proof.RegistrationOwnerScopeId.Should().Be("owner-scope-1");
     }
 
     [Fact]

@@ -24,6 +24,7 @@ public static class ChannelRuntimeConfigProofBuilder
             DefaultSkillVersion = config.DefaultSkill?.Version ?? string.Empty,
             CredentialSourceMode = config.CredentialSourceMode,
             AuthorizationMode = registration.AuthorizationMode,
+            RegistrationOwnerScopeId = registration.NyxChannelBotOwnerScopeId ?? string.Empty,
         };
         proof.ToolSetRefs.AddRange(config.ToolSetRefs);
         proof.ExtraToolNames.AddRange(config.ExtraToolNames);

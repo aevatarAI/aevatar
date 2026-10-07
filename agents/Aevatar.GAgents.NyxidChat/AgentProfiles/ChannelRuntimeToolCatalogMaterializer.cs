@@ -120,16 +120,15 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
             AgentTurnToolCatalogBudget.ChannelReply);
     }
 
-    private static ProfileRoutingPromptLayer? BuildPromptLayer(ChannelRuntimeConfigProof runtimeConfig)
+    private static ProfileRoutingPromptLayer BuildPromptLayer(ChannelRuntimeConfigProof runtimeConfig)
     {
         var instructions = Normalize(runtimeConfig.Instructions);
-        if (instructions is null)
-            return null;
-
         var builder = new StringBuilder()
             .Append("Channel registration: ").Append(runtimeConfig.RegistrationId)
             .Append("\nConfig revision: ").Append(runtimeConfig.ConfigRevision)
             .Append("\nConfig digest: ").Append(runtimeConfig.ConfigDigest);
+        if (!string.IsNullOrWhiteSpace(runtimeConfig.RegistrationOwnerScopeId))
+            builder.Append("\nRegistration owner scope: ").Append(runtimeConfig.RegistrationOwnerScopeId);
         if (!string.IsNullOrWhiteSpace(runtimeConfig.DefaultSkillName))
         {
             builder.Append("\nDefault skill: ").Append(runtimeConfig.DefaultSkillName);
@@ -137,7 +136,8 @@ public sealed class ChannelRuntimeToolCatalogMaterializer : IChannelRuntimeToolC
                 builder.Append('@').Append(runtimeConfig.DefaultSkillVersion);
         }
 
-        builder.Append("\nInstructions:\n").Append(instructions);
+        if (instructions is not null)
+            builder.Append("\nInstructions:\n").Append(instructions);
         return new ProfileRoutingPromptLayer(
             builder.ToString(),
             new ProfileRoutingPromptProvenance(
