@@ -86,10 +86,11 @@ internal static class NyxIdConnectedServiceExposurePolicy
 
 internal sealed class NyxIdConnectedServiceOperationTool :
     IAgentTool,
-    IAgentToolOperationAdmissionOwner
+    IAgentToolOperationAdmissionOwner,
+    IAgentToolLiveResultMapper
 {
-    private const int DefaultMaxReadSourceBytes = 256 * 1024;
-    private const int DefaultMaxReadProjectionBytes = 256 * 1024;
+    private const int DefaultMaxSourceBytes = 256 * 1024;
+    private const int DefaultMaxProjectionBytes = 256 * 1024;
     private const int MaxSafeLabelLength = 80;
     private const string ProxyResponseTooLargeErrorCode = "NYXID_PROXY_RESPONSE_TOO_LARGE";
     private const string ReadTooLargeErrorCode = "NYXID_CONNECTED_SERVICE_READ_TOO_LARGE";
@@ -98,6 +99,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         "Retry with a narrower query or smaller page size and paginate across bounded reads.";
     private const string ReadProjectionKind = "connected_service_read_projection";
     private const string EffectReceiptKind = "connected_service_effect_receipt";
+    private const string EffectResultKind = "connected_service_effect_result";
+    private const string EffectResultOmissionReason = "response_too_large";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -109,8 +112,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     private readonly string _operationLabel;
     private readonly NyxIdServiceAccessTokenSource _accessTokenSource;
     private readonly NyxIdConnectedServiceReadBackPlan? _readBackPlan;
-    private readonly int _maxReadSourceBytes;
-    private readonly int _maxReadProjectionBytes;
+    private readonly int _maxSourceBytes;
+    private readonly int _maxProjectionBytes;
 
     public NyxIdConnectedServiceOperationTool(
         NyxIdProxyTool proxy,
@@ -121,8 +124,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         string? readinessCapabilityId,
         NyxIdServiceAccessTokenSource accessTokenSource,
         NyxIdConnectedServiceReadBackPlan? readBackPlan = null,
-        int maxReadSourceBytes = DefaultMaxReadSourceBytes,
-        int maxReadProjectionBytes = DefaultMaxReadProjectionBytes)
+        int maxSourceBytes = DefaultMaxSourceBytes,
+        int maxProjectionBytes = DefaultMaxProjectionBytes)
     {
         _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
         OperationAdmission = admission ?? throw new ArgumentNullException(nameof(admission));
@@ -134,8 +137,8 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         _operationLabel = NormalizeModelLabel(operationLabel, "Operation", selectorSecrets);
         _accessTokenSource = accessTokenSource;
         _readBackPlan = readBackPlan;
-        _maxReadSourceBytes = maxReadSourceBytes;
-        _maxReadProjectionBytes = maxReadProjectionBytes;
+        _maxSourceBytes = maxSourceBytes;
+        _maxProjectionBytes = maxProjectionBytes;
         Name = BuildOpaqueName(admission);
         ParametersSchema = NyxIdConnectedServiceOperationSchema.Build(admission);
         Presentation = BuildPresentation(
@@ -223,6 +226,12 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         (await ExecuteWithOutcomeAsync(string.Empty, Name, argumentsJson, ct)).ResultJson;
 
+    public string? ResolveLiveResultJson(
+        string argumentsJson,
+        string terminalResultJson,
+        AgentToolReceipt receipt) =>
+        receipt.Status == AgentToolReceiptStatus.Success ? terminalResultJson : null;
+
     public async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeAsync(
         string callId,
         string toolName,
@@ -254,7 +263,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
                 callId,
                 toolName,
                 argumentsJson,
-                _maxReadSourceBytes,
+                _maxSourceBytes,
                 ct)
             : await _proxy.ExecuteAdmittedEffectWithOutcomeAsync(
                 callId,
@@ -268,7 +277,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             outcome.ResultJson);
         var terminalOutcome = IsReadOnly
             ? BuildReadOutcome(callId, toolName, outcome.ResultJson, receipt)
-            : BuildEffectOutcome(callId, toolName, receipt);
+            : BuildEffectOutcome(callId, toolName, outcome.ResultJson, receipt);
         return terminalOutcome with
         {
             ResolvedInvocationSemantics = resolvedInvocationSemantics,
@@ -282,7 +291,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         AgentToolReceipt? sourceReceipt)
     {
         var sourceBytes = Encoding.UTF8.GetByteCount(sourceResult ?? string.Empty);
-        if (sourceBytes > _maxReadSourceBytes ||
+        if (sourceBytes > _maxSourceBytes ||
             string.Equals(
                 sourceReceipt?.ErrorCode,
                 ProxyResponseTooLargeErrorCode,
@@ -320,7 +329,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
         }
 
         var projection = BuildReadProjection("succeeded", data, null, null);
-        if (Encoding.UTF8.GetByteCount(projection) > _maxReadProjectionBytes)
+        if (Encoding.UTF8.GetByteCount(projection) > _maxProjectionBytes)
             return BuildReadTooLargeOutcome(callId, toolName);
 
         var successReceipt = sourceReceipt.Clone();
@@ -353,7 +362,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             ReadTooLargeErrorCode,
             ReadTooLargeErrorMessage,
             BuildReadRetryHints(includeQueryParameters: true));
-        if (Encoding.UTF8.GetByteCount(result) <= _maxReadProjectionBytes)
+        if (Encoding.UTF8.GetByteCount(result) <= _maxProjectionBytes)
             return result;
 
         result = BuildReadProjection(
@@ -362,7 +371,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             ReadTooLargeErrorCode,
             ReadTooLargeErrorMessage,
             BuildReadRetryHints(includeQueryParameters: false));
-        return Encoding.UTF8.GetByteCount(result) <= _maxReadProjectionBytes
+        return Encoding.UTF8.GetByteCount(result) <= _maxProjectionBytes
             ? result
             : BuildReadProjection(
                 "retry_required",
@@ -374,6 +383,7 @@ internal sealed class NyxIdConnectedServiceOperationTool :
     private AgentToolTerminalOutcome BuildEffectOutcome(
         string callId,
         string toolName,
+        string sourceResult,
         AgentToolReceipt? sourceReceipt)
     {
         var receipt = sourceReceipt?.Clone() ?? NyxIdProxyReceiptFactory.CreateError(
@@ -384,9 +394,9 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             "The connected-service effect result could not be verified.",
             string.Empty);
         if (receipt.Status == AgentToolReceiptStatus.Success)
-            receipt.ProviderResourceId = _readBackPlan?.ExtractProviderResourceId(receipt.ResultJson) ?? string.Empty;
+            receipt.ProviderResourceId = _readBackPlan?.ExtractProviderResourceId(sourceResult) ?? string.Empty;
 
-        var result = new JsonObject
+        var durableResult = new JsonObject
         {
             ["kind"] = EffectReceiptKind,
             ["status"] = receipt.Status.ToString().ToLowerInvariant(),
@@ -397,9 +407,44 @@ internal sealed class NyxIdConnectedServiceOperationTool :
             ["error_code"] = SafeCode(receipt.ErrorCode),
             ["error_message"] = SafeMessage(receipt.ErrorMessage),
         }.ToJsonString(JsonOptions);
-        receipt.ResultJson = result;
-        return new AgentToolTerminalOutcome(result, receipt);
+        receipt.ResultJson = durableResult;
+        return receipt.Status == AgentToolReceiptStatus.Success
+            ? new AgentToolTerminalOutcome(BuildLiveEffectResult(sourceResult), receipt)
+            : new AgentToolTerminalOutcome(durableResult, receipt);
     }
+
+    private string BuildLiveEffectResult(string sourceResult)
+    {
+        if (Encoding.UTF8.GetByteCount(sourceResult ?? string.Empty) > _maxSourceBytes)
+            return BuildEffectResultProjection(data: null, resultOmitted: true);
+
+        JsonNode? data;
+        try
+        {
+            data = JsonNode.Parse(sourceResult ?? string.Empty);
+        }
+        catch (JsonException)
+        {
+            data = JsonValue.Create(sourceResult);
+        }
+
+        var projection = BuildEffectResultProjection(data, resultOmitted: false);
+        return Encoding.UTF8.GetByteCount(projection) <= _maxProjectionBytes
+            ? projection
+            : BuildEffectResultProjection(data: null, resultOmitted: true);
+    }
+
+    private string BuildEffectResultProjection(JsonNode? data, bool resultOmitted) => new JsonObject
+    {
+        ["kind"] = EffectResultKind,
+        ["status"] = "succeeded",
+        ["provenance"] = BuildProvenance(),
+        ["content_boundary"] = "untrusted_external_data_only",
+        ["instructions_allowed"] = false,
+        ["data"] = data?.DeepClone(),
+        ["result_omitted"] = resultOmitted,
+        ["result_omission_reason"] = resultOmitted ? EffectResultOmissionReason : null,
+    }.ToJsonString(JsonOptions);
 
     private string BuildReadProjection(
         string status,

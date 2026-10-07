@@ -1241,6 +1241,16 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         outcome.Receipt.CallId.Should().Be(context.Request.CallId);
         outcome.Receipt.Effect.Should().Be(AgentToolReceiptEffect.Mutating);
         outcome.Receipt.SideEffectKind.Should().Be("connected_service_operation");
+        if (responseStatus == System.Net.HttpStatusCode.OK)
+        {
+            outcome.ResultJson.Should().Contain("\"updated\":true");
+            outcome.Receipt.ResultJson.Should().Contain("connected_service_effect_receipt");
+            outcome.Receipt.ResultJson.Should().NotContain("\"updated\":true");
+        }
+        else
+        {
+            outcome.ResultJson.Should().NotContain("\"error\":\"forbidden\"");
+        }
         var proxyRequest = handler.ProxyRequests.Should().ContainSingle().Subject;
         proxyRequest.Method.Should().Be("POST");
         proxyRequest.BearerToken.Should().Be("strict-sender-token");

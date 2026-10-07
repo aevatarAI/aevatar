@@ -1289,14 +1289,14 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
-    public async Task DynamicEffect_ProducesTypedReceiptWithoutRawProviderBody()
+    public async Task DynamicEffect_ExposesProviderResultAsLiveDataAndKeepsReceiptSafe()
     {
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["user-token"] = Keys(Instance("usvc-alpha", "api-shop", "svc-shop"));
         handler.McpConfigByToken["user-token"] = McpCatalog(
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             McpService("usvc-alpha", "api-shop", EffectEndpoint("endpoint-create")));
-        handler.ProxyResponseBody = """{"provider_secret":"must-not-propagate"}""";
+        handler.ProxyResponseBody = """{"id":"resource-alpha","status":"confirmed"}""";
         var source = CreateSource(handler, enableEffects: true);
 
         using var scope = PushContext("user-token");
@@ -1310,11 +1310,52 @@ public class NyxIdConnectedServiceToolSourceTests
 
         using var result = JsonDocument.Parse(outcome.ResultJson);
         result.RootElement.GetProperty("kind").GetString()
-            .Should().Be("connected_service_effect_receipt");
-        outcome.ResultJson.Should().NotContain("provider_secret").And.NotContain("must-not-propagate");
+            .Should().Be("connected_service_effect_result");
+        result.RootElement.GetProperty("status").GetString().Should().Be("succeeded");
+        result.RootElement.GetProperty("data").GetProperty("id").GetString()
+            .Should().Be("resource-alpha");
+        result.RootElement.GetProperty("content_boundary").GetString()
+            .Should().Be("untrusted_external_data_only");
+        result.RootElement.GetProperty("instructions_allowed").GetBoolean().Should().BeFalse();
         outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
         outcome.Receipt.SubjectId.Should().Be("usvc-alpha");
-        outcome.Receipt.ResultJson.Should().Be(outcome.ResultJson);
+        outcome.Receipt.ResultJson.Should().Contain("connected_service_effect_receipt");
+        outcome.Receipt.ResultJson.Should().NotContain("resource-alpha");
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DynamicEffect_ProviderResultOverLimit_PreservesSuccessAndOmitsLiveData()
+    {
+        const string marker = "provider-result-must-not-propagate";
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(Instance("usvc-alpha", "api-shop", "svc-shop"));
+        handler.McpConfigByToken["user-token"] = McpCatalog(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            McpService("usvc-alpha", "api-shop", EffectEndpoint("endpoint-create")));
+        handler.ProxyResponseBody = JsonSerializer.Serialize(
+            new string('x', ConnectedServiceReadBudgetBytes) + marker);
+        var source = CreateSource(handler, enableEffects: true);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+        var outcome = await tool.ExecuteWithOutcomeAsync(
+            "call-effect",
+            tool.Name,
+            """{"body":{"name":"order-alpha"}}""");
+
+        using var result = JsonDocument.Parse(outcome.ResultJson);
+        result.RootElement.GetProperty("kind").GetString()
+            .Should().Be("connected_service_effect_result");
+        result.RootElement.GetProperty("status").GetString().Should().Be("succeeded");
+        result.RootElement.GetProperty("data").ValueKind.Should().Be(JsonValueKind.Null);
+        result.RootElement.GetProperty("result_omitted").GetBoolean().Should().BeTrue();
+        result.RootElement.GetProperty("result_omission_reason").GetString()
+            .Should().Be("response_too_large");
+        outcome.ResultJson.Should().NotContain(marker);
+        outcome.Receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        outcome.Receipt.ResultJson.Should().Contain("connected_service_effect_receipt");
+        outcome.Receipt.ResultJson.Should().NotContain(marker);
         handler.ProxyRequests.Should().ContainSingle();
     }
 
@@ -1664,8 +1705,10 @@ public class NyxIdConnectedServiceToolSourceTests
             effect.Name,
             """{"query":{"receive_id_type":"chat_id"},"body":{"receive_id":"oc_alpha","msg_type":"text","content":"{\"text\":\"m40-alpha\"}"}}""");
         outcome.Receipt!.ProviderResourceId.Should().Be("om_provider_alpha");
-        outcome.ResultJson.Should().NotContain("om_provider_alpha",
-            "the provider identity is durable receipt evidence, not model-visible result content");
+        outcome.ResultJson.Should().Contain("om_provider_alpha",
+            "the successful provider result is model-visible live data");
+        outcome.Receipt.ResultJson.Should().NotContain("om_provider_alpha",
+            "the durable receipt keeps only typed provider identity evidence");
 
         owner.ResolveOperationAdmission(
                 """{"query":{"receive_id_type":"open_id"},"body":{"receive_id":"ou_alpha","msg_type":"text","content":"{\"text\":\"m40-alpha\"}"}}""")
@@ -1790,7 +1833,8 @@ public class NyxIdConnectedServiceToolSourceTests
         effectOutcome.Kind.Should().Be(AgentToolExecutionOutcomeKind.Executed);
         effectOutcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
         effectOutcome.Receipt.ProviderResourceId.Should().Be("om_provider_alpha");
-        effectOutcome.ResultJson.Should().NotContain("om_provider_alpha");
+        effectOutcome.ResultJson.Should().Contain("om_provider_alpha");
+        effectOutcome.Receipt.ResultJson.Should().NotContain("om_provider_alpha");
 
         var afterEffect = NyxIdChatTaskLifecycle.ApplyOperationResult(
             planned.State,

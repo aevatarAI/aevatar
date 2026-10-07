@@ -49,7 +49,7 @@ public sealed record NyxIdConnectedServiceOperationInvokeResult(
 public sealed class NyxIdConnectedServiceOperationInvoker
 {
     private static readonly TimeSpan CatalogFreshnessWindow = TimeSpan.FromMinutes(5);
-    private const int MaxReadSourceBytes = 16 * 1024;
+    private const int MaxSourceBytes = 16 * 1024;
 
     private readonly NyxIdToolOptions _options;
     private readonly NyxIdApiClient _apiClient;
@@ -331,8 +331,8 @@ public sealed class NyxIdConnectedServiceOperationInvoker
             readinessCapabilityId: null,
             accessTokenSource: binding.Instance.AccessTokenSource,
             readBackPlan: readBackPlan,
-            maxReadSourceBytes: MaxReadSourceBytes,
-            maxReadProjectionBytes: MaxReadSourceBytes);
+            maxSourceBytes: MaxSourceBytes,
+            maxProjectionBytes: MaxSourceBytes);
         var outcome = await operationTool.ExecuteWithOutcomeAsync(
                 callId,
                 toolName,

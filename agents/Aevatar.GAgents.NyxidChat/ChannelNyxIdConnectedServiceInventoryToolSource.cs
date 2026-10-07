@@ -1866,7 +1866,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         NyxIdServiceInventoryResult Inventory,
         IReadOnlyList<NyxIdCreatedRecommendedSkill> CreatedSkills);
 
-    private sealed class SenderConnectedServiceOperationTool(ChannelNyxIdConnectedServiceInventoryToolSource source) : IAgentTool
+    private sealed class SenderConnectedServiceOperationTool(ChannelNyxIdConnectedServiceInventoryToolSource source) :
+        IAgentTool,
+        IAgentToolLiveResultMapper
     {
         private const string Schema =
             """
@@ -1952,6 +1954,12 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
 
             return null;
         }
+
+        public string? ResolveLiveResultJson(
+            string argumentsJson,
+            string terminalResultJson,
+            AgentToolReceipt receipt) =>
+            receipt.Status == AgentToolReceiptStatus.Success ? terminalResultJson : null;
 
         public async Task<AgentToolTerminalOutcome> ExecuteWithOutcomeAsync(
             string callId,
