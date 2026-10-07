@@ -1258,6 +1258,56 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         handler.ExecutionContext.Request.CallId.Should().Be($"{context.Request.CallId}:connected-operation");
     }
 
+    [Fact]
+    public async Task InvokeOperationAsync_WriteResultLargerThanReadLimit_PreservesProviderOutcome()
+    {
+        const string documentId = "google-doc-1";
+        var providerResponse = JsonSerializer.Serialize(new
+        {
+            documentId,
+            namedStyles = new string('s', 20 * 1024),
+        });
+        var handler = new InventoryHandler
+        {
+            KeysResponse = KeysWithGoogleWorkspace(),
+            McpConfigResponse = GoogleWorkspaceMcpConfig()
+                .Replace("readDiningProfileContext", "createDocument", StringComparison.Ordinal)
+                .Replace("\"method\": \"GET\"", """
+                    "method": "POST",
+                    "execution_policy": {
+                      "risk": "write", "approval": "required", "enforcement_owner": "aevatar",
+                      "allowed_execution_modes": ["interactive"]
+                    }
+                    """, StringComparison.Ordinal),
+            ProxyResponseBody = providerResponse,
+        };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test", EnableAssistantConnectedServiceEffects = true };
+        var executionPort = CreateAdmittedExecutionPort([]);
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            executionPort,
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            CreateSenderCapabilityIssuer());
+        var context = CreateSenderBindingContext();
+        using var scope = AgentToolContextScope.Push(context);
+        var tool = OperationTool(await source.DiscoverToolsAsync());
+
+        var outcome = await executionPort.ExecuteAsync(new AgentToolExecutionRequest(
+            tool,
+            """{"user_service_id":"user-service-1","operation_id":"createDocument","operation_arguments":{}}""",
+            context,
+            AgentToolApprovalContinuationMode.ActorOwned,
+            ApprovalGrant: null));
+
+        outcome.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success, outcome.ResultJson);
+        outcome.ResultJson.Should().Contain("\"kind\":\"connected_service_effect_result\"");
+        outcome.ResultJson.Should().Contain($"\"documentId\":\"{documentId}\"");
+        outcome.ResultJson.Should().Contain("\"result_omitted\":false");
+        outcome.Receipt.ResultJson.Should().Contain("connected_service_effect_receipt");
+        outcome.Receipt.ResultJson.Should().NotContain(documentId);
+        outcome.Receipt.ResultJson.Should().NotContain("namedStyles");
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
