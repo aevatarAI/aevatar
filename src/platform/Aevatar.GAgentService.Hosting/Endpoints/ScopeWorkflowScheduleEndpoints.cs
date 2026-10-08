@@ -128,6 +128,25 @@ internal static class ScopeWorkflowScheduleEndpoints
             return result;
         }
 
+        var existing = await schedules.GetAsync(configuration.ScheduleId, ct);
+        if (existing != null && !BelongsToWorkflow(existing.Schedule, resolved.Workflow!))
+        {
+            return Results.Conflict(new
+            {
+                code = "WORKFLOW_EXTERNAL_TRIGGER_ID_CONFLICT",
+                message = $"Workflow trigger '{configuration.ScheduleId}' is already owned by another service target.",
+            });
+        }
+
+        if (existing?.Schedule.Deleted == true)
+        {
+            return Results.Conflict(new
+            {
+                code = "WORKFLOW_EXTERNAL_TRIGGER_TOMBSTONED",
+                message = $"Workflow trigger '{configuration.ScheduleId}' is permanently deleted and cannot be reused.",
+            });
+        }
+
         try
         {
             var receipt = await schedules.EnsureAsync(configuration, context, ct);

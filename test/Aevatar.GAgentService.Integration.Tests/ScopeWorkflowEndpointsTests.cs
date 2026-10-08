@@ -1729,6 +1729,49 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task WorkflowExternalTriggerUpsert_ShouldRejectForeignBindingWithoutMutation()
+    {
+        var triggerId = ExternalTriggerId("scope-alpha", "wf-alpha");
+        var http = CreateHttpContext("scope-alpha");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+        var schedules = new RecordingWorkflowScheduledDispatchService
+        {
+            Detail = new ScheduledDispatchDetail(
+                WorkflowScheduleSummary(triggerId) with
+                {
+                    ServiceIdentity = new ServiceIdentity
+                    {
+                        TenantId = "scope-other",
+                        AppId = "workflow-app",
+                        Namespace = "workflow-ns",
+                        ServiceId = "svc-other",
+                    },
+                    ServiceId = "svc-other",
+                },
+                []),
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.UpsertExternalTrigger(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            new WorkflowExternalTriggerConfigurationHttpRequest { Prompt = "run workflow" },
+            workflowQueryPort,
+            schedules,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        body.Should().Contain("WORKFLOW_EXTERNAL_TRIGGER_ID_CONFLICT");
+        schedules.Ensured.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WorkflowExternalTriggerGet_ShouldReturnNotConfiguredWhenBindingIsAbsent()
     {
         var http = CreateHttpContext("scope-alpha");
