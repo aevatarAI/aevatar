@@ -81,7 +81,7 @@ public sealed class BuiltInPromptFloorProviderTests
         floor.Should().Contain("such as `nyxid_services`");
         floor.Should().Contain("establishes current caller-specific service facts");
         floor.Should().Contain("execution tools only run supplied work and cannot establish that inventory");
-        floor.Should().Contain("copying the exact `user_service_id`, `source`, `skill_id`, `literal_version`, and `manifest_digest`");
+        floor.Should().Contain("copying only the exact `source`, `skill_id`, `literal_version`, and `manifest_digest`");
         floor.Should().NotContain("first call `use_skill(skill=\"nyxid-service-discovery\")`");
         floor.Should().NotContain("Do not call `code_execute`");
         floor.Should().NotContain("typed-tool exception");
