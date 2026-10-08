@@ -158,6 +158,9 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.LlmControl.Should().NotBeNull();
         provider.LastRequest.LlmControl!.NyxIdAccessToken.Should().BeNull(
             "the durable Agent Key should only enter the ephemeral tool context");
+        provider.LastRequest.CallerContext.Should().NotBeNull();
+        provider.LastRequest.CallerContext!.Credentials.Should().NotBeNull();
+        provider.LastRequest.CallerContext.Credentials!.NyxIdBearer.Should().Be(agentKey);
     }
 
     [Fact]
@@ -217,6 +220,9 @@ public sealed class WorkflowRoleGAgentMappingTests
         provider.LastRequest.LlmControl.Should().NotBeNull();
         provider.LastRequest.LlmControl!.NyxIdAccessToken.Should().BeNull(
             "the durable Agent Key should only enter the ephemeral tool context");
+        provider.LastRequest.CallerContext.Should().NotBeNull();
+        provider.LastRequest.CallerContext!.Credentials.Should().NotBeNull();
+        provider.LastRequest.CallerContext.Credentials!.NyxIdBearer.Should().Be(agentKey);
     }
 
     [Fact]
