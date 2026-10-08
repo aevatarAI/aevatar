@@ -93,6 +93,15 @@ def coverage_runs(outputs, event="pull_request", base="dev", ref="refs/pull/1/me
 
 
 class ChangeScopeTests(unittest.TestCase):
+    def test_canvas_benchmark_requires_checked_in_capability(self):
+        condition = "hashFiles('apps/aevatar-console-web/playwright.performance.config.ts') != ''"
+        build = block(WORKFLOW, "- name: Build console-web")
+        benchmark = block(WORKFLOW, "- name: Benchmark workflow canvas")
+        upload = block(WORKFLOW, "- name: Upload workflow canvas benchmark")
+        self.assertIn(condition + " && '1' || '0'", build)
+        self.assertIn("if: " + condition, benchmark)
+        self.assertIn("if: always() && " + condition, upload)
+
     def test_job_outputs_are_connected_to_resolver(self):
         step_id = re.search(r"^id: (\w+)$", RESOLVE, re.MULTILINE)[1]
         outputs = block(CHANGES, "outputs:")

@@ -316,14 +316,15 @@ jobs:
 
       - name: Build console-web
         env:
-          AEVATAR_WORKFLOW_CANVAS_BENCHMARK: '1'
+          AEVATAR_WORKFLOW_CANVAS_BENCHMARK: ${{ hashFiles('apps/aevatar-console-web/playwright.performance.config.ts') != '' && '1' || '0' }}
         run: pnpm --dir apps/aevatar-console-web build
 
       - name: Benchmark workflow canvas
+        if: hashFiles('apps/aevatar-console-web/playwright.performance.config.ts') != ''
         run: pnpm --dir apps/aevatar-console-web benchmark:workflow-canvas
 
       - name: Upload workflow canvas benchmark
-        if: always()
+        if: always() && hashFiles('apps/aevatar-console-web/playwright.performance.config.ts') != ''
         uses: actions/upload-artifact@v4
         with:
           name: workflow-canvas-benchmark
