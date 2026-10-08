@@ -4516,6 +4516,57 @@ describe('Workflow Activity vNext editor', () => {
     expect(mockStudioApi.publishWorkflow).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      'a newer saved draft',
+      'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-published-v1\n    type: llm_call\n',
+    ],
+    ['missing published source', null],
+  ])('requires republication after reopening with %s', async (_scenario, publishedYaml) => {
+    arrangeSavedDraftPublication([{ id: 'step-draft-v2', type: 'llm_call' }]);
+    mockScopesApi.getWorkflowDetail.mockResolvedValue({
+      available: true,
+      scopeId: 'scope-alpha',
+      workflow: {
+        scopeId: 'scope-alpha',
+        workflowId: 'wf-draft-alpha',
+        displayName: 'Workflow alpha',
+        serviceKey: 'opaque-service-key',
+        workflowName: 'workflow_alpha',
+        actorId: 'actor-existing',
+        activeRevisionId: 'rev-published-v1',
+        publishedServiceId: 'svc-existing',
+        deploymentId: 'deployment-existing',
+        deploymentStatus: 'Available',
+        updatedAt: '2026-08-10T03:20:32Z',
+      },
+      source: publishedYaml
+        ? {
+            workflowYaml: publishedYaml,
+            definitionActorId: 'definition-existing',
+            inlineWorkflowYamls: null,
+          }
+        : null,
+    });
+
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    await screen.findByDisplayValue('Workflow alpha');
+    const publish = screen.getByRole('button', { name: 'Publish' });
+    await waitFor(() => expect(publish).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Run' })).toBeDisabled();
+    fireEvent.click(publish);
+    await waitFor(() =>
+      expect(mockStudioApi.publishWorkflow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: 'scope-alpha',
+          workflowId: 'wf-draft-alpha',
+          workflowYaml:
+            'name: workflow_alpha\nroles: []\nsteps:\n  - id: step-draft-v2\n    type: llm_call\n',
+        }),
+      ),
+    );
+  });
+
   it('opens the shared run input panel after publication is observed', async () => {
     arrangeObservedWorkflowPublication();
     renderWithQueryClient(<WorkflowActivityVNextPage />);
@@ -4839,14 +4890,20 @@ describe('Workflow Activity vNext editor', () => {
         { id: 'step-beta', type: 'transform' },
       ]);
       fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
-      fireEvent.click(
-        await screen.findByRole('button', { name: 'Start published run' }),
-      );
+      const startRun = await screen.findByRole('button', {
+        name: 'Start published run',
+      });
+      jest.useFakeTimers({
+        doNotFake: ['requestAnimationFrame', 'cancelAnimationFrame'],
+      });
+      await act(async () => {
+        fireEvent.click(startRun);
+      });
 
-      const logs = await screen.findByRole('complementary', {
+      const logs = screen.getByRole('complementary', {
         name: 'Workflow run console',
       });
-      const alphaRow = await within(logs).findByTestId(
+      const alphaRow = within(logs).getByTestId(
         'workflow-execution-log-row-node-step-alpha',
       );
       expect(alphaRow).toHaveTextContent('Running');
@@ -4863,19 +4920,19 @@ describe('Workflow Activity vNext editor', () => {
           yaml: 'serialized',
         }),
       );
-      fireEvent.click(await screen.findByRole('button', { name: 'Add node' }));
-      fireEvent.click(
-        await screen.findByRole('button', { name: 'Insert Assign node' }),
-      );
-      await waitFor(() =>
-        expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
-          document: expect.objectContaining({
-            steps: expect.arrayContaining([
-              expect.objectContaining({ id: 'assign_step' }),
-            ]),
-          }),
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Add node' }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Insert Assign node' }));
+      });
+      expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+        document: expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({ id: 'assign_step' }),
+          ]),
         }),
-      );
+      });
       expect(
         within(logs).queryByTestId(
           'workflow-execution-log-row-node-assign_step',
@@ -4892,10 +4949,9 @@ describe('Workflow Activity vNext editor', () => {
       expect(betaRow).toHaveAttribute('aria-pressed', 'true');
       expect(betaRow).toBeEnabled();
       await releasePaintBoundary();
-      await waitFor(() =>
-        expect(within(logs).getByText('succeeded')).toBeInTheDocument(),
-      );
+      expect(within(logs).getByText('succeeded')).toBeInTheDocument();
     } finally {
+      jest.useRealTimers();
       Object.defineProperty(window, 'requestAnimationFrame', {
         configurable: true,
         value: originalRequestAnimationFrame,

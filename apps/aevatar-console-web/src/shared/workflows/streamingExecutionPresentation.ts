@@ -40,22 +40,30 @@ export async function waitForWorkflowNodeStartPaint(
     const finish = () => {
       if (settled) return;
       settled = true;
+      if (firstFrameHandle !== null) scheduler.cancel(firstFrameHandle);
+      if (secondFrameHandle !== null) scheduler.cancel(secondFrameHandle);
+      firstFrameHandle = null;
+      secondFrameHandle = null;
+      clearTimeout(timeoutHandle);
       signal?.removeEventListener('abort', handleAbort);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener(
+          'visibilitychange',
+          handleVisibilityChange,
+        );
+      }
       resolve();
     };
-    const handleAbort = () => {
-      if (firstFrameHandle !== null) {
-        scheduler.cancel(firstFrameHandle);
-        firstFrameHandle = null;
-      }
-      if (secondFrameHandle !== null) {
-        scheduler.cancel(secondFrameHandle);
-        secondFrameHandle = null;
-      }
-      finish();
+    const handleAbort = () => finish();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') finish();
     };
+    const timeoutHandle = setTimeout(finish, 100);
 
     signal?.addEventListener('abort', handleAbort, { once: true });
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
     firstFrameHandle = scheduler.request(() => {
       firstFrameHandle = null;
       if (signal?.aborted) {

@@ -272,7 +272,7 @@ describe('workflowScheduleApi', () => {
       'wf-alpha',
       'schedule-alpha',
     );
-    await workflowScheduleApi.runNow(
+    const runNowReceipt = await workflowScheduleApi.runNow(
       'scope-alpha',
       'wf-alpha',
       'schedule-alpha',
@@ -300,5 +300,56 @@ describe('workflowScheduleApi', () => {
       expect.objectContaining({ runActorId: '' }),
       expect.objectContaining({ runActorId: '' }),
     ]);
+    expect(runNowReceipt.idempotencyKey).toBe('schedule-alpha:manual:1');
+  });
+
+  it('round-trips observed headers on a configuration replacement and decodes deletion facts', async () => {
+    const headers = {
+      'x-project': 'project-alpha',
+      'x-purpose': 'daily-report',
+    };
+    const fetchMock = mockJson({
+      schedule: createSummary({ headers }),
+      recentFires: [],
+    });
+    const detail = await workflowScheduleApi.get(
+      'scope-alpha',
+      'wf-alpha',
+      'schedule-alpha',
+    );
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => createReceipt(),
+    } as Response);
+    await workflowScheduleApi.update(
+      'scope-alpha',
+      'wf-alpha',
+      'schedule-alpha',
+      {
+        ...detail.schedule,
+        displayName: 'Renamed schedule',
+      },
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual(
+      expect.objectContaining({ displayName: 'Renamed schedule', headers }),
+    );
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        schedule: createSummary({ deleted: true }),
+        recentFires: [],
+      }),
+    } as Response);
+    await expect(
+      workflowScheduleApi.get('scope-alpha', 'wf-alpha', 'schedule-alpha'),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        schedule: expect.objectContaining({ deleted: true }),
+      }),
+    );
   });
 });

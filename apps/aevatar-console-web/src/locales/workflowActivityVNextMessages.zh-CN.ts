@@ -745,6 +745,12 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.settings.notVerified': '未验证',
     'workflowActivityVNext.settings.workflowExecution': '工作流执行',
     'workflowActivityVNext.schedule.actionAccepted': '计划任务操作已受理。',
+    'workflowActivityVNext.schedule.observing': '正在确认计划任务更改…',
+    'workflowActivityVNext.schedule.observationFailed': '暂时无法查询计划任务状态',
+    'workflowActivityVNext.schedule.observationDelayed': '计划任务更改仍在等待确认',
+    'workflowActivityVNext.schedule.observationRetryDescription':
+      '请求已受理。请再次查询状态，无需重复提交请求。',
+    'workflowActivityVNext.schedule.retryObservation': '再次查询状态',
     'workflowActivityVNext.schedule.backToSchedules': '返回计划任务列表',
     'workflowActivityVNext.schedule.change': '修改计划任务',
     'workflowActivityVNext.schedule.completedAt': '完成于 {date}',

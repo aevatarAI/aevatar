@@ -25,8 +25,10 @@ import {
   Tag,
 } from 'antd';
 import React from 'react';
+import { HttpRequestError } from '@/shared/api/http/client';
 import {
   type WorkflowScheduleConfigurationInput,
+  type WorkflowScheduleDetail,
   type WorkflowScheduleFire,
   type WorkflowSchedulePreview,
   type WorkflowScheduleSummary,
@@ -66,6 +68,63 @@ type ScheduleSurfaceView = 'list' | 'detail' | 'form';
 type ScheduleDetailTab = 'overview' | 'history';
 type RepeatPreset = 'hourly' | 'daily' | 'weekdays' | 'weekly' | 'monthly';
 type ScheduleAttemptOutcome = 'accepted' | 'failed' | 'run-created';
+
+type ScheduleObservationExpectation =
+  | {
+      readonly kind: 'create' | 'update';
+      readonly input: WorkflowScheduleConfigurationInput;
+    }
+  | { readonly kind: 'state'; readonly enabled: boolean }
+  | { readonly kind: 'runNow'; readonly idempotencyKey: string }
+  | { readonly kind: 'delete' };
+
+type PendingScheduleObservation = {
+  readonly scheduleId: string;
+  readonly expectation: ScheduleObservationExpectation;
+  readonly phase: 'observing' | 'delayed' | 'error';
+  readonly attempt: number;
+};
+
+const scheduleObservationTimeoutMs = 20_000;
+
+function matchesScheduleConfiguration(
+  schedule: WorkflowScheduleSummary,
+  input: WorkflowScheduleConfigurationInput,
+): boolean {
+  const headers = input.headers ?? {};
+  return (
+    !schedule.deleted &&
+    schedule.displayName === input.displayName.trim() &&
+    schedule.cronExpression === input.cronExpression.trim() &&
+    schedule.timezone === input.timezone.trim() &&
+    schedule.prompt === (input.prompt?.trim() ?? '') &&
+    schedule.enabled === input.enabled &&
+    Object.keys(schedule.headers).length === Object.keys(headers).length &&
+    Object.entries(headers).every(
+      ([key, value]) => schedule.headers[key] === value,
+    )
+  );
+}
+
+function matchesScheduleObservation(
+  detail: WorkflowScheduleDetail | null,
+  expectation: ScheduleObservationExpectation,
+): boolean {
+  if (expectation.kind === 'delete')
+    return detail === null || detail.schedule.deleted;
+  if (!detail || detail.schedule.deleted) return false;
+  if (expectation.kind === 'create' || expectation.kind === 'update') {
+    return matchesScheduleConfiguration(detail.schedule, expectation.input);
+  }
+  if (expectation.kind === 'state')
+    return detail.schedule.enabled === expectation.enabled;
+  if (expectation.kind === 'runNow') {
+    return detail.recentFires.some(
+      (fire) => fire.manual && fire.idempotencyKey === expectation.idempotencyKey,
+    );
+  }
+  return false;
+}
 
 const weekdayValues = ['1', '2', '3', '4', '5', '6', '0'] as const;
 type WeekdayValue = (typeof weekdayValues)[number];
@@ -337,8 +396,14 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   const [actionScheduleId, setActionScheduleId] = React.useState<string | null>(
     null,
   );
-  const [pendingObservationScheduleId, setPendingObservationScheduleId] =
-    React.useState<string | null>(null);
+  const [pendingObservation, setPendingObservation] =
+    React.useState<PendingScheduleObservation | null>(null);
+  const observationInstanceId = React.useId();
+  const observationAttemptRef = React.useRef(0);
+  const resourceRef = React.useRef({ open, scopeId, workflowId });
+  const observing = pendingObservation?.phase === 'observing';
+  const mutationPending =
+    Boolean(pendingObservation) || Boolean(actionScheduleId);
 
   const previewing = creationStep === 'previewing';
   const busy = previewing || saving;
@@ -356,7 +421,10 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         includeTotalCount: true,
         take: 50,
       }),
-    refetchInterval: pendingObservationScheduleId ? 1000 : false,
+    refetchInterval:
+      observing && pendingObservation.expectation.kind === 'create'
+        ? 1000
+        : false,
     refetchOnMount: 'always',
     retry: false,
   });
@@ -376,14 +444,56 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     },
     retry: false,
   });
+  const observationQuery = useQuery({
+    enabled:
+      open &&
+      available &&
+      observing &&
+      pendingObservation.expectation.kind !== 'create',
+    queryKey: [
+      ...queryKey,
+      'observation',
+      observationInstanceId,
+      pendingObservation?.attempt,
+    ],
+    queryFn: async ({ signal }): Promise<WorkflowScheduleDetail | null> => {
+      if (!pendingObservation)
+        throw new Error('A Schedule observation is required.');
+      try {
+        return await workflowScheduleApi.get(
+          scopeId,
+          workflowId,
+          pendingObservation.scheduleId,
+          signal,
+        );
+      } catch (error) {
+        if (
+          error instanceof HttpRequestError &&
+          error.status === 404 &&
+          error.code === 'WORKFLOW_SCHEDULE_NOT_FOUND'
+        ) {
+          return null;
+        }
+        throw error;
+      }
+    },
+    refetchInterval: observing ? 1000 : false,
+    retry: false,
+  });
   const scheduleListRefreshing =
     schedules.isFetching && !schedules.isPending && Boolean(schedules.data);
   const scheduleDetailRefreshing =
-    scheduleDetail.isFetching &&
-    !scheduleDetail.isPending &&
-    Boolean(scheduleDetail.data);
+    (scheduleDetail.isFetching &&
+      !scheduleDetail.isPending &&
+      Boolean(scheduleDetail.data)) ||
+    (observationQuery.isFetching &&
+      selectedSchedule?.scheduleId === pendingObservation?.scheduleId);
 
   React.useEffect(() => {
+    resourceRef.current = { open, scopeId, workflowId };
+    setPendingObservation(null);
+    setActionScheduleId(null);
+    setSaving(false);
     if (!open) return;
     setSurfaceView(initialView ?? (mode === 'modal' ? 'form' : 'list'));
     setCreationStep('configure');
@@ -397,19 +507,114 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     setMonthlyDay('1');
     setCronMode(false);
     setPreview(null);
-    setPendingObservationScheduleId(null);
-  }, [initialView, mode, open, workflowId]);
+  }, [initialView, mode, open, scopeId, workflowId]);
+
+  React.useEffect(
+    () => () => {
+      resourceRef.current = { ...resourceRef.current, open: false };
+    },
+    [],
+  );
+
+  const beginObservation = (
+    scheduleId: string,
+    expectation: ScheduleObservationExpectation,
+  ) => {
+    observationAttemptRef.current += 1;
+    setPendingObservation({
+      scheduleId,
+      expectation,
+      phase: 'observing',
+      attempt: observationAttemptRef.current,
+    });
+  };
 
   React.useEffect(() => {
-    if (!pendingObservationScheduleId || !schedules.data) return;
-    if (
-      schedules.data.items.some(
-        (schedule) => schedule.scheduleId === pendingObservationScheduleId,
-      )
-    ) {
-      setPendingObservationScheduleId(null);
+    if (!open || !observing) return;
+    const timeout = window.setTimeout(() => {
+      setPendingObservation((current) =>
+        current?.phase === 'observing'
+          ? { ...current, phase: 'delayed' }
+          : current,
+      );
+    }, scheduleObservationTimeoutMs);
+    return () => window.clearTimeout(timeout);
+  }, [open, observing, pendingObservation?.attempt]);
+
+  React.useEffect(() => {
+    if (!open || !pendingObservation || !observing) return;
+    const creating = pendingObservation.expectation.kind === 'create';
+    const failed = creating ? schedules.isError : observationQuery.isError;
+    if (failed) {
+      setPendingObservation((current) =>
+        current ? { ...current, phase: 'error' } : null,
+      );
+      return;
     }
-  }, [pendingObservationScheduleId, schedules.data]);
+    const observedSchedule = creating
+      ? schedules.data?.items.find(
+          (schedule) =>
+            schedule.scheduleId === pendingObservation.scheduleId &&
+            pendingObservation.expectation.kind === 'create' &&
+            matchesScheduleConfiguration(
+              schedule,
+              pendingObservation.expectation.input,
+            ),
+        )
+      : undefined;
+    const detail = observationQuery.data;
+    const observed = creating
+      ? Boolean(observedSchedule)
+      : observationQuery.isSuccess &&
+        (detail === null ||
+          detail?.schedule.scheduleId === pendingObservation.scheduleId) &&
+        matchesScheduleObservation(
+          detail ?? null,
+          pendingObservation.expectation,
+        );
+    if (!observed) return;
+    if (pendingObservation.expectation.kind === 'delete') {
+      if (selectedSchedule?.scheduleId === pendingObservation.scheduleId) {
+        setSelectedSchedule(null);
+        setSurfaceView('list');
+      }
+    } else if (detail) {
+      queryClient.setQueryData(
+        [...queryKey, 'detail', pendingObservation.scheduleId],
+        detail,
+      );
+      setSelectedSchedule((current) =>
+        current?.scheduleId === pendingObservation.scheduleId
+          ? detail.schedule
+          : current,
+      );
+    }
+    setPendingObservation(null);
+    if (!creating)
+      void queryClient.invalidateQueries({ queryKey, exact: true });
+  }, [
+    observing,
+    observationQuery.data,
+    observationQuery.isError,
+    observationQuery.isSuccess,
+    open,
+    pendingObservation,
+    queryClient,
+    queryKey,
+    schedules.data,
+    schedules.isError,
+    selectedSchedule,
+  ]);
+
+  const retryObservation = () => {
+    if (!pendingObservation || observing) return;
+    beginObservation(
+      pendingObservation.scheduleId,
+      pendingObservation.expectation,
+    );
+    if (pendingObservation.expectation.kind === 'create')
+      void schedules.refetch();
+  };
 
   const refreshSchedules = React.useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey });
@@ -417,6 +622,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   }, [queryClient, queryKey]);
 
   const openCreate = () => {
+    if (mutationPending) return;
     setEditingSchedule(null);
     setSelectedSchedule(null);
     setForm(emptyForm());
@@ -438,6 +644,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   };
 
   const openEdit = () => {
+    if (mutationPending) return;
     const schedule = scheduleDetail.data?.schedule;
     if (!schedule) return;
     const repeat = repeatFromCron(schedule.cronExpression);
@@ -512,7 +719,8 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
   };
 
   const submitForm = async () => {
-    if (saving || !formValid) return;
+    if (saving || mutationPending || !formValid) return;
+    const resource = resourceRef.current;
     setSaving(true);
     const input: WorkflowScheduleConfigurationInput = {
       displayName: form.displayName,
@@ -520,16 +728,19 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
       timezone: form.timezone,
       enabled: editingSchedule ? editingSchedule.enabled : form.enabled,
       prompt: form.prompt,
+      headers: editingSchedule?.headers ?? {},
     };
     try {
       if (editingSchedule) {
-        await workflowScheduleApi.update(
+        const receipt = await workflowScheduleApi.update(
           scopeId,
           workflowId,
           editingSchedule.scheduleId,
           input,
         );
-        toast.success(
+        if (resourceRef.current !== resource) return;
+        beginObservation(receipt.scheduleId, { kind: 'update', input });
+        toast.info(
           t(
             'workflowActivityVNext.schedule.updateAccepted',
             'Schedule update accepted.',
@@ -537,19 +748,19 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         );
         setSurfaceView('detail');
         setEditingSchedule(null);
-        await refreshSchedules();
       } else {
         const receipt = await workflowScheduleApi.create(
           scopeId,
           workflowId,
           input,
         );
-        setPendingObservationScheduleId(receipt.scheduleId);
+        if (resourceRef.current !== resource) return;
+        beginObservation(receipt.scheduleId, { kind: 'create', input });
         setCreationStep('configure');
         setPreview(null);
         setEditingSchedule(null);
         setSurfaceView(mode === 'modal' ? 'form' : 'list');
-        toast.success(
+        toast.info(
           t(
             'workflowActivityVNext.schedule.created',
             'Schedule request accepted. It will appear in the list shortly.',
@@ -561,9 +772,9 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         });
       }
     } catch (error) {
-      toast.error(describeError(error));
+      if (resourceRef.current === resource) toast.error(describeError(error));
     } finally {
-      setSaving(false);
+      if (resourceRef.current === resource) setSaving(false);
     }
   };
 
@@ -571,63 +782,68 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     schedule: WorkflowScheduleSummary,
     action: 'disable' | 'enable' | 'runNow',
   ) => {
-    if (actionScheduleId) return;
+    if (mutationPending || saving) return;
+    const resource = resourceRef.current;
     setActionScheduleId(schedule.scheduleId);
     try {
-      if (action === 'enable')
-        await workflowScheduleApi.enable(
+      if (action === 'runNow') {
+        const receipt = await workflowScheduleApi.runNow(
           scopeId,
           workflowId,
           schedule.scheduleId,
         );
-      if (action === 'disable')
-        await workflowScheduleApi.disable(
+        if (resourceRef.current !== resource) return;
+        beginObservation(receipt.scheduleId, {
+          kind: 'runNow',
+          idempotencyKey: receipt.idempotencyKey,
+        });
+      } else {
+        const receipt = await workflowScheduleApi[action](
           scopeId,
           workflowId,
           schedule.scheduleId,
         );
-      if (action === 'runNow')
-        await workflowScheduleApi.runNow(
-          scopeId,
-          workflowId,
-          schedule.scheduleId,
-        );
-      toast.success(
+        if (resourceRef.current !== resource) return;
+        beginObservation(receipt.scheduleId, {
+          kind: 'state',
+          enabled: action === 'enable',
+        });
+      }
+      toast.info(
         t(
           'workflowActivityVNext.schedule.actionAccepted',
           'Schedule action accepted.',
         ),
       );
-      await refreshSchedules();
     } catch (error) {
-      toast.error(describeError(error));
+      if (resourceRef.current === resource) toast.error(describeError(error));
     } finally {
-      setActionScheduleId(null);
+      if (resourceRef.current === resource) setActionScheduleId(null);
     }
   };
 
   const deleteSchedule = async (schedule: WorkflowScheduleSummary) => {
-    if (actionScheduleId) return;
+    if (mutationPending || saving) return;
+    const resource = resourceRef.current;
     setActionScheduleId(schedule.scheduleId);
     try {
-      await workflowScheduleApi.delete(
+      const receipt = await workflowScheduleApi.delete(
         scopeId,
         workflowId,
         schedule.scheduleId,
       );
-      toast.success(
+      if (resourceRef.current !== resource) return;
+      beginObservation(receipt.scheduleId, { kind: 'delete' });
+      toast.info(
         t(
           'workflowActivityVNext.schedule.deleteAccepted',
           'Schedule deletion accepted.',
         ),
       );
-      await refreshSchedules();
-      setSelectedSchedule(null);
-      setSurfaceView('list');
     } catch (error) {
-      toast.error(describeError(error));
+      if (resourceRef.current === resource) toast.error(describeError(error));
     } finally {
-      setActionScheduleId(null);
+      if (resourceRef.current === resource) setActionScheduleId(null);
     }
   };
 
@@ -1188,7 +1404,12 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
             loading={schedules.isFetching}
             onClick={() => void schedules.refetch()}
           />
-          <Button icon={<PlusOutlined />} onClick={openCreate} type="primary">
+          <Button
+            disabled={mutationPending}
+            icon={<PlusOutlined />}
+            onClick={openCreate}
+            type="primary"
+          >
             {t('workflowActivityVNext.schedule.new', 'New schedule')}
           </Button>
         </Space>
@@ -1576,9 +1797,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
             <div className="wa-vnext__schedule-overview-actions">
               <Button
                 disabled={
-                  actionScheduleId ===
-                    scheduleDetail.data.schedule.scheduleId ||
-                  !scheduleDetail.data.schedule.enabled
+                  mutationPending || !scheduleDetail.data.schedule.enabled
                 }
                 icon={<PlayCircleOutlined />}
                 onClick={() =>
@@ -1588,7 +1807,11 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
               >
                 {t('workflowActivityVNext.schedule.runNow', 'Run now')}
               </Button>
-              <Button icon={<EditOutlined />} onClick={openEdit}>
+              <Button
+                disabled={mutationPending}
+                icon={<EditOutlined />}
+                onClick={openEdit}
+              >
                 {t(
                   'workflowActivityVNext.schedule.editAction',
                   'Edit schedule',
@@ -1639,9 +1862,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
                     'workflowActivityVNext.schedule.moreActionsAria',
                     'More schedule actions',
                   )}
-                  disabled={
-                    actionScheduleId === scheduleDetail.data.schedule.scheduleId
-                  }
+                  disabled={mutationPending}
                   icon={<DownOutlined />}
                   iconPlacement="end"
                 >
@@ -1774,6 +1995,43 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
     </section>
   );
 
+  const observationFeedback = pendingObservation ? (
+    <Alert
+      showIcon
+      type={observing ? 'info' : 'warning'}
+      title={t(
+        observing
+          ? 'workflowActivityVNext.schedule.observing'
+          : pendingObservation.phase === 'error'
+            ? 'workflowActivityVNext.schedule.observationFailed'
+            : 'workflowActivityVNext.schedule.observationDelayed',
+        observing
+          ? 'Confirming schedule changes…'
+          : pendingObservation.phase === 'error'
+            ? 'Schedule status could not be checked'
+            : 'Schedule change is still pending',
+      )}
+      description={
+        !observing
+          ? t(
+              'workflowActivityVNext.schedule.observationRetryDescription',
+              'The request was accepted. Check its status again without submitting another request.',
+            )
+          : undefined
+      }
+      action={
+        !observing ? (
+          <Button onClick={retryObservation}>
+            {t(
+              'workflowActivityVNext.schedule.retryObservation',
+              'Check status again',
+            )}
+          </Button>
+        ) : undefined
+      }
+    />
+  ) : null;
+
   const activeBody = !available ? (
     <Alert
       showIcon
@@ -1809,6 +2067,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
         size={520}
         title={surfaceTitle}
       >
+        {observationFeedback}
         {activeBody}
       </Drawer>
     );
@@ -1825,6 +2084,7 @@ const WorkflowScheduleSurface: React.FC<WorkflowScheduleSurfaceProps> = ({
       title={surfaceTitle}
       width={820}
     >
+      {observationFeedback}
       {activeBody}
     </Modal>
   );

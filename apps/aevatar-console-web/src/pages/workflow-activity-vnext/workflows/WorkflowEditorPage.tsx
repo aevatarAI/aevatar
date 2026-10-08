@@ -89,6 +89,7 @@ function restorePublishedInvocationTarget(
   scopeId: string,
   workflowId: string,
   detail: Awaited<ReturnType<typeof scopesApi.getWorkflowDetail>> | undefined,
+  draftYaml: string | undefined,
 ): WorkflowPublishedInvocationTarget | null {
   const published = detail?.workflow;
   if (
@@ -97,6 +98,8 @@ function restorePublishedInvocationTarget(
     !published ||
     published.scopeId !== scopeId ||
     published.workflowId !== workflowId ||
+    !draftYaml?.trim() ||
+    detail.source?.workflowYaml.trim() !== draftYaml.trim() ||
     !hasNonBlankIdentifier(published.activeRevisionId) ||
     !hasNonBlankIdentifier(published.publishedServiceId)
   ) {
@@ -305,6 +308,7 @@ const WorkflowEditorPage: React.FC<{
     activeScopeId,
     activeWorkflowId,
     restoredPublication.data,
+    editor.workflow?.yaml,
   );
   const observedPublishedInvocationTarget =
     publicationReceipt &&

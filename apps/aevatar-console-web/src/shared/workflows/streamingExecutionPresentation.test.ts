@@ -121,4 +121,47 @@ describe('waitForWorkflowNodeStartPaint', () => {
     expect(callbackCount()).toBe(0);
     expect(scheduler.cancel).toHaveBeenCalledWith(2);
   });
+
+  it('releases pending consumption when the page becomes hidden', async () => {
+    const { callbackCount, runNext, scheduler } =
+      createAnimationFrameScheduler();
+    let visibility: DocumentVisibilityState = 'visible';
+    const visibilitySpy = jest
+      .spyOn(document, 'visibilityState', 'get')
+      .mockImplementation(() => visibility);
+    try {
+      const waiting = waitForWorkflowNodeStartPaint(
+        createStepRequestEvent(),
+        undefined,
+        scheduler,
+      );
+      runNext(0);
+      visibility = 'hidden';
+      document.dispatchEvent(new Event('visibilitychange'));
+      await waiting;
+      expect(callbackCount()).toBe(0);
+      expect(scheduler.cancel).toHaveBeenCalledWith(2);
+    } finally {
+      visibilitySpy.mockRestore();
+    }
+  });
+
+  it('bounds presentation waiting even when the browser delivers no frames', async () => {
+    jest.useFakeTimers();
+    try {
+      const { callbackCount, scheduler } = createAnimationFrameScheduler();
+      const waiting = waitForWorkflowNodeStartPaint(
+        createStepRequestEvent(),
+        undefined,
+        scheduler,
+      );
+      jest.advanceTimersByTime(100);
+      await waiting;
+      expect(callbackCount()).toBe(0);
+      expect(scheduler.cancel).toHaveBeenCalledWith(1);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

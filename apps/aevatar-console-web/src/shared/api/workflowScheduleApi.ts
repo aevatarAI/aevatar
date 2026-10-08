@@ -7,6 +7,7 @@ import {
   readNumber,
   readOptionalArray,
   readString,
+  readStringRecord,
 } from './http/decoders';
 
 export type WorkflowScheduleConfigurationInput = {
@@ -36,9 +37,11 @@ export type WorkflowScheduleSummary = {
   readonly scheduleId: string;
   readonly displayName: string;
   readonly prompt: string;
+  readonly headers: Readonly<Record<string, string>>;
   readonly cronExpression: string;
   readonly timezone: string;
   readonly enabled: boolean;
+  readonly deleted: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly nextFireAt: string | null;
@@ -74,6 +77,7 @@ export type WorkflowScheduleMutationReceipt = {
 
 export type WorkflowScheduleRunNowReceipt = WorkflowScheduleMutationReceipt & {
   readonly scheduledFireAt: string;
+  readonly idempotencyKey: string;
 };
 
 export type WorkflowScheduleListResult = {
@@ -92,6 +96,7 @@ export type WorkflowScheduleApi = {
     scopeId: string,
     workflowId: string,
     scheduleId: string,
+    signal?: AbortSignal,
   ) => Promise<WorkflowScheduleDetail>;
   readonly preview: (
     scopeId: string,
@@ -174,6 +179,11 @@ function decodeWorkflowScheduleSummary(
     ),
     prompt:
       readNullableString(record, ['prompt', 'Prompt'], `${label}.prompt`) ?? '',
+    headers: readStringRecord(
+      record,
+      ['headers', 'Headers'],
+      `${label}.headers`,
+    ),
     cronExpression: readString(
       record,
       ['cronExpression', 'CronExpression'],
@@ -181,6 +191,10 @@ function decodeWorkflowScheduleSummary(
     ),
     timezone: readString(record, ['timezone', 'Timezone'], `${label}.timezone`),
     enabled: readBoolean(record, ['enabled', 'Enabled'], `${label}.enabled`),
+    deleted:
+      record.deleted === undefined && record.Deleted === undefined
+        ? false
+        : readBoolean(record, ['deleted', 'Deleted'], `${label}.deleted`),
     createdAt: readDateTimeString(
       record,
       ['createdAt', 'CreatedAt'],
@@ -345,6 +359,11 @@ function decodeWorkflowScheduleRunNowReceipt(
   const record = expectRecord(value, 'WorkflowScheduleRunNowReceipt');
   return {
     ...decodeWorkflowScheduleReceipt(value),
+    idempotencyKey: readString(
+      record,
+      ['idempotencyKey', 'IdempotencyKey'],
+      'WorkflowScheduleRunNowReceipt.idempotencyKey',
+    ),
     scheduledFireAt: readDateTimeString(
       record,
       ['scheduledFireAt', 'ScheduledFireAt'],
@@ -414,10 +433,11 @@ export const workflowScheduleApi: WorkflowScheduleApi = {
     );
   },
 
-  get(scopeId, workflowId, scheduleId) {
+  get(scopeId, workflowId, scheduleId, signal) {
     return requestJson(
       `${route(scopeId, workflowId)}/${requireIdentifier(scheduleId, 'scheduleId')}`,
       decodeWorkflowScheduleDetail,
+      { signal },
     );
   },
 

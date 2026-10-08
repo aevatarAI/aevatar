@@ -35,9 +35,11 @@ function createScheduleSummary(overrides: Record<string, unknown> = {}) {
     scheduleId: 'schedule-alpha',
     displayName: 'Daily workflow run',
     prompt: '',
+    headers: {},
     cronExpression: '0 9 * * 1-5',
     timezone: 'Asia/Shanghai',
     enabled: true,
+    deleted: false,
     createdAt: '2026-08-18T00:00:00Z',
     updatedAt: '2026-08-20T01:02:00Z',
     nextFireAt: '2026-08-21T01:00:00Z',
@@ -95,6 +97,15 @@ function findScheduleOption(label: string): HTMLElement {
   ).find((element) => element.textContent?.trim() === label);
   if (!option) throw new Error(`Schedule option not found: ${label}`);
   return option;
+}
+
+async function advanceObservationTime(milliseconds: number): Promise<void> {
+  await act(async () => {
+    await jest.advanceTimersByTimeAsync(milliseconds);
+  });
+  await act(async () => {
+    await jest.advanceTimersToNextTimerAsync();
+  });
 }
 
 describe('WorkflowScheduleSurface', () => {
@@ -294,7 +305,7 @@ describe('WorkflowScheduleSurface', () => {
         mockedWorkflowScheduleApi.list.mock.calls.length,
       ).toBeGreaterThanOrEqual(2),
     );
-    expect(mockToast.success).toHaveBeenCalledWith(
+    expect(mockToast.info).toHaveBeenCalledWith(
       'Schedule request accepted. It will appear in the list shortly.',
     );
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -361,7 +372,7 @@ describe('WorkflowScheduleSurface', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
     await waitFor(() =>
-      expect(mockToast.success).toHaveBeenCalledWith(
+      expect(mockToast.info).toHaveBeenCalledWith(
         'Schedule request accepted. It will appear in the list shortly.',
       ),
     );
@@ -377,8 +388,7 @@ describe('WorkflowScheduleSurface', () => {
 
   it('keeps refreshing until the accepted schedule is observed', async () => {
     let listCallCount = 0;
-    const observedSchedule = {
-      scheduleId: 'schedule-alpha',
+    const observedSchedule = createScheduleSummary({
       displayName: 'Observed schedule',
       prompt: '',
       cronExpression: '0 9 * * 1-5',
@@ -390,7 +400,7 @@ describe('WorkflowScheduleSurface', () => {
       lastFireAt: null,
       fireCount: 0,
       failureCount: 0,
-    };
+    });
     mockedWorkflowScheduleApi.list.mockImplementation(() => {
       listCallCount += 1;
       return Promise.resolve({
@@ -411,30 +421,36 @@ describe('WorkflowScheduleSurface', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
       target: { value: 'Observed schedule' },
     });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Timezone' }), {
+      target: { value: 'Asia/Shanghai' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Review schedule' }));
     await waitFor(() =>
       expect(
         screen.getByText('Review schedule', { selector: '.ant-drawer-title' }),
       ).toBeVisible(),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
-
-    await waitFor(() => expect(listCallCount).toBeGreaterThanOrEqual(2));
-    expect(mockToast.success).toHaveBeenCalledWith(
-      'Schedule request accepted. It will appear in the list shortly.',
-    );
-
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1100));
-    });
-    await waitFor(() => expect(listCallCount).toBeGreaterThanOrEqual(3));
-
-    const observedCallCount = listCallCount;
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1100));
-    });
-    expect(listCallCount).toBe(observedCallCount);
-    view.unmount();
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Create schedule' }),
+        );
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(listCallCount).toBeGreaterThanOrEqual(2);
+      expect(mockToast.info).toHaveBeenCalledWith(
+        'Schedule request accepted. It will appear in the list shortly.',
+      );
+      await advanceObservationTime(1000);
+      expect(listCallCount).toBeGreaterThanOrEqual(3);
+      const observedCallCount = listCallCount;
+      await advanceObservationTime(1000);
+      expect(listCallCount).toBe(observedCallCount);
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
   });
 
   it('synchronizes a custom weekly cron back to the repeat builder before review', async () => {
@@ -975,6 +991,7 @@ describe('WorkflowScheduleSurface', () => {
       scheduleId: schedule.scheduleId,
       accepted: true,
       scheduledFireAt: '2026-08-20T01:00:00Z',
+      idempotencyKey: 'schedule-alpha:manual:pending',
     });
 
     renderSurface(true, 'modal', jest.fn(), 'list');
@@ -1065,6 +1082,351 @@ describe('WorkflowScheduleSurface', () => {
       'aria-selected',
       'true',
     );
+  });
+
+  it('preserves hidden headers and paused state while observing a rename', async () => {
+    const schedule = createScheduleSummary({
+      enabled: false,
+      headers: { 'x-project': 'project-alpha' },
+      prompt: 'Keep this input',
+    });
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get
+      .mockReset()
+      .mockResolvedValue({ schedule, recentFires: [] });
+    mockedWorkflowScheduleApi.update.mockResolvedValue({
+      scheduleId: schedule.scheduleId,
+      accepted: true,
+    });
+    const view = renderSurface(true, 'panel');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Edit schedule' }),
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Schedule name' }), {
+      target: { value: 'Renamed schedule' },
+    });
+
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(mockedWorkflowScheduleApi.update).toHaveBeenCalledWith(
+        'scope-alpha',
+        'wf-alpha',
+        'schedule-alpha',
+        expect.objectContaining({
+          displayName: 'Renamed schedule',
+          enabled: false,
+          prompt: 'Keep this input',
+          headers: { 'x-project': 'project-alpha' },
+        }),
+      );
+      await advanceObservationTime(0);
+      expect(screen.getByText('Confirming schedule changes…')).toBeVisible();
+      expect(
+        screen.getByRole('button', { name: 'Edit schedule' }),
+      ).toBeDisabled();
+      const renamed = { ...schedule, displayName: 'Renamed schedule' };
+      mockedWorkflowScheduleApi.get.mockResolvedValue({
+        schedule: { ...renamed, headers: {} },
+        recentFires: [],
+      });
+      await advanceObservationTime(1000);
+      expect(
+        screen.getByRole('button', { name: 'Edit schedule' }),
+      ).toBeDisabled();
+
+      mockedWorkflowScheduleApi.get.mockResolvedValue({
+        schedule: renamed,
+        recentFires: [],
+      });
+      await advanceObservationTime(1000);
+      expect(
+        screen.queryByText('Confirming schedule changes…'),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Edit schedule' }),
+      ).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+      expect(
+        screen.getByRole('heading', {
+          name: 'Schedule Renamed schedule in workflow Weekly review',
+        }),
+      ).toBeVisible();
+      expect(mockedWorkflowScheduleApi.update).toHaveBeenCalledTimes(1);
+      expect(mockToast.success).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps pause and enable locked until the requested state is observed', async () => {
+    let observedSchedule = createScheduleSummary();
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [observedSchedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get
+      .mockReset()
+      .mockImplementation(async () => ({
+        schedule: observedSchedule,
+        recentFires: [],
+      }));
+    mockedWorkflowScheduleApi.disable.mockResolvedValue({
+      scheduleId: 'schedule-alpha',
+      accepted: true,
+    });
+    mockedWorkflowScheduleApi.enable.mockResolvedValue({
+      scheduleId: 'schedule-alpha',
+      accepted: true,
+    });
+    const view = renderSurface(true, 'panel');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'More schedule actions' }),
+    );
+    const pause = await screen.findByRole('menuitem', { name: 'Pause' });
+
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(pause);
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      await advanceObservationTime(1000);
+      expect(screen.getByText('Enabled')).toBeVisible();
+      expect(
+        screen.getByRole('button', { name: 'More schedule actions' }),
+      ).toBeDisabled();
+      observedSchedule = { ...observedSchedule, enabled: false };
+      await advanceObservationTime(1000);
+      expect(screen.getByText('Paused')).toBeVisible();
+      expect(
+        screen.getByRole('button', { name: 'More schedule actions' }),
+      ).toBeEnabled();
+      fireEvent.click(
+        screen.getByRole('button', { name: 'More schedule actions' }),
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByRole('menuitem', { name: 'Enable' }));
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        screen.getByRole('button', { name: 'Edit schedule' }),
+      ).toBeDisabled();
+      observedSchedule = { ...observedSchedule, enabled: true };
+      await advanceObservationTime(1000);
+      expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled();
+      expect(mockedWorkflowScheduleApi.disable).toHaveBeenCalledTimes(1);
+      expect(mockedWorkflowScheduleApi.enable).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
+  });
+
+  it('rechecks a delayed or failed manual attempt without submitting Run now again', async () => {
+    const schedule = createScheduleSummary();
+    const manualFire = {
+      scheduledFireAt: '2026-08-20T01:00:00Z',
+      completedAt: '2026-08-20T01:01:00Z',
+      idempotencyKey: 'schedule-alpha:manual:older',
+      runActorId: 'run-older',
+      error: '',
+      manual: true,
+    };
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get
+      .mockReset()
+      .mockResolvedValue({ schedule, recentFires: [manualFire] });
+    mockedWorkflowScheduleApi.runNow.mockResolvedValue({
+      scheduleId: schedule.scheduleId,
+      accepted: true,
+      scheduledFireAt: manualFire.scheduledFireAt,
+      idempotencyKey: 'schedule-alpha:manual:current',
+    });
+    const view = renderSurface(true, 'panel');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    await screen.findByRole('button', { name: 'Run now' });
+
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+      await advanceObservationTime(0);
+      mockedWorkflowScheduleApi.get.mockRejectedValue(
+        new Error('Temporary read failure'),
+      );
+      await advanceObservationTime(1000);
+      expect(
+        screen.getByText('Schedule status could not be checked'),
+      ).toBeVisible();
+      mockedWorkflowScheduleApi.get.mockResolvedValue({
+        schedule: { ...schedule, fireCount: 13 },
+        recentFires: [manualFire],
+      });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Check status again' }),
+        );
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      await advanceObservationTime(20_000);
+      expect(
+        screen.getByText('Schedule change is still pending'),
+      ).toBeVisible();
+      const readCount = mockedWorkflowScheduleApi.get.mock.calls.length;
+      await advanceObservationTime(5000);
+      expect(mockedWorkflowScheduleApi.get).toHaveBeenCalledTimes(readCount);
+      mockedWorkflowScheduleApi.get.mockResolvedValue({
+        schedule,
+        recentFires: [
+          {
+            ...manualFire,
+            idempotencyKey: 'schedule-alpha:manual:current',
+            runActorId: 'run-current',
+          },
+        ],
+      });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Check status again' }),
+        );
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      await advanceObservationTime(0);
+      expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled();
+      expect(
+        screen.queryByText('Confirming schedule changes…'),
+      ).not.toBeInTheDocument();
+      expect(mockedWorkflowScheduleApi.runNow).toHaveBeenCalledTimes(1);
+      expect(mockToast.success).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps an accepted deletion visible until an authoritative tombstone is observed', async () => {
+    const schedule = createScheduleSummary();
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get
+      .mockReset()
+      .mockResolvedValue({ schedule, recentFires: [] });
+    mockedWorkflowScheduleApi.delete.mockResolvedValue({
+      scheduleId: schedule.scheduleId,
+      accepted: true,
+    });
+    const view = renderSurface(true, 'panel');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'More schedule actions' }),
+    );
+    fireEvent.click(
+      await screen.findByRole('menuitem', { name: 'Delete schedule' }),
+    );
+    await screen.findByText('Delete Daily workflow run?', {
+      selector: '.ant-modal-confirm-title',
+    });
+
+    jest.useFakeTimers();
+    try {
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Delete schedule' }),
+        );
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        screen.getByRole('region', { name: 'Schedule overview' }),
+      ).toBeVisible();
+      expect(
+        screen.getByRole('button', { name: 'Edit schedule' }),
+      ).toBeDisabled();
+      mockedWorkflowScheduleApi.list.mockResolvedValue({
+        items: [],
+        nextCursor: null,
+        totalCount: 0,
+      });
+      mockedWorkflowScheduleApi.get.mockResolvedValue({
+        schedule: { ...schedule, deleted: true },
+        recentFires: [],
+      });
+      await advanceObservationTime(1000);
+      expect(
+        screen.getByRole('heading', { name: 'No schedules yet' }),
+      ).toBeVisible();
+      expect(
+        screen.queryByRole('region', { name: 'Schedule overview' }),
+      ).not.toBeInTheDocument();
+      expect(mockedWorkflowScheduleApi.delete).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      jest.useRealTimers();
+    }
+  });
+
+  it('ignores a command receipt that arrives after the Schedule surface unmounts', async () => {
+    const schedule = createScheduleSummary();
+    mockedWorkflowScheduleApi.list.mockResolvedValue({
+      items: [schedule],
+      nextCursor: null,
+      totalCount: 1,
+    });
+    mockedWorkflowScheduleApi.get
+      .mockReset()
+      .mockResolvedValue({ schedule, recentFires: [] });
+    const receipt = {
+      scheduleId: schedule.scheduleId,
+      accepted: true,
+      scheduledFireAt: '2026-08-20T01:00:00Z',
+      idempotencyKey: 'schedule-alpha:manual:late',
+    };
+    let resolveReceipt: (value: typeof receipt) => void = () => undefined;
+    const delayedReceipt = new Promise<typeof receipt>((resolve) => {
+      resolveReceipt = resolve;
+    });
+    mockedWorkflowScheduleApi.runNow.mockReturnValue(delayedReceipt);
+    const view = renderSurface(true, 'panel');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'View Daily workflow run' }),
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }));
+    view.unmount();
+    await act(async () => {
+      resolveReceipt(receipt);
+      await delayedReceipt;
+    });
+    expect(mockToast.info).not.toHaveBeenCalled();
+    expect(mockedWorkflowScheduleApi.get).toHaveBeenCalledTimes(1);
   });
 
   it('keeps History focused on recent attempts and hands actual Runs to Activity', async () => {

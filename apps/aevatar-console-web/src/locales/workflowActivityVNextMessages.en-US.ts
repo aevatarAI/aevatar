@@ -792,6 +792,14 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.settings.notVerified': 'Not verified',
   'workflowActivityVNext.settings.workflowExecution': 'Workflow execution',
   'workflowActivityVNext.schedule.actionAccepted': 'Schedule action accepted.',
+  'workflowActivityVNext.schedule.observing': 'Confirming schedule changes…',
+  'workflowActivityVNext.schedule.observationFailed':
+    'Schedule status could not be checked',
+  'workflowActivityVNext.schedule.observationDelayed':
+    'Schedule change is still pending',
+  'workflowActivityVNext.schedule.observationRetryDescription':
+    'The request was accepted. Check its status again without submitting another request.',
+  'workflowActivityVNext.schedule.retryObservation': 'Check status again',
   'workflowActivityVNext.schedule.backToSchedules': 'Back to schedules',
   'workflowActivityVNext.schedule.change': 'Change schedule',
   'workflowActivityVNext.schedule.completedAt': 'Completed {date}',
