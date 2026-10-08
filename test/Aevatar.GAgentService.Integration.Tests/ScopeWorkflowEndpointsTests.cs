@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -1668,6 +1669,180 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task WorkflowExternalTriggerUpsert_ShouldUseDeterministicIdAndServerOwnedCredential()
+    {
+        var http = CreateHttpContext("scope-alpha");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+        var schedules = new RecordingWorkflowScheduledDispatchService();
+        var input = new WorkflowExternalTriggerConfigurationHttpRequest
+        {
+            DisplayName = "External trigger",
+            CronExpression = "0 9 * * *",
+            Timezone = "UTC",
+            Prompt = "run workflow",
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.UpsertExternalTrigger(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            input,
+            workflowQueryPort,
+            schedules,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        schedules.Ensured.Should().ContainSingle();
+        schedules.EnsureContexts.Should().ContainSingle().Which!.AuthenticatedNyxIdOwnerSubject
+            .Should().NotBeNull();
+        var configuration = schedules.Ensured[0];
+        configuration.ScheduleId.Should().StartWith("workflow-trigger-scope-alpha-");
+        configuration.Target.ServiceInvocation!.Auth!.Source
+            .Should().BeOfType<ScheduledServiceInvocationNyxIdCredentialSource>();
+        configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>().Prompt
+            .Should().Be("run workflow");
+
+        var secondHttp = CreateHttpContext("scope-alpha");
+        var secondSchedules = new RecordingWorkflowScheduledDispatchService();
+        var secondResult = await ScopeWorkflowScheduleEndpoints.UpsertExternalTrigger(
+            secondHttp,
+            "scope-alpha",
+            "wf-alpha",
+            input,
+            workflowQueryPort,
+            secondSchedules,
+            CancellationToken.None);
+
+        await secondResult.ExecuteAsync(secondHttp);
+
+        secondSchedules.Ensured.Should().ContainSingle();
+        secondSchedules.Ensured[0].ScheduleId.Should().Be(configuration.ScheduleId);
+    }
+
+    [Fact]
+    public async Task WorkflowExternalTriggerGet_ShouldReturnNotConfiguredWhenBindingIsAbsent()
+    {
+        var http = CreateHttpContext("scope-alpha");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+        var schedules = new RecordingWorkflowScheduledDispatchService();
+
+        var result = await ScopeWorkflowScheduleEndpoints.GetExternalTrigger(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            workflowQueryPort,
+            schedules,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("\"configured\":false");
+        body.Should().Contain("\"status\":\"not_configured\"");
+        schedules.LastScheduleGet.Should().StartWith("workflow-trigger-scope-alpha-");
+    }
+
+    [Fact]
+    public async Task WorkflowExternalTriggerGet_ShouldReturnConfiguredBinding()
+    {
+        var triggerId = ExternalTriggerId("scope-alpha", "wf-alpha");
+        var http = CreateHttpContext("scope-alpha");
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+        var schedules = new RecordingWorkflowScheduledDispatchService
+        {
+            Detail = new ScheduledDispatchDetail(
+                WorkflowScheduleSummary(triggerId) with
+                {
+                    ServiceRevisionId = "rev-alpha",
+                    CredentialSourceKind = ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey,
+                    PermissionDigest = "digest-alpha",
+                    PolicyVersion = "policy-alpha",
+                },
+                []),
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.GetExternalTrigger(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            workflowQueryPort,
+            schedules,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("\"configured\":true");
+        body.Should().Contain($"\"triggerId\":\"{triggerId}\"");
+        body.Should().Contain("\"credentialSourceKind\":\"scheduledInvocationAgentKey\"");
+        body.Should().Contain("\"agentKeyReady\":true");
+        body.Should().Contain("\"permissionDigest\":\"digest-alpha\"");
+    }
+
+    [Fact]
+    public async Task WorkflowExternalTriggerFire_ShouldRejectMismatchedScopeWithoutMutation()
+    {
+        var triggerId = ExternalTriggerId("scope-alpha", "wf-alpha");
+        var http = CreateHttpContext("scope-beta");
+        var schedules = new RecordingWorkflowScheduledDispatchService
+        {
+            Detail = new ScheduledDispatchDetail(WorkflowScheduleSummary(triggerId), []),
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.FireExternalTrigger(
+            http,
+            "scope-beta",
+            triggerId,
+            schedules,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        body.Should().Contain("WORKFLOW_EXTERNAL_TRIGGER_NOT_FOUND");
+        schedules.RunNowScheduleIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowExternalTriggerFire_ShouldPassExpectedWorkflowTarget()
+    {
+        var triggerId = ExternalTriggerId("scope-alpha", "wf-alpha");
+        var http = CreateHttpContext("scope-alpha");
+        var schedules = new RecordingWorkflowScheduledDispatchService
+        {
+            Detail = new ScheduledDispatchDetail(WorkflowScheduleSummary(triggerId), []),
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.FireExternalTrigger(
+            http,
+            "scope-alpha",
+            triggerId,
+            schedules,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        schedules.RunNowScheduleIds.Should().ContainSingle().Which.Should().Be(triggerId);
+        schedules.RunNowContexts.Should().ContainSingle().Which!.ExpectedServiceTarget!.ServiceIdentity.ServiceId
+            .Should().Be("svc-alpha");
+    }
+
+    [Fact]
     public async Task WorkflowScheduleCreate_ShouldResolvePublishedServiceTargetWithoutTeamOwner()
     {
         var http = CreateHttpContext("scope-alpha");
@@ -2453,6 +2628,10 @@ public sealed class ScopeWorkflowEndpointsTests
         },
         string.Empty);
 
+    private static string ExternalTriggerId(string scopeId, string workflowId) =>
+        $"workflow-trigger-{scopeId}-{Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(workflowId))).ToLowerInvariant()[..24]}";
+
     private static ScheduledDispatchSummary WorkflowScheduleSummary(string scheduleId) => new(
         scheduleId,
         "Daily run",
@@ -2542,6 +2721,8 @@ public sealed class ScopeWorkflowEndpointsTests
     {
         public List<ScheduledDispatchConfiguration> Created { get; } = [];
         public List<ScheduledDispatchMutationContext?> CreateContexts { get; } = [];
+        public List<ScheduledDispatchConfiguration> Ensured { get; } = [];
+        public List<ScheduledDispatchMutationContext?> EnsureContexts { get; } = [];
         public List<(string ScheduleId, ScheduledDispatchConfiguration Configuration)> Updated { get; } = [];
         public List<ScheduledDispatchMutationContext?> UpdateContexts { get; } = [];
         public List<ScheduledDispatchMutationContext?> EnableContexts { get; } = [];
@@ -2570,8 +2751,12 @@ public sealed class ScopeWorkflowEndpointsTests
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
             ScheduledDispatchConfiguration configuration,
             ScheduledDispatchMutationContext? context = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(MutationReceipt(configuration.ScheduleId));
+            CancellationToken ct = default)
+        {
+            Ensured.Add(configuration);
+            EnsureContexts.Add(context);
+            return Task.FromResult(MutationReceipt(configuration.ScheduleId));
+        }
 
         public Task<ScheduledDispatchMutationReceipt> UpdateAsync(
             string scheduleId,

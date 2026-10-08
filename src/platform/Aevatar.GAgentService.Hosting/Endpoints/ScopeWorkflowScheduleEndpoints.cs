@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.Capabilities;
@@ -23,6 +25,23 @@ internal static class ScopeWorkflowScheduleEndpoints
 
     public static RouteGroupBuilder MapScopeWorkflowScheduleEndpoints(this RouteGroupBuilder group)
     {
+        group.MapPost("/{scopeId}/workflows/{workflowId}/external-trigger", UpsertExternalTrigger)
+            .Produces<WorkflowExternalTriggerHttpResult>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
+        group.MapGet("/{scopeId}/workflows/{workflowId}/external-trigger", GetExternalTrigger)
+            .Produces<WorkflowExternalTriggerHttpResult>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound);
+        group.MapPost("/{scopeId}/workflow-triggers/{triggerId}:fire", FireExternalTrigger)
+            .Produces<WorkflowExternalTriggerFireHttpResult>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
         group.MapGet("/{scopeId}/workflows/{workflowId}/schedules", List)
             .Produces<ScheduledDispatchListResult>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
@@ -78,6 +97,126 @@ internal static class ScopeWorkflowScheduleEndpoints
             .Produces(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status409Conflict);
         return group;
+    }
+
+    internal static async Task<IResult> UpsertExternalTrigger(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        WorkflowExternalTriggerConfigurationHttpRequest input,
+        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        [FromServices] IScheduledDispatchApplicationService schedules,
+        CancellationToken ct = default)
+    {
+        var resolved = await ResolveWorkflowAsync(http, scopeId, workflowId, workflowQueryPort, ct);
+        if (resolved.Result != null)
+            return resolved.Result;
+
+        ScheduledDispatchConfiguration configuration;
+        ScheduledDispatchMutationContext context;
+        try
+        {
+            context = ResolveMutationContext(http, resolved.Workflow!);
+            configuration = BuildExternalTriggerConfiguration(
+                resolved.Workflow!,
+                input,
+                BuildExternalTriggerId(scopeId, workflowId),
+                context.AuthenticatedNyxIdOwnerSubject);
+        }
+        catch (Exception ex) when (ScheduledDispatchEndpoints.TryMapScheduleConfigurationError(ex, out var result))
+        {
+            return result;
+        }
+
+        try
+        {
+            var receipt = await schedules.EnsureAsync(configuration, context, ct);
+            var response = WorkflowExternalTriggerHttpResult.FromMutation(
+                configured: true,
+                resolved.Workflow!,
+                configuration,
+                receipt,
+                ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId,
+                CredentialExpiresAt: null,
+                PermissionDigest: string.Empty,
+                PolicyVersion: string.Empty);
+            return Results.Accepted(BuildExternalTriggerLocation(scopeId, receipt.ScheduleId), response);
+        }
+        catch (Exception ex) when (ScheduledDispatchEndpoints.TryMapScheduleMutationError(ex, out var result))
+        {
+            return result;
+        }
+    }
+
+    internal static async Task<IResult> GetExternalTrigger(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        [FromServices] IScheduledDispatchApplicationService schedules,
+        CancellationToken ct = default)
+    {
+        var resolved = await ResolveWorkflowAsync(http, scopeId, workflowId, workflowQueryPort, ct);
+        if (resolved.Result != null)
+            return resolved.Result;
+
+        var triggerId = BuildExternalTriggerId(scopeId, workflowId);
+        var detail = await schedules.GetAsync(triggerId, ct);
+        if (detail == null || !BelongsToWorkflow(detail.Schedule, resolved.Workflow!))
+        {
+            return Results.Ok(WorkflowExternalTriggerHttpResult.NotConfigured(
+                resolved.Workflow!,
+                triggerId));
+        }
+
+        return Results.Ok(WorkflowExternalTriggerHttpResult.FromSummary(
+            configured: true,
+            resolved.Workflow!,
+            detail.Schedule));
+    }
+
+    internal static async Task<IResult> FireExternalTrigger(
+        HttpContext http,
+        string scopeId,
+        string triggerId,
+        [FromServices] IScheduledDispatchApplicationService schedules,
+        CancellationToken ct = default)
+    {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+        if (TryCreateInvalidScheduleIdResult(triggerId, out var invalidTriggerId))
+            return invalidTriggerId;
+
+        var detail = await schedules.GetAsync(triggerId, ct);
+        if (detail == null || !IsWorkflowExternalTriggerForScope(detail.Schedule, scopeId, triggerId))
+        {
+            return Results.NotFound(new
+            {
+                code = "WORKFLOW_EXTERNAL_TRIGGER_NOT_FOUND",
+                message = $"Workflow trigger '{triggerId}' was not found for scope '{scopeId}'.",
+            });
+        }
+
+        try
+        {
+            var receipt = await schedules.RunNowAsync(
+                triggerId,
+                new ScheduledDispatchMutationContext(
+                    scopeId,
+                    ExpectedServiceTarget: new ScheduledDispatchExpectedServiceTarget(
+                        ScheduledDispatchScheduleKind.Workflow,
+                        ScheduledDispatchTargetKind.ServiceInvocation,
+                        detail.Schedule.ServiceIdentity,
+                        ChatEndpointId)),
+                ct);
+            return Results.Accepted(
+                BuildExternalTriggerLocation(scopeId, triggerId),
+                WorkflowExternalTriggerFireHttpResult.FromReceipt(receipt));
+        }
+        catch (Exception ex) when (ScheduledDispatchEndpoints.TryMapScheduleMutationError(ex, out var result))
+        {
+            return result;
+        }
     }
 
     internal static async Task<IResult> Create(
@@ -481,6 +620,27 @@ internal static class ScopeWorkflowScheduleEndpoints
                string.Equals(schedule.ServiceKey, workflow.ServiceKey, StringComparison.Ordinal);
     }
 
+    private static ScheduledDispatchConfiguration BuildExternalTriggerConfiguration(
+        ScopeWorkflowSummary workflow,
+        WorkflowExternalTriggerConfigurationHttpRequest input,
+        string triggerId,
+        ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject) =>
+        BuildConfiguration(
+            workflow,
+            new WorkflowScheduleConfigurationHttpRequest
+            {
+                ScheduleId = triggerId,
+                DisplayName = input.DisplayName,
+                CronExpression = input.CronExpression,
+                Timezone = input.Timezone,
+                Enabled = input.Enabled,
+                Prompt = input.Prompt,
+                ScheduleMode = input.ScheduleMode,
+                OneShotFireAt = input.OneShotFireAt,
+            },
+            triggerId,
+            authenticatedOwnerSubject);
+
     private static ScheduledDispatchConfiguration BuildConfiguration(
         ScopeWorkflowSummary workflow,
         WorkflowScheduleConfigurationHttpRequest input,
@@ -634,6 +794,29 @@ internal static class ScopeWorkflowScheduleEndpoints
         return null;
     }
 
+    private static string BuildExternalTriggerId(string scopeId, string workflowId)
+    {
+        var normalizedScopeId = scopeId.Trim();
+        var normalizedWorkflowId = workflowId.Trim();
+        var workflowHash = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(normalizedWorkflowId)))
+            .ToLowerInvariant()[..24];
+        return $"workflow-trigger-{normalizedScopeId}-{workflowHash}";
+    }
+
+    private static string BuildExternalTriggerLocation(string scopeId, string triggerId) =>
+        $"/api/scopes/{Uri.EscapeDataString(scopeId)}/workflow-triggers/{Uri.EscapeDataString(triggerId)}:fire";
+
+    private static bool IsWorkflowExternalTriggerForScope(
+        ScheduledDispatchSummary schedule,
+        string scopeId,
+        string triggerId) =>
+        schedule.ScheduleId == triggerId &&
+        triggerId.StartsWith($"workflow-trigger-{scopeId}-", StringComparison.Ordinal) &&
+        schedule.ScheduleKind == ScheduledDispatchScheduleKind.Workflow &&
+        schedule.TargetKind == ScheduledDispatchTargetKind.ServiceInvocation &&
+        string.Equals(schedule.ServiceEndpointId, ChatEndpointId, StringComparison.Ordinal);
+
     private static string BuildWorkflowScheduleLocation(string scopeId, string workflowId, string scheduleId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId)}/workflows/{Uri.EscapeDataString(workflowId)}/schedules/{Uri.EscapeDataString(scheduleId)}";
 
@@ -644,6 +827,141 @@ internal static class ScopeWorkflowScheduleEndpoints
     private sealed record WorkflowScheduleOwnershipResult(
         ScheduledDispatchDetail? Detail,
         IResult? Result);
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record WorkflowExternalTriggerConfigurationHttpRequest
+{
+    public string? DisplayName { get; init; }
+    public string? CronExpression { get; init; }
+    public string? Timezone { get; init; }
+    public bool Enabled { get; init; } = true;
+    public string? Prompt { get; init; }
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public ScheduledDispatchScheduleMode ScheduleMode { get; init; } = ScheduledDispatchScheduleMode.RecurringCron;
+    public DateTimeOffset? OneShotFireAt { get; init; }
+}
+
+public sealed record WorkflowExternalTriggerHttpResult
+{
+    public bool Configured { get; init; }
+    public required string TriggerId { get; init; }
+    public required string WorkflowId { get; init; }
+    public required string ServiceId { get; init; }
+    public string RevisionId { get; init; } = string.Empty;
+    public string EndpointId { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public bool Enabled { get; init; }
+    public string CronExpression { get; init; } = string.Empty;
+    public string Timezone { get; init; } = string.Empty;
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public ScheduledDispatchScheduleMode ScheduleMode { get; init; }
+    public DateTimeOffset? OneShotFireAt { get; init; }
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public ScheduledDispatchCredentialSourceKind CredentialSourceKind { get; init; }
+    public bool AgentKeyReady { get; init; }
+    public DateTimeOffset? CredentialExpiresAt { get; init; }
+    public string PermissionDigest { get; init; } = string.Empty;
+    public string PolicyVersion { get; init; } = string.Empty;
+
+    public static WorkflowExternalTriggerHttpResult FromMutation(
+        bool configured,
+        ScopeWorkflowSummary workflow,
+        ScheduledDispatchConfiguration configuration,
+        ScheduledDispatchMutationReceipt receipt,
+        ScheduledDispatchCredentialSourceKind credentialSourceKind,
+        DateTimeOffset? CredentialExpiresAt,
+        string PermissionDigest,
+        string PolicyVersion)
+    {
+        var invocation = configuration.Target.ServiceInvocation!;
+        return new WorkflowExternalTriggerHttpResult
+        {
+            Configured = configured,
+            TriggerId = receipt.ScheduleId,
+            WorkflowId = workflow.WorkflowId,
+            ServiceId = invocation.Identity.ServiceId,
+            RevisionId = invocation.RevisionId ?? workflow.ActiveRevisionId,
+            EndpointId = invocation.EndpointId,
+            Status = configuration.Enabled ? "enabled" : "disabled",
+            Enabled = configuration.Enabled,
+            CronExpression = configuration.CronExpression,
+            Timezone = configuration.Timezone,
+            ScheduleMode = configuration.ScheduleMode,
+            OneShotFireAt = configuration.OneShotFireAt,
+            CredentialSourceKind = credentialSourceKind,
+            AgentKeyReady = credentialSourceKind == ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey,
+            CredentialExpiresAt = CredentialExpiresAt,
+            PermissionDigest = PermissionDigest,
+            PolicyVersion = PolicyVersion,
+        };
+    }
+
+    public static WorkflowExternalTriggerHttpResult FromSummary(
+        bool configured,
+        ScopeWorkflowSummary workflow,
+        ScheduledDispatchSummary schedule) =>
+        new()
+        {
+            Configured = configured,
+            TriggerId = schedule.ScheduleId,
+            WorkflowId = workflow.WorkflowId,
+            ServiceId = schedule.ServiceId,
+            RevisionId = schedule.ServiceRevisionId,
+            EndpointId = schedule.ServiceEndpointId,
+            Status = schedule.Deleted ? "deleted" : schedule.Enabled ? "enabled" : "disabled",
+            Enabled = schedule.Enabled,
+            CronExpression = schedule.CronExpression,
+            Timezone = schedule.Timezone,
+            ScheduleMode = schedule.ScheduleMode,
+            OneShotFireAt = schedule.OneShotFireAt,
+            CredentialSourceKind = schedule.CredentialSourceKind,
+            AgentKeyReady = schedule.CredentialSourceKind == ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey,
+            CredentialExpiresAt = schedule.CredentialExpiresAt,
+            PermissionDigest = schedule.PermissionDigest,
+            PolicyVersion = schedule.PolicyVersion,
+        };
+
+    public static WorkflowExternalTriggerHttpResult NotConfigured(
+        ScopeWorkflowSummary workflow,
+        string triggerId) =>
+        new()
+        {
+            Configured = false,
+            TriggerId = triggerId,
+            WorkflowId = workflow.WorkflowId,
+            ServiceId = workflow.PublishedServiceId,
+            RevisionId = workflow.ActiveRevisionId,
+            EndpointId = "chat",
+            Status = "not_configured",
+            CredentialSourceKind = ScheduledDispatchCredentialSourceKind.None,
+        };
+}
+
+public sealed record WorkflowExternalTriggerFireHttpResult
+{
+    public required string TriggerId { get; init; }
+    public bool Accepted { get; init; }
+    public DateTimeOffset ScheduledFireAt { get; init; }
+    public required string IdempotencyKey { get; init; }
+    public required string CommandId { get; init; }
+    public required string CorrelationId { get; init; }
+    public DateTimeOffset AckedAt { get; init; }
+    public string AckStage { get; init; } = string.Empty;
+
+    public static WorkflowExternalTriggerFireHttpResult FromReceipt(
+        ScheduledDispatchRunNowReceipt receipt) =>
+        new()
+        {
+            TriggerId = receipt.ScheduleId,
+            Accepted = receipt.Accepted,
+            ScheduledFireAt = receipt.ScheduledFireAt,
+            IdempotencyKey = receipt.IdempotencyKey,
+            CommandId = receipt.CommandId,
+            CorrelationId = receipt.CorrelationId,
+            AckedAt = receipt.AckedAt,
+            AckStage = receipt.AckStage,
+        };
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
