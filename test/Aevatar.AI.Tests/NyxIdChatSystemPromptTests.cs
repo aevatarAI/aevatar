@@ -264,7 +264,7 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("For any connected-service read or write");
         prompt.Should().Contain("establishes current caller-specific service facts");
         prompt.Should().Contain("execution tools only run supplied work and cannot establish that inventory");
-        prompt.Should().Contain("copying the exact `user_service_id`, `source`, `skill_id`, `literal_version`, and `manifest_digest`");
+        prompt.Should().Contain("copying only the exact `source`, `skill_id`, `literal_version`, and `manifest_digest`");
         prompt.Should().Contain("temporary read failure");
         prompt.Should().Contain("binding is explicitly missing or revoked");
         prompt.Should().NotContain("first call `use_skill(skill=\"nyxid-service-discovery\")`");

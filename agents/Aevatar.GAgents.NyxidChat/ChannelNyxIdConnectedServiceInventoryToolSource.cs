@@ -467,35 +467,42 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             .ConfigureAwait(false);
         var ensureResult = await EnsureInventoryRecommendedSkillRefsAsync(inventory, token, ct).ConfigureAwait(false);
         inventory = ensureResult.Inventory;
-        var service = inventory.Instances.FirstOrDefault(instance =>
-            string.Equals(instance.UserServiceId, arguments.UserServiceId, StringComparison.Ordinal));
-        if (service is null)
+        var matches = inventory.Instances
+            .Select(instance =>
+            {
+                var skillRef = instance.RecommendedSkillRefs.FirstOrDefault(candidate =>
+                    SameRecommendedSkillRef(candidate, arguments));
+                return (instance, skillRef);
+            })
+            .Where(static candidate => candidate.skillRef is not null)
+            .Take(2)
+            .ToArray();
+        if (matches.Length == 0)
         {
-            var visibleInstances = string.Join(';', inventory.Instances.Select(static instance =>
-                string.Join('|',
-                    $"id={instance.UserServiceId}",
-                    $"displaySlug={instance.DisplaySlug}",
-                    $"catalogSlug={instance.CatalogServiceSlug}",
-                    $"catalogId={instance.CatalogServiceId}",
-                    $"active={instance.IsActive}",
-                    $"credentialAllowed={instance.CredentialAllowed}",
-                    $"credentialSource={instance.CredentialSource}",
-                    $"accessTokenSource={instance.AccessTokenSource}")));
             _logger.LogWarning(
-                "NyxID recommended skill service instance is not visible. requestedUserServiceId={UserServiceId} inventoryReadAuthority={InventoryReadAuthority} visibleInstanceCount={VisibleInstanceCount} visibleInstances={VisibleInstances}",
-                arguments.UserServiceId,
+                "NyxID recommended skill ref is not visible. skillId={SkillId} literalVersion={LiteralVersion} manifestDigest={ManifestDigest} inventoryReadAuthority={InventoryReadAuthority} visibleInstanceCount={VisibleInstanceCount}",
+                arguments.SkillId,
+                arguments.LiteralVersion,
+                arguments.ManifestDigest,
                 inventoryReadAuthority,
-                inventory.Instances.Count,
-                visibleInstances);
-            return RecommendedSkillFailure("service_instance_not_visible");
-        }
-        var skillRef = service.RecommendedSkillRefs.FirstOrDefault(candidate =>
-            candidate.Source == NyxIdRecommendedSkillSource.Ornn &&
-            string.Equals(candidate.SkillId, arguments.SkillId, StringComparison.Ordinal) &&
-            string.Equals(candidate.LiteralVersion, arguments.LiteralVersion, StringComparison.Ordinal) &&
-            string.Equals(candidate.ManifestDigest, arguments.ManifestDigest, StringComparison.Ordinal));
-        if (skillRef is null)
+                inventory.Instances.Count);
             return RecommendedSkillFailure("recommended_skill_ref_not_visible");
+        }
+
+        if (matches.Length > 1)
+        {
+            _logger.LogWarning(
+                "NyxID recommended skill ref is ambiguous. skillId={SkillId} literalVersion={LiteralVersion} manifestDigest={ManifestDigest} inventoryReadAuthority={InventoryReadAuthority} matchingInstanceCount={MatchingInstanceCount}",
+                arguments.SkillId,
+                arguments.LiteralVersion,
+                arguments.ManifestDigest,
+                inventoryReadAuthority,
+                matches.Length);
+            return RecommendedSkillFailure("recommended_skill_ref_ambiguous");
+        }
+
+        var service = matches[0].instance;
+        var skillRef = matches[0].skillRef!;
         if (TryLoadGeneratedRecommendedSkill(ensureResult.CreatedSkills, arguments, service, out var generatedSkillJson))
             return generatedSkillJson;
 
@@ -1252,23 +1259,24 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
                 string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
                 return null;
-            var userServiceId = ReadRequiredString(document.RootElement, "user_service_id");
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (property.Name is not ("source" or "skill_id" or "literal_version" or "manifest_digest"))
+                    return null;
+            }
+
             var source = ReadRequiredString(document.RootElement, "source");
             var skillId = ReadRequiredString(document.RootElement, "skill_id");
             var literalVersion = ReadRequiredString(document.RootElement, "literal_version");
-            var manifestDigest = ReadRequiredString(document.RootElement, "manifest_digest");
-            if (userServiceId is null || source is null || skillId is null ||
-                literalVersion is null || manifestDigest is null ||
+            var manifestDigest = NormalizeRecommendedSkillManifestDigest(
+                ReadRequiredString(document.RootElement, "manifest_digest"));
+            if (source is null || skillId is null || literalVersion is null || manifestDigest is null ||
                 !string.Equals(source, "ornn", StringComparison.Ordinal))
             {
                 return null;
             }
 
-            return new RecommendedSkillArguments(
-                userServiceId,
-                skillId,
-                literalVersion,
-                manifestDigest);
+            return new RecommendedSkillArguments(skillId, literalVersion, manifestDigest);
         }
         catch (JsonException)
         {
@@ -1871,7 +1879,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         NyxIdConnectedServiceRawRequest? RawRequest);
 
     private sealed record RecommendedSkillArguments(
-        string UserServiceId,
         string SkillId,
         string LiteralVersion,
         string ManifestDigest);
@@ -2020,13 +2027,12 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
             {
               "type":"object",
               "properties":{
-                "user_service_id":{"type":"string","description":"Exact user_service_id from nyxid_service_inventory."},
                 "source":{"type":"string","enum":["ornn"]},
                 "skill_id":{"type":"string","description":"Exact skill_id from the selected recommended_skill_refs entry."},
                 "literal_version":{"type":"string","description":"Exact literal_version from the selected recommended_skill_refs entry."},
                 "manifest_digest":{"type":"string","description":"Exact manifest_digest from the selected recommended_skill_refs entry."}
               },
-              "required":["user_service_id","source","skill_id","literal_version","manifest_digest"],
+              "required":["source","skill_id","literal_version","manifest_digest"],
               "additionalProperties":false
             }
             """;
