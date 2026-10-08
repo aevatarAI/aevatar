@@ -43,8 +43,8 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
     private readonly IScheduledDispatchApplicationService _scheduleService;
     private readonly IScheduledInvocationAuthorizationPlanner _authorizationPlanner;
     private readonly IScheduledInvocationAuthorizationRevalidator _authorizationRevalidator;
-    private readonly IScheduledInvocationWorkflowEvidenceQueryPort _workflowEvidenceQueryPort;
-    private readonly IStudioScheduledCredentialMaterializer _credentialMaterializer;
+    private readonly IScheduledInvocationWorkflowEvidenceQueryPort? _workflowEvidenceQueryPort;
+    private readonly IStudioScheduledCredentialMaterializer? _credentialMaterializer;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WorkflowExternalTriggerProvisioningService> _logger;
 
@@ -52,16 +52,16 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
         IScheduledDispatchApplicationService scheduleService,
         IScheduledInvocationAuthorizationPlanner authorizationPlanner,
         IScheduledInvocationAuthorizationRevalidator authorizationRevalidator,
-        IScheduledInvocationWorkflowEvidenceQueryPort workflowEvidenceQueryPort,
-        IStudioScheduledCredentialMaterializer credentialMaterializer,
         TimeProvider timeProvider,
-        ILogger<WorkflowExternalTriggerProvisioningService>? logger = null)
+        ILogger<WorkflowExternalTriggerProvisioningService>? logger = null,
+        IStudioScheduledCredentialMaterializer? credentialMaterializer = null,
+        IScheduledInvocationWorkflowEvidenceQueryPort? workflowEvidenceQueryPort = null)
     {
         _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
         _authorizationPlanner = authorizationPlanner ?? throw new ArgumentNullException(nameof(authorizationPlanner));
         _authorizationRevalidator = authorizationRevalidator ?? throw new ArgumentNullException(nameof(authorizationRevalidator));
-        _workflowEvidenceQueryPort = workflowEvidenceQueryPort ?? throw new ArgumentNullException(nameof(workflowEvidenceQueryPort));
-        _credentialMaterializer = credentialMaterializer ?? throw new ArgumentNullException(nameof(credentialMaterializer));
+        _workflowEvidenceQueryPort = workflowEvidenceQueryPort;
+        _credentialMaterializer = credentialMaterializer;
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? NullLogger<WorkflowExternalTriggerProvisioningService>.Instance;
     }
@@ -80,6 +80,9 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
         var scheduleId = NormalizeRequired(configuration.ScheduleId, nameof(configuration.ScheduleId));
         var serviceInvocation = configuration.Target.ServiceInvocation
             ?? throw new ArgumentException("External trigger target must be a service invocation.", nameof(configuration));
+        if (_workflowEvidenceQueryPort == null)
+            throw new InvalidOperationException("workflow_authorization_evidence_query_not_configured");
+
         var workflowEvidence = await _workflowEvidenceQueryPort.GetAsync(
             workflow.ScopeId,
             workflow.PublishedServiceId,
@@ -104,6 +107,9 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
             ct);
         if (!validation.Success)
             throw new InvalidOperationException(validation.Detail);
+
+        if (_credentialMaterializer == null)
+            throw new InvalidOperationException("workflow_external_trigger_credential_materializer_not_configured");
 
         var validatedPlan = validation.ValidatedPlan!;
         var authorizationFact = ToScheduleAuthorizationFact(validatedPlan.Plan);
@@ -484,9 +490,11 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
             DateTimeOffset.FromUnixTimeMilliseconds(pending.KeyExpiresAtUnixMs),
             outcome.PendingRevocationOwner!,
             pending.DurableOperationGrants?.Select(static grant => grant.Clone()).ToArray());
+        var credentialMaterializer = _credentialMaterializer
+            ?? throw new InvalidOperationException("workflow_external_trigger_credential_materializer_not_configured");
         try
         {
-            return await _credentialMaterializer.RevokeAsync(
+            return await credentialMaterializer.RevokeAsync(
                 bearerToken,
                 authenticatedOwner,
                 credential,
