@@ -470,7 +470,25 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentTool
         var service = inventory.Instances.FirstOrDefault(instance =>
             string.Equals(instance.UserServiceId, arguments.UserServiceId, StringComparison.Ordinal));
         if (service is null)
+        {
+            var visibleInstances = string.Join(';', inventory.Instances.Select(static instance =>
+                string.Join('|',
+                    $"id={instance.UserServiceId}",
+                    $"displaySlug={instance.DisplaySlug}",
+                    $"catalogSlug={instance.CatalogServiceSlug}",
+                    $"catalogId={instance.CatalogServiceId}",
+                    $"active={instance.IsActive}",
+                    $"credentialAllowed={instance.CredentialAllowed}",
+                    $"credentialSource={instance.CredentialSource}",
+                    $"accessTokenSource={instance.AccessTokenSource}")));
+            _logger.LogWarning(
+                "NyxID recommended skill service instance is not visible. requestedUserServiceId={UserServiceId} inventoryReadAuthority={InventoryReadAuthority} visibleInstanceCount={VisibleInstanceCount} visibleInstances={VisibleInstances}",
+                arguments.UserServiceId,
+                inventoryReadAuthority,
+                inventory.Instances.Count,
+                visibleInstances);
             return RecommendedSkillFailure("service_instance_not_visible");
+        }
         var skillRef = service.RecommendedSkillRefs.FirstOrDefault(candidate =>
             candidate.Source == NyxIdRecommendedSkillSource.Ornn &&
             string.Equals(candidate.SkillId, arguments.SkillId, StringComparison.Ordinal) &&
