@@ -590,7 +590,35 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         tools.Select(static tool => tool.Name).Should().BeEquivalentTo(
             "nyxid_service_inventory",
             "nyxid_load_recommended_skill");
-        RecommendedSkillTool(tools).ParametersSchema.Should().Contain("manifest_digest");
+        var schema = JsonDocument.Parse(RecommendedSkillTool(tools).ParametersSchema).RootElement;
+        schema.GetProperty("properties").EnumerateObject().Select(static property => property.Name)
+            .Should().BeEquivalentTo("source", "skill_id", "literal_version", "manifest_digest");
+        schema.GetProperty("required").EnumerateArray().Select(static value => value.GetString())
+            .Should().BeEquivalentTo("source", "skill_id", "literal_version", "manifest_digest");
+        schema.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task LoadRecommendedSkillAsync_WhenLegacyUserServiceIdIsSupplied_RejectsBeforeInventoryRead()
+    {
+        var executionPort = new RecordingExecutionPort();
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(executionPort);
+        using var scope = AgentToolContextScope.Push(CreateSenderBindingContext());
+        var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync("""
+            {
+              "user_service_id":"user-service-1",
+              "source":"ornn",
+              "skill_id":"11111111-1111-1111-1111-111111111111",
+              "literal_version":"1.2",
+              "manifest_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+        executionPort.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -910,7 +938,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         var result = await tool.ExecuteAsync("""
             {
-              "user_service_id":"user-service-1",
               "source":"ornn",
               "skill_id":"11111111-1111-1111-1111-111111111111",
               "literal_version":"1.2",
@@ -1921,7 +1948,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
         var arguments = $$"""
             {
-              "user_service_id":"user-service-1",
               "source":"ornn",
               "skill_id":"11111111-1111-1111-1111-111111111111",
               "literal_version":"1.2",
@@ -1981,7 +2007,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
         var arguments = $$"""
             {
-              "user_service_id":"user-service-1",
               "source":"ornn",
               "skill_id":"11111111-1111-1111-1111-111111111111",
               "literal_version":"1.2",
@@ -2053,7 +2078,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         var result = await tool.ExecuteAsync($$"""
             {
-              "user_service_id":"user-service-1",
               "source":"ornn",
               "skill_id":"{{createdRef.SkillId}}",
               "literal_version":"{{createdRef.LiteralVersion}}",
@@ -2115,7 +2139,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         var result = await tool.ExecuteAsync($$"""
             {
-              "user_service_id":"user-service-1",
               "source":"ornn",
               "skill_id":"11111111-1111-1111-1111-111111111111",
               "literal_version":"1.2",
@@ -2160,7 +2183,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         const string argumentsJson = """
             {
-              "user_service_id":"user-service-1",
               "source":"ornn",
               "skill_id":"11111111-1111-1111-1111-111111111111",
               "literal_version":"1.2",
@@ -2204,7 +2226,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         var result = await tool.ExecuteAsync("""
             {
-              "user_service_id":"user-service-1",
               "source":"ornn",
               "skill_id":"11111111-1111-1111-1111-111111111111",
               "literal_version":"1.2",
@@ -2216,6 +2237,37 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         document.RootElement.GetProperty("failure_code").GetString()
             .Should().Be(nameof(ExactRemoteSkillFetchFailureCode.AccessDenied));
         creator.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task LoadRecommendedSkillAsync_WhenExactRefMatchesMultipleInstances_ReturnsAmbiguousWithoutFetching()
+    {
+        var manifestDigest = "sha256:" + new string('0', 64);
+        var handler = new InventoryHandler { KeysResponse = KeysWithDuplicateRecommendedSkill(manifestDigest) };
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var fetcher = new RecordingExactFetcher(ExactRemoteSkillFetchResult.Failed(
+            ExactRemoteSkillFetchFailureCode.Failed));
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            new RecordingExecutionPort(),
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(options, new HttpClient(handler))),
+            Substitute.For<INyxIdConnectedServiceCapabilityIssuer>(),
+            exactSkillFetcher: fetcher);
+        using var scope = AgentToolContextScope.Push(CreateRegistrationContext(hasSenderBinding: false));
+        var tool = RecommendedSkillTool(await source.DiscoverToolsAsync());
+
+        var result = await tool.ExecuteAsync($$"""
+            {
+              "source":"ornn",
+              "skill_id":"11111111-1111-1111-1111-111111111111",
+              "literal_version":"1.2",
+              "manifest_digest":"{{manifestDigest}}"
+            }
+            """);
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Be("recommended_skill_ref_ambiguous");
+        fetcher.CallCount.Should().Be(0);
     }
 
     [Fact]
@@ -2245,7 +2297,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 
         var result = await tool.ExecuteAsync("""
             {
-              "user_service_id":"user-service-1",
               "source":"ornn",
               "skill_id":"22222222-2222-2222-2222-222222222222",
               "literal_version":"1.2",
@@ -2365,6 +2416,55 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
               }
             }
           }
+        }
+        """;
+
+    private static string KeysWithDuplicateRecommendedSkill(string manifestDigest) => $$"""
+        {
+          "keys": [
+            {
+              "id": "user-service-1",
+              "slug": "calendar-primary",
+              "catalog_service_id": "catalog-calendar",
+              "label": "Calendar Primary",
+              "is_active": true,
+              "connected": true,
+              "status": "active",
+              "credential_source": { "type": "personal" },
+              "recommended_skill_refs": [
+                {
+                  "source": "ornn",
+                  "skill_id": "11111111-1111-1111-1111-111111111111",
+                  "literal_version": "1.2",
+                  "manifest_digest": "{{manifestDigest}}",
+                  "display_name": "Calendar Reader",
+                  "recommendation_name": "read-calendar-events",
+                  "revision": "rev-1"
+                }
+              ]
+            },
+            {
+              "id": "user-service-2",
+              "slug": "calendar-secondary",
+              "catalog_service_id": "catalog-calendar",
+              "label": "Calendar Secondary",
+              "is_active": true,
+              "connected": true,
+              "status": "active",
+              "credential_source": { "type": "personal" },
+              "recommended_skill_refs": [
+                {
+                  "source": "ornn",
+                  "skill_id": "11111111-1111-1111-1111-111111111111",
+                  "literal_version": "1.2",
+                  "manifest_digest": "{{manifestDigest}}",
+                  "display_name": "Calendar Reader",
+                  "recommendation_name": "read-calendar-events",
+                  "revision": "rev-1"
+                }
+              ]
+            }
+          ]
         }
         """;
 
