@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -106,6 +107,8 @@ internal static class ScopeWorkflowScheduleEndpoints
         WorkflowExternalTriggerConfigurationHttpRequest input,
         [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
         [FromServices] IScheduledDispatchApplicationService schedules,
+        [FromServices] IWorkflowExternalTriggerProvisioningPort externalTriggerProvisioning,
+        [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
         CancellationToken ct = default)
     {
         var resolved = await ResolveWorkflowAsync(http, scopeId, workflowId, workflowQueryPort, ct);
@@ -149,18 +152,28 @@ internal static class ScopeWorkflowScheduleEndpoints
 
         try
         {
-            var receipt = await schedules.EnsureAsync(configuration, context, ct);
-            var response = WorkflowExternalTriggerHttpResult.FromMutation(
+            var authority = await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                http,
+                bindingQuery,
+                context.AuthenticatedNyxIdOwnerSubject?.ExternalUserId,
+                ct);
+            var provisioned = await externalTriggerProvisioning.ProvisionAsync(
                 resolved.Workflow!,
                 configuration,
-                receipt,
-                ScheduledDispatchCredentialSourceKind.ScopeOwnerNyxId,
-                CredentialExpiresAt: null,
-                PermissionDigest: string.Empty,
-                PolicyVersion: string.Empty);
-            return Results.Accepted(BuildExternalTriggerLocation(scopeId, receipt.ScheduleId), response);
+                context,
+                authority,
+                ct);
+            var response = WorkflowExternalTriggerHttpResult.FromMutation(
+                resolved.Workflow!,
+                provisioned.Configuration,
+                provisioned.Receipt,
+                provisioned.CredentialSourceKind,
+                provisioned.CredentialExpiresAt,
+                provisioned.PermissionDigest,
+                provisioned.PolicyVersion);
+            return Results.Accepted(BuildExternalTriggerLocation(scopeId, provisioned.Receipt.ScheduleId), response);
         }
-        catch (Exception ex) when (ScheduledDispatchEndpoints.TryMapScheduleMutationError(ex, out var result))
+        catch (Exception ex) when (TryMapExternalTriggerProvisioningError(ex, out var result))
         {
             return result;
         }
@@ -818,7 +831,7 @@ internal static class ScopeWorkflowScheduleEndpoints
         var triggerKey = string.Join(
             ":",
             workflow.ScopeId.Trim(),
-            workflow.DefinitionActorId.Trim(),
+            workflow.ActorId.Trim(),
             workflow.PublishedServiceId.Trim());
         var triggerHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(triggerKey)))
             .ToLowerInvariant()[..32];
@@ -827,6 +840,35 @@ internal static class ScopeWorkflowScheduleEndpoints
 
     private static string BuildExternalTriggerLocation(string scopeId, string triggerId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId)}/workflow-triggers/{Uri.EscapeDataString(triggerId)}:fire";
+
+    private static bool TryMapExternalTriggerProvisioningError(Exception ex, out IResult result)
+    {
+        if (ScheduledDispatchEndpoints.TryMapScheduleMutationError(ex, out result))
+            return true;
+
+        switch (ex)
+        {
+            case UnauthorizedAccessException unauthorized:
+                result = Results.Json(
+                    new
+                    {
+                        code = "WORKFLOW_EXTERNAL_TRIGGER_AUTHORIZATION_REQUIRED",
+                        message = unauthorized.Message,
+                    },
+                    statusCode: StatusCodes.Status401Unauthorized);
+                return true;
+            case InvalidOperationException invalid:
+                result = Results.BadRequest(new
+                {
+                    code = "WORKFLOW_EXTERNAL_TRIGGER_PROVISIONING_FAILED",
+                    message = invalid.Message,
+                });
+                return true;
+            default:
+                result = Results.Empty;
+                return false;
+        }
+    }
 
     private static bool IsWorkflowExternalTriggerForScope(
         ScheduledDispatchSummary schedule,

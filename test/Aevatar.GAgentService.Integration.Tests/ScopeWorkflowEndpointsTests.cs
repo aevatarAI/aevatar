@@ -7,12 +7,16 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -1672,11 +1676,14 @@ public sealed class ScopeWorkflowEndpointsTests
     public async Task WorkflowExternalTriggerUpsert_ShouldUseDeterministicIdAndServerOwnedCredential()
     {
         var http = CreateHttpContext("scope-alpha");
+        http.Request.Headers.Authorization = "Bearer transient-provisioning-token";
         var workflowQueryPort = new RecordingScopeWorkflowQueryPort
         {
             LookupResult = RunnableWorkflow(),
         };
         var schedules = new RecordingWorkflowScheduledDispatchService();
+        var provisioner = new RecordingWorkflowExternalTriggerProvisioningPort();
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
         var input = new WorkflowExternalTriggerConfigurationHttpRequest
         {
             DisplayName = "External trigger",
@@ -1692,6 +1699,8 @@ public sealed class ScopeWorkflowEndpointsTests
             input,
             workflowQueryPort,
             schedules,
+            provisioner,
+            bindingQuery,
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
@@ -1701,18 +1710,26 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("\"configured\":false");
         body.Should().Contain("\"status\":\"pending\"");
         body.Should().Contain("\"acceptanceStage\":\"accepted\"");
-        schedules.Ensured.Should().ContainSingle();
-        schedules.EnsureContexts.Should().ContainSingle().Which!.AuthenticatedNyxIdOwnerSubject
+        body.Should().Contain("\"credentialSourceKind\":\"ScheduledInvocationAgentKey\"");
+        body.Should().Contain("\"agentKeyReady\":true");
+        schedules.Ensured.Should().BeEmpty();
+        provisioner.Configurations.Should().ContainSingle();
+        provisioner.Contexts.Should().ContainSingle().Which!.AuthenticatedNyxIdOwnerSubject
             .Should().NotBeNull();
-        var configuration = schedules.Ensured[0];
-        configuration.ScheduleId.Should().StartWith("workflow-trigger-scope-alpha-");
+        provisioner.Authorities.Should().ContainSingle().Which.AuthenticatedOwner.VerifiedBindingId
+            .Should().Be("binding-caller-alpha");
+        var configuration = provisioner.Configurations[0];
+        configuration.ScheduleId.Should().StartWith("workflow-trigger-");
+        configuration.ScheduleId.Should().HaveLength("workflow-trigger-".Length + 32);
         configuration.Target.ServiceInvocation!.Auth!.Source
             .Should().BeOfType<ScheduledServiceInvocationNyxIdCredentialSource>();
         configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>().Prompt
             .Should().Be("run workflow");
 
         var secondHttp = CreateHttpContext("scope-alpha");
+        secondHttp.Request.Headers.Authorization = "Bearer transient-provisioning-token";
         var secondSchedules = new RecordingWorkflowScheduledDispatchService();
+        var secondProvisioner = new RecordingWorkflowExternalTriggerProvisioningPort();
         var secondResult = await ScopeWorkflowScheduleEndpoints.UpsertExternalTrigger(
             secondHttp,
             "scope-alpha",
@@ -1720,12 +1737,15 @@ public sealed class ScopeWorkflowEndpointsTests
             input,
             workflowQueryPort,
             secondSchedules,
+            secondProvisioner,
+            bindingQuery,
             CancellationToken.None);
 
         await secondResult.ExecuteAsync(secondHttp);
 
-        secondSchedules.Ensured.Should().ContainSingle();
-        secondSchedules.Ensured[0].ScheduleId.Should().Be(configuration.ScheduleId);
+        secondSchedules.Ensured.Should().BeEmpty();
+        secondProvisioner.Configurations.Should().ContainSingle();
+        secondProvisioner.Configurations[0].ScheduleId.Should().Be(configuration.ScheduleId);
     }
 
     [Fact]
@@ -1733,6 +1753,7 @@ public sealed class ScopeWorkflowEndpointsTests
     {
         var triggerId = ExternalTriggerId("scope-alpha", "wf-alpha");
         var http = CreateHttpContext("scope-alpha");
+        http.Request.Headers.Authorization = "Bearer transient-provisioning-token";
         var workflowQueryPort = new RecordingScopeWorkflowQueryPort
         {
             LookupResult = RunnableWorkflow(),
@@ -1753,6 +1774,8 @@ public sealed class ScopeWorkflowEndpointsTests
                 },
                 []),
         };
+        var provisioner = new RecordingWorkflowExternalTriggerProvisioningPort();
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
 
         var result = await ScopeWorkflowScheduleEndpoints.UpsertExternalTrigger(
             http,
@@ -1761,6 +1784,8 @@ public sealed class ScopeWorkflowEndpointsTests
             new WorkflowExternalTriggerConfigurationHttpRequest { Prompt = "run workflow" },
             workflowQueryPort,
             schedules,
+            provisioner,
+            bindingQuery,
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
@@ -1769,6 +1794,7 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
         body.Should().Contain("WORKFLOW_EXTERNAL_TRIGGER_ID_CONFLICT");
         schedules.Ensured.Should().BeEmpty();
+        provisioner.Configurations.Should().BeEmpty();
     }
 
     [Fact]
@@ -1795,7 +1821,8 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"configured\":false");
         body.Should().Contain("\"status\":\"not_configured\"");
-        schedules.LastScheduleGet.Should().StartWith("workflow-trigger-scope-alpha-");
+        schedules.LastScheduleGet.Should().StartWith("workflow-trigger-");
+        schedules.LastScheduleGet.Should().HaveLength("workflow-trigger-".Length + 32);
     }
 
     [Fact]
@@ -1834,7 +1861,7 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"configured\":true");
         body.Should().Contain($"\"triggerId\":\"{triggerId}\"");
-        body.Should().Contain("\"credentialSourceKind\":\"scheduledInvocationAgentKey\"");
+        body.Should().Contain("\"credentialSourceKind\":\"ScheduledInvocationAgentKey\"");
         body.Should().Contain("\"agentKeyReady\":true");
         body.Should().Contain("\"permissionDigest\":\"digest-alpha\"");
     }
@@ -2776,6 +2803,49 @@ public sealed class ScopeWorkflowEndpointsTests
             CatalogueRequest = (scopeId, workflowId);
             return Task.FromResult(CatalogueLookupResult);
         }
+    }
+
+    private sealed class RecordingWorkflowExternalTriggerProvisioningPort : IWorkflowExternalTriggerProvisioningPort
+    {
+        public List<ScopeWorkflowSummary> Workflows { get; } = [];
+        public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
+        public List<ScheduledDispatchMutationContext> Contexts { get; } = [];
+        public List<StudioMemberAutomationHttpAuthority> Authorities { get; } = [];
+
+        public Task<WorkflowExternalTriggerProvisioningResult> ProvisionAsync(
+            ScopeWorkflowSummary workflow,
+            ScheduledDispatchConfiguration configuration,
+            ScheduledDispatchMutationContext context,
+            StudioMemberAutomationHttpAuthority authority,
+            CancellationToken ct = default)
+        {
+            Workflows.Add(workflow);
+            Configurations.Add(configuration);
+            Contexts.Add(context);
+            Authorities.Add(authority);
+            return Task.FromResult(new WorkflowExternalTriggerProvisioningResult(
+                new ScheduledDispatchMutationReceipt(
+                    configuration.ScheduleId,
+                    $"actor:{configuration.ScheduleId}",
+                    true,
+                    "cmd-external-trigger",
+                    "corr-external-trigger",
+                    DateTimeOffset.UtcNow,
+                    "accepted"),
+                configuration,
+                ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey,
+                DateTimeOffset.UtcNow.AddDays(30),
+                "permission-digest-alpha",
+                ScheduledInvocationAuthorizationContractVersions.CredentialPolicy));
+        }
+    }
+
+    private sealed class FakeExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort
+    {
+        public Task<BindingId?> ResolveAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) =>
+            Task.FromResult<BindingId?>(new BindingId { Value = $"binding-{externalSubject.ExternalUserId}" });
     }
 
     private sealed class RecordingWorkflowScheduledDispatchService : IScheduledDispatchApplicationService

@@ -209,6 +209,7 @@ public static class ServiceCollectionExtensions
         services.AddScheduledCredentialAdmissionPort();
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
+        services.TryAddSingleton<IWorkflowExternalTriggerProvisioningPort, WorkflowExternalTriggerProvisioningService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
         services.TryAddTransient<ScheduledDispatchGAgent>();
         services.TryAddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>, StaticGAgentStreamInvocationApplicationService>();
@@ -293,6 +294,7 @@ public static class ServiceCollectionExtensions
         services.AddScheduledCredentialAdmissionPort();
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
+        services.TryAddSingleton<IWorkflowExternalTriggerProvisioningPort, WorkflowExternalTriggerProvisioningService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
         services.TryAddTransient<ScheduledDispatchGAgent>();
         return services;
