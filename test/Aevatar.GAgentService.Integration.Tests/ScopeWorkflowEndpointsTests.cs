@@ -1695,8 +1695,12 @@ public sealed class ScopeWorkflowEndpointsTests
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        body.Should().Contain("\"configured\":false");
+        body.Should().Contain("\"status\":\"pending\"");
+        body.Should().Contain("\"acceptanceStage\":\"accepted\"");
         schedules.Ensured.Should().ContainSingle();
         schedules.EnsureContexts.Should().ContainSingle().Which!.AuthenticatedNyxIdOwnerSubject
             .Should().NotBeNull();
@@ -2628,37 +2632,51 @@ public sealed class ScopeWorkflowEndpointsTests
         },
         string.Empty);
 
-    private static string ExternalTriggerId(string scopeId, string workflowId) =>
-        $"workflow-trigger-{scopeId}-{Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(workflowId))).ToLowerInvariant()[..24]}";
+    private static string ExternalTriggerId(string scopeId, string workflowId)
+    {
+        var triggerKey = string.Join(":", scopeId, "definition-actor-alpha", "svc-alpha");
+        return $"workflow-trigger-{Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(triggerKey))).ToLowerInvariant()[..32]}";
+    }
 
-    private static ScheduledDispatchSummary WorkflowScheduleSummary(string scheduleId) => new(
-        scheduleId,
-        "Daily run",
-        ScheduledDispatchTargetKind.ServiceInvocation,
-        "target-actor-alpha",
-        Any.Pack(new ChatRequestEvent()).TypeUrl,
-        "svc-key-alpha",
-        "svc-alpha",
-        "chat",
-        "0 9 * * *",
-        "UTC",
-        true,
-        DateTimeOffset.UtcNow,
-        DateTimeOffset.UtcNow,
-        null,
-        null,
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        0,
-        0,
-        new Dictionary<string, string>(StringComparer.Ordinal),
-        $"actor:{scheduleId}",
-        "run workflow",
-        ScheduledDispatchScheduleKind.Workflow);
+    private static ScheduledDispatchSummary WorkflowScheduleSummary(string scheduleId) =>
+        new(
+            scheduleId,
+            "Daily run",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            "target-actor-alpha",
+            Any.Pack(new ChatRequestEvent()).TypeUrl,
+            "svc-key-alpha",
+            "svc-alpha",
+            "chat",
+            "0 9 * * *",
+            "UTC",
+            true,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            0,
+            0,
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            $"actor:{scheduleId}",
+            "run workflow",
+            ScheduledDispatchScheduleKind.Workflow)
+        {
+            ServiceIdentity = new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "workflow-app",
+                Namespace = "workflow-ns",
+                ServiceId = "svc-alpha",
+            },
+            ServiceRevisionId = "rev-alpha",
+        };
 
     private sealed class RecordingScopeWorkflowQueryPort :
         IScopeWorkflowQueryPort,

@@ -120,7 +120,7 @@ internal static class ScopeWorkflowScheduleEndpoints
             configuration = BuildExternalTriggerConfiguration(
                 resolved.Workflow!,
                 input,
-                BuildExternalTriggerId(scopeId, workflowId),
+                BuildExternalTriggerId(resolved.Workflow!),
                 context.AuthenticatedNyxIdOwnerSubject);
         }
         catch (Exception ex) when (ScheduledDispatchEndpoints.TryMapScheduleConfigurationError(ex, out var result))
@@ -132,7 +132,6 @@ internal static class ScopeWorkflowScheduleEndpoints
         {
             var receipt = await schedules.EnsureAsync(configuration, context, ct);
             var response = WorkflowExternalTriggerHttpResult.FromMutation(
-                configured: true,
                 resolved.Workflow!,
                 configuration,
                 receipt,
@@ -160,7 +159,7 @@ internal static class ScopeWorkflowScheduleEndpoints
         if (resolved.Result != null)
             return resolved.Result;
 
-        var triggerId = BuildExternalTriggerId(scopeId, workflowId);
+        var triggerId = BuildExternalTriggerId(resolved.Workflow!);
         var detail = await schedules.GetAsync(triggerId, ct);
         if (detail == null || !BelongsToWorkflow(detail.Schedule, resolved.Workflow!))
         {
@@ -611,6 +610,7 @@ internal static class ScopeWorkflowScheduleEndpoints
         if (schedule.ScheduleKind != ScheduledDispatchScheduleKind.Workflow ||
             schedule.TargetKind != ScheduledDispatchTargetKind.ServiceInvocation ||
             !string.Equals(schedule.ServiceEndpointId, ChatEndpointId, StringComparison.Ordinal) ||
+            !string.Equals(schedule.ServiceIdentity.TenantId, workflow.ScopeId, StringComparison.Ordinal) ||
             !string.Equals(schedule.ServiceId, workflow.PublishedServiceId, StringComparison.Ordinal))
         {
             return false;
@@ -794,14 +794,16 @@ internal static class ScopeWorkflowScheduleEndpoints
         return null;
     }
 
-    private static string BuildExternalTriggerId(string scopeId, string workflowId)
+    private static string BuildExternalTriggerId(ScopeWorkflowSummary workflow)
     {
-        var normalizedScopeId = scopeId.Trim();
-        var normalizedWorkflowId = workflowId.Trim();
-        var workflowHash = Convert.ToHexString(
-                SHA256.HashData(Encoding.UTF8.GetBytes(normalizedWorkflowId)))
-            .ToLowerInvariant()[..24];
-        return $"workflow-trigger-{normalizedScopeId}-{workflowHash}";
+        var triggerKey = string.Join(
+            ":",
+            workflow.ScopeId.Trim(),
+            workflow.DefinitionActorId.Trim(),
+            workflow.PublishedServiceId.Trim());
+        var triggerHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(triggerKey)))
+            .ToLowerInvariant()[..32];
+        return $"workflow-trigger-{triggerHash}";
     }
 
     private static string BuildExternalTriggerLocation(string scopeId, string triggerId) =>
@@ -812,10 +814,10 @@ internal static class ScopeWorkflowScheduleEndpoints
         string scopeId,
         string triggerId) =>
         schedule.ScheduleId == triggerId &&
-        triggerId.StartsWith($"workflow-trigger-{scopeId}-", StringComparison.Ordinal) &&
         schedule.ScheduleKind == ScheduledDispatchScheduleKind.Workflow &&
         schedule.TargetKind == ScheduledDispatchTargetKind.ServiceInvocation &&
-        string.Equals(schedule.ServiceEndpointId, ChatEndpointId, StringComparison.Ordinal);
+        string.Equals(schedule.ServiceEndpointId, ChatEndpointId, StringComparison.Ordinal) &&
+        string.Equals(schedule.ServiceIdentity.TenantId, scopeId, StringComparison.Ordinal);
 
     private static string BuildWorkflowScheduleLocation(string scopeId, string workflowId, string scheduleId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId)}/workflows/{Uri.EscapeDataString(workflowId)}/schedules/{Uri.EscapeDataString(scheduleId)}";
@@ -845,6 +847,10 @@ public sealed record WorkflowExternalTriggerConfigurationHttpRequest
 public sealed record WorkflowExternalTriggerHttpResult
 {
     public bool Configured { get; init; }
+    public string AcceptanceStage { get; init; } = string.Empty;
+    public string CommandId { get; init; } = string.Empty;
+    public string CorrelationId { get; init; } = string.Empty;
+    public DateTimeOffset? AcceptedAt { get; init; }
     public required string TriggerId { get; init; }
     public required string WorkflowId { get; init; }
     public required string ServiceId { get; init; }
@@ -865,7 +871,6 @@ public sealed record WorkflowExternalTriggerHttpResult
     public string PolicyVersion { get; init; } = string.Empty;
 
     public static WorkflowExternalTriggerHttpResult FromMutation(
-        bool configured,
         ScopeWorkflowSummary workflow,
         ScheduledDispatchConfiguration configuration,
         ScheduledDispatchMutationReceipt receipt,
@@ -877,13 +882,17 @@ public sealed record WorkflowExternalTriggerHttpResult
         var invocation = configuration.Target.ServiceInvocation!;
         return new WorkflowExternalTriggerHttpResult
         {
-            Configured = configured,
+            Configured = false,
+            AcceptanceStage = receipt.AckStage,
+            CommandId = receipt.CommandId,
+            CorrelationId = receipt.CorrelationId,
+            AcceptedAt = receipt.AckedAt,
             TriggerId = receipt.ScheduleId,
             WorkflowId = workflow.WorkflowId,
             ServiceId = invocation.Identity.ServiceId,
             RevisionId = invocation.RevisionId ?? workflow.ActiveRevisionId,
             EndpointId = invocation.EndpointId,
-            Status = configuration.Enabled ? "enabled" : "disabled",
+            Status = "pending",
             Enabled = configuration.Enabled,
             CronExpression = configuration.CronExpression,
             Timezone = configuration.Timezone,
