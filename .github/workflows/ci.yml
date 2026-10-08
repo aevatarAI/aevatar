@@ -394,10 +394,10 @@ jobs:
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
       needs.changes.outputs.docs_only == 'false'
     runs-on: ubuntu-latest
-    # Full coverage takes 34-35 minutes after a roughly 10-minute restore/build,
-    # then still needs time to upload the report. Keep the fail-fast guard while
-    # leaving enough headroom for runner variance and cleanup.
-    timeout-minutes: 55
+    # Full coverage takes roughly 40 minutes after restore/build,
+    # then still needs time to generate and upload the report. Keep the fail-fast
+    # guard while leaving enough headroom for runner variance and cleanup.
+    timeout-minutes: 75
     services:
       agent-tool-admission-redis:
         image: redis:7.2.3
