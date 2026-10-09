@@ -22,7 +22,7 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 /// ingress at /api/workflow-webhooks/{routeKey} resolves it dynamically —
 /// no host configuration change or redeploy per workflow.
 /// </summary>
-internal static class WorkflowWebhookBindingEndpoints
+public static class WorkflowWebhookBindingEndpoints
 {
     public static void Map(IEndpointRouteBuilder group)
     {
@@ -51,7 +51,7 @@ internal static class WorkflowWebhookBindingEndpoints
         string? TimeZoneId = null,
         bool EnableUnattendedEffects = false);
 
-    internal static async Task<IResult> HandlePutAsync(
+    public static async Task<IResult> HandlePutAsync(
         HttpContext http,
         string scopeId,
         string routeKey,
@@ -359,7 +359,7 @@ internal static class WorkflowWebhookBindingEndpoints
         return Results.Ok(new { bindings = records.Select(ToView).ToArray() });
     }
 
-    internal static async Task<IResult> HandleDeleteAsync(
+    public static async Task<IResult> HandleDeleteAsync(
         HttpContext http,
         string scopeId,
         string routeKey,
