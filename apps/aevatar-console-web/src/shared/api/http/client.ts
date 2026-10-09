@@ -1,6 +1,6 @@
-import { authFetch } from "@/shared/auth/fetch";
-import type { Decoder } from "../decodeUtils";
-import { readResponseError } from "./error";
+import { authFetch } from '@/shared/auth/fetch';
+import type { Decoder } from '../decodeUtils';
+import { readResponseErrorDetails } from './error';
 
 export type QueryValue =
   | string
@@ -11,13 +11,32 @@ export type QueryValue =
   | undefined;
 
 const JSON_HEADERS = {
-  Accept: "application/json",
-  "Content-Type": "application/json",
+  Accept: 'application/json',
+  'Content-Type': 'application/json',
 };
+
+export class HttpRequestError extends Error {
+  readonly code?: string;
+  readonly status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'HttpRequestError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+async function createHttpRequestError(
+  response: Pick<Response, 'status' | 'statusText' | 'text'>,
+): Promise<HttpRequestError> {
+  const details = await readResponseErrorDetails(response);
+  return new HttpRequestError(details.message, details.status, details.code);
+}
 
 export function withQuery(
   path: string,
-  query?: Record<string, QueryValue>
+  query?: Record<string, QueryValue>,
 ): string {
   if (!query) {
     return path;
@@ -25,7 +44,7 @@ export function withQuery(
 
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
-    if (value === undefined || value === null || value === "") {
+    if (value === undefined || value === null || value === '') {
       continue;
     }
 
@@ -49,11 +68,11 @@ export function withQuery(
 export async function requestJson<T>(
   input: string,
   decoder: Decoder<T>,
-  init?: RequestInit
+  init?: RequestInit,
 ): Promise<T> {
   const response = await authFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readResponseError(response));
+    throw await createHttpRequestError(response);
   }
 
   return decoder(await response.json());

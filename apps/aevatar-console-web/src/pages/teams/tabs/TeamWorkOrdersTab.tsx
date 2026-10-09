@@ -13,12 +13,13 @@ import {
 } from 'antd';
 import React from 'react';
 import {
-  type WorkOrderListResult,
   type WorkOrderLifecycleStatus,
+  type WorkOrderListResult,
   workOrdersApi,
 } from '@/shared/api/workOrdersApi';
 import { formatCompactDateTime } from '@/shared/datetime/dateTime';
 import { buildTeamWorkOrderDetailHref } from '@/shared/navigation/teamRoutes';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { AevatarPanel } from '@/shared/ui/aevatarPageShells';
 
 type Props = {
@@ -176,26 +177,26 @@ const TeamWorkOrdersTab: React.FC<Props> = ({
                     {workOrder.workOrderId}
                   </Typography.Text>
                 </Space>
-                <Typography.Text
-                  ellipsis={{ tooltip: workOrder.intent }}
-                  strong
-                >
-                  {workOrder.intent}
-                </Typography.Text>
+                <AevatarTooltip title={workOrder.intent}>
+                  <Typography.Text ellipsis strong>
+                    {workOrder.intent}
+                  </Typography.Text>
+                </AevatarTooltip>
               </div>
               <div
                 className="team-work-order-assignment"
                 style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
               >
-                <Typography.Text ellipsis={{ tooltip: workOrder.memberId }}>
-                  {workOrder.memberId}
-                </Typography.Text>
-                <Typography.Text
-                  ellipsis={{ tooltip: workOrder.publishedServiceId }}
-                  type="secondary"
-                >
-                  {workOrder.publishedServiceId}
-                </Typography.Text>
+                <AevatarTooltip title={workOrder.memberId}>
+                  <Typography.Text ellipsis>
+                    {workOrder.memberId}
+                  </Typography.Text>
+                </AevatarTooltip>
+                <AevatarTooltip title={workOrder.publishedServiceId}>
+                  <Typography.Text ellipsis type="secondary">
+                    {workOrder.publishedServiceId}
+                  </Typography.Text>
+                </AevatarTooltip>
               </div>
               <Typography.Text
                 className="team-work-order-updated"

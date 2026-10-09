@@ -1,15 +1,8 @@
-import {
-  Alert,
-  Button,
-  Empty,
-  Skeleton,
-  Space,
-  Typography,
-  theme,
-} from "antd";
-import React from "react";
+import { Alert, Button, Empty, Space, Typography, theme } from 'antd';
+import React from 'react';
+import AevatarContentSkeleton from './AevatarContentSkeleton';
 
-export type InventoryReadinessKind = "empty" | "error" | "loading";
+export type InventoryReadinessKind = 'empty' | 'error' | 'loading';
 
 type InventoryReadinessAction = {
   label: string;
@@ -28,31 +21,23 @@ export const InventoryReadinessState: React.FC<
 > = ({ action, description, kind, title }) => {
   const { token } = theme.useToken();
 
-  if (kind === "loading") {
+  if (kind === 'loading') {
     return (
-      <div
-        aria-busy="true"
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-          padding: 24,
-        }}
-      >
-        <Space direction="vertical" size={4}>
-          <Typography.Text strong style={{ color: token.colorTextHeading }}>
-            {title}
-          </Typography.Text>
-          <Typography.Text style={{ color: token.colorTextSecondary }}>
-            {description}
-          </Typography.Text>
-        </Space>
-        <Skeleton active paragraph={{ rows: 4 }} title={false} />
-      </div>
+      <AevatarContentSkeleton
+        ariaLabel={
+          typeof title === 'string' || typeof title === 'number'
+            ? String(title)
+            : 'Loading inventory'
+        }
+        columnWidths={[96, 136, '1.4fr', '1fr', '1fr', 96, 152, 128]}
+        rows={4}
+        tableMinWidth={1100}
+        variant="table"
+      />
     );
   }
 
-  if (kind === "error") {
+  if (kind === 'error') {
     return (
       <div style={{ padding: 18 }}>
         <Alert

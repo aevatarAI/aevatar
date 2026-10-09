@@ -8,6 +8,9 @@ import { chatHistoryApi } from './chatHistoryApi';
 import ChatPage, { hydrateStoredMessages } from './index';
 import { createNyxIdCatalogKey, listNyxIdConnectors } from './nyxIdServiceApi';
 
+const mockConsoleToast = { error: jest.fn(), info: jest.fn(), success: jest.fn(), warning: jest.fn() };
+jest.mock('@/shared/ui/ConsoleToast', () => ({ useConsoleToast: () => mockConsoleToast }));
+
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
 jest.mock('./chatHistoryApi', () => ({
   chatHistoryApi: {
@@ -2240,6 +2243,29 @@ describe('ChatPage canonical NyxID Assistant', () => {
       screen.queryByText('Reported; waiting for actor verification'),
     ).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Decline' })).toBeInTheDocument();
+  });
+
+  it('reports deletion failures with a toast and keeps history visible', async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+    (chatHistoryApi.deleteConversation as jest.Mock).mockRejectedValueOnce(
+      new Error('Delete request failed'),
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Delete Canonical conversation' }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        'Conversation could not be deleted',
+      ),
+    );
+    expect(screen.queryByText('Delete request failed')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Canonical conversation' })).toBeInTheDocument();
   });
 
   it('submits canonical delete and never infers approval from assistant prose', async () => {

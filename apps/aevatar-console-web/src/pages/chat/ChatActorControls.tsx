@@ -3,15 +3,16 @@ import {
   RedoOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { Button, InputNumber, Tag, Tooltip } from 'antd';
+import { Button, InputNumber, Tag } from 'antd';
 import React, { useEffect, useState } from 'react';
 import { t } from '@/shared/i18n/messages';
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import type {
   ChatActionSummary,
   ChatActorProjection,
   ChatActorStep,
-  ChatPendingInput,
   ChatNyxIdActionRequest,
+  ChatPendingInput,
 } from './chatActorState';
 import { chatActionIdentityKey } from './chatActorState';
 import type { ChatInputAnswer } from './chatApi';
@@ -115,9 +116,7 @@ export function ChatActorControls({
       aria-label={t('pages.chat.actorControls.actorControls', 'Actor controls')}
       style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
     >
-      {projection.task ? (
-        <TaskPlanLedger projection={projection} />
-      ) : null}
+      {projection.task ? <TaskPlanLedger projection={projection} /> : null}
 
       <CommittedResults projection={projection} />
 
@@ -745,14 +744,14 @@ function EffectTag({
           ? 'blue'
           : 'default';
   return (
-    <Tooltip
+    <AevatarTooltip
       title={t(
         'pages.chat.actorControls.externalEffect',
         'External effect evidence',
       )}
     >
       <Tag color={color}>{effect}</Tag>
-    </Tooltip>
+    </AevatarTooltip>
   );
 }
 
@@ -802,10 +801,16 @@ function isActorReportedStalled(step: ChatActorStep): boolean {
 
 function formatStepSourceLabel(source: ChatTaskStepSource): string {
   if (source.kind === 'browserAction' && !source.label) {
-    return t('pages.chat.actorControls.stepSourceBrowserAction', 'Browser action');
+    return t(
+      'pages.chat.actorControls.stepSourceBrowserAction',
+      'Browser action',
+    );
   }
   if (source.kind === 'postcondition' && !source.label) {
-    return t('pages.chat.actorControls.stepSourcePostcondition', 'Postcondition');
+    return t(
+      'pages.chat.actorControls.stepSourcePostcondition',
+      'Postcondition',
+    );
   }
   if (source.kind === 'input') {
     return t('pages.chat.actorControls.stepSourceUserInput', 'User input');

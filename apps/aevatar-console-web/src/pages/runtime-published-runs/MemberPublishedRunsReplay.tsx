@@ -18,10 +18,10 @@ import {
   Space,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
 } from "antd";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { studioApi } from "@/shared/studio/api";
 import { formatDateTime } from "@/shared/datetime/dateTime";
@@ -1215,9 +1215,13 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
     retry: false,
   });
 
+  const selectedAuditSummary =
+    auditQuery.data?.summary?.runId === selectedRunId
+      ? auditQuery.data.summary
+      : null;
   const selectedRun =
+    selectedAuditSummary ??
     selectedCatalogRun ??
-    auditQuery.data?.summary ??
     (normalizedInitialRunId
       ? createFallbackRunSummary({
           actorId: selectedRunActorId,
@@ -1227,8 +1231,19 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
         })
       : null);
   const audit = auditQuery.data?.audit ?? null;
-  const displayRuns =
-    runs.length || !selectedRun ? runs : [selectedRun];
+  const displayRuns = React.useMemo(() => {
+    if (!runs.length) {
+      return selectedRun ? [selectedRun] : runs;
+    }
+
+    if (!selectedAuditSummary) {
+      return runs;
+    }
+
+    return runs.map((run) =>
+      run.runId === selectedAuditSummary.runId ? selectedAuditSummary : run,
+    );
+  }, [runs, selectedAuditSummary, selectedRun]);
   const runsLoadError = memberNotFound ? null : memberQuery.error || runsQuery.error;
   const showReplaySkeleton = Boolean(
     memberQuery.isLoading ||
@@ -1349,7 +1364,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
             )}
             className="member-published-runs-replay__navigation"
           >
-            <Tooltip title={backToTeamMembersLabel}>
+            <AevatarTooltip title={backToTeamMembersLabel}>
               <Button
                 aria-label={backToTeamMembersLabel}
                 className="member-published-runs-replay__back-button"
@@ -1358,7 +1373,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 shape="circle"
                 size="small"
               />
-            </Tooltip>
+            </AevatarTooltip>
             <div className="member-published-runs-replay__breadcrumbs">
               <a
                 className="member-published-runs-replay__breadcrumb-link"
@@ -1396,7 +1411,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 </Typography.Text>
               </div>
             </div>
-            <Tooltip title={t("pages.runs.memberPublishedRuns.refresh", "Refresh")}>
+            <AevatarTooltip title={t("pages.runs.memberPublishedRuns.refresh", "Refresh")}>
               <Button
                 aria-label={t("pages.runs.memberPublishedRuns.refresh", "Refresh")}
                 icon={<ReloadOutlined />}
@@ -1405,7 +1420,7 @@ const MemberPublishedRunsReplay: React.FC<MemberPublishedRunsReplayProps> = ({
                 shape="circle"
                 size="small"
               />
-            </Tooltip>
+            </AevatarTooltip>
           </div>
           {normalizedScheduleId ? (
             <div

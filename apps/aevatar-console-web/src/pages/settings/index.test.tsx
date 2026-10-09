@@ -1,11 +1,19 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { persistAuthSession } from "@/shared/auth/session";
+import { mockBrowserLocationNavigation } from "../../../tests/browserLocationTestUtils";
 import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
 import SettingsPage from "./index";
+
+const mockConsoleToast = {
+  error: jest.fn(),
+  info: jest.fn(),
+  success: jest.fn(),
+  warning: jest.fn(),
+};
 
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
@@ -14,6 +22,10 @@ jest.mock("@/shared/studio/api", () => ({
     getUserLlmSettings: jest.fn(),
     saveUserLlmSettings: jest.fn(),
   },
+}));
+
+jest.mock("@/shared/ui/ConsoleToast", () => ({
+  useConsoleToast: () => mockConsoleToast,
 }));
 
 const { studioApi: mockStudioApi } = jest.requireMock(
@@ -28,10 +40,6 @@ const { studioApi: mockStudioApi } = jest.requireMock(
 };
 
 const originalFetch = global.fetch;
-const originalLocationDescriptor = Object.getOwnPropertyDescriptor(
-  window,
-  "location",
-);
 const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   "crypto",
@@ -39,20 +47,6 @@ const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(
 const originalNyxIDClientId = process.env.NYXID_CLIENT_ID;
 const gatewayRoute = "/api/v1/llm/gateway/v1";
 const sharedExactServiceRoute = "/api/v1/proxy/s/shared-openai";
-
-function installLocationAssignSpy() {
-  const assign = jest.fn();
-  Object.defineProperty(window, "location", {
-    configurable: true,
-    value: {
-      ...window.location,
-      assign,
-      href: window.location.href,
-      origin: window.location.origin,
-    },
-  });
-  return assign;
-}
 
 function installDeterministicCrypto() {
   Object.defineProperty(globalThis, "crypto", {
@@ -336,9 +330,6 @@ describe("SettingsPage", () => {
       process.env.NYXID_CLIENT_ID = originalNyxIDClientId;
     }
     global.fetch = originalFetch;
-    if (originalLocationDescriptor) {
-      Object.defineProperty(window, "location", originalLocationDescriptor);
-    }
     if (originalCryptoDescriptor) {
       Object.defineProperty(globalThis, "crypto", originalCryptoDescriptor);
     } else {
@@ -414,7 +405,7 @@ describe("SettingsPage", () => {
     });
     installDeterministicCrypto();
     window.history.replaceState({}, "", "/settings?section=account");
-    const assign = installLocationAssignSpy();
+    const assign = mockBrowserLocationNavigation("assign");
     const fetchMock = jest.fn();
     global.fetch = fetchMock as typeof global.fetch;
 
@@ -446,14 +437,14 @@ describe("SettingsPage", () => {
     );
   });
 
-  it("keeps service access review retryable when redirect setup fails", async () => {
+  it("reports service access review failures with a toast and keeps retry available", async () => {
     persistAuthSession({
       tokens: { accessToken: "token", tokenType: "Bearer", expiresIn: 3600, expiresAt: Date.now() + 60_000 },
       user: { sub: "user-123", name: "Ada Lovelace" },
     });
     installDeterministicCrypto();
     window.history.replaceState({}, "", "/settings?section=account");
-    const assign = installLocationAssignSpy();
+    const assign = mockBrowserLocationNavigation("assign");
     assign.mockImplementationOnce(() => {
       throw new Error("Navigation failed");
     });
@@ -463,12 +454,38 @@ describe("SettingsPage", () => {
     renderWithQueryClient(React.createElement(SettingsPage));
     const manageButton = await screen.findByRole("button", { name: "Manage service access" });
     fireEvent.click(manageButton);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not start service access review. Try again.");
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Could not start service access review. Try again.",
+      ),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
     await waitFor(() => expect(manageButton).not.toHaveClass("ant-btn-loading"));
     fireEvent.click(manageButton);
     await waitFor(() => expect(assign).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a current settings save failure with a toast", async () => {
+    mockStudioApi.saveUserLlmSettings.mockRejectedValue(
+      new Error("PUT /api/settings returned 500"),
+    );
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.mouseDown(
+      await screen.findByRole("combobox", { name: "Default model" }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: "gpt-4o" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Settings could not be saved. Try again.",
+      ),
+    );
+    expect(screen.queryByText("Save failed")).toBeNull();
+    expect(screen.queryByText("PUT /api/settings returned 500")).toBeNull();
   });
 
   it("hides service access review when the user is signed out", async () => {

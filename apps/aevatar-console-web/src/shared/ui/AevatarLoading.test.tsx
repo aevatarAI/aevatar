@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import React from 'react';
 import {
   AevatarLoadingDots,
+  AevatarLoadingOverlay,
   AevatarLoadingPulseDot,
   AevatarPageLoading,
   AevatarStreamingCursor,
@@ -61,6 +62,22 @@ describe('AevatarLoading', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('Loading');
     expect(screen.getByText('Loading')).toHaveClass(
+      'aevatar-loading-visually-hidden',
+    );
+  });
+
+  it('uses the shared loading language for committed-content overlays', () => {
+    const { container } = render(
+      <AevatarLoadingOverlay ariaLabel="Refreshing run details" />,
+    );
+
+    const status = screen.getByRole('status', {
+      name: 'Refreshing run details',
+    });
+    expect(status).toHaveAttribute('aria-busy', 'true');
+    expect(status).toHaveClass('aevatar-loading-overlay');
+    expect(container.querySelectorAll('.aevatar-loading-dot')).toHaveLength(3);
+    expect(screen.getByText('Refreshing run details')).toHaveClass(
       'aevatar-loading-visually-hidden',
     );
   });

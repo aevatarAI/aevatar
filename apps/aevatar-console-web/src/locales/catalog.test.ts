@@ -3,6 +3,7 @@ import zhCNMessages from './zh-CN';
 import routes from '../../config/routes';
 
 type ConsoleRoute = {
+  path: string;
   name?: string;
   routes?: ConsoleRoute[];
 };

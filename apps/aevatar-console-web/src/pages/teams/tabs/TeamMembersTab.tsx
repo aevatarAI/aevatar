@@ -8,9 +8,10 @@ import {
   StopOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
-import { Button, Skeleton, Tooltip, Typography, theme } from "antd";
+import { Button, Skeleton, Typography, theme } from "antd";
 import { useIntl } from "@umijs/max";
 import React from "react";
+import AevatarTooltip from '@/shared/ui/AevatarTooltip';
 import {
   AevatarInspectorEmpty,
   AevatarPanel,
@@ -247,7 +248,7 @@ const EllipsisText: React.FC<{
   readonly style?: React.CSSProperties;
   readonly type?: "secondary";
 }> = ({ children, strong = false, style, type }) => (
-  <Tooltip placement="topLeft" title={children}>
+  <AevatarTooltip placement="topLeft" title={children}>
     <Typography.Text
       strong={strong}
       style={{
@@ -258,7 +259,7 @@ const EllipsisText: React.FC<{
     >
       {children}
     </Typography.Text>
-  </Tooltip>
+  </AevatarTooltip>
 );
 
 const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
@@ -653,7 +654,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                             border: `1px solid ${token.colorBorderSecondary}`,
                           }}
                         >
-                          <Tooltip
+                          <AevatarTooltip
                             title={
                               row.canInvokeMember
                                 ? invokeActionLabel
@@ -677,8 +678,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               )}
                               type="default"
                             />
-                          </Tooltip>
-                          <Tooltip
+                          </AevatarTooltip>
+                          <AevatarTooltip
                             title={
                               row.canOpenPublishedRuns
                                 ? publishedRunsActionLabel
@@ -704,8 +705,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               style={buildMemberActionButtonStyle()}
                               type="default"
                             />
-                          </Tooltip>
-                          <Tooltip
+                          </AevatarTooltip>
+                          <AevatarTooltip
                             title={
                               row.canAutomateMember
                                 ? automateActionLabel
@@ -731,8 +732,8 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               style={buildMemberActionButtonStyle()}
                               type="default"
                             />
-                          </Tooltip>
-                          <Tooltip
+                          </AevatarTooltip>
+                          <AevatarTooltip
                             title={
                               row.workflowSupported
                                 ? studioActionLabel
@@ -756,9 +757,9 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                               style={buildMemberActionButtonStyle()}
                               type="default"
                             />
-                          </Tooltip>
+                          </AevatarTooltip>
                           {row.isEntryMember ? (
-                            <Tooltip title={entryActionLabel}>
+                            <AevatarTooltip title={entryActionLabel}>
                               <Button
                                 aria-label={entryActionLabel}
                                 icon={entryActionIcon}
@@ -775,9 +776,9 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                                 style={buildMemberActionButtonStyle("primary")}
                                 type="default"
                               />
-                            </Tooltip>
+                            </AevatarTooltip>
                           ) : row.canSetAsEntry && onSetEntry ? (
-                            <Tooltip title={entryActionLabel}>
+                            <AevatarTooltip title={entryActionLabel}>
                               <Button
                                 aria-label={entryActionLabel}
                                 className="team-members-table-action-button team-members-table-entry-action"
@@ -794,10 +795,10 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                                 style={buildMemberActionButtonStyle()}
                                 type="default"
                               />
-                            </Tooltip>
+                            </AevatarTooltip>
                           ) : null}
                           {onDeleteMember ? (
-                            <Tooltip title={deleteActionLabel}>
+                            <AevatarTooltip title={deleteActionLabel}>
                               <Button
                                 aria-label={deleteActionLabel}
                                 className="team-members-table-action-button team-members-table-delete-action"
@@ -820,7 +821,7 @@ const TeamMembersTab: React.FC<TeamMembersTabProps> = ({
                                 style={buildMemberActionButtonStyle("danger")}
                                 type="default"
                               />
-                            </Tooltip>
+                            </AevatarTooltip>
                           ) : null}
                         </div>
                       </div>

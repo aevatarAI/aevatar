@@ -466,6 +466,36 @@ export function insertStepAfter(
   };
 }
 
+export function materializeImplicitSequentialTransitions(
+  document: StudioWorkflowDocument,
+): StudioWorkflowDocument {
+  const steps = Array.isArray(document.steps) ? document.steps : [];
+  const nextSteps = steps.map((entry, index) => {
+    const step = { ...entry } as StudioWorkflowStepDocument;
+    const followingStepId = normalizeString(steps[index + 1]?.id);
+    const hasBranches = Object.keys(step.branches ?? {}).length > 0;
+
+    if (
+      index < steps.length - 1 &&
+      !normalizeString(step.next) &&
+      !hasBranches &&
+      followingStepId
+    ) {
+      return {
+        ...step,
+        next: followingStepId,
+      } satisfies StudioWorkflowStepDocument;
+    }
+
+    return step;
+  });
+
+  return {
+    ...document,
+    steps: nextSteps,
+  };
+}
+
 export function insertStepByType(
   document: StudioWorkflowDocument,
   stepType: string,
