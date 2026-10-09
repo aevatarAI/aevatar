@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -20,9 +21,30 @@ internal static class ScopeWorkflowScheduleEndpoints
 {
     private const string ChatEndpointId = "chat";
     private const string DefaultWorkflowScheduleNyxIdScope = "proxy";
+    private const string DefaultExternalTriggerDeliveryIdJsonPath = "event_id";
+    private const string DefaultExternalTriggerDeliveryIdHeader = "X-NyxID-Delivery-Id";
+    private const string DefaultExternalTriggerHmacSignatureHeader = "X-NyxID-Signature";
+    private const string DefaultExternalTriggerHmacTimestampHeader = "X-NyxID-Timestamp";
 
     public static RouteGroupBuilder MapScopeWorkflowScheduleEndpoints(this RouteGroupBuilder group)
     {
+        group.MapPost("/{scopeId}/workflows/{workflowId}/external-trigger", UpsertExternalTrigger)
+            .Produces<WorkflowExternalTriggerHttpResult>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
+        group.MapGet("/{scopeId}/workflows/{workflowId}/external-trigger", GetExternalTrigger)
+            .Produces<WorkflowExternalTriggerHttpResult>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound);
+        group.MapDelete("/{scopeId}/workflows/{workflowId}/external-trigger", DeleteExternalTrigger)
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
         group.MapGet("/{scopeId}/workflows/{workflowId}/schedules", List)
             .Produces<ScheduledDispatchListResult>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
@@ -78,6 +100,80 @@ internal static class ScopeWorkflowScheduleEndpoints
             .Produces(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status409Conflict);
         return group;
+    }
+
+    internal static async Task<IResult> UpsertExternalTrigger(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        WorkflowExternalTriggerConfigurationHttpRequest input,
+        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        CancellationToken ct = default)
+    {
+        var resolved = await ResolveWorkflowAsync(http, scopeId, workflowId, workflowQueryPort, ct);
+        if (resolved.Result != null)
+            return resolved.Result;
+
+        var routeKey = await ResolveExternalTriggerRouteKeyAsync(http, resolved.Workflow!, ct)
+                       ?? GenerateExternalTriggerRouteKey();
+        var put = await WorkflowWebhookBindingEndpoints.HandlePutAsync(
+            http,
+            scopeId,
+            routeKey,
+            BuildExternalTriggerBindingRequest(resolved.Workflow!, input),
+            ct);
+        if (!IsSuccessStatus(put))
+            return put;
+
+        var record = await ResolveExternalTriggerBindingAsync(http, resolved.Workflow!, routeKey, ct);
+        return record == null
+            ? Results.Json(
+                new
+                {
+                    code = "WORKFLOW_EXTERNAL_TRIGGER_BINDING_NOT_FOUND",
+                    message = "External trigger binding was not found after upsert.",
+                },
+                statusCode: StatusCodes.Status409Conflict)
+            : Results.Ok(WorkflowExternalTriggerHttpResult.FromBinding(resolved.Workflow!, record));
+    }
+
+    internal static async Task<IResult> GetExternalTrigger(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        CancellationToken ct = default)
+    {
+        var resolved = await ResolveWorkflowAsync(http, scopeId, workflowId, workflowQueryPort, ct);
+        if (resolved.Result != null)
+            return resolved.Result;
+
+        var record = await ResolveExternalTriggerBindingAsync(http, resolved.Workflow!, routeKey: null, ct);
+        return Results.Ok(record == null
+            ? WorkflowExternalTriggerHttpResult.NotConfigured(resolved.Workflow!)
+            : WorkflowExternalTriggerHttpResult.FromBinding(resolved.Workflow!, record));
+    }
+
+    internal static async Task<IResult> DeleteExternalTrigger(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        CancellationToken ct = default)
+    {
+        var resolved = await ResolveWorkflowAsync(http, scopeId, workflowId, workflowQueryPort, ct);
+        if (resolved.Result != null)
+            return resolved.Result;
+
+        var record = await ResolveExternalTriggerBindingAsync(http, resolved.Workflow!, routeKey: null, ct);
+        if (record == null)
+            return Results.NotFound();
+
+        return await WorkflowWebhookBindingEndpoints.HandleDeleteAsync(
+            http,
+            scopeId,
+            record.RouteKey,
+            ct);
     }
 
     internal static async Task<IResult> Create(
@@ -472,6 +568,7 @@ internal static class ScopeWorkflowScheduleEndpoints
         if (schedule.ScheduleKind != ScheduledDispatchScheduleKind.Workflow ||
             schedule.TargetKind != ScheduledDispatchTargetKind.ServiceInvocation ||
             !string.Equals(schedule.ServiceEndpointId, ChatEndpointId, StringComparison.Ordinal) ||
+            !string.Equals(schedule.ServiceIdentity.TenantId, workflow.ScopeId, StringComparison.Ordinal) ||
             !string.Equals(schedule.ServiceId, workflow.PublishedServiceId, StringComparison.Ordinal))
         {
             return false;
@@ -480,6 +577,71 @@ internal static class ScopeWorkflowScheduleEndpoints
         return string.IsNullOrWhiteSpace(workflow.ServiceKey) ||
                string.Equals(schedule.ServiceKey, workflow.ServiceKey, StringComparison.Ordinal);
     }
+
+    private static WorkflowWebhookBindingEndpoints.PutWorkflowWebhookBindingRequest BuildExternalTriggerBindingRequest(
+        ScopeWorkflowSummary workflow,
+        WorkflowExternalTriggerConfigurationHttpRequest input) =>
+        new(
+            WorkflowName: workflow.WorkflowName,
+            SourceId: input.SourceId,
+            PromptTemplate: input.PromptTemplate,
+            PromptJsonPath: input.PromptJsonPath,
+            DeliveryIdHeader: input.DeliveryIdHeader ?? DefaultExternalTriggerDeliveryIdHeader,
+            DeliveryIdJsonPath: input.DeliveryIdJsonPath ?? DefaultExternalTriggerDeliveryIdJsonPath,
+            HmacSecret: input.HmacSecret,
+            HmacSignatureHeader: input.HmacSignatureHeader ?? DefaultExternalTriggerHmacSignatureHeader,
+            HmacTimestampHeader: input.HmacTimestampHeader ?? DefaultExternalTriggerHmacTimestampHeader,
+            MaxTimestampSkewSeconds: input.MaxTimestampSkewSeconds,
+            DefinitionActorId: workflow.ActorId,
+            TargetRevisionId: workflow.ActiveRevisionId,
+            PreviousHmacSecret: input.PreviousHmacSecret,
+            TimeZoneId: input.TimeZoneId,
+            EnableUnattendedEffects: input.EnableUnattendedEffects);
+
+    private static async Task<string?> ResolveExternalTriggerRouteKeyAsync(
+        HttpContext http,
+        ScopeWorkflowSummary workflow,
+        CancellationToken ct)
+    {
+        var record = await ResolveExternalTriggerBindingAsync(http, workflow, routeKey: null, ct);
+        return record?.RouteKey;
+    }
+
+    private static async Task<WorkflowWebhookBindingRecord?> ResolveExternalTriggerBindingAsync(
+        HttpContext http,
+        ScopeWorkflowSummary workflow,
+        string? routeKey,
+        CancellationToken ct)
+    {
+        var store = http.RequestServices.GetService(typeof(IWorkflowWebhookBindingStore)) as IWorkflowWebhookBindingStore;
+        if (store == null)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(routeKey))
+        {
+            var record = await store.GetAsync(routeKey.Trim(), ct);
+            return IsExternalTriggerBinding(record, workflow) ? record : null;
+        }
+
+        var records = await store.ListByScopeAsync(workflow.ScopeId, ct);
+        return records.FirstOrDefault(record => IsExternalTriggerBinding(record, workflow));
+    }
+
+    private static bool IsExternalTriggerBinding(
+        WorkflowWebhookBindingRecord? record,
+        ScopeWorkflowSummary workflow) =>
+        record != null &&
+        string.Equals(record.ScopeId, workflow.ScopeId, StringComparison.Ordinal) &&
+        string.Equals(record.DefinitionActorId, workflow.ActorId, StringComparison.Ordinal) &&
+        string.Equals(record.TargetRevisionId, workflow.ActiveRevisionId, StringComparison.Ordinal) &&
+        string.Equals(record.WorkflowName, workflow.WorkflowName, StringComparison.OrdinalIgnoreCase);
+
+    private static string GenerateExternalTriggerRouteKey() =>
+        $"workflow-external-trigger-{Guid.NewGuid():N}";
+
+    private static bool IsSuccessStatus(IResult result) =>
+        result is IStatusCodeHttpResult { StatusCode: >= 200 and < 300 or null } ||
+        result is not IStatusCodeHttpResult;
 
     private static ScheduledDispatchConfiguration BuildConfiguration(
         ScopeWorkflowSummary workflow,
@@ -602,6 +764,11 @@ internal static class ScopeWorkflowScheduleEndpoints
         return false;
     }
 
+    private static string NormalizeRequired(string? value, string paramName) =>
+        string.IsNullOrWhiteSpace(value)
+            ? throw new ArgumentException($"{paramName} is required.", paramName)
+            : value.Trim();
+
     private static ScheduledServiceInvocationNyxIdSubjectRef? ResolveAuthenticatedNyxIdOwnerSubject(HttpContext http)
     {
         var ownerUserId = ReadFirstClaim(
@@ -644,6 +811,85 @@ internal static class ScopeWorkflowScheduleEndpoints
     private sealed record WorkflowScheduleOwnershipResult(
         ScheduledDispatchDetail? Detail,
         IResult? Result);
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record WorkflowExternalTriggerConfigurationHttpRequest
+{
+    public string? SourceId { get; init; }
+    public string? PromptTemplate { get; init; }
+    public string? PromptJsonPath { get; init; }
+    public string? DeliveryIdHeader { get; init; }
+    public string? DeliveryIdJsonPath { get; init; }
+    public string? HmacSecret { get; init; }
+    public string? PreviousHmacSecret { get; init; }
+    public string? HmacSignatureHeader { get; init; }
+    public string? HmacTimestampHeader { get; init; }
+    public int? MaxTimestampSkewSeconds { get; init; }
+    public string? TimeZoneId { get; init; }
+    public bool EnableUnattendedEffects { get; init; } = true;
+}
+
+public sealed record WorkflowExternalTriggerHttpResult
+{
+    public bool Configured { get; init; }
+    public required string WorkflowId { get; init; }
+    public required string ServiceId { get; init; }
+    public string RevisionId { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public string RouteKey { get; init; } = string.Empty;
+    public string FireUrl { get; init; } = string.Empty;
+    public string SourceId { get; init; } = string.Empty;
+    public string DefinitionActorId { get; init; } = string.Empty;
+    public string TargetRevisionId { get; init; } = string.Empty;
+    public string DeliveryIdHeader { get; init; } = string.Empty;
+    public string DeliveryIdJsonPath { get; init; } = string.Empty;
+    public string HmacSignatureHeader { get; init; } = string.Empty;
+    public string HmacTimestampHeader { get; init; } = string.Empty;
+    public bool HmacSecretSet { get; init; }
+    public bool PreviousHmacSecretSet { get; init; }
+    public bool AgentKeyReady { get; init; }
+    public bool UnattendedEffectsEnabled { get; init; }
+    public long UpdatedAtUnixMs { get; init; }
+
+    public static WorkflowExternalTriggerHttpResult FromBinding(
+        ScopeWorkflowSummary workflow,
+        WorkflowWebhookBindingRecord record) =>
+        new()
+        {
+            Configured = true,
+            WorkflowId = workflow.WorkflowId,
+            ServiceId = workflow.PublishedServiceId,
+            RevisionId = record.TargetRevisionId ?? workflow.ActiveRevisionId,
+            Status = record.CallerDurableCredential != null ? "active" : "configured",
+            RouteKey = record.RouteKey,
+            FireUrl = BuildWebhookFireUrl(record.RouteKey),
+            SourceId = record.SourceId ?? string.Empty,
+            DefinitionActorId = record.DefinitionActorId ?? string.Empty,
+            TargetRevisionId = record.TargetRevisionId ?? string.Empty,
+            DeliveryIdHeader = record.DeliveryIdHeader ?? string.Empty,
+            DeliveryIdJsonPath = record.DeliveryIdJsonPath ?? string.Empty,
+            HmacSignatureHeader = record.HmacSignatureHeader ?? string.Empty,
+            HmacTimestampHeader = record.HmacTimestampHeader ?? string.Empty,
+            HmacSecretSet = !string.IsNullOrWhiteSpace(record.HmacSecret),
+            PreviousHmacSecretSet = !string.IsNullOrWhiteSpace(record.PreviousHmacSecret),
+            AgentKeyReady = record.CallerDurableCredential != null,
+            UnattendedEffectsEnabled = record.CallerAuthority != null && record.UnattendedEffectAuthorization != null,
+            UpdatedAtUnixMs = record.UpdatedAtUnixMs,
+        };
+
+    public static WorkflowExternalTriggerHttpResult NotConfigured(ScopeWorkflowSummary workflow) =>
+        new()
+        {
+            Configured = false,
+            WorkflowId = workflow.WorkflowId,
+            ServiceId = workflow.PublishedServiceId,
+            RevisionId = workflow.ActiveRevisionId,
+            Status = "not_configured",
+        };
+
+    private static string BuildWebhookFireUrl(string routeKey) =>
+        $"/api/workflow-webhooks/{Uri.EscapeDataString(routeKey)}";
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
-internal interface IWorkflowWebhookAgentKeyMaterializer
+public interface IWorkflowWebhookAgentKeyMaterializer
 {
     Task<WorkflowWebhookAgentKeyMaterializationResult> MaterializeAsync(
         WorkflowCallerNyxIdAuthority callerAuthority,
@@ -27,7 +27,7 @@ internal interface IWorkflowWebhookAgentKeyMaterializer
         CancellationToken ct);
 }
 
-internal sealed record WorkflowWebhookAgentKeyMaterializationResult(
+public sealed record WorkflowWebhookAgentKeyMaterializationResult(
     DurableCallerCredentialRef? Credential,
     int StatusCode,
     string ErrorCode)

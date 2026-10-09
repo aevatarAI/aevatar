@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -6,20 +8,30 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using CredentialWorkflowCallerAuthority = Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -1668,6 +1680,211 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task WorkflowExternalTriggerUpsert_ShouldCreateWebhookBindingWithAgentKeyAndFireUrl()
+    {
+        var bindingStore = new RecordingWorkflowWebhookBindingStore();
+        var materializer = new RecordingWorkflowWebhookAgentKeyMaterializer();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var http = CreateExternalTriggerHttpContext(bindingStore, materializer, tokenProvider);
+        http.Request.Headers["X-NyxID-Delegation-Token"] = "proxy-delegation-token";
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+        var input = new WorkflowExternalTriggerConfigurationHttpRequest
+        {
+            SourceId = "nyxid-external-trigger",
+            PromptTemplate = "\"Run {{event_id}}\"",
+            HmacSecret = "delivery-signing-secret-at-least-32-bytes",
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.UpsertExternalTrigger(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            input,
+            workflowQueryPort,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("\"configured\":true");
+        body.Should().Contain("\"status\":\"active\"");
+        body.Should().Contain("\"fireUrl\":\"/api/workflow-webhooks/workflow-external-trigger-");
+        body.Should().Contain("\"routeKey\":\"workflow-external-trigger-");
+        body.Should().Contain("\"agentKeyReady\":true");
+        body.Should().Contain("\"hmacSecretSet\":true");
+        body.Should().NotContain("delivery-signing-secret-at-least-32-bytes");
+        body.Should().NotContain("workflow-triggers");
+        bindingStore.Records.Should().ContainSingle();
+        var record = bindingStore.Records.Values.Single();
+        record.ScopeId.Should().Be("scope-alpha");
+        record.WorkflowName.Should().Be("workflow-alpha");
+        record.DefinitionActorId.Should().Be("definition-actor-alpha");
+        record.TargetRevisionId.Should().Be("rev-alpha");
+        record.CallerDurableCredential.Should().NotBeNull();
+        tokenProvider.Authorities.Should().ContainSingle().Which.BindingId.Should().Be("binding-caller-alpha");
+        materializer.Materialized.Should().ContainSingle().Which.RouteKey.Should().Be(record.RouteKey);
+
+        var secondHttp = CreateExternalTriggerHttpContext(bindingStore, materializer, tokenProvider);
+        secondHttp.Request.Headers["X-NyxID-Delegation-Token"] = "proxy-delegation-token";
+        var secondResult = await ScopeWorkflowScheduleEndpoints.UpsertExternalTrigger(
+            secondHttp,
+            "scope-alpha",
+            "wf-alpha",
+            input,
+            workflowQueryPort,
+            CancellationToken.None);
+
+        await secondResult.ExecuteAsync(secondHttp);
+        var secondBody = await ReadBodyAsync(secondHttp.Response);
+
+        secondHttp.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        secondBody.Should().Contain($"\"routeKey\":\"{record.RouteKey}\"");
+        bindingStore.Records.Should().ContainSingle();
+        materializer.Revoked.Should().ContainSingle().Which.Credential.Ref.Should().Be("webhook-agent-key-ref-1");
+    }
+
+    [Fact]
+    public async Task WorkflowExternalTriggerUpsert_ShouldRejectForeignRouteBindingWithoutMutation()
+    {
+        var bindingStore = new RecordingWorkflowWebhookBindingStore();
+        bindingStore.Records["workflow-external-trigger-foreign"] = ExternalTriggerBindingRecord(
+            routeKey: "workflow-external-trigger-foreign",
+            scopeId: "scope-other");
+        var http = CreateExternalTriggerHttpContext(bindingStore);
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.UpsertExternalTrigger(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            new WorkflowExternalTriggerConfigurationHttpRequest
+            {
+                PromptTemplate = "\"Run {{event_id}}\"",
+                HmacSecret = "delivery-signing-secret-at-least-32-bytes",
+                EnableUnattendedEffects = false,
+            },
+            workflowQueryPort,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        bindingStore.Records.Should().HaveCount(2);
+        bindingStore.Records["workflow-external-trigger-foreign"].ScopeId.Should().Be("scope-other");
+    }
+
+    [Fact]
+    public async Task WorkflowExternalTriggerGet_ShouldReturnNotConfiguredWhenBindingIsAbsent()
+    {
+        var bindingStore = new RecordingWorkflowWebhookBindingStore();
+        var http = CreateExternalTriggerHttpContext(bindingStore);
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.GetExternalTrigger(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            workflowQueryPort,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("\"configured\":false");
+        body.Should().Contain("\"status\":\"not_configured\"");
+        body.Should().Contain("\"fireUrl\":\"\"");
+        body.Should().NotContain("workflow-triggers");
+    }
+
+    [Fact]
+    public async Task WorkflowExternalTriggerGet_ShouldReturnConfiguredWebhookBinding()
+    {
+        var bindingStore = new RecordingWorkflowWebhookBindingStore();
+        bindingStore.Records["route-alpha"] = ExternalTriggerBindingRecord(
+            routeKey: "route-alpha",
+            callerDurableCredential: new DurableCallerCredentialRef
+            {
+                Ref = "credential-ref-alpha",
+                Purpose = CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+                OwnerScopeKey = "scope-alpha",
+                SubjectId = "caller-alpha",
+                SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+                ProviderCredentialId = "provider-key-alpha",
+            });
+        var http = CreateExternalTriggerHttpContext(bindingStore);
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.GetExternalTrigger(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            workflowQueryPort,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("\"configured\":true");
+        body.Should().Contain("\"routeKey\":\"route-alpha\"");
+        body.Should().Contain("\"fireUrl\":\"/api/workflow-webhooks/route-alpha\"");
+        body.Should().Contain("\"agentKeyReady\":true");
+        body.Should().Contain("\"hmacSecretSet\":true");
+        body.Should().NotContain("delivery-signing-secret-at-least-32-bytes");
+        body.Should().NotContain("workflow-triggers");
+    }
+
+    [Fact]
+    public async Task WorkflowExternalTriggerDelete_ShouldRemoveBindingAndRevokeCredential()
+    {
+        var bindingStore = new RecordingWorkflowWebhookBindingStore();
+        bindingStore.Records["route-alpha"] = ExternalTriggerBindingRecord(
+            routeKey: "route-alpha",
+            callerDurableCredential: new DurableCallerCredentialRef
+            {
+                Ref = "credential-ref-alpha",
+                Purpose = CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+                OwnerScopeKey = "scope-alpha",
+                SubjectId = "caller-alpha",
+                SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+                ProviderCredentialId = "provider-key-alpha",
+            });
+        var materializer = new RecordingWorkflowWebhookAgentKeyMaterializer();
+        var http = CreateExternalTriggerHttpContext(bindingStore, materializer);
+        var workflowQueryPort = new RecordingScopeWorkflowQueryPort
+        {
+            LookupResult = RunnableWorkflow(),
+        };
+
+        var result = await ScopeWorkflowScheduleEndpoints.DeleteExternalTrigger(
+            http,
+            "scope-alpha",
+            "wf-alpha",
+            workflowQueryPort,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status204NoContent);
+        bindingStore.Records.Should().BeEmpty();
+        materializer.Revoked.Should().ContainSingle().Which.Credential.Ref.Should().Be("credential-ref-alpha");
+    }
+
+    [Fact]
     public async Task WorkflowScheduleCreate_ShouldResolvePublishedServiceTargetWithoutTeamOwner()
     {
         var http = CreateHttpContext("scope-alpha");
@@ -2332,11 +2549,12 @@ public sealed class ScopeWorkflowEndpointsTests
 
     private static DefaultHttpContext CreateHttpContext(
         string scopeId = "user-1",
-        IUserConfigQueryPort? userConfigQueryPort = null)
+        IUserConfigQueryPort? userConfigQueryPort = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         var http = new DefaultHttpContext
         {
-            RequestServices = BuildRequestServices(userConfigQueryPort),
+            RequestServices = BuildRequestServices(userConfigQueryPort, configureServices),
         };
         http.Response.Body = new MemoryStream();
         http.User = new ClaimsPrincipal(
@@ -2377,15 +2595,23 @@ public sealed class ScopeWorkflowEndpointsTests
         return http;
     }
 
-    private static ServiceProvider BuildRequestServices(IUserConfigQueryPort? userConfigQueryPort = null)
+    private static ServiceProvider BuildRequestServices(
+        IUserConfigQueryPort? userConfigQueryPort = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         var services = new ServiceCollection()
             .AddLogging()
             .AddOptions()
-            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Aevatar:Authentication:Enabled"] = "true",
+                })
+                .Build())
             .AddSingleton<IHostEnvironment>(new TestHostEnvironment());
         if (userConfigQueryPort != null)
             services.AddSingleton(userConfigQueryPort);
+        configureServices?.Invoke(services);
 
         return services.BuildServiceProvider();
     }
@@ -2453,33 +2679,44 @@ public sealed class ScopeWorkflowEndpointsTests
         },
         string.Empty);
 
-    private static ScheduledDispatchSummary WorkflowScheduleSummary(string scheduleId) => new(
-        scheduleId,
-        "Daily run",
-        ScheduledDispatchTargetKind.ServiceInvocation,
-        "target-actor-alpha",
-        Any.Pack(new ChatRequestEvent()).TypeUrl,
-        "svc-key-alpha",
-        "svc-alpha",
-        "chat",
-        "0 9 * * *",
-        "UTC",
-        true,
-        DateTimeOffset.UtcNow,
-        DateTimeOffset.UtcNow,
-        null,
-        null,
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        0,
-        0,
-        new Dictionary<string, string>(StringComparer.Ordinal),
-        $"actor:{scheduleId}",
-        "run workflow",
-        ScheduledDispatchScheduleKind.Workflow);
+    private static ScheduledDispatchSummary WorkflowScheduleSummary(string scheduleId) =>
+        new(
+            scheduleId,
+            "Daily run",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            "target-actor-alpha",
+            Any.Pack(new ChatRequestEvent()).TypeUrl,
+            "svc-key-alpha",
+            "svc-alpha",
+            "chat",
+            "0 9 * * *",
+            "UTC",
+            true,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            null,
+            null,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            0,
+            0,
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            $"actor:{scheduleId}",
+            "run workflow",
+            ScheduledDispatchScheduleKind.Workflow)
+        {
+            ServiceIdentity = new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "workflow-app",
+                Namespace = "workflow-ns",
+                ServiceId = "svc-alpha",
+            },
+            ServiceRevisionId = "rev-alpha",
+        };
 
     private sealed class RecordingScopeWorkflowQueryPort :
         IScopeWorkflowQueryPort,
@@ -2538,10 +2775,258 @@ public sealed class ScopeWorkflowEndpointsTests
         }
     }
 
+    private sealed class RecordingWorkflowCallerAccessTokenProvider : IWorkflowCallerAccessTokenProvider
+    {
+        public List<CredentialWorkflowCallerAuthority> Authorities { get; } = [];
+
+        public Task<string> IssueAsync(
+            CredentialWorkflowCallerAuthority authority,
+            CancellationToken ct = default)
+        {
+            Authorities.Add(authority.Clone());
+            return Task.FromResult("issued-provisioning-token-alpha");
+        }
+    }
+
+    private static DefaultHttpContext CreateExternalTriggerHttpContext(
+        RecordingWorkflowWebhookBindingStore bindingStore,
+        RecordingWorkflowWebhookAgentKeyMaterializer? materializer = null,
+        RecordingWorkflowCallerAccessTokenProvider? tokenProvider = null)
+    {
+        var bindingReader = new FakeWorkflowActorBindingReader();
+        bindingReader.Bindings["definition-actor-alpha"] = ExternalTriggerWorkflowBinding();
+        return CreateHttpContext(
+            "scope-alpha",
+            configureServices: services =>
+            {
+                services.AddSingleton<IWorkflowWebhookBindingStore>(bindingStore);
+                services.AddSingleton<IWorkflowActorBindingReader>(bindingReader);
+                services.AddSingleton<IExternalIdentityBindingQueryPort>(new FakeExternalIdentityBindingQueryPort());
+                services.AddSingleton<IWorkflowCallerAccessTokenProvider>(tokenProvider ?? new RecordingWorkflowCallerAccessTokenProvider());
+                services.AddSingleton<IWorkflowWebhookAgentKeyMaterializer>(materializer ?? new RecordingWorkflowWebhookAgentKeyMaterializer());
+            });
+    }
+
+    private static WorkflowActorBinding ExternalTriggerWorkflowBinding()
+    {
+        const string workflowYaml = "name: workflow-alpha\nsteps: []\n";
+        var plan = ExternalTriggerDurableWritePlan();
+        return new WorkflowActorBinding(
+            WorkflowActorKind.Definition,
+            "definition-actor-alpha",
+            "definition-actor-alpha",
+            string.Empty,
+            "workflow-alpha",
+            workflowYaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            ScopeId: "scope-alpha",
+            SourceVersion: 1,
+            CapabilityAdmissionPlan: plan,
+            WorkflowId: "wf-alpha",
+            RevisionId: "rev-alpha");
+    }
+
+    private static WorkflowCapabilityAdmissionPlan ExternalTriggerDurableWritePlan()
+    {
+        var request = new NyxIdRequestSelector
+        {
+            UserServiceId = "service-alpha",
+            Method = NyxIdRequestMethod.Post,
+            PathTemplate = "/v1/resources",
+            BodyMode = NyxIdRequestBodyMode.Json,
+            BodyRequired = true,
+            ResponseMode = NyxIdRequestResponseMode.Text,
+        };
+        var policy = new NyxIdOperationExecutionPolicy
+        {
+            Risk = NyxIdOperationRisk.Write,
+            Approval = NyxIdOperationApproval.Required,
+            EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+            AllowedExecutionModes =
+            {
+                ExternalCapabilityExecutionMode.Interactive,
+                ExternalCapabilityExecutionMode.Durable,
+            },
+        };
+        var requestDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeNyxIdRequestContractDigest(request);
+        var grant = new NyxIdExplicitRequestGrant
+        {
+            WorkflowId = "wf-alpha",
+            RevisionId = "rev-alpha",
+            CallSiteId = "workflow-alpha/update_resource",
+            RequestContractDigest = requestDigest,
+            GrantorAuthority = NyxIdExplicitRequestGrantorAuthority.AevatarWorkflowBinder,
+            GrantorOwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+            GrantorOwnerSubject = "caller-alpha",
+            Risk = NyxIdOperationRisk.Write,
+            AllowedExecutionModes =
+            {
+                ExternalCapabilityExecutionMode.Interactive,
+                ExternalCapabilityExecutionMode.Durable,
+            },
+        };
+        var capability = new NyxIdUserRequestCapabilityRef
+        {
+            Request = request,
+            ServiceSlugSnapshot = "api-resource-service",
+            ContractDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdExplicitRequestProofDigest(requestDigest, "api-resource-service"),
+            ExplicitRequestGrantDigest = WorkflowCapabilityAdmissionPlanIntegrity
+                .ComputeNyxIdExplicitRequestGrantDigest(grant),
+            ExecutionPolicy = policy,
+        };
+        var plan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion,
+            DefinitionDigest = "sha256:definition",
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            DurableAuthorizationOwner = new ExternalCapabilityAuthorizationOwner
+            {
+                Authority = WorkflowCapabilityAdmissionPlanIntegrity.NyxIdAuthority,
+                OwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+                OwnerSubject = "caller-alpha",
+            },
+        };
+        plan.InvocationAdmissions.Add(new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = grant.CallSiteId,
+            Capability = new ExternalWorkflowCapabilityRef { NyxIdUserRequest = capability },
+            NyxIdExplicitRequestGrant = grant,
+        });
+        plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
+        return plan;
+    }
+
+    private static WorkflowWebhookBindingRecord ExternalTriggerBindingRecord(
+        string routeKey,
+        string scopeId = "scope-alpha",
+        DurableCallerCredentialRef? callerDurableCredential = null) => new(
+        RouteKey: routeKey,
+        ScopeId: scopeId,
+        WorkflowName: "workflow-alpha",
+        SourceId: "nyxid-external-trigger",
+        PromptTemplate: "Run {{event_id}}",
+        PromptJsonPath: null,
+        DeliveryIdHeader: "X-NyxID-Delivery-Id",
+        DeliveryIdJsonPath: "event_id",
+        HmacSecret: "delivery-signing-secret-at-least-32-bytes",
+        HmacSignatureHeader: "X-NyxID-Signature",
+        HmacTimestampHeader: "X-NyxID-Timestamp",
+        MaxTimestampSkewSeconds: 300,
+        UpdatedAtUnixMs: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        DefinitionActorId: "definition-actor-alpha",
+        TargetRevisionId: "rev-alpha",
+        CallerAuthority: callerDurableCredential == null ? null : new CredentialWorkflowCallerAuthority
+        {
+            Platform = OwnerScope.NyxIdPlatform,
+            ExternalUserId = "caller-alpha",
+            Scope = "proxy",
+            BindingId = "binding-caller-alpha",
+        },
+        CallerDurableCredential: callerDurableCredential);
+
+    private sealed class RecordingWorkflowWebhookBindingStore : IWorkflowWebhookBindingStore
+    {
+        public Dictionary<string, WorkflowWebhookBindingRecord> Records { get; } = new(StringComparer.Ordinal);
+
+        public Task<WorkflowWebhookBindingRecord?> GetAsync(string routeKey, CancellationToken ct = default) =>
+            Task.FromResult(Records.GetValueOrDefault(routeKey));
+
+        public async Task<bool> TryPutOwnedAsync(WorkflowWebhookBindingRecord record, CancellationToken ct = default) =>
+            (await PutOwnedAsync(record, ct)).Succeeded;
+
+        public Task<WorkflowWebhookBindingPutResult> PutOwnedAsync(
+            WorkflowWebhookBindingRecord record,
+            CancellationToken ct = default)
+        {
+            if (Records.TryGetValue(record.RouteKey, out var existing) &&
+                !string.Equals(existing.ScopeId, record.ScopeId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(new WorkflowWebhookBindingPutResult(false, null));
+            }
+
+            Records[record.RouteKey] = record;
+            return Task.FromResult(new WorkflowWebhookBindingPutResult(true, existing));
+        }
+
+        public async Task<bool> TryDeleteOwnedAsync(
+            string routeKey,
+            string scopeId,
+            CancellationToken ct = default) =>
+            (await DeleteOwnedAsync(routeKey, scopeId, ct)).Succeeded;
+
+        public Task<WorkflowWebhookBindingDeleteResult> DeleteOwnedAsync(
+            string routeKey,
+            string scopeId,
+            CancellationToken ct = default)
+        {
+            if (!Records.TryGetValue(routeKey, out var existing) ||
+                !string.Equals(existing.ScopeId, scopeId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(new WorkflowWebhookBindingDeleteResult(false, null));
+            }
+
+            Records.Remove(routeKey);
+            return Task.FromResult(new WorkflowWebhookBindingDeleteResult(true, existing));
+        }
+
+        public Task<IReadOnlyList<WorkflowWebhookBindingRecord>> ListByScopeAsync(
+            string scopeId,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WorkflowWebhookBindingRecord>>(
+                Records.Values.Where(record => string.Equals(record.ScopeId, scopeId, StringComparison.Ordinal)).ToArray());
+    }
+
+    private sealed class RecordingWorkflowWebhookAgentKeyMaterializer : IWorkflowWebhookAgentKeyMaterializer
+    {
+        public List<(CredentialWorkflowCallerAuthority Authority, string ScopeId, string RouteKey)> Materialized { get; } = [];
+        public List<(CredentialWorkflowCallerAuthority? Authority, DurableCallerCredentialRef Credential, string AuditReason)> Revoked { get; } = [];
+
+        public Task<WorkflowWebhookAgentKeyMaterializationResult> MaterializeAsync(
+            CredentialWorkflowCallerAuthority callerAuthority,
+            WorkflowCapabilityAdmissionPlan admissionPlan,
+            string scopeId,
+            string routeKey,
+            CancellationToken ct)
+        {
+            Materialized.Add((callerAuthority.Clone(), scopeId, routeKey));
+            return Task.FromResult(WorkflowWebhookAgentKeyMaterializationResult.Success(new DurableCallerCredentialRef
+            {
+                Ref = $"webhook-agent-key-ref-{Materialized.Count}",
+                Purpose = CredentialSecretPurposes.WorkflowWebhookBindingAgentKey,
+                OwnerScopeKey = scopeId,
+                SubjectId = callerAuthority.ExternalUserId,
+                SourceKind = DurableCallerCredentialSourceKind.WebhookBinding,
+                ProviderCredentialId = $"provider-key-{Materialized.Count}",
+            }));
+        }
+
+        public Task<bool> RevokeAsync(
+            CredentialWorkflowCallerAuthority? callerAuthority,
+            DurableCallerCredentialRef credential,
+            string auditReason,
+            CancellationToken ct)
+        {
+            Revoked.Add((callerAuthority?.Clone(), credential.Clone(), auditReason));
+            return Task.FromResult(true);
+        }
+    }
+
+    private sealed class FakeExternalIdentityBindingQueryPort : IExternalIdentityBindingQueryPort
+    {
+        public Task<BindingId?> ResolveAsync(
+            ExternalSubjectRef externalSubject,
+            CancellationToken ct = default) =>
+            Task.FromResult<BindingId?>(new BindingId { Value = $"binding-{externalSubject.ExternalUserId}" });
+    }
+
     private sealed class RecordingWorkflowScheduledDispatchService : IScheduledDispatchApplicationService
     {
         public List<ScheduledDispatchConfiguration> Created { get; } = [];
         public List<ScheduledDispatchMutationContext?> CreateContexts { get; } = [];
+        public List<ScheduledDispatchConfiguration> Ensured { get; } = [];
+        public List<ScheduledDispatchMutationContext?> EnsureContexts { get; } = [];
         public List<(string ScheduleId, ScheduledDispatchConfiguration Configuration)> Updated { get; } = [];
         public List<ScheduledDispatchMutationContext?> UpdateContexts { get; } = [];
         public List<ScheduledDispatchMutationContext?> EnableContexts { get; } = [];
@@ -2555,7 +3040,93 @@ public sealed class ScopeWorkflowEndpointsTests
         public (string CronExpression, string? Timezone, int Count, DateTimeOffset? FromUtc)? LastPreview { get; private set; }
         public ArgumentException? PreviewError { get; init; }
         public List<string> RunNowScheduleIds { get; } = [];
+        public List<TeamMemberAutomationOwner> RunNowTeamOwners { get; } = [];
+        public TeamMemberAutomationOwner? LastTeamAutomationGet { get; private set; }
+        public (string ScheduleId, string ScopeId, string? TeamId, string? MemberId)? LastTeamScheduleGet { get; private set; }
         public ScheduledDispatchDetail? Detail { get; init; }
+        public List<TeamAutomationCredentialOperation> BeginCredentialOperations { get; } = [];
+        public List<(string ScheduleId, string OperationId, string ErrorCode)> FailedCredentialOperations { get; } = [];
+        public List<(string ScheduleId, string OperationId)> RecordedCredentialCandidates { get; } = [];
+        public List<(string ScheduleId, string OperationId)> CompletedCredentialOperations { get; } = [];
+
+        public Task<TeamAutomationCommittedMutationReceipt> BeginTeamAutomationCredentialOperationAsync(
+            TeamAutomationCredentialOperation operation,
+            CancellationToken ct = default)
+        {
+            BeginCredentialOperations.Add(operation);
+            return Task.FromResult(Committed(
+                operation.ScheduleId,
+                operation.OperationId,
+                operation.IdempotencyKey,
+                TeamAutomationOperationObservationStages.Begin,
+                ownsEffectAttempt: true,
+                "cmd-team-begin",
+                effectAttemptId: "attempt-alpha",
+                credentialEffectLocator: operation.CredentialEffectLocator,
+                newOperationCommitted: true));
+        }
+
+        public Task<TeamAutomationCommittedMutationReceipt> RecordTeamAutomationCredentialCandidateAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string operationId,
+            string idempotencyKey,
+            string effectAttemptId,
+            ScheduledInvocationAgentKeyCredentialReference credential,
+            ScheduledInvocationAuthorizationOwner credentialOwner,
+            CancellationToken ct = default)
+        {
+            RecordedCredentialCandidates.Add((scheduleId, operationId));
+            return Task.FromResult(Committed(
+                scheduleId,
+                operationId,
+                idempotencyKey,
+                TeamAutomationOperationObservationStages.Candidate,
+                ownsEffectAttempt: false,
+                "cmd-team-candidate",
+                candidateCredential: credential,
+                candidateOwner: credentialOwner));
+        }
+
+        public Task<TeamAutomationCommittedMutationReceipt> CompleteTeamAutomationCredentialOperationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string operationId,
+            string idempotencyKey,
+            string effectAttemptId,
+            ScheduledInvocationAgentKeyCredentialReference credential,
+            ScheduledDispatchConfiguration configuration,
+            CancellationToken ct = default)
+        {
+            CompletedCredentialOperations.Add((scheduleId, operationId));
+            return Task.FromResult(Committed(
+                scheduleId,
+                operationId,
+                idempotencyKey,
+                TeamAutomationOperationObservationStages.Complete,
+                ownsEffectAttempt: false,
+                "cmd-team-complete"));
+        }
+
+        public Task<TeamAutomationCommittedMutationReceipt> FailTeamAutomationCredentialOperationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string operationId,
+            string idempotencyKey,
+            string effectAttemptId,
+            string errorCode,
+            CancellationToken ct = default)
+        {
+            FailedCredentialOperations.Add((scheduleId, operationId, errorCode));
+            return Task.FromResult(Committed(
+                scheduleId,
+                operationId,
+                idempotencyKey,
+                TeamAutomationOperationObservationStages.Fail,
+                ownsEffectAttempt: false,
+                "cmd-team-fail",
+                errorCode));
+        }
 
         public Task<ScheduledDispatchMutationReceipt> CreateAsync(
             ScheduledDispatchConfiguration configuration,
@@ -2570,8 +3141,12 @@ public sealed class ScopeWorkflowEndpointsTests
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
             ScheduledDispatchConfiguration configuration,
             ScheduledDispatchMutationContext? context = null,
-            CancellationToken ct = default) =>
-            Task.FromResult(MutationReceipt(configuration.ScheduleId));
+            CancellationToken ct = default)
+        {
+            Ensured.Add(configuration);
+            EnsureContexts.Add(context);
+            return Task.FromResult(MutationReceipt(configuration.ScheduleId));
+        }
 
         public Task<ScheduledDispatchMutationReceipt> UpdateAsync(
             string scheduleId,
@@ -2624,6 +3199,39 @@ public sealed class ScopeWorkflowEndpointsTests
             return Task.FromResult(Detail?.Schedule.ScheduleId == scheduleId ? Detail : null);
         }
 
+        public Task<ScheduledDispatchDetail?> GetTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            CancellationToken ct = default)
+        {
+            LastScheduleGet = scheduleId;
+            LastTeamAutomationGet = owner;
+            return Task.FromResult(IsTeamSchedule(scheduleId, owner) ? Detail : null);
+        }
+
+        public Task<ScheduledDispatchDetail?> GetTeamScheduleAsync(
+            string scheduleId,
+            string scopeId,
+            string? teamId = null,
+            string? memberId = null,
+            CancellationToken ct = default)
+        {
+            LastTeamScheduleGet = (scheduleId, scopeId, teamId, memberId);
+            if (Detail?.Schedule is not { } schedule || schedule.ScheduleId != scheduleId)
+                return Task.FromResult<ScheduledDispatchDetail?>(null);
+
+            if (!schedule.TeamOwned || !string.Equals(schedule.TeamOwnerScopeId, scopeId, StringComparison.Ordinal))
+                return Task.FromResult<ScheduledDispatchDetail?>(null);
+
+            if (!string.IsNullOrWhiteSpace(teamId) && !string.Equals(schedule.TeamId, teamId, StringComparison.Ordinal))
+                return Task.FromResult<ScheduledDispatchDetail?>(null);
+
+            if (!string.IsNullOrWhiteSpace(memberId) && !string.Equals(schedule.TeamOwnerMemberId, memberId, StringComparison.Ordinal))
+                return Task.FromResult<ScheduledDispatchDetail?>(null);
+
+            return Task.FromResult<ScheduledDispatchDetail?>(Detail);
+        }
+
         public Task<ScheduledDispatchListResult> ListAsync(
             int take = 50,
             string? cursor = null,
@@ -2660,7 +3268,29 @@ public sealed class ScopeWorkflowEndpointsTests
         {
             RunNowScheduleIds.Add(scheduleId);
             RunNowContexts.Add(context);
-            return Task.FromResult(new ScheduledDispatchRunNowReceipt(
+            return Task.FromResult(RunNowReceipt(scheduleId));
+        }
+
+        public Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            CancellationToken ct = default)
+        {
+            RunNowScheduleIds.Add(scheduleId);
+            RunNowTeamOwners.Add(owner);
+            return Task.FromResult(RunNowReceipt(scheduleId));
+        }
+
+        private bool IsTeamSchedule(string scheduleId, TeamMemberAutomationOwner owner) =>
+            Detail?.Schedule is { } schedule &&
+            schedule.ScheduleId == scheduleId &&
+            schedule.TeamOwned &&
+            string.Equals(schedule.TeamOwnerScopeId, owner.ScopeId, StringComparison.Ordinal) &&
+            string.Equals(schedule.TeamOwnerMemberId, owner.MemberId, StringComparison.Ordinal) &&
+            string.Equals(schedule.TeamId, owner.TeamId, StringComparison.Ordinal);
+
+        private static ScheduledDispatchRunNowReceipt RunNowReceipt(string scheduleId) =>
+            new(
                 scheduleId,
                 $"actor:{scheduleId}",
                 DateTimeOffset.UtcNow,
@@ -2669,8 +3299,44 @@ public sealed class ScopeWorkflowEndpointsTests
                 "cmd-run-now",
                 "corr-run-now",
                 DateTimeOffset.UtcNow,
-                "accepted"));
-        }
+                "accepted");
+
+        private static TeamAutomationCommittedMutationReceipt Committed(
+            string scheduleId,
+            string operationId,
+            string idempotencyKey,
+            string stage,
+            bool ownsEffectAttempt,
+            string commandId,
+            string errorCode = "",
+            string effectAttemptId = "",
+            ScheduledInvocationAgentKeyCredentialReference? candidateCredential = null,
+            ScheduledInvocationAuthorizationOwner? candidateOwner = null,
+            ScheduledCredentialEffectLocator? credentialEffectLocator = null,
+            bool newOperationCommitted = false) =>
+            new(
+                MutationReceipt(scheduleId) with { CommandId = commandId },
+                new TeamAutomationOperationCommittedOutcome(
+                    scheduleId,
+                    operationId,
+                    idempotencyKey,
+                    stage,
+                    ownsEffectAttempt,
+                    StateVersion: 1,
+                    errorCode,
+                    ErrorMessage: string.Empty,
+                    ObservedAtUtc: DateTimeOffset.UtcNow,
+                    PendingRevocationCredential: null,
+                    PendingRevocationOwner: null,
+                    NyxIdRevocationPending: false,
+                    VaultRevocationPending: false,
+                    EffectAttemptId: effectAttemptId,
+                    EffectAttemptGeneration: ownsEffectAttempt ? 1 : 0,
+                    EffectAttemptExpiresAtUtc: ownsEffectAttempt ? DateTimeOffset.UtcNow.AddMinutes(5) : null,
+                    CandidateCredential: candidateCredential,
+                    CandidateOwner: candidateOwner,
+                    CredentialEffectLocator: credentialEffectLocator,
+                    NewOperationCommitted: newOperationCommitted));
 
         private static ScheduledDispatchMutationReceipt MutationReceipt(string scheduleId) => new(
             scheduleId,
