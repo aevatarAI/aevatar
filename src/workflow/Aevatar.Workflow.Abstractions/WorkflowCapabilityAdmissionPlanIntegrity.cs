@@ -274,8 +274,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                     "Workflow capability admission cannot contain legacy external capabilities."));
         }
 
-        if (executionMode == ExternalCapabilityExecutionMode.Unspecified ||
-            plan.ExecutionMode != executionMode)
+        if (!IsPlanExecutionModeCompatible(plan.ExecutionMode, executionMode))
         {
             return Failed(
                 WorkflowCapabilityAdmissionCompatibilityFailure.ExecutionModeMismatch,
@@ -318,7 +317,9 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         var actual = plan.InvocationAdmissions.ToArray();
         try
         {
-            ValidateInvocationAdmissions(actual, executionMode);
+            ValidateInvocationAdmissions(actual, plan.ExecutionMode);
+            if (plan.ExecutionMode != executionMode)
+                ValidateInvocationAdmissions(actual, executionMode);
         }
         catch (Exception exception) when (IsStructuralValidationException(exception))
         {
@@ -405,10 +406,13 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             .Select(static admission => admission.Capability)
             .ToArray();
 
-        var requiresDurableAuthorizationCatalog = RequiresDurableAuthorizationCatalog(
+        var requiresStoredDurableAuthorizationCatalog = RequiresDurableAuthorizationCatalog(
+            plan.ExecutionMode,
+            expectedCapabilityArray);
+        var requiresRequestedDurableAuthorizationCatalog = RequiresDurableAuthorizationCatalog(
             executionMode,
             expectedCapabilityArray);
-        if (requiresDurableAuthorizationCatalog &&
+        if (requiresRequestedDurableAuthorizationCatalog &&
             !HasDurableAuthorizationCatalogSource(plan.SourceStamps))
         {
             return Failed(
@@ -416,14 +420,17 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 new InvalidOperationException(
                     "Workflow capability admission durable authorization catalog source is required."));
         }
-        if (!HasRequiredSourceEvidence(executionMode, expectedCapabilityArray, plan.SourceStamps))
+        var requiredSourceEvidenceMode = requiresStoredDurableAuthorizationCatalog
+            ? plan.ExecutionMode
+            : executionMode;
+        if (!HasRequiredSourceEvidence(requiredSourceEvidenceMode, expectedCapabilityArray, plan.SourceStamps))
         {
             return Failed(
                 WorkflowCapabilityAdmissionCompatibilityFailure.RequiredSourceMissing,
                 new InvalidOperationException(
                     "Workflow capability admission required source evidence is invalid."));
         }
-        if (requiresDurableAuthorizationCatalog)
+        if (requiresStoredDurableAuthorizationCatalog || requiresRequestedDurableAuthorizationCatalog)
         {
             if (!IsCanonicalDurableAuthorizationOwner(plan.DurableAuthorizationOwner))
             {
@@ -453,6 +460,15 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 WorkflowCapabilityAdmissionCompatibilityFailure.None),
             null);
     }
+
+    private static bool IsPlanExecutionModeCompatible(
+        ExternalCapabilityExecutionMode planExecutionMode,
+        ExternalCapabilityExecutionMode expectedExecutionMode) =>
+        expectedExecutionMode != ExternalCapabilityExecutionMode.Unspecified &&
+        planExecutionMode is ExternalCapabilityExecutionMode.Interactive or ExternalCapabilityExecutionMode.Durable &&
+        (planExecutionMode == expectedExecutionMode ||
+         planExecutionMode == ExternalCapabilityExecutionMode.Durable &&
+         expectedExecutionMode == ExternalCapabilityExecutionMode.Interactive);
 
     public static IReadOnlyList<ExternalWorkflowCapabilityRef> DistinctCapabilities(
         WorkflowCapabilityAdmissionPlan plan)

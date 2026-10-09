@@ -10,7 +10,7 @@ public sealed class WorkflowCapabilityAdmissionPlanIntegrityTests
 
     [Theory]
     [InlineData("schema", WorkflowCapabilityAdmissionCompatibilityFailure.SchemaMismatch)]
-    [InlineData("mode", WorkflowCapabilityAdmissionCompatibilityFailure.ExecutionModeMismatch)]
+    [InlineData("mode", WorkflowCapabilityAdmissionCompatibilityFailure.AdmissionDigestMismatch)]
     [InlineData("definition", WorkflowCapabilityAdmissionCompatibilityFailure.DefinitionDigestMismatch)]
     [InlineData("call-site-count", WorkflowCapabilityAdmissionCompatibilityFailure.InvocationMismatch)]
     [InlineData("call-site-order", WorkflowCapabilityAdmissionCompatibilityFailure.InvocationOrderingInvalid)]
@@ -93,6 +93,25 @@ public sealed class WorkflowCapabilityAdmissionPlanIntegrityTests
 
         result.Succeeded.Should().BeFalse();
         result.Failure.Should().Be(expected);
+    }
+
+    [Fact]
+    public void CheckCompatibility_WithInteractivePlanForDurableExpectedMode_ShouldRejectMode()
+    {
+        var fixture = ExplicitRequestFixture(ExternalCapabilityExecutionMode.Interactive);
+
+        var result = WorkflowCapabilityAdmissionPlanIntegrity.CheckCompatibility(
+            fixture.Plan,
+            fixture.WorkflowYaml,
+            fixture.InlineWorkflowYamls,
+            ExternalCapabilityExecutionMode.Durable,
+            fixture.ExpectedInvocations,
+            fixture.WorkflowId,
+            fixture.RevisionId);
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().Be(
+            WorkflowCapabilityAdmissionCompatibilityFailure.ExecutionModeMismatch);
     }
 
     [Theory]

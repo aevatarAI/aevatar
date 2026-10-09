@@ -1712,6 +1712,122 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
+    public async Task RevalidatePersistedAsync_ShouldAcceptDurableExplicitRequestPlanForInteractiveExecution()
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var plan = DurableExplicitPlan(selector);
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            new StubParser(WorkflowYamlParseResult.Success("explicit-workflow", ExplicitDependencies(selector))),
+            new StubReadinessPort(),
+            new FixedTimeProvider());
+
+        var verified = await service.RevalidatePersistedAsync(
+            new PersistedWorkflowCapabilityAdmissionRequest(
+                plan,
+                yaml,
+                new Dictionary<string, string>(),
+                "service_revision_prepare",
+                ExternalCapabilityExecutionMode.Interactive,
+                ExplicitWorkflowId,
+                ExplicitRevisionId));
+
+        verified.Should().BeEquivalentTo(plan);
+    }
+
+    [Fact]
+    public async Task RevalidatePersistedAsync_ShouldRejectInteractiveUseOfDurableExplicitPlanWithoutCatalogSource()
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var plan = DurableExplicitPlan(selector);
+        var durableSource = plan.SourceStamps.Single(static source =>
+            source.SourceKind == ExternalCapabilitySourceKind.DurableAuthorizationCatalog);
+        plan.SourceStamps.Remove(durableSource);
+        plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            new StubParser(WorkflowYamlParseResult.Success("explicit-workflow", ExplicitDependencies(selector))),
+            new StubReadinessPort(),
+            new FixedTimeProvider());
+
+        Func<Task> act = async () => await service.RevalidatePersistedAsync(
+            new PersistedWorkflowCapabilityAdmissionRequest(
+                plan,
+                yaml,
+                new Dictionary<string, string>(),
+                "service_revision_prepare",
+                ExternalCapabilityExecutionMode.Interactive,
+                ExplicitWorkflowId,
+                ExplicitRevisionId));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*required source evidence*");
+    }
+
+    [Fact]
+    public async Task RevalidatePersistedAsync_ShouldRejectInteractiveUseOfDurableExplicitPlanWithoutOwner()
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var plan = DurableExplicitPlan(selector);
+        plan.DurableAuthorizationOwner = null;
+        plan.AdmissionDigest = WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan);
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            new StubParser(WorkflowYamlParseResult.Success("explicit-workflow", ExplicitDependencies(selector))),
+            new StubReadinessPort(),
+            new FixedTimeProvider());
+
+        Func<Task> act = async () => await service.RevalidatePersistedAsync(
+            new PersistedWorkflowCapabilityAdmissionRequest(
+                plan,
+                yaml,
+                new Dictionary<string, string>(),
+                "service_revision_prepare",
+                ExternalCapabilityExecutionMode.Interactive,
+                ExplicitWorkflowId,
+                ExplicitRevisionId));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*durable authorization owner is invalid*");
+    }
+
+    [Fact]
+    public async Task RefreshPersistedAsync_ShouldPreserveDurableExplicitAdmissionForInteractiveExpectedMode()
+    {
+        const string yaml = "name: explicit-workflow\nsteps: []\n";
+        var selector = ExplicitSelector();
+        var plan = DurableExplicitPlan(selector);
+        var capability = ExplicitCapability(selector.NyxIdRequest);
+        var readiness = DurableExplicitReady(selector, capability);
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            new StubParser(WorkflowYamlParseResult.Success("explicit-workflow", ExplicitDependencies(selector))),
+            new StubReadinessPort(readiness),
+            new FixedTimeProvider());
+        var access = new ExternalWorkflowCapabilityAccessContext(
+            "scope-alpha",
+            "caller-alpha",
+            NyxIdCallerCredentialSelection.SourceReadableUserBearer("runtime-caller-credential"));
+
+        var refreshed = await service.RefreshPersistedAsync(
+            new RefreshPersistedWorkflowCapabilityAdmissionRequest(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    plan,
+                    yaml,
+                    new Dictionary<string, string>(),
+                    "service_revision_prepare",
+                    ExternalCapabilityExecutionMode.Interactive,
+                    ExplicitWorkflowId,
+                    ExplicitRevisionId),
+                access));
+
+        refreshed.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        refreshed.InvocationAdmissions.Should().ContainSingle().Which
+            .NyxIdExplicitRequestGrant.AllowedExecutionModes.Should()
+            .Contain(ExternalCapabilityExecutionMode.Durable);
+        refreshed.DurableAuthorizationOwner.Should().BeEquivalentTo(DurableOwner());
+    }
+
+    [Fact]
     public async Task RevalidatePersistedAsync_ShouldRejectDurableNyxIdPlanWithoutCatalogSource()
     {
         const string yaml = "name: wf-alpha\nsteps: []\n";
@@ -2215,6 +2331,51 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             CallSiteId = ExplicitCallSiteId,
             ToolName = "nyxid_proxy",
             Selector = selector,
+        };
+
+    private static WorkflowAuthorizationDependencies ExplicitDependencies(
+        ExternalWorkflowCapabilitySelector selector)
+    {
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
+        };
+        dependencies.ExternalInvocations.Add(ExplicitInvocation(selector));
+        return dependencies;
+    }
+
+    private static WorkflowCapabilityAdmissionPlan DurableExplicitPlan(
+        ExternalWorkflowCapabilitySelector selector)
+    {
+        var admission = ExplicitAdmission(ExplicitCapability(selector.NyxIdRequest));
+        admission.NyxIdExplicitRequestGrant.GrantorOwnerSubject = "caller-alpha";
+        admission.Capability.NyxIdUserRequest.ExplicitRequestGrantDigest =
+            ExplicitGrantDigest(admission.NyxIdExplicitRequestGrant);
+        return WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: explicit-workflow\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            [admission],
+            [ExplicitSource(), DurableCatalogSource()],
+            DurableOwner(),
+            ExplicitWorkflowId,
+            ExplicitRevisionId);
+    }
+
+    private static ExternalCapabilityReadiness DurableExplicitReady(
+        ExternalWorkflowCapabilitySelector selector,
+        ExternalWorkflowCapabilityRef capability) =>
+        new()
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Durable,
+            Status = ExternalCapabilityReadinessStatus.Ready,
+            SelectedSelector = selector.Clone(),
+            SelectedCapability = capability.Clone(),
+            Sources =
+            {
+                ExplicitSource(),
+                DurableCatalogSource(),
+            },
         };
 
     private static ExternalCapabilitySourceStamp ExplicitSource() =>
