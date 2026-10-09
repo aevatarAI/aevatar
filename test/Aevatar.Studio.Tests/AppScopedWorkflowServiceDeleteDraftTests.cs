@@ -1,5 +1,6 @@
 using Aevatar.Configuration;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -9,6 +10,8 @@ using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Domain.Studio.Services;
 using Aevatar.Studio.Infrastructure.Serialization;
+using Aevatar.Studio.Hosting;
+using Microsoft.Extensions.DependencyInjection;
 using Aevatar.Studio.Tests.Shared;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -650,6 +653,183 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
+    [Fact]
+    public async Task SaveKnownWorkflowDraftAsync_HostComposition_ShouldResolveCommittedSourceForPublishedOnlyWorkflow()
+    {
+        var workspace = new RecordingStudioWorkspacePorts();
+        var committed = new StubCommittedWorkflowSource(new ScopeWorkflowCatalogueLookupResult(
+            ScopeWorkflowCatalogueLookupStatus.Found, CommittedWorkflow()));
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IWorkflowYamlDocumentService>(new StubWorkflowYamlDocumentService());
+        services.AddSingleton<IWorkflowDefinitionParser>(new StubWorkflowDefinitionParser());
+        services.AddSingleton<IStudioWorkspaceQueryPort>(workspace);
+        services.AddSingleton<IStudioWorkspaceCommandPort>(new ReceiptWorkspaceCommandPort(workspace));
+        services.AddSingleton<IScopeWorkflowCatalogueCommittedSourcePort>(committed);
+        services.AddStudioBridgeServices();
+        await using var provider = services.BuildServiceProvider();
+        var service = provider.GetRequiredService<AppScopedWorkflowService>();
+
+        var receipt = await service.SaveKnownWorkflowDraftAsync("scope-alpha", "wf-alpha", SaveRequest());
+
+        receipt.WorkflowId.Should().Be("wf-alpha");
+        receipt.CommandId.Should().Be("cmd-alpha");
+        committed.LastScopeId.Should().Be("scope-alpha");
+        committed.LastWorkflowId.Should().Be("wf-alpha");
+        (await service.GetDraftAsync("scope-alpha", "wf-alpha"))!.Yaml.Should().Be(SaveRequest().Yaml);
+    }
+
+    [Fact]
+    public async Task SaveKnownWorkflowDraftAsync_ExistingDraft_ShouldPreserveActualCommandReceipt()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspace = new RecordingStudioWorkspacePorts(new ScopedDraft[]
+        {
+            new("scope-alpha", NewDraft("wf-alpha", "alpha", "name: alpha\nsteps: []\n", DateTimeOffset.UtcNow)),
+        });
+        var commands = new ReceiptWorkspaceCommandPort(workspace);
+        var service = environment.CreateService(workspace, commands);
+
+        var receipt = await service.SaveKnownWorkflowDraftAsync("scope-alpha", "wf-alpha", SaveRequest());
+
+        receipt.WorkflowId.Should().Be("wf-alpha");
+        receipt.CommandId.Should().Be("cmd-alpha");
+        workspace.SavedDrafts.Should().ContainSingle().Which.ScopeId.Should().Be("scope-alpha");
+        (await service.GetDraftAsync("scope-alpha", "wf-alpha"))!.Yaml.Should().Be(SaveRequest().Yaml);
+    }
+
+    [Fact]
+    public async Task SaveKnownWorkflowDraftAsync_CommittedWorkflowWithoutRunnableFacts_ShouldRestoreSameId()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspace = new RecordingStudioWorkspacePorts();
+        var committed = new StubCommittedWorkflowSource(new ScopeWorkflowCatalogueLookupResult(
+            ScopeWorkflowCatalogueLookupStatus.Found, CommittedWorkflow()));
+        var service = environment.CreateService(workspace, workspace, committedSource: committed);
+
+        var receipt = await service.SaveKnownWorkflowDraftAsync("scope-alpha", "wf-alpha", SaveRequest());
+
+        receipt.WorkflowId.Should().Be("wf-alpha");
+        receipt.CommandId.Should().NotBeNullOrWhiteSpace();
+        committed.LastScopeId.Should().Be("scope-alpha");
+        committed.LastWorkflowId.Should().Be("wf-alpha");
+        workspace.SavedDrafts.Should().ContainSingle().Which.WorkflowId.Should().Be("wf-alpha");
+        (await service.GetDraftAsync("scope-alpha", "wf-alpha"))!.Yaml.Should().Be(SaveRequest().Yaml);
+    }
+
+    [Theory]
+    [InlineData(ScopeWorkflowCatalogueLookupStatus.NotFound)]
+    [InlineData(ScopeWorkflowCatalogueLookupStatus.Ambiguous)]
+    public async Task SaveKnownWorkflowDraftAsync_UnknownOrAmbiguousWorkflow_ShouldRejectWithoutMutation(
+        ScopeWorkflowCatalogueLookupStatus status)
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspace = new RecordingStudioWorkspacePorts();
+        var committed = new StubCommittedWorkflowSource(new ScopeWorkflowCatalogueLookupResult(status, null));
+        var service = environment.CreateService(workspace, workspace, committedSource: committed);
+
+        var act = () => service.SaveKnownWorkflowDraftAsync("scope-alpha", "wf-alpha", SaveRequest());
+
+        await act.Should().ThrowAsync<WorkflowDraftNotFoundException>();
+        workspace.SavedDrafts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SaveKnownWorkflowDraftAsync_DraftInAnotherScope_ShouldRejectWithoutMutation()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspace = new RecordingStudioWorkspacePorts(new ScopedDraft[]
+        {
+            new("scope-beta", NewDraft("wf-alpha", "alpha", "name: alpha\nsteps: []\n", DateTimeOffset.UtcNow)),
+        });
+        var committed = new StubCommittedWorkflowSource(new ScopeWorkflowCatalogueLookupResult(
+            ScopeWorkflowCatalogueLookupStatus.NotFound, null));
+        var service = environment.CreateService(workspace, workspace, committedSource: committed);
+
+        var act = () => service.SaveKnownWorkflowDraftAsync("scope-alpha", "wf-alpha", SaveRequest());
+
+        await act.Should().ThrowAsync<WorkflowDraftNotFoundException>();
+        workspace.SavedDrafts.Should().BeEmpty();
+        committed.LastScopeId.Should().Be("scope-alpha");
+    }
+
+    [Theory]
+    [InlineData("scope-beta", "wf-alpha")]
+    [InlineData("scope-alpha", "wf-beta")]
+    public async Task SaveKnownWorkflowDraftAsync_MismatchedCommittedIdentity_ShouldRejectWithoutMutation(
+        string committedScopeId, string committedWorkflowId)
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspace = new RecordingStudioWorkspacePorts();
+        var committed = new StubCommittedWorkflowSource(new ScopeWorkflowCatalogueLookupResult(
+            ScopeWorkflowCatalogueLookupStatus.Found,
+            CommittedWorkflow() with { ScopeId = committedScopeId, WorkflowId = committedWorkflowId }));
+        var service = environment.CreateService(workspace, workspace, committedSource: committed);
+
+        var act = () => service.SaveKnownWorkflowDraftAsync("scope-alpha", "wf-alpha", SaveRequest());
+
+        await act.Should().ThrowAsync<WorkflowDraftNotFoundException>();
+        workspace.SavedDrafts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SaveDraftAsync_ProvisioningAssignedId_ShouldRemainAllowedWithoutExistingResource()
+    {
+        using var environment = new ScopedWorkflowEnvironment();
+        var workspace = new RecordingStudioWorkspacePorts();
+        var service = environment.CreateService(workspace, workspace);
+
+        var receipt = await service.SaveDraftAsync("scope-alpha", "wf-alpha", SaveRequest());
+
+        receipt.WorkflowId.Should().Be("wf-alpha");
+        workspace.SavedDrafts.Should().ContainSingle();
+    }
+
+    private static SaveWorkflowDraftRequest SaveRequest() =>
+        new("", "alpha", null, "name: alpha\nsteps: []");
+
+    private static ScopeWorkflowSummary CommittedWorkflow() =>
+        new("scope-alpha", "wf-alpha", "Alpha", "service-key", "alpha", "", "", "", "Unspecified", DateTimeOffset.UtcNow)
+        {
+            ServiceAppId = "app-alpha",
+            ServiceNamespace = "workflows",
+            PublishedServiceId = "svc-alpha",
+        };
+
+    private sealed class StubCommittedWorkflowSource(ScopeWorkflowCatalogueLookupResult result)
+        : IScopeWorkflowCatalogueCommittedSourcePort
+    {
+        public string? LastScopeId { get; private set; }
+        public string? LastWorkflowId { get; private set; }
+
+        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListCatalogueAsync(string scopeId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScopeWorkflowCatalogueLookupResult> LookupCatalogueByWorkflowIdAsync(
+            string scopeId, string workflowId, CancellationToken ct = default)
+        {
+            LastScopeId = scopeId;
+            LastWorkflowId = workflowId;
+            return Task.FromResult(result);
+        }
+    }
+
+    private sealed class ReceiptWorkspaceCommandPort(RecordingStudioWorkspacePorts inner) : IStudioWorkspaceCommandPort
+    {
+        public Task<StudioWorkspaceCommandReceipt> UpdateSettingsAsync(StudioWorkspaceSettings settings, long? expectedVersion = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<StudioWorkspaceCommandReceipt> AddDirectoryAsync(StudioWorkspaceDirectory directory, long? expectedVersion = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<StudioWorkspaceCommandReceipt> RemoveDirectoryAsync(string directoryId, long? expectedVersion = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(StudioWorkflowDraftRecord draft, long? expectedVersion = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(string workflowId, long? expectedVersion = null, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<StudioWorkspaceCommandReceipt> DeleteDraftAsync(string scopeId, string workflowId, long? expectedVersion = null, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public async Task<StudioWorkspaceCommandReceipt> SaveDraftAsync(string scopeId, StudioWorkflowDraftRecord draft, long? expectedVersion = null, CancellationToken ct = default)
+        {
+            await inner.SaveDraftAsync(scopeId, draft, expectedVersion, ct);
+            return new("workspace-alpha", "actor-alpha", "cmd-alpha", null);
+        }
+    }
+
     private sealed class ScopedWorkflowEnvironment : IDisposable
     {
         private readonly string? _previousHome;
@@ -666,13 +846,15 @@ public sealed class AppScopedWorkflowServiceDeleteDraftTests
         public AppScopedWorkflowService CreateService(
             IStudioWorkspaceQueryPort? workspaceQueryPort = null,
             IStudioWorkspaceCommandPort? workspaceCommandPort = null,
-            IWorkflowDefinitionParser? workflowDefinitionParser = null)
+            IWorkflowDefinitionParser? workflowDefinitionParser = null,
+            IScopeWorkflowCatalogueCommittedSourcePort? committedSource = null)
         {
             return new AppScopedWorkflowService(
                 new StubWorkflowYamlDocumentService(),
                 workflowDefinitionParser ?? new StubWorkflowDefinitionParser(),
                 workspaceQueryPort,
-                workspaceCommandPort);
+                workspaceCommandPort,
+                committedWorkflowSource: committedSource);
         }
 
         public string BuildLayoutPath(string scopeId, string workflowId) =>

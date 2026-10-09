@@ -50,7 +50,8 @@ public static class WorkflowCapabilityEndpoints
             .WithName("StartWorkflowChatWebSocket");
         ChatQueryEndpoints.Map(group);
         group.MapPost("/workflow/runs/fork", HandleForkRun)
-            .WithName("ForkWorkflowRun");
+            .WithName("ForkWorkflowRun")
+            .ExcludeFromDescription();
         WorkflowWebhookIngressEndpoints.Map(group);
         WorkflowExternalApprovalCallbackEndpoints.Map(group);
         // 06-19-workflow-run-observatory (C2): read-only, scope-gated run viewer. Maps its own absolute

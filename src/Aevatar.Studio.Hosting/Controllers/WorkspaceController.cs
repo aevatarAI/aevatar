@@ -4,6 +4,7 @@ using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -98,6 +99,8 @@ public sealed class WorkspaceController : ControllerBase
         return Ok(await _workspaceService.RemoveDirectoryAsync(directoryId, cancellationToken));
     }
 
+    [ExcludeFromDescription]
+    [ApiExplorerSettings(IgnoreApi = true)]
     [HttpGet("workflow-drafts")]
     public async Task<ActionResult<IReadOnlyList<WorkflowDraftSummary>>> ListDrafts(
         [FromQuery] string? scopeId,
@@ -127,6 +130,8 @@ public sealed class WorkspaceController : ControllerBase
         return Ok(await _workspaceService.ListDraftsAsync(cancellationToken));
     }
 
+    [ExcludeFromDescription]
+    [ApiExplorerSettings(IgnoreApi = true)]
     [HttpGet("workflow-drafts/{workflowId}")]
     public async Task<ActionResult<WorkflowDraftResponse>> GetDraft(
         string workflowId,
@@ -162,6 +167,8 @@ public sealed class WorkspaceController : ControllerBase
         return workflow is null ? NotFound() : Ok(workflow);
     }
 
+    [ExcludeFromDescription]
+    [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("workflow-drafts")]
     public async Task<ActionResult> CreateDraft(
         [FromBody] SaveWorkflowDraftRequest request,
@@ -210,6 +217,8 @@ public sealed class WorkspaceController : ControllerBase
         }
     }
 
+    [ExcludeFromDescription]
+    [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPut("workflow-drafts/{workflowId}")]
     public async Task<ActionResult<WorkflowDraftResponse>> UpdateDraft(
         string workflowId,
@@ -313,6 +322,8 @@ public sealed class WorkspaceController : ControllerBase
         return environment?.IsDevelopment() == true;
     }
 
+    [ExcludeFromDescription]
+    [ApiExplorerSettings(IgnoreApi = true)]
     [HttpDelete("workflow-drafts/{workflowId}")]
     public async Task<IActionResult> DeleteDraft(
         string workflowId,

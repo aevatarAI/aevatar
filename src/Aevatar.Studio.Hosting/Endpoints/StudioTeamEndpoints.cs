@@ -33,25 +33,32 @@ internal static class StudioTeamEndpoints
         ArgumentNullException.ThrowIfNull(app);
 
         app.MapPost("/api/scopes/{scopeId}/teams", HandleCreateAsync)
-            .WithTags("StudioTeams");
+            .WithTags("StudioTeams")
+            .ExcludeFromDescription();
         app.MapGet("/api/scopes/{scopeId}/teams", HandleListAsync)
-            .WithTags("StudioTeams");
+            .WithTags("StudioTeams")
+            .ExcludeFromDescription();
         app.MapGet("/api/scopes/{scopeId}/teams/{teamId}", HandleGetAsync)
-            .WithTags("StudioTeams");
+            .WithTags("StudioTeams")
+            .ExcludeFromDescription();
         app.MapPatch("/api/scopes/{scopeId}/teams/{teamId}", HandlePatchAsync)
-            .WithTags("StudioTeams");
+            .WithTags("StudioTeams")
+            .ExcludeFromDescription();
         app.MapPost(
                 "/api/scopes/{scopeId}/teams/{teamId}/archive",
                 HandleArchiveAsync)
-            .WithTags("StudioTeams");
+            .WithTags("StudioTeams")
+            .ExcludeFromDescription();
         app.MapPut(
                 "/api/scopes/{scopeId}/teams/{teamId}/entry-member",
                 HandleSetEntryMemberAsync)
-            .WithTags("StudioTeams");
+            .WithTags("StudioTeams")
+            .ExcludeFromDescription();
         app.MapDelete(
                 "/api/scopes/{scopeId}/teams/{teamId}/entry-member",
                 HandleClearEntryMemberAsync)
-            .WithTags("StudioTeams");
+            .WithTags("StudioTeams")
+            .ExcludeFromDescription();
 
         // Team -> members listing: queries the member read model filtered by
         // team_id (per ADR-0017 §HTTP endpoints — the team read model itself
@@ -59,7 +66,8 @@ internal static class StudioTeamEndpoints
         app.MapGet(
                 "/api/scopes/{scopeId}/teams/{teamId}/members",
                 HandleListMembersAsync)
-            .WithTags("StudioTeams");
+            .WithTags("StudioTeams")
+            .ExcludeFromDescription();
     }
 
     internal static async Task<IResult> HandleCreateAsync(

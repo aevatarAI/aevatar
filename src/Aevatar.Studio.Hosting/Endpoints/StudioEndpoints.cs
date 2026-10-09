@@ -55,14 +55,16 @@ internal static class StudioEndpoints
             AppWorkflowGenerateRequest request,
             IServiceProvider services,
             CancellationToken ct) =>
-            HandleGenerateWorkflowAsync(http, request, services, embeddedWorkflowMode, ct));
+            HandleGenerateWorkflowAsync(http, request, services, embeddedWorkflowMode, ct))
+            .ExcludeFromDescription();
         app.MapPost("/api/workflows/generator", (
             HttpContext http,
             AppWorkflowGenerateRequest request,
             IServiceProvider services,
             CancellationToken ct) =>
             HandleGenerateWorkflowAsync(http, request, services, embeddedWorkflowMode, ct))
-            .WithTags("Workflows");
+            .WithTags("Workflows")
+            .ExcludeFromDescription();
         app.MapPost("/api/app/scripts/generator", (
             HttpContext http,
             AppScriptGenerateRequest request,

@@ -39,6 +39,7 @@ public static partial class ServiceEndpoints
         group.MapGAgentServiceGovernanceEndpoints();
         app.MapScopeServiceEndpoints();
         app.MapScopeWorkflowCapabilityEndpoints();
+        app.MapWorkflowApi();
         // Scope script endpoints exist only when the host composed the scripting capability;
         // without it the routes are absent entirely (404) instead of resolving to missing services.
         if (app.ServiceProvider.GetService<IScopeScriptQueryPort>() is not null)

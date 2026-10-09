@@ -21,37 +21,45 @@ public static class ChatQueryEndpoints
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/workflows", ListWorkflows)
+            .ExcludeFromDescription()
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/workflow-catalog", ListWorkflowCatalog)
+            .ExcludeFromDescription()
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/capabilities", GetCapabilities)
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/workflows/{workflowName}", GetWorkflowDetail)
+            .ExcludeFromDescription()
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/workflow-actors/{actorId}/current-state", GetWorkflowActorCurrentState)
+            .ExcludeFromDescription()
             // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/workflow-runs/{workflowRunId}/timeline-export", ListWorkflowRunTimelineExport)
+            .ExcludeFromDescription()
             // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/workflow-runs/{workflowRunId}/graph-export/edges", ListWorkflowRunGraphExportEdges)
+            .ExcludeFromDescription()
             // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 
         group.MapGet("/workflow-runs/{workflowRunId}/graph-export/enriched", GetWorkflowRunGraphExportEnriched)
+            .ExcludeFromDescription()
             // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
         group.MapGet("/workflow-runs/{workflowRunId}/graph-export/subgraph", GetWorkflowRunGraphExportSubgraph)
+            .ExcludeFromDescription()
             // security-allowlist: workflow standalone host is dev-only; production hosts must add .RequireAuthorization() -- see cluster-022
             .Produces(StatusCodes.Status200OK);
 

@@ -63,6 +63,7 @@ public static class WorkflowRunObservatoryEndpoints
             .RequireAuthorization();
 
         data.MapGet("/runs", ListRuns)
+            .ExcludeFromDescription()
             .WithName("ListWorkflowObservatoryRuns")
             .WithSummary("List runs. Default = caller scope; admins may pass scope=<id> or scope=__all__.")
             .WithEndpointAudit(
@@ -74,6 +75,7 @@ public static class WorkflowRunObservatoryEndpoints
             .RequireAuthorization();
 
         data.MapGet("/activity-runs", ListActivityRuns)
+            .ExcludeFromDescription()
             .WithName("ListWorkflowObservatoryActivityRuns")
             .WithSummary("Page Activity run rows. Default = caller scope; admins may pass scope=<id> or scope=__all__.")
             .WithEndpointAudit(
@@ -85,6 +87,7 @@ public static class WorkflowRunObservatoryEndpoints
             .RequireAuthorization();
 
         data.MapGet("/runs/{runId}", GetRun)
+            .ExcludeFromDescription()
             .WithName("GetWorkflowObservatoryRun")
             .WithSummary("Run timeline + summary + usage. Admins may pass scope=<id> for another scope's run.")
             .WithEndpointAudit(
@@ -96,6 +99,7 @@ public static class WorkflowRunObservatoryEndpoints
             .RequireAuthorization();
 
         data.MapGet("/runs/{runId}/graph", GetRunGraph)
+            .ExcludeFromDescription()
             .WithName("GetWorkflowObservatoryRunGraph")
             .WithSummary("Run topology. Admins may pass scope=<id> for another scope's run.")
             .WithEndpointAudit(
@@ -107,6 +111,7 @@ public static class WorkflowRunObservatoryEndpoints
             .RequireAuthorization();
 
         data.MapGet("/admin/runs/{runId}", GetAdminRun)
+            .ExcludeFromDescription()
             .WithName("GetWorkflowObservatoryAdminRun")
             .WithSummary("Admin-only run timeline + summary + usage, resolved by run id across all scopes.")
             .WithEndpointAudit(
@@ -118,6 +123,7 @@ public static class WorkflowRunObservatoryEndpoints
             .RequireAuthorization();
 
         data.MapGet("/admin/runs/{runId}/graph", GetAdminRunGraph)
+            .ExcludeFromDescription()
             .WithName("GetWorkflowObservatoryAdminRunGraph")
             .WithSummary("Admin-only run topology, resolved by run id across all scopes.")
             .WithEndpointAudit(

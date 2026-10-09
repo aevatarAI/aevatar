@@ -47,38 +47,49 @@ internal static class StudioMemberEndpoints
         ArgumentNullException.ThrowIfNull(app);
 
         app.MapPost("/api/scopes/{scopeId}/members", HandleCreateAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
         app.MapGet("/api/scopes/{scopeId}/members", HandleListAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
         app.MapGet("/api/scopes/{scopeId}/members/{memberId}", HandleGetAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
         app.MapPut("/api/scopes/{scopeId}/members/{memberId}/binding", HandleBindAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
         app.MapGet("/api/scopes/{scopeId}/members/{memberId}/binding", HandleGetBindingAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
         app.MapGet(
                 "/api/scopes/{scopeId}/members/{memberId}/binding-runs/{bindingRunId}",
                 HandleGetBindingRunAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
         app.MapGet(
                 "/api/scopes/{scopeId}/members/{memberId}/endpoints/{endpointId}/contract",
                 HandleGetEndpointContractAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
         app.MapPost(
                 "/api/scopes/{scopeId}/members/{memberId}/binding/revisions/{revisionId}:activate",
                 HandleActivateBindingRevisionAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
         app.MapPost(
                 "/api/scopes/{scopeId}/members/{memberId}/binding/revisions/{revisionId}:retire",
                 HandleRetireBindingRevisionAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
 
         // ADR-0017: PATCH a member's team assignment. Body shape carries
         // Merge-Patch semantics for `teamId` — see HandlePatchAsync.
         app.MapPatch("/api/scopes/{scopeId}/members/{memberId}", HandlePatchAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
         app.MapDelete("/api/scopes/{scopeId}/members/{memberId}", HandleDeleteAsync)
-            .WithTags("StudioMembers");
+            .WithTags("StudioMembers")
+            .ExcludeFromDescription();
     }
 
     internal static async Task<IResult> HandleCreateAsync(

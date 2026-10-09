@@ -61,7 +61,8 @@ internal static class StudioProvisioningEndpoints
         ArgumentNullException.ThrowIfNull(app);
 
         app.MapPost("/api/scopes/{scopeId}/provision-workflow", HandleProvisionWorkflowAsync)
-            .WithTags("StudioProvisioning");
+            .WithTags("StudioProvisioning")
+            .ExcludeFromDescription();
     }
 
     internal static async Task<IResult> HandleProvisionWorkflowAsync(

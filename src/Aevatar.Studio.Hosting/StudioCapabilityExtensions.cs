@@ -40,6 +40,7 @@ public static class StudioCapabilityExtensions
             static app =>
             {
                 app.MapControllers();
+                app.MapWorkflowYamlApi();
                 StudioEndpoints.Map(app, embeddedWorkflowMode: true);
                 WorkflowBoardSnapshotEndpoints.Map(app);
                 StudioMemberEndpoints.Map(app);

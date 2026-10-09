@@ -168,8 +168,10 @@ public sealed class MainnetHealthEndpointsTests
 
         var preflightPath =
             "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/preflight";
-        paths.TryGetProperty(preflightPath, out var preflightOperations).Should().BeTrue();
-        preflightOperations.TryGetProperty("post", out _).Should().BeTrue();
+        paths.TryGetProperty(preflightPath, out _).Should().BeFalse(
+            "legacy Team and Member routes remain available but are excluded from tool discovery");
+        paths.GetProperty("/api/v1/workflows/{workflowId}/invoke").GetProperty("post")
+            .GetProperty("operationId").GetString().Should().Be("invoke_workflow");
 
         await app.StopAsync();
     }

@@ -27,19 +27,30 @@ internal static class StudioMemberAutomationEndpoints
     public static void Map(IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
-        app.MapPost($"{BasePath}/preflight", HandlePreflightAsync).WithTags("StudioTeamAutomations");
-        app.MapGet(BasePath, HandleListAsync).WithTags("StudioTeamAutomations");
-        app.MapPost(BasePath, HandleCreateAsync).WithTags("StudioTeamAutomations");
-        app.MapGet($"{BasePath}/{{scheduleId}}", HandleGetAsync).WithTags("StudioTeamAutomations");
-        app.MapPut($"{BasePath}/{{scheduleId}}", HandleUpdateAsync).WithTags("StudioTeamAutomations");
+        app.MapPost($"{BasePath}/preflight", HandlePreflightAsync).WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
+        app.MapGet(BasePath, HandleListAsync).WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
+        app.MapPost(BasePath, HandleCreateAsync).WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
+        app.MapGet($"{BasePath}/{{scheduleId}}", HandleGetAsync).WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
+        app.MapPut($"{BasePath}/{{scheduleId}}", HandleUpdateAsync).WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
         app.MapPost($"{BasePath}/{{scheduleId}}/reauthorize", HandleReauthorizeAsync)
-            .WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/pause", HandlePauseAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/resume", HandleResumeAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/run-now", HandleRunNowAsync).WithTags("StudioTeamAutomations");
-        app.MapDelete($"{BasePath}/{{scheduleId}}", HandleDeleteAsync).WithTags("StudioTeamAutomations");
+            .WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
+        app.MapPost($"{BasePath}/{{scheduleId}}/pause", HandlePauseAsync).WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
+        app.MapPost($"{BasePath}/{{scheduleId}}/resume", HandleResumeAsync).WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
+        app.MapPost($"{BasePath}/{{scheduleId}}/run-now", HandleRunNowAsync).WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
+        app.MapDelete($"{BasePath}/{{scheduleId}}", HandleDeleteAsync).WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
         app.MapPost($"{BasePath}/{{scheduleId}}/retry-revocation", HandleRetryRevocationAsync)
-            .WithTags("StudioTeamAutomations");
+            .WithTags("StudioTeamAutomations")
+            .ExcludeFromDescription();
     }
 
     internal static async Task<IResult> HandlePreflightAsync(

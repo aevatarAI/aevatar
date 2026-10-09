@@ -60,11 +60,13 @@ public static class ScopeServiceEndpoints
     {
         var group = ScopeEndpointRouteGroups.MapScopeGroup(app).WithTags("ScopeServices");
         group.MapPost("/{scopeId}/workflow/draft-run", HandleDraftRunAsync)
-            .WithScopeServiceAudit("scope.workflow.draft-run", "scope-workflow-draft", "scopeId");
+            .WithScopeServiceAudit("scope.workflow.draft-run", "scope-workflow-draft", "scopeId")
+            .ExcludeFromDescription();
         group.MapPut("/{scopeId}/binding", HandleUpsertBindingAsync)
             .WithScopeServiceAudit("scope.binding.upsert", "scope-binding", "scopeId");
         group.MapGet("/{scopeId}/binding", HandleGetBindingAsync);
-        group.MapGet("/{scopeId}/members/{memberId}/published-service", HandleGetMemberPublishedServiceAsync);
+        group.MapGet("/{scopeId}/members/{memberId}/published-service", HandleGetMemberPublishedServiceAsync)
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/binding/revisions/{revisionId}:activate", HandleActivateBindingRevisionAsync)
             .WithScopeServiceAudit("scope.binding-revision.activate", "scope-binding-revision", "scopeId", "revisionId");
         group.MapGet("/{scopeId}/revisions", HandleGetDefaultServiceRevisionsAsync);
@@ -76,35 +78,53 @@ public static class ScopeServiceEndpoints
         group.MapPost("/{scopeId}/invoke/{endpointId}", HandleInvokeDefaultAsync)
             .WithScopeServiceAudit("scope.default-service.invoke", "scope-service-invocation", "scopeId", "endpointId");
         group.MapPost("/{scopeId}/members/{memberId}/invoke/{endpointId}:stream", HandleInvokeMemberStreamAsync)
-            .WithScopeServiceAudit("scope.member.invoke-stream", "scope-member-invocation", "scopeId", "memberId", "endpointId");
+            .WithScopeServiceAudit("scope.member.invoke-stream", "scope-member-invocation", "scopeId", "memberId", "endpointId")
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/members/{memberId}/invoke/{endpointId}", HandleInvokeMemberAsync)
-            .WithScopeServiceAudit("scope.member.invoke", "scope-member-invocation", "scopeId", "memberId", "endpointId");
+            .WithScopeServiceAudit("scope.member.invoke", "scope-member-invocation", "scopeId", "memberId", "endpointId")
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream", HandleInvokeTeamStreamAsync)
-            .WithScopeServiceAudit("scope.team.invoke-stream", "scope-team-invocation", "scopeId", "teamId", "endpointId");
+            .WithScopeServiceAudit("scope.team.invoke-stream", "scope-team-invocation", "scopeId", "teamId", "endpointId")
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/teams/{teamId}/invoke/{endpointId}", HandleInvokeTeamAsync)
-            .WithScopeServiceAudit("scope.team.invoke", "scope-team-invocation", "scopeId", "teamId", "endpointId");
-        group.MapGet("/{scopeId}/runs", HandleListDefaultRunsAsync);
-        group.MapGet("/{scopeId}/runs/{runId}", HandleGetDefaultRunAsync);
-        group.MapGet("/{scopeId}/members/{memberId}/runs", HandleListMemberRunsAsync);
-        group.MapGet("/{scopeId}/members/{memberId}/runs/{runId}", HandleGetMemberRunAsync);
-        group.MapGet("/{scopeId}/members/{memberId}/runs/{runId}/audit", HandleGetMemberRunAuditAsync);
+            .WithScopeServiceAudit("scope.team.invoke", "scope-team-invocation", "scopeId", "teamId", "endpointId")
+            .ExcludeFromDescription();
+        group.MapGet("/{scopeId}/runs", HandleListDefaultRunsAsync)
+            .ExcludeFromDescription();
+        group.MapGet("/{scopeId}/runs/{runId}", HandleGetDefaultRunAsync)
+            .ExcludeFromDescription();
+        group.MapGet("/{scopeId}/members/{memberId}/runs", HandleListMemberRunsAsync)
+            .ExcludeFromDescription();
+        group.MapGet("/{scopeId}/members/{memberId}/runs/{runId}", HandleGetMemberRunAsync)
+            .ExcludeFromDescription();
+        group.MapGet("/{scopeId}/members/{memberId}/runs/{runId}/audit", HandleGetMemberRunAuditAsync)
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:resume", HandleResumeMemberRunAsync)
-            .WithScopeServiceAudit("scope.member-run.resume", "workflow-run", "scopeId", "memberId", "runId");
+            .WithScopeServiceAudit("scope.member-run.resume", "workflow-run", "scopeId", "memberId", "runId")
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:signal", HandleSignalMemberRunAsync)
-            .WithScopeServiceAudit("scope.member-run.signal", "workflow-run", "scopeId", "memberId", "runId");
+            .WithScopeServiceAudit("scope.member-run.signal", "workflow-run", "scopeId", "memberId", "runId")
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:stop", HandleStopMemberRunAsync)
-            .WithScopeServiceAudit("scope.member-run.stop", "workflow-run", "scopeId", "memberId", "runId");
+            .WithScopeServiceAudit("scope.member-run.stop", "workflow-run", "scopeId", "memberId", "runId")
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:retry-compensation", HandleRetryCompensationMemberRunAsync)
-            .WithScopeServiceAudit("scope.member-run.retry-compensation", "workflow-run", "scopeId", "memberId", "runId");
-        group.MapGet("/{scopeId}/runs/{runId}/audit", HandleGetDefaultRunAuditAsync);
+            .WithScopeServiceAudit("scope.member-run.retry-compensation", "workflow-run", "scopeId", "memberId", "runId")
+            .ExcludeFromDescription();
+        group.MapGet("/{scopeId}/runs/{runId}/audit", HandleGetDefaultRunAuditAsync)
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/runs/{runId}:resume", HandleResumeDefaultRunAsync)
-            .WithScopeServiceAudit("scope.default-run.resume", "workflow-run", "scopeId", "runId");
+            .WithScopeServiceAudit("scope.default-run.resume", "workflow-run", "scopeId", "runId")
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/runs/{runId}:signal", HandleSignalDefaultRunAsync)
-            .WithScopeServiceAudit("scope.default-run.signal", "workflow-run", "scopeId", "runId");
+            .WithScopeServiceAudit("scope.default-run.signal", "workflow-run", "scopeId", "runId")
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/runs/{runId}:stop", HandleStopDefaultRunAsync)
-            .WithScopeServiceAudit("scope.default-run.stop", "workflow-run", "scopeId", "runId");
+            .WithScopeServiceAudit("scope.default-run.stop", "workflow-run", "scopeId", "runId")
+            .ExcludeFromDescription();
         group.MapPost("/{scopeId}/runs/{runId}:retry-compensation", HandleRetryCompensationDefaultRunAsync)
-            .WithScopeServiceAudit("scope.default-run.retry-compensation", "workflow-run", "scopeId", "runId");
+            .WithScopeServiceAudit("scope.default-run.retry-compensation", "workflow-run", "scopeId", "runId")
+            .ExcludeFromDescription();
         group.MapGet("/{scopeId}/services", HandleListScopeServicesAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream", HandleInvokeStreamAsync)
             .WithScopeServiceAudit("scope.service.invoke-stream", "scope-service-invocation", "scopeId", "serviceId", "endpointId");
@@ -4125,7 +4145,7 @@ const response = await fetch("{{invokePath}}", {
                 StringComparer.Ordinal);
     }
 
-    private static IResult CreateScopeInvokeFailureResult(Exception ex)
+    internal static IResult CreateScopeInvokeFailureResult(Exception ex)
     {
         if (ex is FormatException)
         {

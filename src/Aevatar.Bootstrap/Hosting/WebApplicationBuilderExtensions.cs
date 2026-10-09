@@ -92,7 +92,7 @@ public static class WebApplicationBuilderExtensions
             AddDefaultCorsPolicy(builder, hostOptions.CorsPolicyName);
 
         if (hostOptions.EnableOpenApiDocument)
-            builder.Services.AddOpenApi();
+            builder.Services.AddOpenApi(options => options.AddOperationTransformer<AevatarToolOpenApiOperationTransformer>());
 
         // Authorization services are always required because UseAuthorization() runs
         // unconditionally in UseAevatarDefaultHost. This is safe even when no auth

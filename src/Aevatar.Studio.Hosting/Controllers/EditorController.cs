@@ -2,11 +2,15 @@ using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Aevatar.Studio.Hosting.Controllers;
 
 [ApiController]
+[ExcludeFromDescription]
+[ApiExplorerSettings(IgnoreApi = true)]
 [Route("api/editor")]
 public sealed class EditorController : ControllerBase
 {

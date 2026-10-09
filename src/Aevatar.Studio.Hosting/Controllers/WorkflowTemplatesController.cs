@@ -4,11 +4,14 @@ using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.WorkflowTemplates;
 using Aevatar.Studio.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Aevatar.Studio.Hosting.Controllers;
 
 [ApiController]
+[ExcludeFromDescription]
+[ApiExplorerSettings(IgnoreApi = true)]
 [Route("api/workflow-templates")]
 public sealed class WorkflowTemplatesController : ControllerBase
 {

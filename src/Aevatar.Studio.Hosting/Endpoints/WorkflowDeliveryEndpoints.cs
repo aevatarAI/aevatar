@@ -29,6 +29,7 @@ internal static class WorkflowDeliveryEndpoints
 
         var delivery = app.MapGroup("/api/delivery")
             .WithTags("WorkflowDelivery")
+            .ExcludeFromDescription()
             .RequireAuthorization();
         delivery.MapGet("/session", GetSessionAsync);
         delivery.MapGet("/packages", ListPackagesAsync);
@@ -42,6 +43,7 @@ internal static class WorkflowDeliveryEndpoints
 
         var scoped = app.MapGroup("/api/scopes/{scopeId}")
             .WithTags("WorkflowDelivery")
+            .ExcludeFromDescription()
             .RequireAuthorization();
         scoped.MapPost(
             "/delivery-requests/{deliveryId}/connections/{slotKey}:connect",

@@ -1,3 +1,4 @@
+using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Domain.Studio.Models;
@@ -18,13 +19,15 @@ public sealed class AppScopedWorkflowService
     private readonly IStudioWorkspaceQueryPort? _workspaceQueryPort;
     private readonly IStudioWorkspaceCommandPort? _workspaceCommandPort;
     private readonly ILogger<AppScopedWorkflowService>? _logger;
+    private readonly IScopeWorkflowCatalogueCommittedSourcePort? _committedWorkflowSource;
 
     public AppScopedWorkflowService(
         IWorkflowYamlDocumentService yamlDocumentService,
         IWorkflowDefinitionParser workflowDefinitionParser,
         IStudioWorkspaceQueryPort? workspaceQueryPort = null,
         IStudioWorkspaceCommandPort? workspaceCommandPort = null,
-        ILogger<AppScopedWorkflowService>? logger = null)
+        ILogger<AppScopedWorkflowService>? logger = null,
+        IScopeWorkflowCatalogueCommittedSourcePort? committedWorkflowSource = null)
     {
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
         _workflowDefinitionParser = workflowDefinitionParser
@@ -32,6 +35,7 @@ public sealed class AppScopedWorkflowService
         _workspaceQueryPort = workspaceQueryPort;
         _workspaceCommandPort = workspaceCommandPort;
         _logger = logger;
+        _committedWorkflowSource = committedWorkflowSource;
     }
 
     public async Task<IReadOnlyList<WorkflowDraftSummary>> ListDraftsAsync(
@@ -90,6 +94,38 @@ public sealed class AppScopedWorkflowService
             requireExisting: false,
             ct);
         return ToDraftCreateAcceptedResponse(draft.WorkflowId, receipt);
+    }
+
+    public async Task<WorkflowDraftCreateAcceptedResponse> SaveKnownWorkflowDraftAsync(
+        string scopeId,
+        string workflowId,
+        SaveWorkflowDraftRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
+        var workspaceQueryPort = _workspaceQueryPort
+            ?? throw new InvalidOperationException("Scoped workflow workspace query port is not configured.");
+        var workspace = await workspaceQueryPort.GetAsync(normalizedScopeId, ct);
+        var hasScopedDraft = string.Equals(workspace.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
+            workspace.Drafts.Any(draft =>
+                string.Equals(draft.WorkflowId, normalizedWorkflowId, StringComparison.Ordinal));
+        if (!hasScopedDraft)
+        {
+            var committed = _committedWorkflowSource == null
+                ? null
+                : await _committedWorkflowSource.LookupCatalogueByWorkflowIdAsync(
+                    normalizedScopeId, normalizedWorkflowId, ct);
+            if (committed?.IsFound != true ||
+                !string.Equals(committed.Workflow!.ScopeId, normalizedScopeId, StringComparison.Ordinal) ||
+                !string.Equals(committed.Workflow.WorkflowId, normalizedWorkflowId, StringComparison.Ordinal))
+            {
+                throw new WorkflowDraftNotFoundException(normalizedWorkflowId);
+            }
+        }
+
+        return await SaveDraftAsync(normalizedScopeId, normalizedWorkflowId, request, ct);
     }
 
     public async Task<WorkflowDraftResponse> UpdateDraftAsync(

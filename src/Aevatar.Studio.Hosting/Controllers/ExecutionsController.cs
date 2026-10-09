@@ -3,10 +3,13 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Routing;
 
 namespace Aevatar.Studio.Hosting.Controllers;
 
 [ApiController]
+[ExcludeFromDescription]
+[ApiExplorerSettings(IgnoreApi = true)]
 [Route("api/executions")]
 // Refactor (iter42/issue-864-studio-workspace-execution-fact-owner):
 //   Old pattern: Studio executions/workspace facts mixed FileStudioWorkspaceStore JSON, draft index sidecars, and authoritative server UI/layout state across multiple owners.

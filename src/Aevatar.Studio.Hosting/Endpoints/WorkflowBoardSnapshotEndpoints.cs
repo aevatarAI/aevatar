@@ -18,7 +18,8 @@ internal static class WorkflowBoardSnapshotEndpoints
         app.MapPost(
                 "/api/scopes/{scopeId}/workflow-board/snapshot",
                 HandleSnapshotAsync)
-            .WithTags("WorkflowBoard");
+            .WithTags("WorkflowBoard")
+            .ExcludeFromDescription();
     }
 
     internal static async Task<IResult> HandleSnapshotAsync(
