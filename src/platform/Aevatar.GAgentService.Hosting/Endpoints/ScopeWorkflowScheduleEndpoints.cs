@@ -23,6 +23,7 @@ internal static class ScopeWorkflowScheduleEndpoints
 {
     private const string ChatEndpointId = "chat";
     private const string DefaultWorkflowScheduleNyxIdScope = "proxy";
+    private const string ExternalTriggerTeamId = "workflow-external-trigger";
 
     public static RouteGroupBuilder MapScopeWorkflowScheduleEndpoints(this RouteGroupBuilder group)
     {
@@ -192,7 +193,10 @@ internal static class ScopeWorkflowScheduleEndpoints
             return resolved.Result;
 
         var triggerId = BuildExternalTriggerId(resolved.Workflow!);
-        var detail = await schedules.GetAsync(triggerId, ct);
+        var detail = await schedules.GetTeamAutomationAsync(
+            triggerId,
+            BuildExternalTriggerOwner(resolved.Workflow!),
+            ct);
         if (detail == null || !BelongsToWorkflow(detail.Schedule, resolved.Workflow!))
         {
             return Results.Ok(WorkflowExternalTriggerHttpResult.NotConfigured(
@@ -218,7 +222,11 @@ internal static class ScopeWorkflowScheduleEndpoints
         if (TryCreateInvalidScheduleIdResult(triggerId, out var invalidTriggerId))
             return invalidTriggerId;
 
-        var detail = await schedules.GetAsync(triggerId, ct);
+        var detail = await schedules.GetTeamScheduleAsync(
+            triggerId,
+            scopeId,
+            ExternalTriggerTeamId,
+            ct: ct);
         if (detail == null || !IsWorkflowExternalTriggerForScope(detail.Schedule, scopeId, triggerId))
         {
             return Results.NotFound(new
@@ -228,17 +236,12 @@ internal static class ScopeWorkflowScheduleEndpoints
             });
         }
 
+        var owner = BuildExternalTriggerOwner(detail.Schedule);
         try
         {
-            var receipt = await schedules.RunNowAsync(
+            var receipt = await schedules.RunTeamAutomationNowAsync(
                 triggerId,
-                new ScheduledDispatchMutationContext(
-                    scopeId,
-                    ExpectedServiceTarget: new ScheduledDispatchExpectedServiceTarget(
-                        ScheduledDispatchScheduleKind.Workflow,
-                        ScheduledDispatchTargetKind.ServiceInvocation,
-                        detail.Schedule.ServiceIdentity,
-                        ChatEndpointId)),
+                owner,
                 ct);
             return Results.Accepted(
                 BuildExternalTriggerLocation(scopeId, triggerId),
@@ -794,6 +797,11 @@ internal static class ScopeWorkflowScheduleEndpoints
         return false;
     }
 
+    private static string NormalizeRequired(string? value, string paramName) =>
+        string.IsNullOrWhiteSpace(value)
+            ? throw new ArgumentException($"{paramName} is required.", paramName)
+            : value.Trim();
+
     private static ScheduledServiceInvocationNyxIdSubjectRef? ResolveAuthenticatedNyxIdOwnerSubject(HttpContext http)
     {
         var ownerUserId = ReadFirstClaim(
@@ -841,6 +849,18 @@ internal static class ScopeWorkflowScheduleEndpoints
     private static string BuildExternalTriggerLocation(string scopeId, string triggerId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId)}/workflow-triggers/{Uri.EscapeDataString(triggerId)}:fire";
 
+    private static TeamMemberAutomationOwner BuildExternalTriggerOwner(ScopeWorkflowSummary workflow) =>
+        new(
+            NormalizeRequired(workflow.ScopeId, nameof(workflow.ScopeId)),
+            NormalizeRequired(workflow.WorkflowId, nameof(workflow.WorkflowId)),
+            ExternalTriggerTeamId);
+
+    private static TeamMemberAutomationOwner BuildExternalTriggerOwner(ScheduledDispatchSummary schedule) =>
+        new(
+            NormalizeRequired(schedule.TeamOwnerScopeId, nameof(schedule.TeamOwnerScopeId)),
+            NormalizeRequired(schedule.TeamOwnerMemberId, nameof(schedule.TeamOwnerMemberId)),
+            NormalizeRequired(schedule.TeamId, nameof(schedule.TeamId)));
+
     private static bool TryMapExternalTriggerProvisioningError(Exception ex, out IResult result)
     {
         if (ScheduledDispatchEndpoints.TryMapScheduleMutationError(ex, out result))
@@ -875,10 +895,14 @@ internal static class ScopeWorkflowScheduleEndpoints
         string scopeId,
         string triggerId) =>
         schedule.ScheduleId == triggerId &&
+        schedule.TeamOwned &&
+        string.Equals(schedule.TeamId, ExternalTriggerTeamId, StringComparison.Ordinal) &&
+        string.Equals(schedule.TeamOwnerScopeId, scopeId, StringComparison.Ordinal) &&
         schedule.ScheduleKind == ScheduledDispatchScheduleKind.Workflow &&
         schedule.TargetKind == ScheduledDispatchTargetKind.ServiceInvocation &&
         string.Equals(schedule.ServiceEndpointId, ChatEndpointId, StringComparison.Ordinal) &&
-        string.Equals(schedule.ServiceIdentity.TenantId, scopeId, StringComparison.Ordinal);
+        string.Equals(schedule.ServiceIdentity.TenantId, scopeId, StringComparison.Ordinal) &&
+        schedule.CredentialSourceKind == ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey;
 
     private static string BuildWorkflowScheduleLocation(string scopeId, string workflowId, string scheduleId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId)}/workflows/{Uri.EscapeDataString(workflowId)}/schedules/{Uri.EscapeDataString(scheduleId)}";

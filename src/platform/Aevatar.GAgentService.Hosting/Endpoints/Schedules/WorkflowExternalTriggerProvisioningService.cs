@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -45,6 +46,7 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
     private readonly IScheduledInvocationAuthorizationRevalidator _authorizationRevalidator;
     private readonly IScheduledInvocationWorkflowEvidenceQueryPort? _workflowEvidenceQueryPort;
     private readonly IStudioScheduledCredentialMaterializer? _credentialMaterializer;
+    private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WorkflowExternalTriggerProvisioningService> _logger;
 
@@ -55,13 +57,15 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
         TimeProvider timeProvider,
         ILogger<WorkflowExternalTriggerProvisioningService>? logger = null,
         IStudioScheduledCredentialMaterializer? credentialMaterializer = null,
-        IScheduledInvocationWorkflowEvidenceQueryPort? workflowEvidenceQueryPort = null)
+        IScheduledInvocationWorkflowEvidenceQueryPort? workflowEvidenceQueryPort = null,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
         _authorizationPlanner = authorizationPlanner ?? throw new ArgumentNullException(nameof(authorizationPlanner));
         _authorizationRevalidator = authorizationRevalidator ?? throw new ArgumentNullException(nameof(authorizationRevalidator));
         _workflowEvidenceQueryPort = workflowEvidenceQueryPort;
         _credentialMaterializer = credentialMaterializer;
+        _callerAccessTokenProvider = callerAccessTokenProvider;
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? NullLogger<WorkflowExternalTriggerProvisioningService>.Instance;
     }
@@ -114,6 +118,7 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
         var validatedPlan = validation.ValidatedPlan!;
         var authorizationFact = ToScheduleAuthorizationFact(validatedPlan.Plan);
         var callerAuthority = BuildScheduleCallerAuthority(authority.AuthenticatedOwner);
+        var provisioningBearerToken = await ResolveProvisioningBearerTokenAsync(authority, ct);
         var owner = BuildOwner(workflow);
         var existing = await _scheduleService.GetAsync(scheduleId, ct);
         var operationKind = existing?.Schedule.CredentialSourceKind ==
@@ -182,7 +187,7 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
                     began.Outcome.CandidateCredential!,
                     began.Outcome.CandidateOwner)
                 : await _credentialMaterializer.MaterializeAsync(
-                    authority.ProvisioningBearerToken,
+                    provisioningBearerToken,
                     validatedPlan,
                     scheduleId,
                     operationId,
@@ -236,7 +241,7 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
                 throw new InvalidOperationException("team_automation_activation_rejected");
             _ = await ExecutePendingRevocationAsync(
                 activation.Outcome,
-                authority.ProvisioningBearerToken,
+                provisioningBearerToken,
                 authority.AuthenticatedOwner,
                 owner,
                 CancellationToken.None);
@@ -250,7 +255,7 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
         }
         catch (Exception ex)
         {
-            if (candidateCommitted && !activationAttempted)
+            if (!activationAttempted)
             {
                 _ = await TryRecordFailureAsync(
                     scheduleId,
@@ -261,12 +266,13 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
                     ToStableFailureCode(ex),
                     CancellationToken.None);
             }
-            else if (!candidateCommitAttempted && credential != null)
+
+            if (!candidateCommitAttempted && credential != null)
             {
                 try
                 {
                     _ = await _credentialMaterializer.RevokeAsync(
-                        authority.ProvisioningBearerToken,
+                        provisioningBearerToken,
                         authority.AuthenticatedOwner,
                         credential,
                         revokeNyxId: true,
@@ -475,6 +481,42 @@ internal sealed class WorkflowExternalTriggerProvisioningService : IWorkflowExte
             result.ErrorCode,
             ct);
         return completion.Admission.Accepted && result.NyxIdRevoked && result.VaultRevoked;
+    }
+
+    private async Task<string> ResolveProvisioningBearerTokenAsync(
+        StudioMemberAutomationHttpAuthority authority,
+        CancellationToken ct)
+    {
+        if (_callerAccessTokenProvider != null)
+        {
+            var callerAuthority = BuildWorkflowCallerAuthority(authority.AuthenticatedOwner);
+            var issued = await _callerAccessTokenProvider.IssueAsync(callerAuthority, ct);
+            var issuedToken = WorkflowCallerCredentialTokens.ParseOptional(issued);
+            return issuedToken.IsValid
+                ? issuedToken.NormalizedBearerToken!
+                : throw new InvalidOperationException("workflow_caller_access_token_provider_returned_invalid_token");
+        }
+
+        var parsed = WorkflowCallerCredentialTokens.ParseOptional(authority.ProvisioningBearerToken);
+        return parsed.IsValid
+            ? parsed.NormalizedBearerToken!
+            : throw new UnauthorizedAccessException("provisioning_bearer_invalid");
+    }
+
+    private static WorkflowCallerNyxIdAuthority BuildWorkflowCallerAuthority(
+        AuthenticatedAuthorizationOwnerContext owner)
+    {
+        var subjectPlatform = NormalizeRequired(owner.SubjectPlatform, nameof(owner.SubjectPlatform));
+        var subjectExternalUserId = NormalizeRequired(owner.SubjectExternalUserId, nameof(owner.SubjectExternalUserId));
+        var bindingId = NormalizeRequired(owner.VerifiedBindingId, nameof(owner.VerifiedBindingId));
+        return new WorkflowCallerNyxIdAuthority
+        {
+            Platform = subjectPlatform,
+            Tenant = NormalizeOptional(owner.SubjectTenant) ?? string.Empty,
+            ExternalUserId = subjectExternalUserId,
+            Scope = ProvisioningBearerCapabilityScope,
+            BindingId = bindingId,
+        };
     }
 
     private async Task<StudioScheduledCredentialRevocationResult> RevokePendingCredentialAsync(
