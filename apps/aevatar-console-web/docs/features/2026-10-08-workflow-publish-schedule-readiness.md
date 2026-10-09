@@ -7,7 +7,8 @@ against `feature/integrate`; that branch is an accepted deployment baseline
 and is not required to be merged into `dev` for this change.
 
 Repository-wide CI routing and test sharding are reviewed separately in
-PR #3697. The frontend PR depends on that CI branch until it lands in `dev`.
+optional PR #3697. Frontend PR #3187 targets `dev` directly and does not depend
+on that CI PR being merged. Repository CI files remain identical to `dev`.
 
 The visual baseline remains unchanged: Workflow Activity Excalidraw SHA-256
 `30e74d7b410ae72c4c91432355436679033679c54c10b1702908435b001577de`
