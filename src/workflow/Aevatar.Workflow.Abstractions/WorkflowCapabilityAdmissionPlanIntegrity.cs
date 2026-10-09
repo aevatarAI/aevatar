@@ -274,7 +274,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                     "Workflow capability admission cannot contain legacy external capabilities."));
         }
 
-        if (!IsPlanExecutionModeCompatible(plan.ExecutionMode, executionMode))
+        if (!IsExecutionModeCompatible(plan.ExecutionMode, executionMode))
         {
             return Failed(
                 WorkflowCapabilityAdmissionCompatibilityFailure.ExecutionModeMismatch,
@@ -461,7 +461,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             null);
     }
 
-    private static bool IsPlanExecutionModeCompatible(
+    public static bool IsExecutionModeCompatible(
         ExternalCapabilityExecutionMode planExecutionMode,
         ExternalCapabilityExecutionMode expectedExecutionMode) =>
         expectedExecutionMode != ExternalCapabilityExecutionMode.Unspecified &&

@@ -127,18 +127,36 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
     }
 
     [Fact]
-    public void Build_WhenExpectedModeDiffersFromAdmissionPlan_ShouldFailClosed()
+    public void Build_WithDurableAdmissionPlanForInteractiveExpectedMode_ShouldSucceed()
     {
         var plan = new WorkflowCapabilityAdmissionPlan
         {
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
         };
 
-        var action = () => BuildArtifactWithIdentity(
+        var artifact = BuildArtifactWithIdentity(
             "wf-artifact-alpha",
             "rev-artifact-alpha",
             plan,
             ExternalCapabilityExecutionMode.Interactive);
+
+        artifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
+    public void Build_WithInteractiveAdmissionPlanForDurableExpectedMode_ShouldFailClosed()
+    {
+        var plan = new WorkflowCapabilityAdmissionPlan
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+        };
+
+        var action = () => BuildArtifactWithIdentity(
+            "wf-artifact-alpha",
+            "rev-artifact-alpha",
+            plan,
+            ExternalCapabilityExecutionMode.Durable);
 
         action.Should().Throw<InvalidOperationException>()
             .WithMessage("*execution mode*match*");
@@ -171,10 +189,32 @@ public sealed class WorkflowServiceRevisionArtifactBuilderTests
     }
 
     [Fact]
-    public void ResolveBindingIdentity_WhenDeploymentModeDiffersFromAdmissionPlan_ShouldFailClosed()
+    public void ResolveBindingIdentity_WithDurableAdmissionPlanForInteractiveDeploymentMode_ShouldSucceed()
     {
         var artifact = BuildArtifact();
         artifact.DeploymentPlan.WorkflowPlan.ExecutionMode = ExternalCapabilityExecutionMode.Interactive;
+
+        var identity = WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
+            artifact,
+            "rev-artifact-alpha");
+
+        identity.WorkflowId.Should().Be("wf-artifact-alpha");
+        identity.RevisionId.Should().Be("rev-artifact-alpha");
+    }
+
+    [Fact]
+    public void ResolveBindingIdentity_WithInteractiveAdmissionPlanForDurableDeploymentMode_ShouldFailClosed()
+    {
+        var plan = new WorkflowCapabilityAdmissionPlan
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+        };
+        var artifact = BuildArtifactWithIdentity(
+            "wf-artifact-alpha",
+            "rev-artifact-alpha",
+            plan,
+            ExternalCapabilityExecutionMode.Interactive);
+        artifact.DeploymentPlan.WorkflowPlan.ExecutionMode = ExternalCapabilityExecutionMode.Durable;
 
         var action = () => WorkflowServiceDeploymentPlanIntegrity.ResolveBindingIdentity(
             artifact,

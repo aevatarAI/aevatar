@@ -51,10 +51,10 @@ public static class WorkflowServiceDeploymentPlanIntegrity
             throw new InvalidOperationException(
                 "Workflow service must be reissued under the current tool catalog policy.");
         }
-        if (plan.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
-            !Enum.IsDefined(plan.ExecutionMode) ||
-            plan.CapabilityAdmissionPlan == null ||
-            plan.ExecutionMode != plan.CapabilityAdmissionPlan.ExecutionMode)
+        if (plan.CapabilityAdmissionPlan == null ||
+            !WorkflowCapabilityAdmissionPlanIntegrity.IsExecutionModeCompatible(
+                plan.CapabilityAdmissionPlan.ExecutionMode,
+                plan.ExecutionMode))
         {
             throw new InvalidOperationException(
                 "Workflow service deployment execution mode must match the capability admission plan.");
