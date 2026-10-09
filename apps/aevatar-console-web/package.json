@@ -80,6 +80,11 @@
   "engines": {
     "node": ">=18.20.0"
   },
+  "pnpm": {
+    "overrides": {
+      "jest-environment-jsdom@29.7.0>jsdom": "26.1.0"
+    }
+  },
   "create-umi": {
     "ignoreScript": [
       "docker*",

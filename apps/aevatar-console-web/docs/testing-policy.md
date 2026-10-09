@@ -121,6 +121,21 @@ that gap with weak unit tests.
     behavior tests.
 - Tests live beside production code as `*.test.ts` or `*.test.tsx`. Shared setup,
   mocks, and reusable render utilities live under `tests/`.
+
+The browser environment uses a package-local pnpm override from
+`jest-environment-jsdom@29.7.0` to `jsdom@26.1.0`. This retains Jest 29 and the
+existing CI Node 20 runtime while avoiding jsdom 20's repeated stylesheet scans
+during accessible-role and visibility queries. Keep real component styles,
+hidden-element filtering, assertions, and test budgets intact when addressing
+test performance. Validate runtime dependency changes with explicitly selected
+owning integration tests and a representative test from each Jest project;
+GitHub CI still owns complete verification.
+
+Browser navigation tests use `tests/browserLocationTestUtils.ts` to spy on
+`assign` or `replace` at the pinned jsdom implementation boundary. Do not
+redefine `window.location`: modern jsdom keeps that browser-owned property
+non-configurable. Change same-origin test URLs with `history.replaceState` so
+the real Location getters remain coherent. Shared cleanup restores the spies.
 - When adding a truly DOM-free test to the `node` project, add its exact path to
   `nodeTestFiles` in `jest.config.ts`. Do not move a test to `node` merely to
   avoid configuring realistic browser behavior.

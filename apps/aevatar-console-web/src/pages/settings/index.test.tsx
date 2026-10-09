@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { persistAuthSession } from "@/shared/auth/session";
+import { mockBrowserLocationNavigation } from "../../../tests/browserLocationTestUtils";
 import {
   cleanupTestQueryClients,
   renderWithQueryClient,
@@ -39,10 +40,6 @@ const { studioApi: mockStudioApi } = jest.requireMock(
 };
 
 const originalFetch = global.fetch;
-const originalLocationDescriptor = Object.getOwnPropertyDescriptor(
-  window,
-  "location",
-);
 const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(
   globalThis,
   "crypto",
@@ -50,20 +47,6 @@ const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(
 const originalNyxIDClientId = process.env.NYXID_CLIENT_ID;
 const gatewayRoute = "/api/v1/llm/gateway/v1";
 const sharedExactServiceRoute = "/api/v1/proxy/s/shared-openai";
-
-function installLocationAssignSpy() {
-  const assign = jest.fn();
-  Object.defineProperty(window, "location", {
-    configurable: true,
-    value: {
-      ...window.location,
-      assign,
-      href: window.location.href,
-      origin: window.location.origin,
-    },
-  });
-  return assign;
-}
 
 function installDeterministicCrypto() {
   Object.defineProperty(globalThis, "crypto", {
@@ -347,9 +330,6 @@ describe("SettingsPage", () => {
       process.env.NYXID_CLIENT_ID = originalNyxIDClientId;
     }
     global.fetch = originalFetch;
-    if (originalLocationDescriptor) {
-      Object.defineProperty(window, "location", originalLocationDescriptor);
-    }
     if (originalCryptoDescriptor) {
       Object.defineProperty(globalThis, "crypto", originalCryptoDescriptor);
     } else {
@@ -425,7 +405,7 @@ describe("SettingsPage", () => {
     });
     installDeterministicCrypto();
     window.history.replaceState({}, "", "/settings?section=account");
-    const assign = installLocationAssignSpy();
+    const assign = mockBrowserLocationNavigation("assign");
     const fetchMock = jest.fn();
     global.fetch = fetchMock as typeof global.fetch;
 
@@ -464,7 +444,7 @@ describe("SettingsPage", () => {
     });
     installDeterministicCrypto();
     window.history.replaceState({}, "", "/settings?section=account");
-    const assign = installLocationAssignSpy();
+    const assign = mockBrowserLocationNavigation("assign");
     assign.mockImplementationOnce(() => {
       throw new Error("Navigation failed");
     });

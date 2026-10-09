@@ -1,4 +1,5 @@
 import { TextEncoder } from 'node:util';
+import { mockBrowserLocationNavigation } from '../../../tests/browserLocationTestUtils';
 import { CONSOLE_HOME_ROUTE } from '../navigation/consoleHome';
 import {
   ensureActiveAuthSession,
@@ -21,26 +22,8 @@ const runtimeConfig: NyxIDRuntimeConfig = {
 
 const reviewReturnTo = '/scopes/scope-alpha/settings?section=account';
 
-function installLocationAssignSpy() {
-  const assign = jest.fn();
-  Object.defineProperty(window, 'location', {
-    configurable: true,
-    value: {
-      ...window.location,
-      assign,
-      href: window.location.href,
-      origin: window.location.origin,
-    },
-  });
-  return assign;
-}
-
 describe('NyxIDAuthClient', () => {
   const originalFetch = global.fetch;
-  const originalLocationDescriptor = Object.getOwnPropertyDescriptor(
-    window,
-    'location',
-  );
 
   beforeEach(() => {
     window.localStorage.clear();
@@ -66,15 +49,12 @@ describe('NyxIDAuthClient', () => {
 
   afterEach(() => {
     global.fetch = originalFetch;
-    if (originalLocationDescriptor) {
-      Object.defineProperty(window, 'location', originalLocationDescriptor);
-    }
     jest.restoreAllMocks();
     window.localStorage.clear();
   });
 
   it('starts authorize entirely from frontend runtime config', async () => {
-    const assign = installLocationAssignSpy();
+    const assign = mockBrowserLocationNavigation('assign');
     const fetchMock = jest.fn();
     global.fetch = fetchMock as typeof global.fetch;
 
@@ -117,7 +97,7 @@ describe('NyxIDAuthClient', () => {
   });
 
   it('starts service access review with consent prompt and account return state', async () => {
-    const assign = installLocationAssignSpy();
+    const assign = mockBrowserLocationNavigation('assign');
     const fetchMock = jest.fn();
     global.fetch = fetchMock as typeof global.fetch;
 
@@ -146,7 +126,7 @@ describe('NyxIDAuthClient', () => {
   });
 
   it('starts service access review with exact resources and a caller return', async () => {
-    const assign = installLocationAssignSpy();
+    const assign = mockBrowserLocationNavigation('assign');
 
     await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
       flow: 'serviceAccessReview',
@@ -174,7 +154,7 @@ describe('NyxIDAuthClient', () => {
   });
 
   it('forces consent while preserving a canonical workflow return URL', async () => {
-    const assign = installLocationAssignSpy();
+    const assign = mockBrowserLocationNavigation('assign');
 
     await new NyxIDAuthClient(runtimeConfig).loginWithRedirect({
       prompt: 'consent',
