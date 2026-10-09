@@ -557,7 +557,7 @@ describe("runtimeRunsApi", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/scopes/scope-1/runs/run-1?",
+      "/api/scopes/scope-1/runs/run-1",
       expect.objectContaining({
         method: "GET",
         headers: {
@@ -567,7 +567,7 @@ describe("runtimeRunsApi", () => {
     );
   });
 
-  it("routes scoped getRunSummary through the service run endpoint with actor filters", async () => {
+  it("routes scoped getRunSummary through the service run endpoint without actor filters", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -585,7 +585,7 @@ describe("runtimeRunsApi", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/scopes/scope-1/services/service-1/runs/run-1?",
+      "/api/scopes/scope-1/services/service-1/runs/run-1",
       expect.objectContaining({
         method: "GET",
       })
@@ -609,7 +609,7 @@ describe("runtimeRunsApi", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/scopes/scope-1/members/joker/runs/run-1?",
+      "/api/scopes/scope-1/members/joker/runs/run-1",
       expect.objectContaining({
         method: "GET",
       })
