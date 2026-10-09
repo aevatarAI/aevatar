@@ -520,7 +520,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task BuildInitialStepState_WhenRegistrationAgentKeyCannotResolve_ShouldPreserveFailClosedRegistrationAuthority()
+    public async Task BuildInitialStepState_WhenRegistrationAgentKeyCannotResolve_ShouldClearAllNyxIdCredentials()
     {
         var fixture = CreateProfiledChannelExecutor();
         var request = fixture.Request.Clone();
