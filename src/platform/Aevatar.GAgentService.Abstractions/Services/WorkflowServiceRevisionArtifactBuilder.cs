@@ -42,9 +42,9 @@ public static class WorkflowServiceRevisionArtifactBuilder
             throw new InvalidOperationException("workflow capability admission execution mode is required.");
         }
 
-        if (workflowSpec.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified ||
-            !Enum.IsDefined(workflowSpec.ExpectedExecutionMode) ||
-            workflowSpec.ExpectedExecutionMode != capabilityAdmissionPlan.ExecutionMode)
+        if (!WorkflowCapabilityAdmissionPlanIntegrity.IsExecutionModeCompatible(
+                capabilityAdmissionPlan.ExecutionMode,
+                workflowSpec.ExpectedExecutionMode))
         {
             throw new InvalidOperationException(
                 "workflow expected execution mode must match the capability admission plan.");

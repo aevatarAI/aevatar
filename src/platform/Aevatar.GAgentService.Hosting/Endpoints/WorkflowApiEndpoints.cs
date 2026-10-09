@@ -9,7 +9,6 @@ using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
-using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Observatory;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -100,7 +99,7 @@ public static class WorkflowApiEndpoints
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId)) return Results.Unauthorized();
         try
         {
-            var save = new SaveWorkflowDraftRequest(string.Empty, request.WorkflowName, request.FileName, request.Yaml, request.Layout);
+            var save = new SaveWorkflowDraftRequest(string.Empty, request.WorkflowName, request.FileName, request.Yaml, null);
             var receipt = workflowId == null
                 ? await drafts.CreateDraftAsync(scopeId, save, ct)
                 : await drafts.SaveKnownWorkflowDraftAsync(scopeId, workflowId, save, ct);
@@ -201,7 +200,7 @@ public static class WorkflowApiEndpoints
         ? [] : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     private static DateTimeOffset? ParseTimestamp(string? value) => DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
 
-    public sealed record WorkflowDraftWriteRequest(string WorkflowName, string Yaml, string? FileName = null, WorkflowLayoutDocument? Layout = null);
+    public sealed record WorkflowDraftWriteRequest(string WorkflowName, string Yaml, string? FileName = null);
     public sealed record WorkflowDraftAcceptedResponse(string WorkflowId, string CommandId);
     public sealed record WorkflowPublicationAcceptedResponse(string WorkflowId, string RevisionId, DateTimeOffset AcceptedAtUtc,
         IReadOnlyList<WorkflowPublicationCommandHandle> CommandHandles);

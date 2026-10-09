@@ -453,28 +453,36 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         var confirmations = request.ExplicitRequestConfirmations.Count > 0
             ? request.ExplicitRequestConfirmations
             : RestorePersistedExplicitRequestConfirmations(persisted, request.Access);
+        var admissionMode = ResolveRefreshAdmissionMode(persisted);
         var liveRequest = persisted.WorkflowYamls is { Count: > 0 } workflowYamls
             ? WorkflowExternalCapabilityAdmissionRequest.FromWorkflowYamls(
                 request.Access,
                 workflowYamls,
                 persisted.SourceKind,
-                persisted.ExpectedExecutionMode,
+                admissionMode,
                 confirmations,
                 persisted.WorkflowId,
                 persisted.RevisionId,
-                persisted.ExpectedExecutionMode)
+                admissionMode)
             : new WorkflowExternalCapabilityAdmissionRequest(
                 request.Access,
                 persisted.WorkflowYaml,
                 persisted.InlineWorkflowYamls,
                 persisted.SourceKind,
-                persisted.ExpectedExecutionMode,
+                admissionMode,
                 confirmations,
                 persisted.WorkflowId,
                 persisted.RevisionId,
-                persisted.ExpectedExecutionMode);
+                admissionMode);
         return await AdmitAsync(liveRequest, cancellationToken);
     }
+
+    private static ExternalCapabilityExecutionMode ResolveRefreshAdmissionMode(
+        PersistedWorkflowCapabilityAdmissionRequest persisted) =>
+        persisted.Plan.ExecutionMode == ExternalCapabilityExecutionMode.Durable &&
+        persisted.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Interactive
+            ? ExternalCapabilityExecutionMode.Durable
+            : persisted.ExpectedExecutionMode;
 
     private async Task ValidatePersistedIntegrityAsync(
         PersistedWorkflowCapabilityAdmissionRequest request,
