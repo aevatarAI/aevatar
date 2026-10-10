@@ -146,6 +146,7 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
             readString(nested, "correlationId", "correlation_id") ||
             readString(frame, "correlationId", "correlation_id"),
           result: nested?.result,
+          ...(nested?.status !== undefined ? { status: nested.status } : {}),
           runId: readString(nested, "runId") || readString(frame, "runId"),
           threadId:
             readString(nested, "threadId", "actorId") ||

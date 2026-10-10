@@ -5962,7 +5962,7 @@ describe('Workflow Activity vNext editor', () => {
     });
 
     expect(
-      within(logs).getByText('Published run stream disconnected.'),
+      await within(logs).findByText('Published run stream disconnected.'),
     ).toBeInTheDocument();
     expect(
       within(logs).getByTestId('workflow-execution-log-row-node-step-live'),

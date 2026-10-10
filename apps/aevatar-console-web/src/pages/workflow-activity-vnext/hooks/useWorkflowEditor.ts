@@ -6,6 +6,7 @@ import {
   createRuntimeEventAccumulator,
 } from '@/shared/agui/runtimeEventSemantics';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { createWorkflowTelemetry } from '@/shared/analytics/workflowTelemetry';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { t } from '@/shared/i18n/messages';
 import { getLocationSnapshot, history } from '@/shared/navigation/history';
@@ -53,6 +54,7 @@ type SubmittedSaveSnapshot = {
 };
 
 export type WorkflowPublishedInvocationTarget = {
+  readonly nodeCount: number;
   readonly publishedServiceId: string;
   readonly revisionId: string;
   readonly workflowId: string;
@@ -66,6 +68,7 @@ export type PublishedRunSnapshot = {
 
 export type WorkflowPublicationPreparation = {
   readonly documentVersion: number;
+  readonly nodeCount: number;
   readonly workflowId: string;
   readonly workflowName: string;
   readonly workflowYaml: string;
@@ -275,6 +278,9 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const runControllerRef = React.useRef<AbortController | null>(null);
   const runInFlightRef = React.useRef(false);
   const runGenerationRef = React.useRef(0);
+  const runTelemetryRef = React.useRef<ReturnType<
+    typeof createWorkflowTelemetry
+  > | null>(null);
   const sseRunIdRef = React.useRef('');
   const savingRef = React.useRef(false);
   const configurationGenerationRef = React.useRef(0);
@@ -289,6 +295,11 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     null,
   );
   const runObservation = useRunObservation(scopeId, sseRunId);
+  React.useEffect(() => {
+    if (runObservation.run) {
+      runTelemetryRef.current?.observeRun(runObservation.run);
+    }
+  }, [runObservation.run]);
   const receiptPending =
     materialization.phase === 'accepted' ||
     materialization.phase === 'observing' ||
@@ -389,6 +400,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   React.useEffect(
     () => () => {
       runGenerationRef.current += 1;
+      runTelemetryRef.current = null;
       runControllerRef.current?.abort();
       runControllerRef.current = null;
       runInFlightRef.current = false;
@@ -467,6 +479,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       structuralMutationGenerationRef.current += 1;
       structuralMutationPendingRef.current = false;
       runGenerationRef.current += 1;
+      runTelemetryRef.current = null;
       runControllerRef.current?.abort();
       runControllerRef.current = null;
       runInFlightRef.current = false;
@@ -919,6 +932,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
 
       return {
         documentVersion: localEditRevisionRef.current,
+        nodeCount: document.steps.length,
         workflowId: workflow.workflowId,
         workflowName: workflowTitle.trim(),
         workflowYaml: yaml,
@@ -978,6 +992,12 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       }
       const generation = ++runGenerationRef.current;
       const controller = new AbortController();
+      const telemetry = createWorkflowTelemetry(
+        target.workflowId,
+        target.nodeCount,
+      );
+      runTelemetryRef.current = telemetry;
+      let streamConnected = false;
       const liveAccumulator = createRuntimeEventAccumulator();
       const liveFrames: StudioExecutionFrame[] = [];
       const liveStartedAtUtc = new Date().toISOString();
@@ -1046,6 +1066,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
                 { serviceId: target.publishedServiceId },
               );
         if (!ownsRun()) return;
+        streamConnected = true;
         setLastRunSnapshot(submittedSnapshot);
         setRunPhase('accepted');
         let sawRunError = false;
@@ -1055,6 +1076,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
           signal: controller.signal,
         })) {
           if (!ownsRun()) return;
+          telemetry.observeEvent(event);
           applyRuntimeEvent(liveAccumulator, event);
           liveFrames.push(createPublishedRunExecutionFrame(event));
           sawRunFinished = sawRunFinished || isSseRunFinished(event);
@@ -1086,6 +1108,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
             setRunPhase('failed');
           }
         }
+        if (ownsRun()) telemetry.disconnect('unexpected_eof');
         if (ownsRun() && !sawRunError) {
           const liveStatus = sawRunStopped
             ? 'stopped'
@@ -1102,6 +1125,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         }
       } catch (error) {
         if (ownsRun()) {
+          if (streamConnected) telemetry.disconnect('stream_error');
           const message = toErrorMessage(error);
           setRunInputError(readRunInputError(error));
           setLiveRunExecution(

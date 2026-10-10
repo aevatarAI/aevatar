@@ -7,6 +7,10 @@ import BrandLogo from '@/components/BrandLogo';
 import MainLayout from '@/layouts/MainLayout';
 import { buildMissionSnapshotFromRuntime } from '@/pages/MissionControl/runtimeAdapter';
 import { readMissionControlRouteContext } from '@/pages/MissionControl/services/api';
+import {
+  initializeConsoleAnalytics,
+  syncConsoleAnalyticsUser,
+} from '@/shared/analytics/posthog';
 import { runtimeActorsApi } from '@/shared/api/runtimeActorsApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import {
@@ -34,6 +38,7 @@ import {
 } from './shared/auth/routeAccess';
 import {
   buildAuthInitialState,
+  loadRestorableAuthSession,
   loadStoredAuthSession,
   sanitizeReturnTo,
 } from './shared/auth/session';
@@ -118,6 +123,8 @@ export async function getInitialState(): Promise<{
   settings: typeof defaultSettings;
   auth: ReturnType<typeof buildAuthInitialState>;
 }> {
+  initializeConsoleAnalytics();
+  syncConsoleAnalyticsUser(loadRestorableAuthSession()?.user.sub);
   const authConfig = getNyxIDRuntimeConfig();
 
   return {
@@ -648,7 +655,9 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
   React.useEffect(() => {
     let cancelled = false;
 
-    if (loadStoredAuthSession()) {
+    const storedSession = loadStoredAuthSession();
+    if (storedSession) {
+      syncConsoleAnalyticsUser(storedSession.user.sub);
       setReady(true);
       return undefined;
     }
@@ -660,10 +669,12 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
       }
 
       if (!session) {
+        syncConsoleAnalyticsUser();
         history.replace(buildLoginRoute(getCurrentReturnTo(pathname)));
         return;
       }
 
+      syncConsoleAnalyticsUser(session.user.sub);
       setReady(true);
     });
 
@@ -736,6 +747,7 @@ export const layout = ({
 
   return {
     onPageChange: () => {
+      syncConsoleAnalyticsUser(loadRestorableAuthSession()?.user.sub);
       const pathname = window.location.pathname;
       if (PUBLIC_ROUTES.has(pathname)) {
         return;
