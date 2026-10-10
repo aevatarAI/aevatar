@@ -92,7 +92,7 @@ describe('console analytics boundary', () => {
       session_recording: {
         maskAllInputs: true,
         maskTextSelector: '*',
-        maskAllElementAttributes: true,
+        maskAllElementAttributes: false,
         recordHeaders: false,
         recordBody: false,
       },
@@ -104,16 +104,22 @@ describe('console analytics boundary', () => {
       timestamp: new Date(),
       $set: {
         $current_url: 'https://console.example.com/auth/callback?code=private',
+        access_token: 'private-profile-token',
       },
       $set_once: {
         $referrer: 'https://identity.example.com/login?state=private',
       },
       properties: {
         $current_url: 'https://console.example.com/scopes?token=private#secret',
+        password: 'private-password',
         $exception_list: [
           {
             value:
               'Failed at https://api.example.com/run?key=secret Bearer private-value',
+          },
+          {
+            value:
+              'GET /api/chat?access_token=private-relative failed: {"access_token":"private-json","refreshToken":"private-refresh"}; Authorization: Bearer private-header',
           },
         ],
       },
@@ -122,12 +128,18 @@ describe('console analytics boundary', () => {
       app: 'aevatar-console',
       environment: 'production',
       $current_url: 'https://console.example.com/scopes',
+      password: '[redacted]',
       $exception_list: [
         { value: 'Failed at https://api.example.com/run Bearer [redacted]' },
+        {
+          value:
+            'GET /api/chat failed: {"access_token":"[redacted]","refreshToken":"[redacted]"}; Authorization: [redacted]',
+        },
       ],
     });
     expect(result?.$set).toEqual({
       $current_url: 'https://console.example.com/auth/callback',
+      access_token: '[redacted]',
     });
     expect(result?.$set_once).toEqual({
       $referrer: 'https://identity.example.com/login',
@@ -151,6 +163,44 @@ describe('console analytics boundary', () => {
     expect(
       beforeSend({ event: '$pageview', uuid: 'event-beta', properties: {} }),
     ).toBeNull();
+  });
+
+  it('preserves replay layout while masking content and stylesheet resource credentials before compression', () => {
+    process.env.AEVATAR_POSTHOG_KEY = 'phc-test';
+    process.env.AEVATAR_POSTHOG_HOST = 'https://eu.i.posthog.com';
+    loadAnalytics().initializeConsoleAnalytics();
+    const maskAttribute =
+      initializedConfig().session_recording?.maskAttributeFn;
+    const section = document.createElement('section');
+
+    expect(maskAttribute?.('class', 'styled-card', section)).toBe(
+      'styled-card',
+    );
+    expect(maskAttribute?.('id', 'replay-card', section)).toBe('replay-card');
+    expect(
+      maskAttribute?.('style', 'width: 640px; min-height: 96px;', section),
+    ).toBe('width: 640px; min-height: 96px;');
+    for (const attribute of ['title', 'data-output', 'value', 'aria-label']) {
+      expect(maskAttribute?.(attribute, 'private-output', section)).toBe(
+        '**************',
+      );
+    }
+    expect(
+      maskAttribute?.(
+        '_cssText',
+        '@import "/styles.css?token=private#secret"; .styled-card { background: url(https://assets.example.com/card.png?token=private#secret); width: 640px; }',
+        section,
+      ),
+    ).toBe(
+      `@import "${window.location.origin}/styles.css"; .styled-card { background: url("https://assets.example.com/card.png"); width: 640px; }`,
+    );
+    expect(
+      maskAttribute?.('href', '/theme.css?token=private#secret', section),
+    ).toBe(`${window.location.origin}/theme.css`);
+    expect(
+      maskAttribute?.('src', 'data:text/plain,private-output', section),
+    ).toBe('[redacted]');
+    expect(maskAttribute?.('rr_width', '640px', section)).toBe('640px');
   });
 
   it('separates identified users across logout and account switches without sending profile fields', () => {

@@ -4,35 +4,46 @@ import type { ConsoleEventProperties } from './types';
 
 let initialized = false;
 
+const SECRET_PROPERTY =
+  /^(authorization|cookie|password|access_?token|refresh_?token|id_?token|api_?key)$/i;
+
 function withoutUrlParameters(value: string): string {
   try {
-    const url = new URL(value);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') return value;
+    const url = new URL(value, window.location.href);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:')
+      return '[redacted]';
     return `${url.origin}${url.pathname}`;
   } catch {
-    return value;
+    return '[redacted]';
   }
+}
+
+function sanitizeTelemetryText(value: string): string {
+  return value
+    .replace(/https?:\/\/[^\s<>"')\]}]+/g, withoutUrlParameters)
+    .replace(
+      /(^|[\s("'=])((?:\/|\.\.?\/)[^\s<>"')\]}]*[?#][^\s<>"')\]}]*)/g,
+      (_match, prefix: string, url: string) =>
+        `${prefix}${url.split(/[?#]/, 1)[0]}`,
+    )
+    .replace(
+      /(\b(?:authorization|cookie|password|access_?token|refresh_?token|id_?token|api_?key)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|(?:Bearer\s+)?(?:\[redacted\]|[^\s,;&}\]]+))/gi,
+      (_match, prefix: string, secret: string) => {
+        const quote = secret[0];
+        return `${prefix}${quote === '"' || quote === "'" ? `${quote}[redacted]${quote}` : '[redacted]'}`;
+      },
+    )
+    .replace(/Bearer\s+[\w.+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+\b/g, '[redacted]');
 }
 
 function sanitizeTelemetryValue(value: unknown): unknown {
   if (typeof value === 'string') {
-    return value
-      .replace(/https?:\/\/[^\s<>"']+/g, withoutUrlParameters)
-      .replace(/Bearer\s+[\w.+/=-]+/gi, 'Bearer [redacted]')
-      .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+\b/g, '[redacted]');
+    return sanitizeTelemetryText(value);
   }
   if (Array.isArray(value)) return value.map(sanitizeTelemetryValue);
   if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [
-        key,
-        /^(authorization|cookie|password|access_?token|refresh_?token|id_?token|api_?key)$/i.test(
-          key,
-        )
-          ? '[redacted]'
-          : sanitizeTelemetryValue(entry),
-      ]),
-    );
+    return sanitizeProperties(value);
   }
   return value;
 }
@@ -58,13 +69,42 @@ function sanitizeEvent(event: CaptureResult | null): CaptureResult | null {
   };
 }
 
-function sanitizeProperties(properties: CaptureResult['properties']) {
+function sanitizeProperties(properties: object): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(properties).map(([key, value]) => [
       key,
-      sanitizeTelemetryValue(value),
+      SECRET_PROPERTY.test(key) ? '[redacted]' : sanitizeTelemetryValue(value),
     ]),
   );
+}
+
+function maskReplayAttribute(name: string, value: string): string {
+  const attribute = name.toLowerCase();
+  if (attribute === 'style' || attribute === '_csstext') {
+    // rrweb compresses snapshots before before_send, so scrub CSS at capture.
+    return sanitizeTelemetryText(value)
+      .replace(
+        /url\(\s*(['"]?)(.*?)\1\s*\)/gi,
+        (_match, _quote, url: string) =>
+          `url("${withoutUrlParameters(url.trim())}")`,
+      )
+      .replace(
+        /(@import\s+)(['"])(.*?)\2/gi,
+        (_match, prefix, _quote, url) =>
+          `${prefix}"${withoutUrlParameters(url)}"`,
+      );
+  }
+  if (/^(src|href|xlink:href|poster|rr_src)$/.test(attribute)) {
+    return withoutUrlParameters(value);
+  }
+  if (
+    /^(class|id|role|type|rel|media|width|height|viewbox|d|fill|stroke|stroke-width|xmlns|x|y|x1|x2|y1|y2|cx|cy|r|rx|ry|points|transform|preserveaspectratio|colspan|rowspan|tabindex|aria-hidden|aria-expanded|aria-selected|rr_width|rr_height|rr_left|rr_top|rr_position|rr_transform|rr_display|rr_scrollleft|rr_scrolltop|rr_mediastate|rr_open_mode)$/.test(
+      attribute,
+    )
+  ) {
+    return sanitizeTelemetryText(value);
+  }
+  return '*'.repeat(value.length);
 }
 
 export function initializeConsoleAnalytics(): void {
@@ -91,7 +131,9 @@ export function initializeConsoleAnalytics(): void {
       session_recording: {
         maskAllInputs: true,
         maskTextSelector: '*',
-        maskAllElementAttributes: true,
+        // The coarse SDK option also masks class/style and destroys layout.
+        maskAllElementAttributes: false,
+        maskAttributeFn: maskReplayAttribute,
         blockSelector: '.ph-no-capture, .monaco-editor',
         recordHeaders: false,
         recordBody: false,

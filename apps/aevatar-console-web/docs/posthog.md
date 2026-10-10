@@ -25,12 +25,16 @@ check sampling, URL triggers and recording limits. Local SDK configuration alone
 does not prove that the project has accepted recordings. INP requires user
 interaction, and Web Vitals may arrive when the page becomes hidden or exits.
 
-Recordings mask all inputs and text, block the workflow code editor and
-`.ph-no-capture` elements, and exclude console logs and request/response bodies
-and headers. URLs lose query strings and fragments. OAuth callback events are
-discarded. This retains navigation, timing and interaction evidence while
-protecting workflow inputs and output content. Authenticated users are identified
-by their existing opaque user ID; sign-out/account changes reset the identity.
+Recordings mask inputs, text and content attributes while preserving structural
+attributes and styles needed to reconstruct the layout. They block the workflow
+code editor and `.ph-no-capture` elements, and exclude console logs and
+request/response bodies and headers. URL sanitization removes query strings and
+fragments, and OAuth callback events are discarded. Exception sanitization
+redacts recognized credential fields and supported token patterns; it cannot
+guarantee removal of every secret embedded in arbitrary error text. Inspect
+representative replay and exception payloads during acceptance. Authenticated
+users are identified by their existing opaque user ID; sign-out/account changes
+reset the identity.
 
 All captured events carry `app = aevatar-console` and `environment`. Filter on
 both when sharing a PostHog project with another application.
@@ -71,17 +75,62 @@ to a dashboard. Filter every series to `app = aevatar-console` and
 | Workflow duration P50 / P95 | Event: `workflow_finished`. Aggregate the numeric `duration` property at the 50th and 95th percentiles; show milliseconds. |
 | SSE disconnect % | Series A: count `sse_disconnect`. Series B: count `workflow_started`. Formula: `100 * A / B`. |
 
-Use PostHog's native Error Tracking and Web Analytics / Web Vitals views for
-frontend errors, crash-free users and LCP/INP/CLS. Apply app/environment filters
-where supported, or use a dedicated Console project.
+Use **Error Tracking → Insights** for native frontend error analysis and
+**crash-free sessions**, and **Web Analytics → Web Vitals** for LCP/INP/CLS.
+The native crash-free card measures `(sessions - sessions with a crash) /
+sessions`; it does not measure crash-free users. Apply app/environment filters
+where supported, or use a dedicated Console project. A distinct-user crash-free
+metric would require a separate definition and insight, not relabeling this
+native card.
 
-Create alerts on the saved ratio insights with **success below 90%** and
-**disconnects above 5%**. Select the evaluation window, frequency and notification
-recipients in PostHog. Keep no-data periods from triggering a low-success alert:
-inspect the insight's zero-denominator behavior and the alert's no-data handling
-before enabling it. If the project's alert UI cannot exclude idle periods, use a
-saved SQL insight with an explicit `started > 0` breach condition rather than
-substituting zero for an undefined success ratio.
+For alerts, create a saved **SQL insight** in the UI with the explicit guarded
+conditions below. Do not attach a below-90 alert directly to the trend formula:
+PostHog's formula evaluator returns zero for division by zero, and empty alert
+results also evaluate as zero. This would trigger a false low-success alert in
+an idle period. The SQL keeps the ratios null when there are no starts and emits
+separate 0/1 breach values:
+
+```sql
+SELECT
+    started,
+    succeeded,
+    disconnected,
+    100.0 * succeeded / nullIf(started, 0) AS success_percent,
+    100.0 * disconnected / nullIf(started, 0) AS disconnect_percent,
+    if(started > 0 AND 100.0 * succeeded < 90.0 * started, 1, 0)
+        AS success_breached,
+    if(started > 0 AND 100.0 * disconnected > 5.0 * started, 1, 0)
+        AS disconnect_breached
+FROM (
+    SELECT
+        countIf(event = 'workflow_started') AS started,
+        countIf(event = 'workflow_finished' AND properties.status = 'success')
+            AS succeeded,
+        countIf(event = 'sse_disconnect') AS disconnected
+    FROM events
+    WHERE properties.app = 'aevatar-console'
+      AND properties.environment = 'production'
+      AND timestamp >= toStartOfHour(now()) - INTERVAL 1 HOUR
+      AND timestamp < toStartOfHour(now())
+      AND event IN ('workflow_started', 'workflow_finished', 'sse_disconnect')
+)
+```
+
+This query examines the **previous complete hour**. Open the saved insight's
+**Monitor → Alerts → New alert** twice, selecting `success_breached` and
+`disconnect_breached` respectively as the value column. For each, choose
+**last row → Threshold → has value → more than 0**. Name them **Workflow success
+below 90%** and **SSE disconnect above 5%**. Exactly 90% or 5% does not trigger;
+an hour without starts does not trigger either alert.
+
+Choose **Hourly** checks; the optional 10th minute allows some ingestion delay.
+The SQL itself owns the window, so changing the check frequency does not change
+the query's previous-hour scope. **Every 15 minutes** requires Boost or higher;
+**Real time** checks approximately every two minutes and requires Scale or
+Enterprise. Confirm the next scheduled check and project timezone in the UI.
+Select the intended subscribed user for in-app notifications; email recipients
+are a separate notification setting. Saving a rule does not prove that an email
+destination is configured or that a notification was delivered.
 
 Configure frontend error surges through **Error Tracking → Configuration →
 Spike detection**, choosing its threshold, baseline multiplier and recipients
@@ -111,4 +160,8 @@ PostHog project. Local frontend tests alone do not establish those results.
 
 - [Dashboard documentation](https://posthog.com/docs/product-analytics/dashboards)
 - [Insight alerts](https://posthog.com/docs/alerts)
+- [Formula division-by-zero behavior](https://github.com/PostHog/posthog/blob/fb029ea7e37f18963007287957ca15449ed6188f/posthog/hogql_queries/utils/formula_ast.py)
+- [SQL alert no-data behavior](https://github.com/PostHog/posthog/blob/fb029ea7e37f18963007287957ca15449ed6188f/products/alerts/backend/evaluation/hogql.py)
+- [Native crash-free sessions card](https://github.com/PostHog/posthog/blob/fb029ea7e37f18963007287957ca15449ed6188f/products/error_tracking/frontend/scenes/ErrorTrackingScene/tabs/insights/MetricTiles.tsx)
+- [Web Vitals documentation](https://posthog.com/docs/web-analytics/web-vitals)
 - [Native exception spikes](https://posthog.com/docs/error-tracking/spikes)
