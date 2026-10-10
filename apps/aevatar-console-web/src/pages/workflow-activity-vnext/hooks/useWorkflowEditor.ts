@@ -75,6 +75,19 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+class CanvasConnectionCycleError extends Error {
+  constructor(path: readonly string[]) {
+    super(
+      t(
+        'workflowActivityVNext.editor.cycleDetected',
+        'Cannot connect these steps because it would create a cycle: {path}.',
+        { path: path.join(' → ') },
+      ),
+    );
+    this.name = 'CanvasConnectionCycleError';
+  }
+}
+
 function appendControlFlowCycleFinding(
   document: StudioWorkflowDocument | null | undefined,
   findings: readonly StudioValidationFinding[],
@@ -242,7 +255,8 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
   const [selectedEdgeId, setSelectedEdgeId] = React.useState('');
   const [selectedStepConfigurationError, setSelectedStepConfigurationError] =
     React.useState('');
-  const [canvasMutationError, setCanvasMutationError] = React.useState('');
+  const [canvasMutationError, setCanvasMutationError] =
+    React.useState<Error | null>(null);
   const selectCanvas = React.useCallback(() => {
     setSelectedEdgeId('');
     setSelectedNodeId('');
@@ -326,7 +340,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     setSaveError('');
     setStructuralMutationError('');
     setFailedNodeType(null);
-    setCanvasMutationError('');
+    setCanvasMutationError(null);
     setSelectedEdgeId('');
     setSelectedNodeId('');
     setSelectedStepConfigurationError('');
@@ -476,7 +490,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       setStructuralMutationPending(false);
       setStructuralMutationError('');
       setFailedNodeType(null);
-      setCanvasMutationError('');
+      setCanvasMutationError(null);
       setSaveError('');
       setRunFiles([]);
       setRunInput('');
@@ -689,7 +703,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       const generation = ++structuralMutationGenerationRef.current;
       structuralMutationPendingRef.current = true;
       setStructuralMutationPending(true);
-      setCanvasMutationError('');
+      setCanvasMutationError(null);
       try {
         const current = document ?? (await parseCurrentYaml());
         if (!current || generation !== structuralMutationGenerationRef.current)
@@ -718,7 +732,16 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         return true;
       } catch (error) {
         if (generation === structuralMutationGenerationRef.current) {
-          setCanvasMutationError(toErrorMessage(error));
+          setCanvasMutationError(
+            error instanceof CanvasConnectionCycleError
+              ? error
+              : new Error(
+                  t(
+                    'workflowActivityVNext.editor.canvasUpdateFailed',
+                    "Couldn't update workflow",
+                  ),
+                ),
+          );
         }
         return false;
       } finally {
@@ -756,13 +779,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
           branchLabel,
         });
         if (cycle) {
-          throw new Error(
-            t(
-              'workflowActivityVNext.editor.cycleDetected',
-              'Cannot connect these steps because it would create a cycle: {path}.',
-              { path: cycle.join(' → ') },
-            ),
-          );
+          throw new CanvasConnectionCycleError(cycle);
         }
         return connectStepToTarget(
           current,

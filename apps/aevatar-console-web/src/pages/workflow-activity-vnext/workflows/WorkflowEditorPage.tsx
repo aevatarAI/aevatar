@@ -583,13 +583,7 @@ const WorkflowEditorPage: React.FC<{
 
   React.useEffect(() => {
     if (!editor.canvasMutationError) return;
-    toast.error(
-      editor.canvasMutationError ||
-        t(
-          'workflowActivityVNext.editor.canvasUpdateFailed',
-          "Couldn't update workflow",
-        ),
-    );
+    toast.error(editor.canvasMutationError.message);
   }, [editor.canvasMutationError, toast]);
 
   const retryMaterialization = React.useCallback(async () => {
