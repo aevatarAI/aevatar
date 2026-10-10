@@ -157,6 +157,15 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
   exportStatic: {},
   esbuildMinifyIIFE: true,
   define: {
+    'process.env.AEVATAR_POSTHOG_KEY': JSON.stringify(
+      process.env.AEVATAR_POSTHOG_KEY,
+    ),
+    'process.env.AEVATAR_POSTHOG_HOST': JSON.stringify(
+      process.env.AEVATAR_POSTHOG_HOST,
+    ),
+    'process.env.AEVATAR_POSTHOG_ENVIRONMENT': JSON.stringify(
+      process.env.AEVATAR_POSTHOG_ENVIRONMENT,
+    ),
     'process.env.CI': JSON.stringify(process.env.CI),
     'process.env.NYXID_BASE_URL': JSON.stringify(process.env.NYXID_BASE_URL),
     'process.env.NYXID_CLIENT_ID': JSON.stringify(process.env.NYXID_CLIENT_ID),
