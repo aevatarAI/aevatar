@@ -171,6 +171,10 @@ const workflowActivityVNextMessages = {
   'workflowActivityVNext.editor.canvas': 'Canvas',
   'workflowActivityVNext.editor.canvasAria': 'Workflow canvas',
   'workflowActivityVNext.editor.canvasUpdateFailed': "Couldn't update workflow",
+  'workflowActivityVNext.editor.cycleDetected':
+    'Cannot connect these steps because it would create a cycle: {path}.',
+  'workflowActivityVNext.editor.controlFlowCycleDetected':
+    'Control-flow cycle detected: {path}.',
   'workflowActivityVNext.editor.description':
     'Build, test, and refine this workflow.',
   'workflowActivityVNext.editor.discardLeave': 'Discard and leave',

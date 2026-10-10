@@ -584,10 +584,11 @@ const WorkflowEditorPage: React.FC<{
   React.useEffect(() => {
     if (!editor.canvasMutationError) return;
     toast.error(
-      t(
-        'workflowActivityVNext.editor.canvasUpdateFailed',
-        "Couldn't update workflow",
-      ),
+      editor.canvasMutationError ||
+        t(
+          'workflowActivityVNext.editor.canvasUpdateFailed',
+          "Couldn't update workflow",
+        ),
     );
   }, [editor.canvasMutationError, toast]);
 

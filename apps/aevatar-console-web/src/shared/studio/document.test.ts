@@ -2,6 +2,7 @@ import {
   applyRoleInspectorDraft,
   applyStepInspectorDraft,
   connectStepToTarget,
+  findStudioControlFlowCycle,
   insertStepAfter,
   insertStepByType,
   materializeImplicitSequentialTransitions,
@@ -665,6 +666,78 @@ describe('studio document helpers', () => {
         },
       }),
     );
+  });
+
+  it('detects self and multi-step next cycles before a connection is applied', () => {
+    const document: StudioWorkflowDocument = {
+      steps: [
+        { id: 'draft', next: 'review', branches: {} },
+        { id: 'review', next: null, branches: {} },
+      ],
+    };
+
+    expect(
+      findStudioControlFlowCycle(document, {
+        sourceStepId: 'review',
+        targetStepId: 'review',
+      }),
+    ).toEqual(['review', 'review']);
+    expect(
+      findStudioControlFlowCycle(document, {
+        sourceStepId: 'review',
+        targetStepId: 'draft',
+      }),
+    ).toEqual(['draft', 'review', 'draft']);
+  });
+
+  it('detects cycles introduced through branch targets and preserves replacement semantics', () => {
+    expect(
+      findStudioControlFlowCycle(
+        {
+          steps: [
+            { id: 'source', next: 'old_target', branches: {} },
+            { id: 'old_target', next: 'source', branches: {} },
+            { id: 'new_target', next: null, branches: {} },
+          ],
+        },
+        {
+          sourceStepId: 'source',
+          targetStepId: 'new_target',
+        },
+      ),
+    ).toBeNull();
+
+    const document: StudioWorkflowDocument = {
+      steps: [
+        { id: 'guard', next: null, branches: { true: 'publish' } },
+        { id: 'publish', next: null, branches: {} },
+        { id: 'retry', next: null, branches: {} },
+      ],
+    };
+
+    expect(
+      findStudioControlFlowCycle(document, {
+        sourceStepId: 'publish',
+        targetStepId: 'guard',
+        branchLabel: 'retry',
+      }),
+    ).toEqual(['guard', 'publish', 'guard']);
+    expect(
+      findStudioControlFlowCycle(
+        {
+          steps: [
+            { id: 'first', next: null, branches: {} },
+            { id: 'second', next: null, branches: {} },
+            { id: 'third', next: null, branches: {} },
+          ],
+        },
+        {
+          sourceStepId: 'first',
+          targetStepId: 'third',
+          branchLabel: 'fallback',
+        },
+      ),
+    ).toBeNull();
   });
 
   it('suggests branch labels that match the app editor defaults', () => {

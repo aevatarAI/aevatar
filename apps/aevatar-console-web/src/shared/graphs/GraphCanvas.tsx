@@ -1060,7 +1060,18 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   );
   const handleNodeClick = useCallback<
     NonNullable<ReactFlowProps['onNodeClick']>
-  >((_, node) => onNodeSelect?.(node.id), [onNodeSelect]);
+  >(
+    (event, node) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.react-flow__handle')
+      ) {
+        return;
+      }
+      onNodeSelect?.(node.id);
+    },
+    [onNodeSelect],
+  );
   const handleEdgeClick = useCallback<
     NonNullable<ReactFlowProps['onEdgeClick']>
   >((_, edge) => onEdgeSelect?.(edge.id), [onEdgeSelect]);

@@ -14,6 +14,7 @@ import {
   applyStepInspectorDraft,
   connectStepToTarget,
   createStepInspectorDraft,
+  findStudioControlFlowCycle,
   insertStepByType,
   materializeImplicitSequentialTransitions,
   removeStepConnection,
@@ -72,6 +73,38 @@ export type WorkflowPublicationPreparation = {
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function appendControlFlowCycleFinding(
+  document: StudioWorkflowDocument | null | undefined,
+  findings: readonly StudioValidationFinding[],
+): readonly StudioValidationFinding[] {
+  if (!document) return findings;
+  const cycle = findStudioControlFlowCycle(document);
+  if (!cycle) return findings;
+  const path = cycle.join(' → ');
+  if (
+    findings.some(
+      (finding) =>
+        finding.code === 'WORKFLOW_CONTROL_FLOW_CYCLE' && finding.path === path,
+    )
+  ) {
+    return findings;
+  }
+
+  return [
+    ...findings,
+    {
+      code: 'WORKFLOW_CONTROL_FLOW_CYCLE',
+      level: 'error',
+      message: t(
+        'workflowActivityVNext.editor.controlFlowCycleDetected',
+        'Control-flow cycle detected: {path}.',
+        { path },
+      ),
+      path,
+    },
+  ];
 }
 
 function workflowSignature(workflow: StudioWorkflowFile): string {
@@ -286,7 +319,9 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     setYaml(source.data.yaml);
     setDocument(source.data.document ?? null);
     setLayout(source.data.layout ?? null);
-    setFindings(source.data.findings);
+    setFindings(
+      appendControlFlowCycleFinding(source.data.document, source.data.findings),
+    );
     markClean();
     setSaveError('');
     setStructuralMutationError('');
@@ -303,7 +338,9 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       .then((parsed) => {
         if (cancelled || loadedSignatureRef.current !== signature) return;
         setDocument(parsed.document ?? null);
-        setFindings(parsed.findings);
+        setFindings(
+          appendControlFlowCycleFinding(parsed.document, parsed.findings),
+        );
       })
       .catch(() => {
         if (cancelled || loadedSignatureRef.current !== signature) return;
@@ -361,8 +398,12 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     async (shouldApply: () => boolean = () => true) => {
       const parsed = await studioApi.parseYaml({ yaml });
       if (!shouldApply()) return null;
-      setFindings(parsed.findings);
-      if (hasBlockingFindings(parsed.document, parsed.findings)) return null;
+      const findings = appendControlFlowCycleFinding(
+        parsed.document,
+        parsed.findings,
+      );
+      setFindings(findings);
+      if (hasBlockingFindings(parsed.document, findings)) return null;
       setDocument(parsed.document ?? null);
       return parsed.document ?? null;
     },
@@ -391,7 +432,9 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         setYaml(saved.yaml);
         setDocument(saved.document ?? fallbackDocument);
         setLayout(saved.layout ?? layout);
-        setFindings(saved.findings);
+        setFindings(
+          appendControlFlowCycleFinding(saved.document, saved.findings),
+        );
         markClean();
         setSelectedStepConfigurationError('');
       }
@@ -495,8 +538,12 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
           name: normalizedWorkflowTitle,
         },
       });
-      setFindings(serialized.findings);
-      if (hasBlockingFindings(serialized.document, serialized.findings)) {
+      const findings = appendControlFlowCycleFinding(
+        serialized.document,
+        serialized.findings,
+      );
+      setFindings(findings);
+      if (hasBlockingFindings(serialized.document, findings)) {
         setSaveError('Workflow validation failed.');
         return false;
       }
@@ -635,7 +682,6 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     async (
       mutate: (current: StudioWorkflowDocument) => {
         document: StudioWorkflowDocument;
-        nodeId: string;
       },
     ): Promise<boolean> => {
       if (savingRef.current || structuralMutationPendingRef.current)
@@ -658,7 +704,15 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         setYaml(serialized.yaml);
         setFindings(serialized.findings);
         setSelectedEdgeId('');
-        setSelectedNodeId(result.nodeId);
+        // Editing connections must not open or switch the node inspector.
+        // Read the latest selection so an async result cannot reopen a closed panel.
+        setSelectedNodeId((currentNodeId) =>
+          serialized.document.steps?.some(
+            (step) => `step:${String(step.id ?? '').trim()}` === currentNodeId,
+          )
+            ? currentNodeId
+            : '',
+        );
         setSelectedStepConfigurationError('');
         markLocalEdit();
         return true;
@@ -686,8 +740,8 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         const targetStepId = currentGraph.nodes.find(
           (node) => node.id === targetNodeId,
         )?.data.stepId;
-        if (!sourceStepId || !targetStepId || sourceStepId === targetStepId) {
-          return { document: current, nodeId: sourceNodeId };
+        if (!sourceStepId || !targetStepId) {
+          return { document: current };
         }
         const sourceStep = current.steps?.find(
           (step) => String(step.id ?? '').trim() === sourceStepId,
@@ -696,6 +750,20 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
           String(sourceStep?.type ?? '').trim(),
           sourceStep?.branches ?? {},
         );
+        const cycle = findStudioControlFlowCycle(current, {
+          sourceStepId,
+          targetStepId,
+          branchLabel,
+        });
+        if (cycle) {
+          throw new Error(
+            t(
+              'workflowActivityVNext.editor.cycleDetected',
+              'Cannot connect these steps because it would create a cycle: {path}.',
+              { path: cycle.join(' → ') },
+            ),
+          );
+        }
         return connectStepToTarget(
           current,
           sourceStepId,
@@ -724,7 +792,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
     (edgeIds: readonly string[]) =>
       applyCanvasDocumentMutation((current) => {
         const currentGraph = buildStudioGraphElements(current, layout);
-        let result = { document: current, nodeId: selectedNodeId };
+        let result = { document: current };
         for (const edgeId of edgeIds) {
           const edge = currentGraph.edges.find((entry) => entry.id === edgeId);
           const sourceStepId = currentGraph.nodes.find(
@@ -743,7 +811,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
         }
         return result;
       }),
-    [applyCanvasDocumentMutation, layout, selectedNodeId],
+    [applyCanvasDocumentMutation, layout],
   );
   const moveNodes = React.useCallback(
     (nodes: ReturnType<typeof buildStudioGraphElements>['nodes']) => {

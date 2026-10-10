@@ -171,6 +171,10 @@ const workflowActivityVNextMessages: Record<keyof typeof enUSMessages, string> =
     'workflowActivityVNext.editor.canvas': '画布',
     'workflowActivityVNext.editor.canvasAria': '工作流画布',
     'workflowActivityVNext.editor.canvasUpdateFailed': '无法更新工作流',
+    'workflowActivityVNext.editor.cycleDetected':
+      '无法连接这些步骤，因为这会形成环：{path}。',
+    'workflowActivityVNext.editor.controlFlowCycleDetected':
+      '检测到控制流成环：{path}。',
     'workflowActivityVNext.editor.description': '构建、测试并完善这个工作流。',
     'workflowActivityVNext.editor.discardLeave': '放弃并离开',
     'workflowActivityVNext.editor.emptyCanvas':

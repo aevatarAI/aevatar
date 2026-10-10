@@ -689,6 +689,139 @@ export function suggestBranchLabelForStep(
   return null;
 }
 
+export type StudioControlFlowConnection = {
+  readonly sourceStepId: string;
+  readonly targetStepId: string;
+  readonly branchLabel?: string | null;
+};
+
+/**
+ * Finds a control-flow cycle in the document, optionally including a
+ * connection that is about to be written by the canvas editor.
+ *
+ * The canvas stores sequential transitions explicitly when a user edits a
+ * connection, while workflow documents may also rely on the implicit
+ * sequential transition between adjacent steps. We first apply the candidate
+ * with the same replacement semantics as `connectStepToTarget`, then
+ * materialize those implicit transitions before walking the graph.
+ */
+export function findStudioControlFlowCycle(
+  document: StudioWorkflowDocument,
+  candidate?: StudioControlFlowConnection | null,
+): readonly string[] | null {
+  const steps = Array.isArray(document.steps) ? document.steps : [];
+  const candidateSourceId = normalizeString(candidate?.sourceStepId);
+  const candidateTargetId = normalizeString(candidate?.targetStepId);
+  const candidateBranchLabel = normalizeString(candidate?.branchLabel);
+  const candidateIsValid = Boolean(candidateSourceId && candidateTargetId);
+
+  const simulatedSteps = steps.map((entry) => {
+    const step = { ...entry } as StudioWorkflowStepDocument;
+    if (
+      !candidateIsValid ||
+      normalizeString(step.id) !== candidateSourceId
+    ) {
+      return step;
+    }
+
+    const branches = { ...(step.branches ?? {}) };
+    if (candidateBranchLabel) {
+      branches[candidateBranchLabel] = candidateTargetId;
+      return {
+        ...step,
+        branches,
+      } satisfies StudioWorkflowStepDocument;
+    }
+
+    return {
+      ...step,
+      next: candidateTargetId,
+    } satisfies StudioWorkflowStepDocument;
+  });
+
+  const materializedDocument = materializeImplicitSequentialTransitions({
+    ...document,
+    steps: simulatedSteps,
+  });
+  const materializedSteps = Array.isArray(materializedDocument.steps)
+    ? materializedDocument.steps
+    : [];
+  const validStepIds = new Set(
+    materializedSteps
+      .map((step) => normalizeString(step.id))
+      .filter(Boolean),
+  );
+  const outgoing = new Map<string, string[]>();
+
+  for (const step of materializedSteps) {
+    const stepId = normalizeString(step.id);
+    if (!stepId || outgoing.has(stepId)) {
+      continue;
+    }
+
+    const targets: string[] = [];
+    const nextTarget = normalizeString(step.next);
+    if (nextTarget && validStepIds.has(nextTarget)) {
+      targets.push(nextTarget);
+    }
+
+    for (const target of Object.values(step.branches ?? {})) {
+      const branchTarget = normalizeString(target);
+      if (
+        branchTarget &&
+        validStepIds.has(branchTarget) &&
+        !targets.includes(branchTarget)
+      ) {
+        targets.push(branchTarget);
+      }
+    }
+    outgoing.set(stepId, targets);
+  }
+
+  const colors = new Map<string, 0 | 1 | 2>();
+  const path: string[] = [];
+
+  function visit(stepId: string): readonly string[] | null {
+    colors.set(stepId, 1);
+    path.push(stepId);
+
+    for (const targetId of outgoing.get(stepId) ?? []) {
+      const targetColor = colors.get(targetId) ?? 0;
+      if (targetColor === 0) {
+        const cycle = visit(targetId);
+        if (cycle) {
+          return cycle;
+        }
+        continue;
+      }
+
+      if (targetColor === 1) {
+        const cycleStart = path.indexOf(targetId);
+        return [
+          ...path.slice(cycleStart >= 0 ? cycleStart : 0),
+          targetId,
+        ];
+      }
+    }
+
+    path.pop();
+    colors.set(stepId, 2);
+    return null;
+  }
+
+  for (const stepId of validStepIds) {
+    if ((colors.get(stepId) ?? 0) !== 0) {
+      continue;
+    }
+    const cycle = visit(stepId);
+    if (cycle) {
+      return cycle;
+    }
+  }
+
+  return null;
+}
+
 export function connectStepToTarget(
   document: StudioWorkflowDocument,
   sourceStepId: string,

@@ -1256,6 +1256,10 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.header.save': '保存',
   'teamMemberWorkflowStudio.header.saveDraft': '保存草稿',
   'teamMemberWorkflowStudio.header.tabs.editor': '编辑器',
+  'teamMemberWorkflowStudio.editor.cycleDetected':
+    '无法连接这些步骤，因为这会形成环：{path}。',
+  'teamMemberWorkflowStudio.editor.controlFlowCycleDetected':
+    '检测到控制流成环：{path}。',
   'teamMemberWorkflowStudio.header.tabs.executions': '执行记录',
   'teamMemberWorkflowStudio.header.tabs.runs': '运行记录',
   'teamMemberWorkflowStudio.header.publish.binding': '绑定中',
