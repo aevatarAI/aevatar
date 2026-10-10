@@ -1,5 +1,11 @@
 import { deserialize, serialize } from 'node:v8';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { setLocale } from '@umijs/max';
 import type { Node } from '@xyflow/react';
 import React from 'react';
@@ -73,14 +79,16 @@ describe('GraphCanvas connection selection', () => {
     }
   });
 
-  it('connects through handles without selecting a node and still selects the node body', () => {
+  it('connects through handles without changing selection or the keyboard deletion target', async () => {
     const onConnectNodes = jest.fn();
+    const onDeleteNodes = jest.fn();
     const onNodeSelect = jest.fn();
     render(
       <GraphCanvas
         edges={[]}
         nodes={nodes}
         onConnectNodes={onConnectNodes}
+        onDeleteNodes={onDeleteNodes}
         onNodeSelect={onNodeSelect}
         onlyRenderVisibleElements={false}
         showMiniMap={false}
@@ -102,12 +110,29 @@ describe('GraphCanvas connection selection', () => {
 
     fireEvent.click(sourceHandle);
     expect(onNodeSelect).not.toHaveBeenCalled();
+    expect(firstNode).not.toHaveClass('selected');
     fireEvent.click(targetHandle);
     expect(onConnectNodes).toHaveBeenCalledWith('step:first', 'step:second');
     expect(onNodeSelect).not.toHaveBeenCalled();
+    expect(secondNode).not.toHaveClass('selected');
 
-    fireEvent.click(within(secondNode).getByText('second'));
+    fireEvent.click(within(firstNode).getByText('first'));
     expect(onNodeSelect).toHaveBeenCalledTimes(1);
-    expect(onNodeSelect).toHaveBeenCalledWith('step:second');
+    expect(onNodeSelect).toHaveBeenCalledWith('step:first');
+    expect(firstNode).toHaveClass('selected');
+
+    fireEvent.click(sourceHandle);
+    fireEvent.click(targetHandle);
+    expect(onConnectNodes).toHaveBeenCalledTimes(2);
+    expect(onNodeSelect).toHaveBeenCalledTimes(1);
+    expect(firstNode).toHaveClass('selected');
+    expect(secondNode).not.toHaveClass('selected');
+
+    fireEvent.keyDown(firstNode, { key: 'Backspace', code: 'Backspace' });
+    await waitFor(() =>
+      expect(onDeleteNodes).toHaveBeenCalledWith(['step:first']),
+    );
+    fireEvent.keyUp(firstNode, { key: 'Backspace', code: 'Backspace' });
+    expect(onDeleteNodes).toHaveBeenCalledTimes(1);
   });
 });
