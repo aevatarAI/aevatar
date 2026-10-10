@@ -138,6 +138,20 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
       React.createElement(
         'button',
         {
+          key: 'connect-reverse',
+          onClick: () => {
+            const [target, source] = props.nodes ?? [];
+            if (source?.id && target?.id) {
+              props.onConnectNodes?.(source.id, target.id);
+            }
+          },
+          type: 'button',
+        },
+        'connect second node to first',
+      ),
+      React.createElement(
+        'button',
+        {
           key: 'move',
           onClick: () => {
             props.onNodeLayoutChange?.(
@@ -3086,9 +3100,13 @@ describe('TeamMemberWorkflowStudioPage', () => {
     await waitFor(() => {
       expect(screen.getByText('nodes:2')).toBeTruthy();
     });
+    const inspector = screen.getByLabelText('Node inspector');
+    expect(within(inspector).getAllByText('Guard').length).toBeGreaterThan(0);
     fireEvent.click(
       screen.getByRole('button', { name: 'connect first two nodes' }),
     );
+    expect(screen.getByLabelText('Node inspector')).toBe(inspector);
+    expect(within(inspector).getAllByText('Guard').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'move first node' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -3114,7 +3132,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     });
   });
 
-  it('connects conditional nodes through the shared branch-aware Studio editor', async () => {
+  it('connects conditional nodes and rejects cycles without opening or switching the node inspector', async () => {
     window.history.replaceState(
       {},
       '',
@@ -3179,9 +3197,42 @@ describe('TeamMemberWorkflowStudioPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('graph-canvas')).toHaveTextContent('nodes:2');
     });
+    expect(screen.queryByLabelText('Node inspector')).toBeNull();
     fireEvent.click(
       screen.getByRole('button', { name: 'connect first two nodes' }),
     );
+    expect(screen.queryByLabelText('Node inspector')).toBeNull();
+    expect(
+      screen.getByRole('button', {
+        name: 'edge:edge:condition:transform:branch:true',
+      }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'connect second node to first' }),
+    );
+    const cycleMessage =
+      'Cannot connect these steps because it would create a cycle: condition → transform → condition.';
+    expect(mockConsoleToast.error).toHaveBeenLastCalledWith(cycleMessage);
+    expect(screen.queryByLabelText('Node inspector')).toBeNull();
+    expect(
+      screen.queryByRole('button', {
+        name: 'edge:edge:transform:condition:linear',
+      }),
+    ).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'node:step:condition' }),
+    );
+    const inspector = screen.getByLabelText('Node inspector');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'connect second node to first' }),
+    );
+    expect(screen.getByLabelText('Node inspector')).toBe(inspector);
+    expect(
+      within(inspector).getAllByText('Conditional').length,
+    ).toBeGreaterThan(0);
+    expect(within(inspector).queryByText(cycleMessage)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {

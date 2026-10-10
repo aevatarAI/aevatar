@@ -26,6 +26,7 @@ import {
   applyStepInspectorDraft,
   connectStepToTarget,
   createStepInspectorDraft,
+  findStudioControlFlowCycle,
   insertStepByType,
   removeStep,
   removeStepConnection,
@@ -971,6 +972,53 @@ function assertNoBlockingFindings(
   }
 }
 
+function appendControlFlowCycleFinding(
+  document: StudioWorkflowDocument | null | undefined,
+  findings: readonly StudioValidationFinding[],
+): readonly StudioValidationFinding[] {
+  if (!document) return findings;
+  const cycle = findStudioControlFlowCycle(document);
+  if (!cycle) return findings;
+  const path = cycle.join(' → ');
+  if (
+    findings.some(
+      (finding) =>
+        finding.code === 'WORKFLOW_CONTROL_FLOW_CYCLE' && finding.path === path,
+    )
+  ) {
+    return findings;
+  }
+
+  return [
+    ...findings,
+    {
+      code: 'WORKFLOW_CONTROL_FLOW_CYCLE',
+      level: 'error',
+      message: t(
+        'teamMemberWorkflowStudio.editor.controlFlowCycleDetected',
+        'Control-flow cycle detected: {path}.',
+        { path },
+      ),
+      path,
+    },
+  ];
+}
+
+function assertNoControlFlowCycle(
+  document: StudioWorkflowDocument | null | undefined,
+): void {
+  const cycle = document ? findStudioControlFlowCycle(document) : null;
+  if (cycle) {
+    throw new Error(
+      t(
+        'teamMemberWorkflowStudio.editor.controlFlowCycleDetected',
+        'Control-flow cycle detected: {path}.',
+        { path: cycle.join(' → ') },
+      ),
+    );
+  }
+}
+
 async function saveWorkflowDraft(input: {
   readonly document: StudioWorkflowDocument;
   readonly layout: unknown;
@@ -979,6 +1027,7 @@ async function saveWorkflowDraft(input: {
   readonly workflow: StudioWorkflowFile;
 }): Promise<SaveWorkflowDraftOutcome> {
   const { document, layout, routeScopeId, title, workflow } = input;
+  assertNoControlFlowCycle(document);
   const normalizedTitle =
     trimOptional(title) ||
     trimOptional(document.name) ||
@@ -992,7 +1041,9 @@ async function saveWorkflowDraft(input: {
     document: documentWithTitle,
     availableStepTypes: AVAILABLE_STEP_TYPES,
   });
-  assertNoBlockingFindings(serialized.findings);
+  assertNoBlockingFindings(
+    appendControlFlowCycleFinding(serialized.document, serialized.findings),
+  );
   const savedDocument =
     cloneWorkflowDocument(serialized.document) ?? documentWithTitle;
   const graphForLayout = buildStudioGraphElements(savedDocument, layout);
@@ -1069,7 +1120,9 @@ async function saveAndBindPublishedWorkflowDraft(input: {
     document: documentWithTitle,
     availableStepTypes: AVAILABLE_STEP_TYPES,
   });
-  assertNoBlockingFindings(serialized.findings);
+  assertNoBlockingFindings(
+    appendControlFlowCycleFinding(serialized.document, serialized.findings),
+  );
   const workflowYamlForPublication = serialized.yaml;
   const revisionIdentityCandidate = createWorkflowRevisionIdentityCandidate();
   const explicitRequestPreview = await studioApi.previewExplicitRequests({
@@ -2086,10 +2139,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       );
     }
 
-    assertNoBlockingFindings(parsed.findings);
+    const findings = appendControlFlowCycleFinding(
+      parsedDocument,
+      parsed.findings,
+    );
+    assertNoBlockingFindings(findings);
     return {
       document: parsedDocument,
-      findings: parsed.findings,
+      findings,
     };
   }, []);
   const openYamlEditor = React.useCallback(async () => {
@@ -2151,7 +2208,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       };
       setYamlEditBufferState(serialized.yaml);
       setYamlEditSnapshot(serialized.yaml);
-      setYamlEditDiagnostics([...(serialized.findings ?? [])]);
+      setYamlEditDiagnostics([
+        ...appendControlFlowCycleFinding(
+          serializedDocument,
+          serialized.findings ?? [],
+        ),
+      ]);
       setYamlEditParsedDocument(serializedDocument);
       setYamlEditValidatedBuffer(serialized.yaml);
       setYamlEditBaseRevision(baseRevision);
@@ -2237,9 +2299,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             }
           : await parseYamlEditBuffer(yaml);
 
-      assertNoBlockingFindings(parsed.findings);
       const parsedDocument =
         cloneWorkflowDocument(parsed.document) ?? parsed.document;
+      const parsedFindings = appendControlFlowCycleFinding(
+        parsedDocument,
+        parsed.findings,
+      );
+      assertNoBlockingFindings(parsedFindings);
       const nextTitle =
         trimOptional(parsedDocument.name) ||
         trimOptional(workflowTitle) ||
@@ -2252,7 +2318,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         document: documentWithTitle,
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
-      assertNoBlockingFindings(serialized.findings);
+      assertNoBlockingFindings(
+        appendControlFlowCycleFinding(serialized.document, serialized.findings),
+      );
       if (!baseIsCurrent()) {
         throw new Error(
           'This YAML buffer was based on an older draft. Reopen Edit YAML from the current canvas before applying.',
@@ -2278,7 +2346,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setNodeLibraryOpen(false);
       setYamlEditBufferState(serialized.yaml);
       setYamlEditSnapshot(serialized.yaml);
-      setYamlEditDiagnostics([...(serialized.findings ?? [])]);
+      setYamlEditDiagnostics([
+        ...appendControlFlowCycleFinding(
+          serialized.document,
+          serialized.findings ?? [],
+        ),
+      ]);
       setYamlEditParsedDocument(nextDocument);
       setYamlEditValidatedBuffer(serialized.yaml);
       setYamlEditBaseRevision(nextRevision);
@@ -2355,8 +2428,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             return;
           }
 
-          setYamlEditDiagnostics([...(parsed.findings ?? [])]);
-          setYamlEditParsedDocument(cloneWorkflowDocument(parsed.document));
+          const parsedDocument = cloneWorkflowDocument(parsed.document);
+          setYamlEditDiagnostics([
+            ...appendControlFlowCycleFinding(
+              parsedDocument,
+              parsed.findings ?? [],
+            ),
+          ]);
+          setYamlEditParsedDocument(parsedDocument);
           setYamlEditValidatedBuffer(yaml);
           setYamlEditError('');
         })
@@ -2413,6 +2492,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
       const normalizedTitle = trimOptional(title) || 'Workflow draft';
       const userRunMessage = trimOptional(runMessage);
+      assertNoControlFlowCycle(document);
       const serialized = await studioApi.serializeYaml({
         document: {
           ...document,
@@ -2420,7 +2500,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         },
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
-      assertNoBlockingFindings(serialized.findings);
+      assertNoBlockingFindings(
+        appendControlFlowCycleFinding(serialized.document, serialized.findings),
+      );
       const startedAtUtc = new Date().toISOString();
       const executionScopeKey =
         trimOptional(route.memberId) || 'current-workflow';
@@ -2593,7 +2675,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         },
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
-      assertNoBlockingFindings(serialized.findings);
+      assertNoBlockingFindings(
+        appendControlFlowCycleFinding(serialized.document, serialized.findings),
+      );
       const workflowYamlForPublication = serialized.yaml;
       const revisionIdentityCandidate =
         createWorkflowRevisionIdentityCandidate();
@@ -3201,7 +3285,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
       const sourceStepId = readStepIdFromGraphNodeId(sourceNodeId);
       const targetStepId = readStepIdFromGraphNodeId(targetNodeId);
-      if (!sourceStepId || !targetStepId || sourceStepId === targetStepId) {
+      if (!sourceStepId || !targetStepId) {
         return;
       }
 
@@ -3212,6 +3296,21 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         trimOptional(sourceStep?.type),
         sourceStep?.branches ?? {},
       );
+      const cycle = findStudioControlFlowCycle(editableDocument, {
+        sourceStepId,
+        targetStepId,
+        branchLabel,
+      });
+      if (cycle) {
+        const cycleMessage = t(
+          'teamMemberWorkflowStudio.editor.cycleDetected',
+          'Cannot connect these steps because it would create a cycle: {path}.',
+          { path: cycle.join(' → ') },
+        );
+        toast.error(cycleMessage);
+        return;
+      }
+
       const result = connectStepToTarget(
         editableDocument,
         sourceStepId,
@@ -3220,10 +3319,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       );
       setEditableDocument(result.document);
       setSelectedEdgeId('');
-      setSelectedNodeId(result.nodeId);
       markDraftDirty();
     },
-    [editableDocument, markDraftDirty],
+    [editableDocument, markDraftDirty, toast],
   );
   const moveNodes = React.useCallback(
     (nodes: ReturnType<typeof buildStudioGraphElements>['nodes']) => {

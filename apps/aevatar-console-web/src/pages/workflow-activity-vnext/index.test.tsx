@@ -38,6 +38,9 @@ type SerializableWorkflowDocument = {
   readonly name?: string;
 };
 
+type StudioWorkflowDocument =
+  import('@/shared/studio/models').StudioWorkflowDocument;
+
 type SaveWorkflowRequestProbe = {
   readonly workflowName: string;
   readonly yaml: string;
@@ -423,6 +426,7 @@ jest.mock(
   () => ({
     __esModule: true,
     default: ({
+      edges,
       nodes,
       onAddFirstStep,
       onCanvasSelect,
@@ -433,6 +437,7 @@ jest.mock(
       onNodeLayoutChange,
       onNodeSelect,
     }: {
+      edges: readonly { readonly id: string }[];
       nodes: readonly { readonly id: string }[];
       onAddFirstStep?: () => void;
       onCanvasSelect?: () => void;
@@ -481,6 +486,27 @@ jest.mock(
             type="button"
           >
             Connect first two nodes
+          </button>
+          <button
+            disabled={!onConnectNodes || nodes.length < 2}
+            onClick={() => onConnectNodes?.(nodes[1].id, nodes[0].id)}
+            type="button"
+          >
+            Connect second node to first
+          </button>
+          <button
+            disabled={!onDeleteEdges || edges.length === 0}
+            onClick={() => onDeleteEdges?.([edges[0].id])}
+            type="button"
+          >
+            Delete first connection
+          </button>
+          <button
+            disabled={!onDeleteNodes || nodes.length === 0}
+            onClick={() => onDeleteNodes?.([nodes[0].id])}
+            type="button"
+          >
+            Delete first node
           </button>
         </div>
       );
@@ -2301,6 +2327,37 @@ describe('Workflow Activity vNext editor', () => {
 
   afterEach(() => cleanupTestQueryClients());
 
+  const prepareCanvasConnectionWorkflow = () => {
+    const sourceDocument: StudioWorkflowDocument = {
+      name: 'committed_source',
+      roles: [],
+      steps: [
+        { id: 'step-root', type: 'conditional' },
+        { id: 'step-next', type: 'transform' },
+      ],
+    };
+    mockStudioApi.getWorkflow.mockResolvedValue({
+      workflowId: 'wf-committed-source',
+      name: 'Committed source',
+      fileName: 'committed-source.yaml',
+      filePath: '',
+      directoryId: '',
+      directoryLabel: '',
+      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+      updatedAtUtc: '2026-08-04T10:00:00Z',
+      document: sourceDocument,
+      draftExists: false,
+      findings: [],
+    });
+    mockStudioApi.serializeYaml.mockImplementation(
+      async ({ document }: { document: StudioWorkflowDocument }) => ({
+        yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+        document,
+        findings: [],
+      }),
+    );
+  };
+
   it('keeps the editor header focused on one inline workflow name', async () => {
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
@@ -3652,34 +3709,8 @@ describe('Workflow Activity vNext editor', () => {
     ).toBeInTheDocument();
   });
 
-  it('reuses the complete Studio canvas editing contract', async () => {
-    const sourceDocument = {
-      name: 'committed_source',
-      roles: [],
-      steps: [
-        { id: 'step-root', type: 'conditional' },
-        { id: 'step-next', type: 'transform' },
-      ],
-    };
-    mockStudioApi.getWorkflow.mockResolvedValue({
-      workflowId: 'wf-committed-source',
-      name: 'Committed source',
-      fileName: 'committed-source.yaml',
-      filePath: '',
-      directoryId: '',
-      directoryLabel: '',
-      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
-      updatedAtUtc: '2026-08-04T10:00:00Z',
-      document: sourceDocument,
-      draftExists: false,
-      findings: [],
-    });
-    mockStudioApi.serializeYaml.mockImplementation(async ({ document }) => ({
-      yaml: 'name: committed_source\nroles: []\nsteps: []\n',
-      document,
-      findings: [],
-    }));
-
+  it('connects and deletes edges without opening the node inspector', async () => {
+    prepareCanvasConnectionWorkflow();
     renderWithQueryClient(<WorkflowActivityVNextPage />);
 
     const canvas = await screen.findByTestId('workflow-studio-canvas');
@@ -3687,24 +3718,195 @@ describe('Workflow Activity vNext editor', () => {
     expect(canvas).toHaveAttribute('data-deletable', 'true');
     expect(canvas).toHaveAttribute('data-edge-selectable', 'true');
     expect(canvas).toHaveAttribute('data-layout-editable', 'true');
+    expect(
+      screen.queryByRole('complementary', { name: /^Configure / }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(
       within(canvas).getByRole('button', { name: 'Connect first two nodes' }),
     );
 
-    await waitFor(() =>
-      expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
-        document: expect.objectContaining({
-          steps: expect.arrayContaining([
-            expect.objectContaining({
-              id: 'step-root',
-              branches: { true: 'step-next' },
-              next: null,
-            }),
-          ]),
-        }),
+    const deleteConnection = within(canvas).getByRole('button', {
+      name: 'Delete first connection',
+    });
+    await waitFor(() => expect(deleteConnection).toBeEnabled());
+    expect(
+      screen.queryByRole('complementary', { name: /^Configure / }),
+    ).not.toBeInTheDocument();
+    expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
+      document: expect.objectContaining({
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            id: 'step-root',
+            branches: { true: 'step-next' },
+            next: null,
+          }),
+        ]),
       }),
+    });
+
+    fireEvent.click(deleteConnection);
+    await waitFor(() => expect(deleteConnection).toBeDisabled());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Add node' })).toBeEnabled(),
     );
+    expect(
+      screen.queryByRole('complementary', { name: /^Configure / }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows a safe canvas failure message and allows retry without exposing transport details', async () => {
+    prepareCanvasConnectionWorkflow();
+    const transportDetail =
+      'POST /api/editor/serialize-yaml failed: upstream connection refused';
+    mockStudioApi.serializeYaml.mockRejectedValueOnce(
+      new Error(transportDetail),
+    );
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    const canvas = await screen.findByTestId('workflow-studio-canvas');
+    const connect = within(canvas).getByRole('button', {
+      name: 'Connect first two nodes',
+    });
+
+    fireEvent.click(connect);
+
+    await waitFor(() =>
+      expect(mockConsoleToast.error).toHaveBeenCalledWith(
+        "Couldn't update workflow",
+      ),
+    );
+    expect(mockConsoleToast.error).toHaveBeenCalledTimes(1);
+    expect(mockConsoleToast.error).not.toHaveBeenCalledWith(transportDetail);
+    expect(screen.queryByText(transportDetail)).not.toBeInTheDocument();
+    const deleteConnection = within(canvas).getByRole('button', {
+      name: 'Delete first connection',
+    });
+    expect(deleteConnection).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Save workflow' }),
+    ).toBeDisabled();
+
+    fireEvent.click(connect);
+
+    await waitFor(() => expect(deleteConnection).toBeEnabled());
+    expect(mockConsoleToast.error).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole('complementary', { name: /^Configure / }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('reports every rejected cycle with its path while preserving the selected inspector', async () => {
+    prepareCanvasConnectionWorkflow();
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    const canvas = await screen.findByTestId('workflow-studio-canvas');
+    fireEvent.click(
+      within(canvas).getByRole('button', { name: 'Connect first two nodes' }),
+    );
+    await waitFor(() =>
+      expect(
+        within(canvas).getByRole('button', { name: 'Delete first connection' }),
+      ).toBeEnabled(),
+    );
+    fireEvent.click(
+      within(canvas).getByRole('button', { name: 'Select step:step-next' }),
+    );
+    const inspector = screen.getByRole('complementary', {
+      name: 'Configure step-next',
+    });
+    const connectReverse = within(canvas).getByRole('button', {
+      name: 'Connect second node to first',
+    });
+    const cycleMessage =
+      'Cannot connect these steps because it would create a cycle: step-root → step-next → step-root.';
+
+    fireEvent.click(connectReverse);
+    expect(mockConsoleToast.error).toHaveBeenNthCalledWith(1, cycleMessage);
+    fireEvent.click(connectReverse);
+    expect(mockConsoleToast.error).toHaveBeenNthCalledWith(2, cycleMessage);
+    expect(mockConsoleToast.error).toHaveBeenCalledTimes(2);
+    expect(mockStudioApi.serializeYaml).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole('complementary', { name: 'Configure step-next' }),
+    ).toBe(inspector);
+    expect(within(inspector).queryByText(cycleMessage)).not.toBeInTheDocument();
+  });
+
+  it('preserves the chosen inspector during connection edits and does not reopen it after an async update', async () => {
+    prepareCanvasConnectionWorkflow();
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    const canvas = await screen.findByTestId('workflow-studio-canvas');
+    fireEvent.click(
+      within(canvas).getByRole('button', { name: 'Select step:step-next' }),
+    );
+    expect(
+      screen.getByRole('complementary', { name: 'Configure step-next' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      within(canvas).getByRole('button', { name: 'Connect first two nodes' }),
+    );
+    const deleteConnection = within(canvas).getByRole('button', {
+      name: 'Delete first connection',
+    });
+    await waitFor(() => expect(deleteConnection).toBeEnabled());
+    expect(
+      screen.getByRole('complementary', { name: 'Configure step-next' }),
+    ).toBeInTheDocument();
+
+    let completeSerialization: (() => void) | undefined;
+    mockStudioApi.serializeYaml.mockImplementationOnce(
+      ({ document }: { document: StudioWorkflowDocument }) =>
+        new Promise((resolve) => {
+          completeSerialization = () =>
+            resolve({
+              document,
+              yaml: 'name: committed_source\nroles: []\nsteps: []\n',
+              findings: [],
+            });
+        }),
+    );
+    fireEvent.click(deleteConnection);
+    expect(screen.getByRole('button', { name: 'Add node' })).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Close node configuration' }),
+    );
+    expect(
+      screen.queryByRole('complementary', { name: /^Configure / }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => completeSerialization?.());
+    expect(deleteConnection).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add node' })).toBeEnabled();
+    expect(
+      screen.queryByRole('complementary', { name: /^Configure / }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('closes the deleted node inspector without opening another node', async () => {
+    prepareCanvasConnectionWorkflow();
+    renderWithQueryClient(<WorkflowActivityVNextPage />);
+    const canvas = await screen.findByTestId('workflow-studio-canvas');
+    fireEvent.click(
+      within(canvas).getByRole('button', { name: 'Select step:step-root' }),
+    );
+    expect(
+      screen.getByRole('complementary', { name: 'Configure step-root' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      within(canvas).getByRole('button', { name: 'Delete first node' }),
+    );
+    await waitFor(() =>
+      expect(
+        within(canvas).queryByRole('button', { name: 'Select step:step-root' }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      within(canvas).getByRole('button', { name: 'Select step:step-next' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('complementary', { name: /^Configure / }),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps canvas editing callbacks stable when the node library opens', async () => {

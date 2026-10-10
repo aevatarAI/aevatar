@@ -1337,6 +1337,10 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.save': 'Save',
   'teamMemberWorkflowStudio.header.saveDraft': 'Save draft',
   'teamMemberWorkflowStudio.header.tabs.editor': 'Editor',
+  'teamMemberWorkflowStudio.editor.cycleDetected':
+    'Cannot connect these steps because it would create a cycle: {path}.',
+  'teamMemberWorkflowStudio.editor.controlFlowCycleDetected':
+    'Control-flow cycle detected: {path}.',
   'teamMemberWorkflowStudio.header.tabs.executions': 'Executions',
   'teamMemberWorkflowStudio.header.tabs.runs': 'Runs',
   'teamMemberWorkflowStudio.header.publish.binding': 'Binding',
