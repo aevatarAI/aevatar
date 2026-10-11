@@ -174,6 +174,10 @@ const WorkflowEditorPage: React.FC<{
     React.useRef<React.ElementRef<typeof Button>>(null);
   const expandRunConsoleButtonRef =
     React.useRef<React.ElementRef<typeof Button>>(null);
+  const scheduleButtonRef = React.useRef<React.ElementRef<typeof Button>>(null);
+  const pendingScheduleFocusRef = React.useRef<{
+    readonly button: React.ElementRef<typeof Button> | null;
+  } | null>(null);
   const pendingRunConsoleFocusRef = React.useRef<'collapse' | 'expand' | null>(
     null,
   );
@@ -253,6 +257,23 @@ const WorkflowEditorPage: React.FC<{
   React.useEffect(() => {
     focusPendingRunConsoleButton();
   }, [focusPendingRunConsoleButton, runConsoleExpanded]);
+  const closeScheduleFallback = React.useCallback(() => {
+    pendingScheduleFocusRef.current = { button: scheduleButtonRef.current };
+    setSchedulePanelOpen(false);
+  }, []);
+  React.useEffect(() => {
+    const pendingFocus = pendingScheduleFocusRef.current;
+    if (schedulePanelOpen || !pendingFocus) return;
+    // Closing an inactive fallback unmounts its Drawer immediately, before the
+    // Drawer's normal close animation can restore focus to its trigger.
+    queueMicrotask(() => {
+      if (pendingScheduleFocusRef.current !== pendingFocus) return;
+      pendingScheduleFocusRef.current = null;
+      if (scheduleButtonRef.current === pendingFocus.button) {
+        pendingFocus.button?.focus();
+      }
+    });
+  }, [schedulePanelOpen]);
 
   React.useEffect(() => {
     let toastIntent: 'error' | 'success' | null = null;
@@ -1174,7 +1195,11 @@ const WorkflowEditorPage: React.FC<{
             )}
             disabled={!publicationCurrent}
             icon={<CalendarOutlined />}
-            onClick={() => setSchedulePanelOpen(true)}
+            onClick={() => {
+              pendingScheduleFocusRef.current = null;
+              setSchedulePanelOpen(true);
+            }}
+            ref={scheduleButtonRef}
             title={
               publicationCurrent
                 ? undefined
@@ -1588,7 +1613,7 @@ const WorkflowEditorPage: React.FC<{
         renderFallback={(retry) => (
           <Drawer
             destroyOnHidden
-            onClose={() => setSchedulePanelOpen(false)}
+            onClose={closeScheduleFallback}
             open={schedulePanelOpen}
             placement="right"
             rootClassName="wa-vnext-schedule-drawer"

@@ -135,7 +135,7 @@ The JavaScript file count rises from 13 to 18 as Webpack shares code among
 independent routes. This can add request overhead on some connections, so the
 byte reduction must not be equated with an identical percentage timing gain.
 After the loading-state accessibility review, the final verification build
-contains 3,610,537 raw JS bytes and 929,580 estimated gzip bytes (18 files).
+contains 3,610,834 raw JS bytes and 929,639 estimated gzip bytes (18 files).
 The earlier same-environment comparison above remains the performance baseline;
 these small follow-up changes retain the approximately 19.3% gzip reduction.
 The global entry remains the largest payload. CSS changes only from 67,118 to
