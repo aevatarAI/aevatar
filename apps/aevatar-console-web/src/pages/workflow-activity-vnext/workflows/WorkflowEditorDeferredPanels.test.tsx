@@ -5,6 +5,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
+import { ConfigProvider } from 'antd';
 import * as React from 'react';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopesApi } from '@/shared/api/scopesApi';
@@ -228,7 +229,12 @@ it('keeps Schedule focus and Escape dismissal available while its module loads o
     .mockImplementation(() => {});
   try {
     renderWithQueryClient(
-      <WorkflowEditorPage scopeId="scope-alpha" workflowId="wf-alpha" />,
+      // rc-util replaces layout effects with passive effects in tests, so a
+      // newly created portal would attach after Drawer's autofocus effect.
+      // Use an attached container to retain the browser's focus ordering.
+      <ConfigProvider getPopupContainer={() => document.body}>
+        <WorkflowEditorPage scopeId="scope-alpha" workflowId="wf-alpha" />
+      </ConfigProvider>,
     );
     const schedules = await screen.findByRole('button', {
       name: 'Manage schedules for Workflow alpha',
