@@ -167,14 +167,23 @@ async function openRunLogs() {
   );
 }
 
-function expectDialogFocus(dialog: HTMLElement) {
+function expectScheduleDialogFocus() {
+  // A lazy boundary can replace its fallback while the module settles.
+  // Query the live dialog on every retry instead of retaining a prior node.
+  const dialog = screen.getByRole('dialog', {
+    name: 'Schedules for Workflow alpha',
+  });
+  expect(dialog).toBeVisible();
   const focused = document.activeElement;
   expect(focused).not.toBe(document.body);
   expect(focused).not.toBe(document.documentElement);
   // Drawer may focus its enclosing keyboard container or a dialog control.
-  expect(
-    Boolean(focused && (dialog.contains(focused) || focused.contains(dialog))),
-  ).toBe(true);
+  if (!focused || !(dialog.contains(focused) || focused.contains(dialog))) {
+    throw new Error(
+      `Schedule dialog does not own focus. Focused element: ${focused?.outerHTML ?? 'none'}`,
+    );
+  }
+  return dialog;
 }
 
 it('keeps keyboard focus through deferred logs loading, failure and retry without losing edits', async () => {
@@ -227,10 +236,7 @@ it('keeps Schedule focus and Escape dismissal available while its module loads o
     await waitFor(() => expect(schedules).toBeEnabled());
     schedules.focus();
     fireEvent.click(schedules);
-    const loadingDialog = await screen.findByRole('dialog', {
-      name: 'Schedules for Workflow alpha',
-    });
-    await waitFor(() => expectDialogFocus(loadingDialog));
+    const loadingDialog = await waitFor(expectScheduleDialogFocus);
     fireEvent.keyDown(document.activeElement ?? loadingDialog, {
       key: 'Escape',
       keyCode: 27,
@@ -250,7 +256,7 @@ it('keeps Schedule focus and Escape dismissal available while its module loads o
     expect(
       await within(failedDialog).findByRole('button', { name: 'Retry' }),
     ).toBeVisible();
-    await waitFor(() => expectDialogFocus(failedDialog));
+    await waitFor(expectScheduleDialogFocus);
     fireEvent.keyDown(document.activeElement ?? failedDialog, {
       key: 'Escape',
       keyCode: 27,
