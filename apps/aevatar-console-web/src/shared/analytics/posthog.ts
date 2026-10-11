@@ -116,9 +116,20 @@ function observeLongTasks(): void {
     ) {
       return;
     }
+    const observationStartedAt = performance.now();
+    let documentUrl = withoutUrlParameters(window.location.href);
+    try {
+      const navigation = performance.getEntriesByType('navigation')[0];
+      if (navigation?.name) {
+        const navigationUrl = withoutUrlParameters(navigation.name);
+        if (navigationUrl !== '[redacted]') documentUrl = navigationUrl;
+      }
+    } catch {
+      // Older browsers may expose Long Tasks without Navigation Timing.
+    }
     const observer = new PerformanceObserver((list) => {
       try {
-        const pageUrl = withoutUrlParameters(window.location.href);
+        const currentPageUrl = withoutUrlParameters(window.location.href);
         for (const entry of list.getEntries()) {
           if (
             entry.entryType !== 'longtask' ||
@@ -129,19 +140,27 @@ function observeLongTasks(): void {
           ) {
             continue;
           }
+          const pageUrl =
+            entry.startTime < observationStartedAt
+              ? documentUrl
+              : currentPageUrl;
           captureConsoleEvent('long_task', {
             duration_ms: entry.duration,
             blocking_time_ms: entry.duration - 50,
             start_time_ms: entry.startTime,
             $current_url: pageUrl,
+            $pathname:
+              pageUrl === '[redacted]'
+                ? '[redacted]'
+                : new URL(pageUrl).pathname,
           });
         }
       } catch {
         // Browser observer delivery must not interfere with the application.
       }
     });
-    // Start at initialization; buffered tasks may belong to an earlier route.
-    observer.observe({ type: 'longtask', buffered: false });
+    // Recover startup work without attributing it to a later SPA route.
+    observer.observe({ type: 'longtask', buffered: true });
   } catch {
     // Unsupported or failing observers must not disable other monitoring.
   }

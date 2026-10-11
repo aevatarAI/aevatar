@@ -36,13 +36,23 @@ describe('console Long Task reporting', () => {
     window,
     'PerformanceObserver',
   );
+  const originalGetEntries = Object.getOwnPropertyDescriptor(
+    performance,
+    'getEntriesByType',
+  );
   let observers: ObserverBoundary[];
   let observeFailure: Error | undefined;
+  let bufferedEntries: PerformanceEntry[];
+  let navigationEntries: PerformanceEntry[];
+  let navigationFailure: Error | undefined;
 
   class ObserverBoundary implements PerformanceObserver {
     static supportedEntryTypes = ['longtask'];
-    readonly observe = jest.fn(() => {
+    readonly observe = jest.fn((options?: PerformanceObserverInit) => {
       if (observeFailure) throw observeFailure;
+      if (options?.buffered && bufferedEntries.length) {
+        this.deliver(bufferedEntries);
+      }
     });
     readonly disconnect = jest.fn();
     readonly takeRecords = jest.fn(() => []);
@@ -77,6 +87,17 @@ describe('console Long Task reporting', () => {
     jest.mocked(onTTFB).mockReset();
     observers = [];
     observeFailure = undefined;
+    bufferedEntries = [];
+    navigationEntries = [];
+    navigationFailure = undefined;
+    jest.spyOn(performance, 'now').mockReturnValue(100);
+    Object.defineProperty(performance, 'getEntriesByType', {
+      configurable: true,
+      value: jest.fn((type: string) => {
+        if (navigationFailure) throw navigationFailure;
+        return type === 'navigation' ? navigationEntries : [];
+      }),
+    });
     ObserverBoundary.supportedEntryTypes = ['longtask'];
     Object.defineProperty(window, 'PerformanceObserver', {
       configurable: true,
@@ -92,6 +113,15 @@ describe('console Long Task reporting', () => {
     } else {
       Reflect.deleteProperty(window, 'PerformanceObserver');
     }
+    if (originalGetEntries) {
+      Object.defineProperty(
+        performance,
+        'getEntriesByType',
+        originalGetEntries,
+      );
+    } else {
+      Reflect.deleteProperty(performance, 'getEntriesByType');
+    }
   });
 
   it('reports long task duration and blocking time once against the current sanitized route', () => {
@@ -101,7 +131,7 @@ describe('console Long Task reporting', () => {
     expect(observers).toHaveLength(1);
     expect(observers[0].observe).toHaveBeenCalledWith({
       type: 'longtask',
-      buffered: false,
+      buffered: true,
     });
 
     window.history.replaceState(
@@ -118,14 +148,67 @@ describe('console Long Task reporting', () => {
       blocking_time_ms: 32.5,
       start_time_ms: 120,
       $current_url: `${window.location.origin}/scopes/s-alpha/workflows/wf-alpha`,
+      $pathname: '/scopes/s-alpha/workflows/wf-alpha',
     });
     expect(posthog.capture).toHaveBeenNthCalledWith(2, 'long_task', {
       duration_ms: 50,
       blocking_time_ms: 0,
       start_time_ms: 240,
       $current_url: `${window.location.origin}/scopes/s-alpha/activity`,
+      $pathname: '/scopes/s-alpha/activity',
     });
     expect(posthog.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it('recovers buffered startup tasks using the document URL before subsequent SPA tasks', () => {
+    navigationEntries = [
+      {
+        ...entry(0, 0, 'navigation'),
+        name: `${window.location.origin}/workflows?token=private#secret`,
+      },
+    ];
+    bufferedEntries = [entry(75, 10)];
+    const analytics = loadAnalytics();
+    analytics.initializeConsoleAnalytics();
+    analytics.initializeConsoleAnalytics();
+    expect(posthog.capture).toHaveBeenCalledTimes(1);
+    expect(posthog.capture).toHaveBeenCalledWith('long_task', {
+      duration_ms: 75,
+      blocking_time_ms: 25,
+      start_time_ms: 10,
+      $current_url: `${window.location.origin}/workflows`,
+      $pathname: '/workflows',
+    });
+
+    window.history.replaceState(
+      {},
+      '',
+      '/scopes/s-alpha/activity?token=private',
+    );
+    observers[0].deliver([entry(80, 150)]);
+    expect(posthog.capture).toHaveBeenLastCalledWith('long_task', {
+      duration_ms: 80,
+      blocking_time_ms: 30,
+      start_time_ms: 150,
+      $current_url: `${window.location.origin}/scopes/s-alpha/activity`,
+      $pathname: '/scopes/s-alpha/activity',
+    });
+  });
+
+  it('retains the initialization URL for early tasks when Navigation Timing fails', () => {
+    navigationFailure = new Error('Navigation Timing unavailable');
+    window.history.replaceState({}, '', '/workflows?token=private#secret');
+    loadAnalytics().initializeConsoleAnalytics();
+    window.history.replaceState({}, '', '/scopes/s-alpha/settings');
+    observers[0].deliver([entry(65, 20)]);
+    expect(posthog.capture).toHaveBeenCalledWith('long_task', {
+      duration_ms: 65,
+      blocking_time_ms: 15,
+      start_time_ms: 20,
+      $current_url: `${window.location.origin}/workflows`,
+      $pathname: '/workflows',
+    });
+    expect(onTTFB).toHaveBeenCalledTimes(1);
   });
 
   it('ignores invalid samples and continues reporting after a collector failure', () => {
@@ -152,6 +235,7 @@ describe('console Long Task reporting', () => {
       blocking_time_ms: 90,
       start_time_ms: 320,
       $current_url: `${window.location.origin}/scopes/s-alpha/workflows`,
+      $pathname: '/scopes/s-alpha/workflows',
     });
   });
 

@@ -13,8 +13,10 @@ export type ConsoleEventProperties = {
     blocking_time_ms: number;
     /** Task start relative to this document's performance time origin. */
     start_time_ms: number;
-    /** Sanitized current page URL when the observer delivers the task. */
+    /** Document URL before observation starts; current SPA URL for later tasks. */
     $current_url: string;
+    /** Path from the same sanitized URL, including for buffered startup tasks. */
+    $pathname: string;
   };
   api_request: {
     /** Request origin and path, without credentials, query or fragment. */

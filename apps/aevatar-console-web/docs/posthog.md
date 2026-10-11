@@ -33,9 +33,10 @@ requested LCP, INP and CLS, and uses a custom insight for TTFB.
 Long Tasks are captured separately with the browser's native
 `PerformanceObserver` after analytics initializes. A single document-wide
 observer continues across SPA navigation and reports browser `longtask` entries
-(tasks lasting approximately 50 ms or longer). It does not backfill entries from
-before initialization. Support depends on the browser and is commonly available
-in Chromium. Browsers without `longtask` support skip this collector; missing
+(tasks lasting approximately 50 ms or longer). Buffered collection also recovers
+startup entries retained by the browser before initialization. Support depends
+on the browser and is commonly available in Chromium. Browsers without
+`longtask` support skip this collector; missing
 events on those browsers do not establish that the page had no blocking.
 Observer and collector failures cannot disable TTFB or other analytics.
 
@@ -57,7 +58,7 @@ both when sharing a PostHog project with another application.
 
 | Event | Properties | Producer |
 | --- | --- | --- |
-| `long_task` | `duration_ms`, `blocking_time_ms`, `start_time_ms`, `$current_url` | Native Long Tasks observer. One event per reported task, with the sanitized current page URL at delivery; no raw entries, iframe attribution or content are sent. |
+| `long_task` | `duration_ms`, `blocking_time_ms`, `start_time_ms`, `$current_url`, `$pathname` | Native Long Tasks observer, including buffered startup entries. One event per reported task, with matching sanitized URL/path; no raw entries, iframe attribution or content are sent. |
 | `api_request` | `url`, `method`, `status`, `duration_ms`, `success`, `error_type` on failure | Shared `apiFetch` used by authenticated Console APIs, auth backend requests and NyxID connector requests. One event per network attempt; duration ends when response headers arrive or fetch rejects. |
 | `page_ttfb` | `ttfbMs`, `navigationType`, `metricId`, `$current_url` | `web-vitals` reports the document's Navigation Timing after load. Time is in **milliseconds**; `$current_url` is the sanitized document navigation URL, preserved across later SPA navigation. No raw performance entries are sent. |
 | `workflow_started` | `workflowId`, `nodeCount` | A real `RUN_STARTED` from the active workflow editor invocation. A queued observation can also be confirmed by the same run's Activity record. |
@@ -90,9 +91,13 @@ Existing disabled-analytics and OAuth-callback suppression rules still apply.
 For `long_task`, `start_time_ms` is relative to the document's performance time
 origin, and `blocking_time_ms` is the part of that task beyond 50 ms. Summing it
 does not produce Lighthouse Total Blocking Time (TBT), which has a specific
-measurement window. The current page URL is captured when the observer callback
-runs; a task spanning an SPA route change can be attributed to the destination
-page. Long Tasks indicate main-thread blocking, not API duration or page/editor
+measurement window. Tasks that started before observer registration use the
+document's Navigation Timing URL, falling back to the URL at initialization when
+Navigation Timing is unavailable. This is document-level startup attribution,
+not a reconstruction of any earlier SPA routes. Later tasks use the current page
+URL when the observer callback runs; a task spanning an SPA route change can be
+attributed to the destination page. `$pathname` always matches the chosen URL.
+Long Tasks indicate main-thread blocking, not API duration or page/editor
 readiness, and the browser does not identify the responsible JavaScript function
 through this event.
 
