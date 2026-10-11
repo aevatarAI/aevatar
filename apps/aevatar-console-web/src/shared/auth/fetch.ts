@@ -1,3 +1,4 @@
+import { apiFetch } from '@/shared/api/http/fetch';
 import { ensureActiveAuthSession } from './client';
 
 export async function authFetch(
@@ -6,7 +7,7 @@ export async function authFetch(
 ): Promise<Response> {
   const accessToken = (await ensureActiveAuthSession())?.tokens.accessToken;
   if (!accessToken) {
-    return init === undefined ? fetch(input) : fetch(input, init);
+    return apiFetch(input, init);
   }
 
   const headers = new Headers(init?.headers);
@@ -15,7 +16,7 @@ export async function authFetch(
     headers.set('Authorization', `Bearer ${accessToken}`);
   }
 
-  return fetch(input, {
+  return apiFetch(input, {
     ...init,
     headers,
   });

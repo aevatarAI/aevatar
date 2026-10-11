@@ -1,3 +1,4 @@
+import { apiFetch } from '@/shared/api/http/fetch';
 import { ensureActiveAuthSession } from "@/shared/auth/client";
 import { getNyxIDRuntimeConfig } from "@/shared/auth/config";
 
@@ -220,7 +221,7 @@ async function nyxIdRequest(
     Authorization: `Bearer ${accessToken}`,
   };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
-  const response = await fetch(`${config.baseUrl}${path}`, {
+  const response = await apiFetch(`${config.baseUrl}${path}`, {
     headers,
     ...(options.method ? { method: options.method } : {}),
     ...(options.body !== undefined

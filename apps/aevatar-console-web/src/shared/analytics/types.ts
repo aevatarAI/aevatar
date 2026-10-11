@@ -1,6 +1,24 @@
 import type { TTFBMetric } from 'web-vitals';
 
+export type ApiRequestErrorType =
+  | 'http_error'
+  | 'network_error'
+  | 'aborted'
+  | 'timeout';
+
 export type ConsoleEventProperties = {
+  api_request: {
+    /** Request origin and path, without credentials, query or fragment. */
+    url: string;
+    method: string;
+    /** Zero when fetch rejects before a response is available. */
+    status: number;
+    /** Dispatch to response headers or fetch rejection, in milliseconds. */
+    duration_ms: number;
+  } & (
+    | { success: true; error_type?: never }
+    | { success: false; error_type: ApiRequestErrorType }
+  );
   page_ttfb: {
     /** Time from document navigation to the first byte, in milliseconds. */
     ttfbMs: number;

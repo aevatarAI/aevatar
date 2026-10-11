@@ -48,6 +48,7 @@ both when sharing a PostHog project with another application.
 
 | Event | Properties | Producer |
 | --- | --- | --- |
+| `api_request` | `url`, `method`, `status`, `duration_ms`, `success`, `error_type` on failure | Shared `apiFetch` used by authenticated Console APIs, auth backend requests and NyxID connector requests. One event per network attempt; duration ends when response headers arrive or fetch rejects. |
 | `page_ttfb` | `ttfbMs`, `navigationType`, `metricId`, `$current_url` | `web-vitals` reports the document's Navigation Timing after load. Time is in **milliseconds**; `$current_url` is the sanitized document navigation URL, preserved across later SPA navigation. No raw performance entries are sent. |
 | `workflow_started` | `workflowId`, `nodeCount` | A real `RUN_STARTED` from the active workflow editor invocation. A queued observation can also be confirmed by the same run's Activity record. |
 | `workflow_finished` | `workflowId`, `status: success \| failed`, `duration` | Terminal SSE evidence, or an authoritative terminal Activity record for that exact run. `duration` is elapsed **milliseconds** from server timestamps; completion is deduplicated. |
@@ -60,7 +61,23 @@ identities must never be substituted. `nodeCount` counts the workflow nodes for
 the invocation, not members in a team. Duration is a distribution of observed
 finished workflows; P50 and P95 are percentiles, not an arithmetic mean.
 
-These metrics cover Console editor invocations observed by the browser. They do
+`api_request` reports the request origin and path without URL credentials, query
+parameters or fragments. Methods are uppercase; `success` follows the HTTP
+response's `ok` flag (2xx). HTTP failures retain the real status and use
+`error_type = http_error`. Fetch rejections use `status = 0` and
+`network_error`, `aborted` (AbortError), or `timeout` (TimeoutError). Error
+messages, headers and request/response bodies are not captured. Browser network
+errors do not distinguish CORS failures from connection failures.
+
+Timing starts after any session restoration and ends at response headers, so it
+does not include body download, JSON decoding, editor readiness or SSE stream
+lifetime. A token refresh is a separate request. Later body/stream failures are
+not reclassified as failed HTTP requests. Requests keep their original response,
+body, signal, authentication and rejection behavior even if monitoring fails.
+The wrapper does not replace global fetch or instrument PostHog's own traffic.
+Existing disabled-analytics and OAuth-callback suppression rules still apply.
+
+Workflow metrics cover Console editor invocations observed by the browser. They do
 not cover schedules, channels, other clients, or a completion after the browser
 closed. A failed start before `RUN_STARTED` is not a started workflow. Browser
 measurements are therefore product/experience metrics, not a backend-wide SLO.
@@ -77,6 +94,8 @@ to a dashboard. Filter every series to `app = aevatar-console` and
 
 | Insight | Configuration |
 | --- | --- |
+| API latency P50 / P95 | Event: `api_request`. Aggregate numeric `duration_ms` at the 50th and 95th percentiles; break down by `url` and filter by `method` as needed. |
+| API failure % | Series A: count `api_request` with `success = false`. Series B: all `api_request`. Formula: `100 * A / B`. Inspect failed-event counts separately by `error_type` to distinguish HTTP, network and cancellation failures. |
 | Workflow success % | Series A: count `workflow_finished`, filtered to `status = success`. Series B: count `workflow_started`. Formula: `100 * A / B`. |
 | Workflow duration P50 / P95 | Event: `workflow_finished`. Aggregate the numeric `duration` property at the 50th and 95th percentiles; show milliseconds. |
 | SSE disconnect % | Series A: count `sse_disconnect`. Series B: count `workflow_started`. Formula: `100 * A / B`. |

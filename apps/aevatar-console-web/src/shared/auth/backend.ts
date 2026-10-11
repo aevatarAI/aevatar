@@ -2,6 +2,7 @@ import {
   readResponseErrorDetails,
   type ResponseErrorDetails,
 } from "@/shared/api/http/error";
+import { apiFetch } from '@/shared/api/http/fetch';
 import type { NyxIDAuthSession, NyxIDTokenSet, NyxIDUserInfo } from "./session";
 
 export type NyxIDLoginFinalizationRequest = {
@@ -244,7 +245,7 @@ async function requestBackendJson<T>(
   init?: RequestInit,
   createError?: (details: ResponseErrorDetails) => Error,
 ): Promise<T> {
-  const response = await fetch(input, init);
+  const response = await apiFetch(input, init);
   if (!response.ok) {
     const details = await readResponseErrorDetails(response);
     throw createError?.(details) ?? new Error(details.message);
