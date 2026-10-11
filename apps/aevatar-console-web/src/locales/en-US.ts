@@ -8,6 +8,8 @@ const enUSMessages = {
   'workflowCanvasBenchmark.title': 'Workflow canvas benchmark',
   ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
+  'shared.workflowPanel.loading': 'Loading panel…',
+  'shared.workflowPanel.loadFailed': "This panel couldn't be loaded",
   'console.home.unavailable': 'Could not open your workspace',
   'console.home.retry': 'Try again',
   'common.language.english': 'English',

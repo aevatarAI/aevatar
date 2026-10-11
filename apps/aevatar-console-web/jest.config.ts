@@ -62,6 +62,11 @@ function createProjectConfig(target: 'browser' | 'node') {
     ...baseConfig
   } = createConfig({
     target,
+    jsTransformerOpts: {
+      // Jest runs CommonJS in a VM. Preserve deferred loading through require
+      // instead of emitting native import(), which needs VM module support.
+      supported: { 'dynamic-import': false },
+    },
   });
 
   return {
@@ -80,6 +85,8 @@ const browserProjectConfig = createProjectConfig('browser');
 const nodeProjectConfig = createProjectConfig('node');
 
 const nodeTestFiles = [
+  '<rootDir>/tests/jestDynamicImport.test.ts',
+  '<rootDir>/src/routesConfig.test.ts',
   '<rootDir>/src/pages/MissionControl/runtimeAdapter.test.ts',
   '<rootDir>/src/pages/actors/actorPresentation.test.ts',
   '<rootDir>/src/pages/chat/chatTaskPlan.test.ts',
@@ -89,6 +96,7 @@ const nodeTestFiles = [
   '<rootDir>/src/pages/scopes/components/scopeQuery.test.ts',
   '<rootDir>/src/pages/services/components/serviceQuery.test.ts',
   '<rootDir>/src/pages/workflows/workflowPresentation.test.ts',
+  '<rootDir>/src/pages/workflow-activity-vnext/routes/routeParameters.test.ts',
   '<rootDir>/src/shared/agui/customEventData.test.ts',
   '<rootDir>/src/shared/agui/sseFrameNormalizer.test.ts',
   '<rootDir>/src/shared/config/proxyConfig.test.ts',

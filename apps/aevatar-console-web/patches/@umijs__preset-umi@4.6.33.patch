@@ -1,0 +1,13 @@
+diff --git a/dist/features/routePreloadOnLoad/routePreloadOnLoad.js b/dist/features/routePreloadOnLoad/routePreloadOnLoad.js
+index 2f78d5354fc09a2c97ad58d51904d8c83d15770e..b5b5cf127703a5b8f400e0f781e91f7599ba5f63 100644
+--- a/dist/features/routePreloadOnLoad/routePreloadOnLoad.js
++++ b/dist/features/routePreloadOnLoad/routePreloadOnLoad.js
+@@ -217,7 +217,7 @@ var routePreloadOnLoad_default = (api) => {
+           f: Object.entries(routeChunkFiles).sort((a, b) => a[1].index - b[1].index).map(([k, { id }]) => [k, id]),
+           // sort similar to react-router@6
+           r: (0, import_utils.lodash)(routeFilesMap).toPairs().sort(
+-            ([a], [b]) => computeRouteScore(a) - computeRouteScore(b)
++            ([a], [b]) => computeRouteScore(b) - computeRouteScore(a)
+           ).fromPairs().value()
+         };
+       }

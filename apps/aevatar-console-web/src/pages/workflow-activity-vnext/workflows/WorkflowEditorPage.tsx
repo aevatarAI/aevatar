@@ -1,6 +1,7 @@
 import {
   ArrowLeftOutlined,
   CalendarOutlined,
+  CloseOutlined,
   CodeOutlined,
   NodeIndexOutlined,
   PlayCircleOutlined,
@@ -10,7 +11,7 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Input, Modal, Segmented, Space } from 'antd';
+import { Alert, Button, Drawer, Input, Modal, Segmented, Space } from 'antd';
 import React from 'react';
 import WorkflowStudioEditorSurface from '@/pages/team-member-workflow-studio/components/WorkflowStudioEditorSurface';
 import { scopesApi } from '@/shared/api/scopesApi';
@@ -31,11 +32,13 @@ import {
 } from '@/shared/workflows/activityExecution';
 import { adaptExecutionDetailToLogs } from '@/shared/workflows/executionDetail';
 import { useWorkflowPanelResize } from '@/shared/workflows/useWorkflowPanelResize';
-import WorkflowExecutionLogsPanel, {
-  type WorkflowExecutionLogsModel,
-} from '@/shared/workflows/WorkflowExecutionLogsPanel';
+import {
+  DeferredWorkflowPanel,
+  WorkflowPanelLoadState,
+} from '@/shared/workflows/DeferredWorkflowPanel';
+import type { WorkflowExecutionLogsModel } from '@/shared/workflows/WorkflowExecutionLogsPanel';
 import WorkflowPanelResizeHandle from '@/shared/workflows/WorkflowPanelResizeHandle';
-import WorkflowRunInputPanel from '@/shared/workflows/WorkflowRunInputPanel';
+import WorkflowSidePanel from '@/shared/workflows/WorkflowSidePanel';
 import { useConsoleLocation } from '../hooks/useConsoleLocation';
 import {
   useWorkflowEditor,
@@ -51,10 +54,13 @@ import {
 } from '../navigation';
 import TechnicalDetails from '../TechnicalDetails';
 import WorkflowActivityVNextShell from '../WorkflowActivityVNextShell';
-import WorkflowNodeInspector, {
-  type WorkflowNodeInspectorHandle,
-} from './WorkflowNodeInspector';
-import WorkflowScheduleSurface from './WorkflowScheduleSurface';
+import type { WorkflowNodeInspectorHandle } from './WorkflowNodeInspector';
+
+const loadExecutionLogs = () =>
+  import('@/shared/workflows/WorkflowExecutionLogsPanel');
+const loadRunInput = () => import('@/shared/workflows/WorkflowRunInputPanel');
+const loadNodeInspector = () => import('./WorkflowNodeInspector');
+const loadSchedules = () => import('./WorkflowScheduleSurface');
 
 const PUBLISHED_RUN_CONSOLE_ID = 'workflow-published-run-console';
 
@@ -168,6 +174,10 @@ const WorkflowEditorPage: React.FC<{
     React.useRef<React.ElementRef<typeof Button>>(null);
   const expandRunConsoleButtonRef =
     React.useRef<React.ElementRef<typeof Button>>(null);
+  const scheduleButtonRef = React.useRef<React.ElementRef<typeof Button>>(null);
+  const pendingScheduleFocusRef = React.useRef<{
+    readonly button: React.ElementRef<typeof Button> | null;
+  } | null>(null);
   const pendingRunConsoleFocusRef = React.useRef<'collapse' | 'expand' | null>(
     null,
   );
@@ -204,25 +214,66 @@ const WorkflowEditorPage: React.FC<{
       400,
       'INVALID_USER_WORKFLOW_REQUEST',
     );
-  React.useEffect(() => {
+  const focusPendingRunConsoleButton = React.useCallback(() => {
     const pendingFocus = pendingRunConsoleFocusRef.current;
     if (!pendingFocus) return;
-    pendingRunConsoleFocusRef.current = null;
-    let cancelled = false;
+    const button =
+      pendingFocus === 'collapse'
+        ? collapseRunConsoleButtonRef.current
+        : expandRunConsoleButtonRef.current;
+    if (!button) return;
     // Focusing can close an Ant Design popup via flushSync. Wait until this
-    // React commit finishes before dispatching the resulting focus events.
+    // React commit finishes, including the first lazy panel mount.
     queueMicrotask(() => {
-      if (cancelled) return;
-      const button =
+      const currentButton =
         pendingFocus === 'collapse'
           ? collapseRunConsoleButtonRef.current
           : expandRunConsoleButtonRef.current;
-      button?.focus();
+      if (
+        pendingRunConsoleFocusRef.current !== pendingFocus ||
+        currentButton !== button
+      )
+        return;
+      pendingRunConsoleFocusRef.current = null;
+      button.focus();
     });
-    return () => {
-      cancelled = true;
-    };
-  }, [runConsoleExpanded]);
+  }, []);
+  const attachCollapseRunConsoleButton = React.useCallback(
+    (button: React.ElementRef<typeof Button> | null) => {
+      if (
+        !button &&
+        collapseRunConsoleButtonRef.current === document.activeElement &&
+        !pendingRunConsoleFocusRef.current
+      ) {
+        // A focused loading/error control can be replaced by the loaded panel.
+        // Carry focus across that replacement without overriding a collapse.
+        pendingRunConsoleFocusRef.current = 'collapse';
+      }
+      collapseRunConsoleButtonRef.current = button;
+      focusPendingRunConsoleButton();
+    },
+    [focusPendingRunConsoleButton],
+  );
+  React.useEffect(() => {
+    focusPendingRunConsoleButton();
+  }, [focusPendingRunConsoleButton, runConsoleExpanded]);
+  const closeScheduleFallback = React.useCallback(() => {
+    pendingScheduleFocusRef.current = { button: scheduleButtonRef.current };
+    setSchedulePanelOpen(false);
+  }, []);
+  React.useEffect(() => {
+    const pendingFocus = pendingScheduleFocusRef.current;
+    if (schedulePanelOpen || !pendingFocus) return;
+    // Closing an inactive fallback unmounts its Drawer immediately, before the
+    // Drawer's normal close animation can restore focus to its trigger.
+    queueMicrotask(() => {
+      if (pendingScheduleFocusRef.current !== pendingFocus) return;
+      pendingScheduleFocusRef.current = null;
+      if (scheduleButtonRef.current === pendingFocus.button) {
+        pendingFocus.button?.focus();
+      }
+    });
+  }, [schedulePanelOpen]);
 
   React.useEffect(() => {
     let toastIntent: 'error' | 'success' | null = null;
@@ -992,26 +1043,68 @@ const WorkflowEditorPage: React.FC<{
               orientation="horizontal"
               {...executionPanelHandleProps}
             />
-            <WorkflowExecutionLogsPanel
-              activeLogIndex={activeRunLogIndex}
-              collapseButtonRef={collapseRunConsoleButtonRef}
-              collapseControlsId={PUBLISHED_RUN_CONSOLE_ID}
-              error={runConsoleError}
-              execution={runExecution}
-              height={executionPanelHeight}
-              id={PUBLISHED_RUN_CONSOLE_ID}
-              onClear={() => {
-                setRunConsoleVisible(false);
-                setRunConsoleExpanded(false);
-                setActiveRunLogIndex(null);
-              }}
-              onCollapse={() => {
-                pendingRunConsoleFocusRef.current = 'expand';
-                setRunConsoleExpanded(false);
-              }}
-              onSelectLog={setActiveRunLogIndex}
-              workflowNodes={runWorkflowNodes}
-            />
+            <DeferredWorkflowPanel
+              active
+              load={loadExecutionLogs}
+              renderFallback={(retry) => (
+                <div
+                  id={PUBLISHED_RUN_CONSOLE_ID}
+                  style={{
+                    height: executionPanelHeight,
+                    overflow: 'auto',
+                    padding: 16,
+                  }}
+                >
+                  <Button
+                    aria-controls={PUBLISHED_RUN_CONSOLE_ID}
+                    aria-expanded={true}
+                    onClick={() => {
+                      pendingRunConsoleFocusRef.current = 'expand';
+                      setRunConsoleExpanded(false);
+                    }}
+                    ref={attachCollapseRunConsoleButton}
+                  >
+                    {t(
+                      'shared.workflowExecutionLogs.collapse',
+                      'Collapse workflow logs',
+                    )}
+                  </Button>
+                  <WorkflowPanelLoadState
+                    retry={
+                      retry
+                        ? () => {
+                            pendingRunConsoleFocusRef.current = 'collapse';
+                            retry();
+                          }
+                        : undefined
+                    }
+                  />
+                </div>
+              )}
+            >
+              {(WorkflowExecutionLogsPanel) => (
+                <WorkflowExecutionLogsPanel
+                  activeLogIndex={activeRunLogIndex}
+                  collapseButtonRef={attachCollapseRunConsoleButton}
+                  collapseControlsId={PUBLISHED_RUN_CONSOLE_ID}
+                  error={runConsoleError}
+                  execution={runExecution}
+                  height={executionPanelHeight}
+                  id={PUBLISHED_RUN_CONSOLE_ID}
+                  onClear={() => {
+                    setRunConsoleVisible(false);
+                    setRunConsoleExpanded(false);
+                    setActiveRunLogIndex(null);
+                  }}
+                  onCollapse={() => {
+                    pendingRunConsoleFocusRef.current = 'expand';
+                    setRunConsoleExpanded(false);
+                  }}
+                  onSelectLog={setActiveRunLogIndex}
+                  workflowNodes={runWorkflowNodes}
+                />
+              )}
+            </DeferredWorkflowPanel>
           </div>
         ) : (
           <div className="wa-vnext__logs-dock-bar">
@@ -1102,7 +1195,11 @@ const WorkflowEditorPage: React.FC<{
             )}
             disabled={!publicationCurrent}
             icon={<CalendarOutlined />}
-            onClick={() => setSchedulePanelOpen(true)}
+            onClick={() => {
+              pendingScheduleFocusRef.current = null;
+              setSchedulePanelOpen(true);
+            }}
+            ref={scheduleButtonRef}
             title={
               publicationCurrent
                 ? undefined
@@ -1386,18 +1483,49 @@ const WorkflowEditorPage: React.FC<{
             >
               {t('workflowActivityVNext.editor.addNode', 'Add node')}
             </Button>
-            <WorkflowNodeInspector
-              disabled={editorWriteLocked}
-              error={editor.selectedStepConfigurationError}
-              ref={inspectorRef}
-              onClose={editor.selectCanvas}
-              onConfigurationChange={editor.updateSelectedStepConfiguration}
-              onConfigurationErrorChange={
-                editor.setSelectedStepConfigurationError
-              }
-              onUnappliedChangesChange={setHasUnappliedNodeChanges}
-              stepDraft={editor.selectedStepDraft}
-            />
+            <DeferredWorkflowPanel
+              active={editor.selectedStepDraft !== null}
+              load={loadNodeInspector}
+              renderFallback={(retry) => (
+                <aside className="wa-vnext__node-inspector">
+                  <header className="wa-vnext__node-inspector-header">
+                    <span>
+                      {t(
+                        'workflowActivityVNext.nodeInspector.configuration',
+                        'Settings',
+                      )}
+                    </span>
+                    <Button
+                      aria-label={t(
+                        'workflowActivityVNext.nodeInspector.closeAria',
+                        'Close node configuration',
+                      )}
+                      icon={<CloseOutlined />}
+                      onClick={editor.selectCanvas}
+                      type="text"
+                    />
+                  </header>
+                  <div className="wa-vnext__node-inspector-body">
+                    <WorkflowPanelLoadState retry={retry} />
+                  </div>
+                </aside>
+              )}
+            >
+              {(WorkflowNodeInspector) => (
+                <WorkflowNodeInspector
+                  disabled={editorWriteLocked}
+                  error={editor.selectedStepConfigurationError}
+                  ref={inspectorRef}
+                  onClose={editor.selectCanvas}
+                  onConfigurationChange={editor.updateSelectedStepConfiguration}
+                  onConfigurationErrorChange={
+                    editor.setSelectedStepConfigurationError
+                  }
+                  onUnappliedChangesChange={setHasUnappliedNodeChanges}
+                  stepDraft={editor.selectedStepDraft}
+                />
+              )}
+            </DeferredWorkflowPanel>
           </WorkflowStudioEditorSurface>
         ) : (
           <Input.TextArea
@@ -1425,51 +1553,93 @@ const WorkflowEditorPage: React.FC<{
             {...sidePanelHandleProps}
           />
         ) : null}
-        <WorkflowRunInputPanel
-          canRun={
-            !runBusy &&
-            Boolean(publishedInvocationTarget) &&
-            editor.canRun &&
-            !editorWriteLocked
-          }
-          height="100%"
-          inputDisabled={runBusy || editorWriteLocked}
-          onClose={() => setRunPanelOpen(false)}
-          onRun={() => {
-            if (!publishedInvocationTarget) return;
-            setRunConsoleVisible(true);
-            setRunConsoleExpanded(true);
-            setActiveRunLogIndex(null);
-            setRunWorkflowNodes(
-              editor.document
-                ? buildWorkflowExecutionNodeSnapshots(editor.document)
-                : [],
-            );
-            void editor.run(publishedInvocationTarget);
-          }}
-          onRunMessageChange={editor.setRunInput}
-          open={runPanelOpen && publishedInvocationTarget !== null}
-          pending={editor.runPhase === 'submitting'}
-          runMessage={editor.runInput}
-          variant={{
-            files: editor.runFiles,
-            inputError: editor.runInputError,
-            kind: 'published',
-            onFilesAdd: editor.addRunFiles,
-            onFileRemove: editor.removeRunFile,
-          }}
-          width={sidePanelWidth}
-        />
+        <DeferredWorkflowPanel
+          active={runPanelOpen && publishedInvocationTarget !== null}
+          load={loadRunInput}
+          renderFallback={(retry) => (
+            <WorkflowSidePanel
+              ariaLabel={t('workflowActivityVNext.common.run', 'Run')}
+              height="100%"
+              onClose={() => setRunPanelOpen(false)}
+              title={t('workflowActivityVNext.common.run', 'Run')}
+              width={sidePanelWidth}
+            >
+              <WorkflowPanelLoadState retry={retry} />
+            </WorkflowSidePanel>
+          )}
+        >
+          {(WorkflowRunInputPanel) => (
+            <WorkflowRunInputPanel
+              canRun={
+                !runBusy &&
+                Boolean(publishedInvocationTarget) &&
+                editor.canRun &&
+                !editorWriteLocked
+              }
+              height="100%"
+              inputDisabled={runBusy || editorWriteLocked}
+              onClose={() => setRunPanelOpen(false)}
+              onRun={() => {
+                if (!publishedInvocationTarget) return;
+                setRunConsoleVisible(true);
+                setRunConsoleExpanded(true);
+                setActiveRunLogIndex(null);
+                setRunWorkflowNodes(
+                  editor.document
+                    ? buildWorkflowExecutionNodeSnapshots(editor.document)
+                    : [],
+                );
+                void editor.run(publishedInvocationTarget);
+              }}
+              onRunMessageChange={editor.setRunInput}
+              open={runPanelOpen && publishedInvocationTarget !== null}
+              pending={editor.runPhase === 'submitting'}
+              runMessage={editor.runInput}
+              variant={{
+                files: editor.runFiles,
+                inputError: editor.runInputError,
+                kind: 'published',
+                onFilesAdd: editor.addRunFiles,
+                onFileRemove: editor.removeRunFile,
+              }}
+              width={sidePanelWidth}
+            />
+          )}
+        </DeferredWorkflowPanel>
       </div>
-      <WorkflowScheduleSurface
-        available={publicationCurrent}
-        mode="panel"
-        onClose={() => setSchedulePanelOpen(false)}
-        open={schedulePanelOpen}
-        scopeId={activeScopeId}
-        workflowId={activeWorkflowId}
-        workflowName={editor.workflowTitle}
-      />
+      <DeferredWorkflowPanel
+        active={schedulePanelOpen}
+        load={loadSchedules}
+        renderFallback={(retry) => (
+          <Drawer
+            destroyOnHidden
+            onClose={closeScheduleFallback}
+            open={schedulePanelOpen}
+            placement="right"
+            rootClassName="wa-vnext-schedule-drawer"
+            size={520}
+            title={t(
+              'workflowActivityVNext.schedule.titleForWorkflow',
+              'Schedules for {name}',
+              { name: editor.workflowTitle },
+            )}
+          >
+            <WorkflowPanelLoadState retry={retry} />
+          </Drawer>
+        )}
+      >
+        {(WorkflowScheduleSurface) => (
+          <WorkflowScheduleSurface
+            available={publicationCurrent}
+            mode="panel"
+            onClose={() => setSchedulePanelOpen(false)}
+            open={schedulePanelOpen}
+            scopeId={activeScopeId}
+            workflowId={activeWorkflowId}
+            workflowName={editor.workflowTitle}
+          />
+        )}
+      </DeferredWorkflowPanel>
       <Modal
         aria-label={t(
           'workflowActivityVNext.editor.unsavedTitle',

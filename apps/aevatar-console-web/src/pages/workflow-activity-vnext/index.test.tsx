@@ -17,7 +17,7 @@ import {
   cleanupTestQueryClients,
   renderWithQueryClient,
 } from '../../../tests/reactQueryTestUtils';
-import WorkflowActivityVNextPage from './index';
+import WorkflowActivityVNextPage from '../../../tests/WorkflowActivityRouteTestHarness';
 import { workflowActivityVNextCss } from './styles';
 
 jest.mock('@/shared/api/workflowScheduleApi', () => ({
@@ -3810,7 +3810,7 @@ describe('Workflow Activity vNext editor', () => {
     fireEvent.click(
       within(canvas).getByRole('button', { name: 'Select step:step-next' }),
     );
-    const inspector = screen.getByRole('complementary', {
+    const inspector = await screen.findByRole('complementary', {
       name: 'Configure step-next',
     });
     const connectReverse = within(canvas).getByRole('button', {
@@ -3839,7 +3839,7 @@ describe('Workflow Activity vNext editor', () => {
       within(canvas).getByRole('button', { name: 'Select step:step-next' }),
     );
     expect(
-      screen.getByRole('complementary', { name: 'Configure step-next' }),
+      await screen.findByRole('complementary', { name: 'Configure step-next' }),
     ).toBeInTheDocument();
 
     fireEvent.click(
@@ -3890,7 +3890,7 @@ describe('Workflow Activity vNext editor', () => {
       within(canvas).getByRole('button', { name: 'Select step:step-root' }),
     );
     expect(
-      screen.getByRole('complementary', { name: 'Configure step-root' }),
+      await screen.findByRole('complementary', { name: 'Configure step-root' }),
     ).toBeInTheDocument();
 
     fireEvent.click(
@@ -3917,6 +3917,7 @@ describe('Workflow Activity vNext editor', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add node' }));
 
+    await screen.findByRole('button', { name: 'Insert LLM call node' });
     await waitFor(() =>
       expect(mockWorkflowStudioCanvasProps).toHaveBeenCalledTimes(2),
     );
@@ -5102,7 +5103,7 @@ describe('Workflow Activity vNext editor', () => {
         fireEvent.click(startRun);
       });
 
-      const logs = screen.getByRole('complementary', {
+      const logs = await screen.findByRole('complementary', {
         name: 'Workflow run console',
       });
       const alphaRow = within(logs).getByTestId(
@@ -5125,8 +5126,11 @@ describe('Workflow Activity vNext editor', () => {
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'Add node' }));
       });
+      const insertNode = await screen.findByRole('button', {
+        name: 'Insert Assign node',
+      });
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Insert Assign node' }));
+        fireEvent.click(insertNode);
       });
       expect(mockStudioApi.serializeYaml).toHaveBeenCalledWith({
         document: expect.objectContaining({

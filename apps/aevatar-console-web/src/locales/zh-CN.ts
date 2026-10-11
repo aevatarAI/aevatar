@@ -8,6 +8,8 @@ const zhCNMessages = {
   'workflowCanvasBenchmark.title': '工作流画布基准测试',
   ...workflowActivityVNextMessages,
   'common.appName': 'Aevatar',
+  'shared.workflowPanel.loading': '正在加载面板…',
+  'shared.workflowPanel.loadFailed': '暂时无法加载此面板',
   'console.home.unavailable': '暂时无法打开你的工作区',
   'console.home.retry': '重试',
   'common.language.english': 'English',

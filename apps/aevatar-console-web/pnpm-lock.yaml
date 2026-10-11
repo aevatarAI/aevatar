@@ -7,6 +7,11 @@ settings:
 overrides:
   jest-environment-jsdom@29.7.0>jsdom: 26.1.0
 
+patchedDependencies:
+  '@umijs/preset-umi@4.6.33':
+    hash: 1ee39e95ca7ef24b7d39be86accb6ef571fef684efd6e89c47acabc9124c838d
+    path: patches/@umijs__preset-umi@4.6.33.patch
+
 importers:
 
   .:
@@ -16450,7 +16455,7 @@ snapshots:
       - react-native
       - supports-color
 
-  '@umijs/preset-umi@4.6.33(@types/node@25.5.0)(@types/react@19.2.14)(lightningcss@1.22.1)(resolve-url-loader@5.0.0)(rollup@3.30.0)(sass@1.54.0)(sugarss@2.0.0)(terser@5.46.1)(type-fest@0.21.3)(typescript@5.9.3)(webpack@5.105.4)':
+  '@umijs/preset-umi@4.6.33(patch_hash=1ee39e95ca7ef24b7d39be86accb6ef571fef684efd6e89c47acabc9124c838d)(@types/node@25.5.0)(@types/react@19.2.14)(lightningcss@1.22.1)(resolve-url-loader@5.0.0)(rollup@3.30.0)(sass@1.54.0)(sugarss@2.0.0)(terser@5.46.1)(type-fest@0.21.3)(typescript@5.9.3)(webpack@5.105.4)':
     dependencies:
       '@iconify/utils': 2.1.1
       '@stagewise/toolbar': 0.6.2
@@ -25847,7 +25852,7 @@ snapshots:
       '@umijs/bundler-webpack': 4.6.33(type-fest@0.21.3)(typescript@5.9.3)(webpack@5.105.4)
       '@umijs/core': 4.6.33
       '@umijs/lint': 4.6.33(eslint@8.35.0)(jest@29.7.0(@types/node@25.5.0)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@types/node@25.5.0)(typescript@5.9.3)))(stylelint@13.13.1)(typescript@5.9.3)
-      '@umijs/preset-umi': 4.6.33(@types/node@25.5.0)(@types/react@19.2.14)(lightningcss@1.22.1)(resolve-url-loader@5.0.0)(rollup@3.30.0)(sass@1.54.0)(sugarss@2.0.0)(terser@5.46.1)(type-fest@0.21.3)(typescript@5.9.3)(webpack@5.105.4)
+      '@umijs/preset-umi': 4.6.33(patch_hash=1ee39e95ca7ef24b7d39be86accb6ef571fef684efd6e89c47acabc9124c838d)(@types/node@25.5.0)(@types/react@19.2.14)(lightningcss@1.22.1)(resolve-url-loader@5.0.0)(rollup@3.30.0)(sass@1.54.0)(sugarss@2.0.0)(terser@5.46.1)(type-fest@0.21.3)(typescript@5.9.3)(webpack@5.105.4)
       '@umijs/renderer-react': 4.6.33(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@umijs/server': 4.6.33
       '@umijs/test': 4.6.33(@babel/core@7.29.0)
@@ -25901,7 +25906,7 @@ snapshots:
       '@umijs/bundler-webpack': 4.6.33(type-fest@0.21.3)(typescript@5.9.3)(webpack@5.105.4)
       '@umijs/core': 4.6.33
       '@umijs/lint': 4.6.33(eslint@8.35.0)(jest@29.7.0(@types/node@25.5.0)(babel-plugin-macros@3.1.0)(ts-node@10.9.2(@types/node@25.5.0)(typescript@5.9.3)))(stylelint@14.8.2)(typescript@5.9.3)
-      '@umijs/preset-umi': 4.6.33(@types/node@25.5.0)(@types/react@19.2.14)(lightningcss@1.22.1)(resolve-url-loader@5.0.0)(rollup@3.30.0)(sass@1.54.0)(sugarss@2.0.0)(terser@5.46.1)(type-fest@0.21.3)(typescript@5.9.3)(webpack@5.105.4)
+      '@umijs/preset-umi': 4.6.33(patch_hash=1ee39e95ca7ef24b7d39be86accb6ef571fef684efd6e89c47acabc9124c838d)(@types/node@25.5.0)(@types/react@19.2.14)(lightningcss@1.22.1)(resolve-url-loader@5.0.0)(rollup@3.30.0)(sass@1.54.0)(sugarss@2.0.0)(terser@5.46.1)(type-fest@0.21.3)(typescript@5.9.3)(webpack@5.105.4)
       '@umijs/renderer-react': 4.6.33(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@umijs/server': 4.6.33
       '@umijs/test': 4.6.33(@babel/core@7.29.0)

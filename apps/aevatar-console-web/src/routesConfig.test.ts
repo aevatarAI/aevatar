@@ -115,7 +115,7 @@ describe('console routes', () => {
     for (const resource of resources) {
       const route = findRoute(routes, `/scopes/:scopeId/${resource}`);
       expect(route).toMatchObject({
-        component: './workflow-activity-vnext',
+        component: expect.any(String),
         hideInMenu: true,
       });
       // Keep the shared authenticated providers around the local shell.
@@ -135,6 +135,19 @@ describe('console routes', () => {
     ).toBeLessThan(
       findRouteIndex(routes, '/scopes/:scopeId/channels/:registrationId'),
     );
+  });
+
+  it('gives the workflow editor its own Umi entry instead of loading sibling pages', () => {
+    const routes = loadRoutes();
+    const editor = findRoute(routes, '/scopes/:scopeId/workflows/:workflowId');
+    const siblings = routes.filter(
+      (route) =>
+        route.path.startsWith('/scopes/:scopeId/') &&
+        route.path !== editor.path,
+    );
+    for (const route of siblings) {
+      expect(route).not.toHaveProperty('component', editor.component);
+    }
   });
 
   it('keeps the preserved legacy page routes out of the public router', () => {
