@@ -7,6 +7,15 @@ export type ApiRequestErrorType =
   | 'timeout';
 
 export type ConsoleEventProperties = {
+  long_task: {
+    duration_ms: number;
+    /** Portion beyond 50 ms for this task; not the Lighthouse TBT metric. */
+    blocking_time_ms: number;
+    /** Task start relative to this document's performance time origin. */
+    start_time_ms: number;
+    /** Sanitized current page URL when the observer delivers the task. */
+    $current_url: string;
+  };
   api_request: {
     /** Request origin and path, without credentials, query or fragment. */
     url: string;

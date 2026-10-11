@@ -30,6 +30,15 @@ Time to First Byte (TTFB) is collected separately through `web-vitals` and the
 FCP, LCP, INP and CLS; they do not include a TTFB card. The Console enables the
 requested LCP, INP and CLS, and uses a custom insight for TTFB.
 
+Long Tasks are captured separately with the browser's native
+`PerformanceObserver` after analytics initializes. A single document-wide
+observer continues across SPA navigation and reports browser `longtask` entries
+(tasks lasting approximately 50 ms or longer). It does not backfill entries from
+before initialization. Support depends on the browser and is commonly available
+in Chromium. Browsers without `longtask` support skip this collector; missing
+events on those browsers do not establish that the page had no blocking.
+Observer and collector failures cannot disable TTFB or other analytics.
+
 Recordings mask inputs, text and content attributes while preserving structural
 attributes and styles needed to reconstruct the layout. They block the workflow
 code editor and `.ph-no-capture` elements, and exclude console logs and
@@ -48,6 +57,7 @@ both when sharing a PostHog project with another application.
 
 | Event | Properties | Producer |
 | --- | --- | --- |
+| `long_task` | `duration_ms`, `blocking_time_ms`, `start_time_ms`, `$current_url` | Native Long Tasks observer. One event per reported task, with the sanitized current page URL at delivery; no raw entries, iframe attribution or content are sent. |
 | `api_request` | `url`, `method`, `status`, `duration_ms`, `success`, `error_type` on failure | Shared `apiFetch` used by authenticated Console APIs, auth backend requests and NyxID connector requests. One event per network attempt; duration ends when response headers arrive or fetch rejects. |
 | `page_ttfb` | `ttfbMs`, `navigationType`, `metricId`, `$current_url` | `web-vitals` reports the document's Navigation Timing after load. Time is in **milliseconds**; `$current_url` is the sanitized document navigation URL, preserved across later SPA navigation. No raw performance entries are sent. |
 | `workflow_started` | `workflowId`, `nodeCount` | A real `RUN_STARTED` from the active workflow editor invocation. A queued observation can also be confirmed by the same run's Activity record. |
@@ -77,6 +87,15 @@ body, signal, authentication and rejection behavior even if monitoring fails.
 The wrapper does not replace global fetch or instrument PostHog's own traffic.
 Existing disabled-analytics and OAuth-callback suppression rules still apply.
 
+For `long_task`, `start_time_ms` is relative to the document's performance time
+origin, and `blocking_time_ms` is the part of that task beyond 50 ms. Summing it
+does not produce Lighthouse Total Blocking Time (TBT), which has a specific
+measurement window. The current page URL is captured when the observer callback
+runs; a task spanning an SPA route change can be attributed to the destination
+page. Long Tasks indicate main-thread blocking, not API duration or page/editor
+readiness, and the browser does not identify the responsible JavaScript function
+through this event.
+
 Workflow metrics cover Console editor invocations observed by the browser. They do
 not cover schedules, channels, other clients, or a completion after the browser
 closed. A failed start before `RUN_STARTED` is not a started workflow. Browser
@@ -94,6 +113,8 @@ to a dashboard. Filter every series to `app = aevatar-console` and
 
 | Insight | Configuration |
 | --- | --- |
+| Long Task count / duration P95 | Event: `long_task`. Count events or aggregate numeric `duration_ms` at the 95th percentile; break down by `$current_url` and browser. Use a custom Product Analytics insight, not the native Web Vitals cards. |
+| Long Task blocking time | Event: `long_task`. Sum numeric `blocking_time_ms` for a selected page and time window; compare alongside page views because total blocking grows with traffic. This is not Lighthouse TBT. |
 | API latency P50 / P95 | Event: `api_request`. Aggregate numeric `duration_ms` at the 50th and 95th percentiles; break down by `url` and filter by `method` as needed. |
 | API failure % | Series A: count `api_request` with `success = false`. Series B: all `api_request`. Formula: `100 * A / B`. Inspect failed-event counts separately by `error_type` to distinguish HTTP, network and cancellation failures. |
 | Workflow success % | Series A: count `workflow_finished`, filtered to `status = success`. Series B: count `workflow_started`. Formula: `100 * A / B`. |

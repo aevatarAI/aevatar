@@ -108,6 +108,45 @@ function maskReplayAttribute(name: string, value: string): string {
   return '*'.repeat(value.length);
 }
 
+function observeLongTasks(): void {
+  try {
+    if (
+      typeof PerformanceObserver === 'undefined' ||
+      !PerformanceObserver.supportedEntryTypes?.includes('longtask')
+    ) {
+      return;
+    }
+    const observer = new PerformanceObserver((list) => {
+      try {
+        const pageUrl = withoutUrlParameters(window.location.href);
+        for (const entry of list.getEntries()) {
+          if (
+            entry.entryType !== 'longtask' ||
+            !Number.isFinite(entry.duration) ||
+            entry.duration < 50 ||
+            !Number.isFinite(entry.startTime) ||
+            entry.startTime < 0
+          ) {
+            continue;
+          }
+          captureConsoleEvent('long_task', {
+            duration_ms: entry.duration,
+            blocking_time_ms: entry.duration - 50,
+            start_time_ms: entry.startTime,
+            $current_url: pageUrl,
+          });
+        }
+      } catch {
+        // Browser observer delivery must not interfere with the application.
+      }
+    });
+    // Start at initialization; buffered tasks may belong to an earlier route.
+    observer.observe({ type: 'longtask', buffered: false });
+  } catch {
+    // Unsupported or failing observers must not disable other monitoring.
+  }
+}
+
 export function initializeConsoleAnalytics(): void {
   if (initialized || typeof window === 'undefined') return;
   const key = process.env.AEVATAR_POSTHOG_KEY?.trim();
@@ -154,6 +193,7 @@ export function initializeConsoleAnalytics(): void {
     };
     posthog.init(key, config);
     initialized = true;
+    observeLongTasks();
     const documentUrl = window.location.href;
     onTTFB((metric) => {
       captureConsoleEvent('page_ttfb', {
