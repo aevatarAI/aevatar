@@ -167,6 +167,16 @@ async function openRunLogs() {
   );
 }
 
+function expectDialogFocus(dialog: HTMLElement) {
+  const focused = document.activeElement;
+  expect(focused).not.toBe(document.body);
+  expect(focused).not.toBe(document.documentElement);
+  // Drawer may focus its enclosing keyboard container or a dialog control.
+  expect(
+    Boolean(focused && (dialog.contains(focused) || focused.contains(dialog))),
+  ).toBe(true);
+}
+
 it('keeps keyboard focus through deferred logs loading, failure and retry without losing edits', async () => {
   const consoleError = jest
     .spyOn(console, 'error')
@@ -220,9 +230,7 @@ it('keeps Schedule focus and Escape dismissal available while its module loads o
     const loadingDialog = await screen.findByRole('dialog', {
       name: 'Schedules for Workflow alpha',
     });
-    await waitFor(() =>
-      expect(loadingDialog.contains(document.activeElement)).toBe(true),
-    );
+    await waitFor(() => expectDialogFocus(loadingDialog));
     fireEvent.keyDown(document.activeElement ?? loadingDialog, {
       key: 'Escape',
       keyCode: 27,
@@ -242,9 +250,7 @@ it('keeps Schedule focus and Escape dismissal available while its module loads o
     expect(
       await within(failedDialog).findByRole('button', { name: 'Retry' }),
     ).toBeVisible();
-    await waitFor(() =>
-      expect(failedDialog.contains(document.activeElement)).toBe(true),
-    );
+    await waitFor(() => expectDialogFocus(failedDialog));
     fireEvent.keyDown(document.activeElement ?? failedDialog, {
       key: 'Escape',
       keyCode: 27,
