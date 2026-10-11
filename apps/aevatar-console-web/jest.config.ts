@@ -62,6 +62,11 @@ function createProjectConfig(target: 'browser' | 'node') {
     ...baseConfig
   } = createConfig({
     target,
+    jsTransformerOpts: {
+      // Jest runs CommonJS in a VM. Preserve deferred loading through require
+      // instead of emitting native import(), which needs VM module support.
+      supported: { 'dynamic-import': false },
+    },
   });
 
   return {
@@ -80,6 +85,7 @@ const browserProjectConfig = createProjectConfig('browser');
 const nodeProjectConfig = createProjectConfig('node');
 
 const nodeTestFiles = [
+  '<rootDir>/tests/jestDynamicImport.test.ts',
   '<rootDir>/src/routesConfig.test.ts',
   '<rootDir>/src/pages/MissionControl/runtimeAdapter.test.ts',
   '<rootDir>/src/pages/actors/actorPresentation.test.ts',

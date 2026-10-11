@@ -1,3 +1,4 @@
+import React from 'react';
 import RunDetailPage from '../activity/RunDetailPage';
 import { useWorkflowActivityRoute } from './useWorkflowActivityRoute';
 

@@ -111,7 +111,14 @@ The focused route tests protect canonical route selection, resource identity
 decoding and Channel query/remount behavior. The deferred-panel unit tests
 protect first-use loading, retained inputs and failure/retry isolation. Existing
 route integration tests load the real route adapters through a test-only
-harness instead of preserving the removed production dispatcher.
+harness instead of preserving the removed production dispatcher. Route entries
+retain the React runtime import required by Jest's JSX transform. Umi's existing
+`jsTransformerOpts.supported` option lowers dynamic imports to deferred CommonJS
+loads for Jest only; the production bundler retains real chunk boundaries.
+The transform regression executes both configured Jest projects' emitted code
+and verifies deferred loading and asynchronous rejection without VM ESM flags.
+Template recovery tests also await actual modal visibility and clear their
+queued API responses between cases to avoid cascading failures.
 
 ## Measured build comparison
 
@@ -135,7 +142,7 @@ The JavaScript file count rises from 13 to 18 as Webpack shares code among
 independent routes. This can add request overhead on some connections, so the
 byte reduction must not be equated with an identical percentage timing gain.
 After the loading-state accessibility review, the final verification build
-contains 3,610,834 raw JS bytes and 929,639 estimated gzip bytes (18 files).
+contains 3,610,858 raw JS bytes and 929,677 estimated gzip bytes (18 files).
 The earlier same-environment comparison above remains the performance baseline;
 these small follow-up changes retain the approximately 19.3% gzip reduction.
 The global entry remains the largest payload. CSS changes only from 67,118 to
@@ -149,7 +156,8 @@ pnpm --dir apps/aevatar-console-web install --frozen-lockfile
 pnpm --dir apps/aevatar-console-web exec jest --runInBand --runTestsByPath \
   src/routesConfig.test.ts \
   src/pages/workflow-activity-vnext/routes/routeParameters.test.ts \
-  src/shared/workflows/DeferredWorkflowPanel.test.tsx
+  src/shared/workflows/DeferredWorkflowPanel.test.tsx \
+  tests/jestDynamicImport.test.ts
 pnpm --dir apps/aevatar-console-web exec jest --runInBand --runTestsByPath \
   src/app.layout.test.ts src/locales/catalog.test.ts \
   --testNamePattern 'renders workflow route .* without the global console chrome|keeps the English and Chinese message catalogs structurally aligned|keeps the English message catalog free of Chinese copy|keeps ICU placeholder names aligned across locales|keeps every named route backed by menu locale entries'
@@ -163,9 +171,9 @@ python3 apps/aevatar-console-web/docs/design-baselines/workflow-activity-vnext/v
 git diff --check
 ```
 
-The local Jest preflight selected five exact test files. All 20 selected cases
+The local Jest preflight selected six exact test files. All 21 selected cases
 passed: 11 route/parser/deferred-panel cases, five layout configuration cases
-and four locale contract cases. Ten unrelated cases in the latter two files
+four locale contract cases and one deferred-import transform case. Ten unrelated cases in the latter two files
 were excluded by the explicit name filter. Dependency-based discovery was not
 used because app, router and locale entries have broad fan-out. Changed-file
 Biome validation and the required static/build guards are recorded in the PR.
@@ -188,6 +196,9 @@ New verification scenarios are deliberately limited to these distinct risks:
 | Channel edit/detail identity | Registration identity or remount behavior changing during route extraction |
 | Deferred panel activation and close/reopen | Eager import or loss of unapplied local configuration |
 | Deferred panel failure/retry | Recovery reloading the editor and losing the unsaved document |
+| Jest deferred-import execution | Native ESM import escaping the CommonJS test runtime or losing asynchronous rejection |
+| Logs loading/failure/retry focus | Keyboard focus or unsaved edits lost when a loading control is replaced |
+| Schedule loading/failure dismissal | Missing Escape support or focus restoration while a chunk is unavailable |
 | Generated preload: workflow detail | Catch-all shadowing the parameterized editor |
 | Generated preload: new workflow | Dynamic editor shadowing the static creation page |
 | Generated preload: templates | Broader resource patterns shadowing the deeper template route |

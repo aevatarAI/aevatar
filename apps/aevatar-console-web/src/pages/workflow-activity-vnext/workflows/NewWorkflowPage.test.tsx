@@ -182,6 +182,9 @@ const acceptedTemplateReceipt = {
 describe('New workflow save-target recovery', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Clear queued responses even when an earlier template case exits before retry.
+    mockRuntimeCatalogApi.getWorkflowTemplate.mockReset();
+    mockStudioApi.instantiateWorkflowTemplate.mockReset();
     mockIsStudioApiErrorCode.mockReturnValue(false);
     mockUseDraftMaterialization.mockReturnValue({
       error: null,
@@ -923,9 +926,9 @@ describe('New workflow save-target recovery', () => {
       }),
     );
 
-    expect(
-      await within(dialog).findByText('Template is out of date'),
-    ).toBeVisible();
+    await waitFor(() =>
+      expect(within(dialog).getByText('Template is out of date')).toBeVisible(),
+    );
     expect(
       within(dialog).getByRole('button', { name: 'Use this template' }),
     ).toBeDisabled();
@@ -1015,9 +1018,9 @@ describe('New workflow save-target recovery', () => {
     });
     await waitFor(() => expect(useThisTemplate).toBeEnabled());
     fireEvent.click(useThisTemplate);
-    expect(
-      await within(dialog).findByText('Template is out of date'),
-    ).toBeVisible();
+    await waitFor(() =>
+      expect(within(dialog).getByText('Template is out of date')).toBeVisible(),
+    );
 
     fireEvent.click(
       within(dialog).getByRole('button', { name: 'Refresh catalog' }),

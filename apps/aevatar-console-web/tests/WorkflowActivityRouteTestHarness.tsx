@@ -1,4 +1,4 @@
-import type React from 'react';
+import React from 'react';
 import routes from '../config/routes';
 import { useConsoleLocation } from '../src/pages/workflow-activity-vnext/hooks/useConsoleLocation';
 

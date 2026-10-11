@@ -1,3 +1,4 @@
+import React from 'react';
 import WorkflowsPage from '../workflows/WorkflowsPage';
 import { useWorkflowActivityRoute } from './useWorkflowActivityRoute';
 

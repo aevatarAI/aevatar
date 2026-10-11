@@ -1,3 +1,4 @@
+import React from 'react';
 import SettingsPage from '../settings/SettingsPage';
 import { useWorkflowActivityRoute } from './useWorkflowActivityRoute';
 

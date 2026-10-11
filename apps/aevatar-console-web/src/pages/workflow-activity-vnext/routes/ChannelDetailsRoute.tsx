@@ -1,3 +1,4 @@
+import React from 'react';
 import ChannelDetailsPage from '../channels/ChannelDetailsPage';
 import { useWorkflowActivityRoute } from './useWorkflowActivityRoute';
 
