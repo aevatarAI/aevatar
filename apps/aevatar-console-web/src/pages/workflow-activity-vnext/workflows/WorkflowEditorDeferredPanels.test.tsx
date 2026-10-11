@@ -5,7 +5,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import React from 'react';
+import * as React from 'react';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopesApi } from '@/shared/api/scopesApi';
 import { studioApi } from '@/shared/studio/api';
