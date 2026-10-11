@@ -45,7 +45,7 @@ jest.mock('@/shared/workflows/WorkflowExecutionLogsPanel', () => {
   return {
     ...actual,
     __esModule: true,
-    default: (props: React.ComponentProps<typeof actual.default>) => {
+    default: (props: import('react').ComponentProps<typeof actual.default>) => {
       if (mockLogsChunk.pending) throw mockLogsChunk.pending;
       if (mockLogsChunk.error) throw mockLogsChunk.error;
       return <actual.default {...props} />;
@@ -60,7 +60,7 @@ jest.mock('./WorkflowScheduleSurface', () => {
   return {
     ...actual,
     __esModule: true,
-    default: (props: React.ComponentProps<typeof actual.default>) => {
+    default: (props: import('react').ComponentProps<typeof actual.default>) => {
       if (mockSchedulesChunk.pending) throw mockSchedulesChunk.pending;
       if (mockSchedulesChunk.error) throw mockSchedulesChunk.error;
       return <actual.default {...props} />;
