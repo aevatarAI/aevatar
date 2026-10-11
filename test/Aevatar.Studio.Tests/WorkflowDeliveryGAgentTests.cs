@@ -111,6 +111,52 @@ public sealed class WorkflowDeliveryGAgentTests
     }
 
     [Fact]
+    public async Task Create_WhenConnectionSlotYamlPointersAreDuplicated_ShouldRejectBeforeCommit()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var command = CreateCommandWithConnectionSlot();
+        command.Package.ConnectionSlots.Add(new WorkflowDeliveryConnectionSlotDefinition
+        {
+            Key = "calendar-secondary",
+            Label = "Calendar Secondary",
+            ServiceSlug = "api-calendar-secondary",
+            Required = true,
+            YamlPointer = command.Package.ConnectionSlots[0].YamlPointer,
+        });
+        ResealPackage(command.Package);
+
+        var action = () => agent.HandleCreateAsync(command);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connection slot yaml pointers must be unique*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Create_WhenConnectionSlotYamlPointerOverlapsVariable_ShouldRejectBeforeCommit()
+    {
+        var agent = await CreateAgentAsync("delivery-alpha");
+        var command = CreateCommandWithConnectionSlot();
+        command.Package.VariableSchema.Add(new WorkflowDeliveryVariableDefinition
+        {
+            Key = "threshold",
+            Label = "Threshold",
+            Description = "Approval threshold",
+            Kind = WorkflowDeliveryVariableKind.Integer,
+            Required = true,
+            YamlPointer = "/steps/0/parameters/value",
+        });
+        command.Package.ConnectionSlots[0].YamlPointer = command.Package.VariableSchema[0].YamlPointer;
+        ResealPackage(command.Package);
+
+        var action = () => agent.HandleCreateAsync(command);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*connection slot yaml pointers must not overlap variable yaml pointers*");
+        agent.EventSourcing!.CurrentVersion.Should().Be(0);
+    }
+
+    [Fact]
     public async Task DuplicateCreate_WithDefaultExpiryClockDrift_ShouldKeepFirstExpiryWhileExplicitDriftConflicts()
     {
         var defaultedAgent = await CreateAgentAsync("delivery-defaulted");
@@ -1392,6 +1438,7 @@ public sealed class WorkflowDeliveryGAgentTests
             Label = "Lark",
             ServiceSlug = "api-lark",
             Required = true,
+            YamlPointer = "/steps/0/capability/nyxid_request/user_service_id",
         });
         command.Package.PackageHash = WorkflowDeliveryConventions.ComputePackageHash(command.Package);
         command.Package.Version = command.Package.PackageHash[..16];

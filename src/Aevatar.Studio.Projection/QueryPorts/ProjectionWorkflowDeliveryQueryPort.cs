@@ -315,7 +315,7 @@ public sealed class ProjectionWorkflowDeliveryQueryPort : IWorkflowDeliveryQuery
 
     private static ApplicationConnectionSlotDefinition MapConnectionSlot(
         Aevatar.GAgents.WorkflowDelivery.WorkflowDeliveryConnectionSlotDefinition value) =>
-        new(value.Key, value.Label, value.ServiceSlug, value.Required);
+        new(value.Key, value.Label, value.ServiceSlug, value.Required, value.YamlPointer);
 
     private static WorkflowDeliveryConnectionSnapshot MapConnection(
         WorkflowDeliveryConnectionState value) =>

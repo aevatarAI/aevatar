@@ -101,7 +101,8 @@ public sealed record WorkflowDeliveryConnectionSlotDefinition(
     string Key,
     string Label,
     string ServiceSlug,
-    bool Required);
+    bool Required,
+    string YamlPointer);
 
 public enum WorkflowDeliveryAcceptanceDateProjection
 {
