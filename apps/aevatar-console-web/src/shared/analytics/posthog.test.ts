@@ -53,6 +53,8 @@ describe('console analytics boundary', () => {
     analytics.captureConsoleEvent('workflow_started', {
       workflowId: 'wf-alpha',
       nodeCount: 2,
+      scopeId: 'scope-alpha',
+      invocationId: 'invocation-alpha',
       start_source: 'run_started',
     });
     expect(posthog.init).not.toHaveBeenCalled();
@@ -78,6 +80,8 @@ describe('console analytics boundary', () => {
         workflowId: 'wf-alpha',
         status: 'success',
         duration: 1234,
+        scopeId: 'scope-alpha',
+        invocationId: 'invocation-alpha',
         start_source: 'run_started',
       }),
     ).not.toThrow();
@@ -137,12 +141,16 @@ describe('console analytics boundary', () => {
     analytics.captureConsoleEvent('workflow_started', {
       workflowId: 'wf-alpha',
       nodeCount: 2,
+      scopeId: 'scope-alpha',
+      invocationId: 'invocation-alpha',
       start_source: 'run_started',
     });
     expect(onTTFB).toHaveBeenCalledTimes(1);
     expect(posthog.capture).toHaveBeenCalledWith('workflow_started', {
       workflowId: 'wf-alpha',
       nodeCount: 2,
+      scopeId: 'scope-alpha',
+      invocationId: 'invocation-alpha',
       start_source: 'run_started',
     });
   });

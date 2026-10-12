@@ -3,6 +3,19 @@ import type { WorkflowActivityRunDetail } from '@/shared/models/workflowActivity
 import { captureConsoleEvent } from './posthog';
 import type { ConsoleEventProperties, WorkflowStartSource } from './types';
 
+let fallbackInvocationSequence = 0;
+
+function createTelemetryInvocationId(): string {
+  try {
+    const uuid = globalThis.crypto?.randomUUID?.();
+    if (uuid) return uuid;
+  } catch {
+    // Optional telemetry must not prevent a run when crypto is unavailable.
+  }
+  fallbackInvocationSequence += 1;
+  return `console-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${fallbackInvocationSequence.toString(36)}`;
+}
+
 function eventTime(timestamp: number | undefined): number {
   return typeof timestamp === 'number' &&
     Number.isFinite(timestamp) &&
@@ -12,7 +25,12 @@ function eventTime(timestamp: number | undefined): number {
 }
 
 /** One observer belongs to one user invocation, never to a workflow catalogue row. */
-export function createWorkflowTelemetry(workflowId: string, nodeCount: number) {
+export function createWorkflowTelemetry(
+  scopeId: string,
+  workflowId: string,
+  nodeCount: number,
+) {
+  const invocationId = createTelemetryInvocationId();
   let runId = '';
   let startedAt: number | null = null;
   let startSource: WorkflowStartSource | null = null;
@@ -50,7 +68,9 @@ export function createWorkflowTelemetry(workflowId: string, nodeCount: number) {
     startedAt = timestamp;
     startSource = source;
     captureConsoleEvent('workflow_started', {
+      scopeId,
       workflowId,
+      invocationId,
       nodeCount,
       start_source: source,
     });
@@ -62,7 +82,9 @@ export function createWorkflowTelemetry(workflowId: string, nodeCount: number) {
     if (finished || startedAt === null || startSource === null) return;
     finished = true;
     captureConsoleEvent('workflow_finished', {
+      scopeId,
       workflowId,
+      invocationId,
       status,
       duration: Math.max(0, timestamp - startedAt),
       start_source: startSource,

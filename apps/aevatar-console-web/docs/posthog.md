@@ -61,8 +61,8 @@ both when sharing a PostHog project with another application.
 | `long_task` | `duration_ms`, `blocking_time_ms`, `start_time_ms`, `$current_url`, `$pathname` | Native Long Tasks observer, including buffered startup entries. One event per reported task, with matching sanitized URL/path; no raw entries, iframe attribution or content are sent. |
 | `api_request` | `url`, `method`, `status`, `duration_ms`, `success`, `error_type` on failure | Shared `apiFetch` used by authenticated Console APIs, auth backend requests and NyxID connector requests. One event per network attempt; duration ends when response headers arrive or fetch rejects. |
 | `page_ttfb` | `ttfbMs`, `navigationType`, `metricId`, `$current_url` | `web-vitals` reports the document's Navigation Timing after load. Time is in **milliseconds**; `$current_url` is the sanitized document navigation URL, preserved across later SPA navigation. No raw performance entries are sent. |
-| `workflow_started` | `workflowId`, `nodeCount`, `start_source` | A real `RUN_STARTED`, the same run's Activity record, or the first `STEP_STARTED` when the stream omits a run-start frame. Clicks, HTTP acceptance and `aevatar.run.context` alone do not count as execution. |
-| `workflow_finished` | `workflowId`, `status: success \| failed`, `duration`, `start_source` | Terminal SSE evidence, or an authoritative terminal Activity record for that exact run. `duration` is elapsed **milliseconds** from the observed execution baseline; completion is deduplicated. |
+| `workflow_started` | `scopeId`, `workflowId`, `invocationId`, `nodeCount`, `start_source` | A real `RUN_STARTED`, the same run's Activity record, or the first `STEP_STARTED` when the stream omits a run-start frame. Clicks, HTTP acceptance and `aevatar.run.context` alone do not count as execution. |
+| `workflow_finished` | `scopeId`, `workflowId`, `invocationId`, `status: success \| failed`, `duration`, `start_source` | Terminal SSE evidence, or an authoritative terminal Activity record for that exact run. `duration` is elapsed **milliseconds** from the observed execution baseline; completion is deduplicated. |
 | `sse_disconnect` | `workflowId`, `reason: unexpected_eof \| stream_error` | Unexpected termination of the stream for a confirmed started workflow. Normal terminal EOF, user cancellation and navigation are excluded. |
 | `workflow_timeout` | `workflowId`, `timeoutMs` | Typed contract only; the current backend does not expose the run's configured timeout or a distinct timeout SSE contract. No guessed timeout event is emitted. |
 | `sse_reconnect` | `workflowId`, `retryCount` | Typed contract only; the current invocation API uses POST SSE and exposes no safe resume/reconnect operation. Activity recovery is a readback, so it emits no reconnect event. |
@@ -71,6 +71,15 @@ both when sharing a PostHog project with another application.
 identities must never be substituted. `nodeCount` counts the workflow nodes for
 the invocation, not members in a team. Duration is a distribution of observed
 finished workflows; P50 and P95 are percentiles, not an arithmetic mean.
+
+`scopeId` is passed from the editor's explicit scope context. `invocationId` is
+generated once per Console invocation and reused by its start and finish events.
+It is only a client analytics correlation key, never a backend run, actor,
+command or published-service identity; it is not sent to execution APIs. A new
+invocation gets a new key, including another run of the same Workflow. Native
+UUID generation has a time/random/sequence fallback so unavailable crypto does
+not interrupt execution. This key does not recover outcomes after the browser
+closes or make frontend telemetry an authoritative execution ledger.
 
 `start_source` is `run_started`, `activity`, or `first_step`. For streams without
 `RUN_STARTED`, a real `STEP_STARTED` confirms execution; its timestamp becomes
@@ -114,12 +123,50 @@ through this event.
 
 Workflow metrics cover Console editor invocations observed by the browser. They do
 not cover schedules, channels, other clients, or a completion after the browser
-closed. A failed start before `RUN_STARTED` is not a started workflow. Browser
+closed. Rejection before any execution-start evidence is not a started workflow. Browser
 measurements are therefore product/experience metrics, not a backend-wide SLO.
 
 Timeout and reconnect producers are outside this frontend-only change. The
 current contracts provide neither the actual `timeoutMs` nor a resumable stream;
 repeating the invocation POST would create a new run.
+
+## Workflow adoption and outcome metrics
+
+Use `app` and `environment` filters consistently. Group Workflow identity by the
+pair `(scopeId, workflowId)`, not its display name or pathname. Select the start
+cohort by `workflow_started.timestamp`, then match terminal events on
+`(scopeId, workflowId, invocationId)` through the query's observation time.
+Deduplicate both sides before aggregating; an end from a run started before the
+selected window is not part of this cohort.
+
+| Metric | Definition |
+| --- | --- |
+| Total executions | Distinct invocation keys with observed execution-start evidence in the selected window. |
+| Execution failure rate | Failed invocations divided by successful plus failed invocations from that same start cohort. Show the known-terminal coverage alongside it. |
+| Workflow reuse rate | Workflow identity pairs with at least two distinct invocations in the window, divided by Workflow identity pairs with at least one. Failed or unfinished executions still count as executions. |
+| Known-terminal coverage | Invocations with one unambiguous success or failure result, divided by all started invocations in the cohort. |
+
+All zero-denominator percentages are unavailable (`NULL` / `—`), not zero.
+Report starts without a captured terminal as unknown endings; they may still be
+running, have been stopped, or have lost browser observation. Do not count them
+as successes or failures. If one invocation has conflicting terminal statuses,
+report it separately instead of choosing a successful result. The alternative
+`failed / started` ratio is a confirmed-failure share, not the failure rate among
+known completed executions. Start and finish `start_source` can differ after a
+baseline upgrade, so use `invocationId`, not `start_source`, to correlate them.
+
+Older events without `scopeId` or `invocationId` cannot be reliably joined into
+this cohort. Keep legacy event counts separate and show field coverage; do not
+silently label a new-field-only count as complete historical execution volume.
+
+Time savings / ROI is unavailable until a human supplies a defensible per-Workflow
+manual-work baseline and the remaining human effort after automation. A basic
+estimate is successful executions multiplied by the difference between those
+two effort values, summed by Workflow; label it estimated saved labor time and
+show baseline coverage. Missing baselines mean `NULL` / `—`, not zero. The
+automatic execution `duration` is wall-clock latency, not human effort, and
+must not be substituted for either baseline. Financial ROI additionally needs
+labor prices and automation costs, which these frontend events do not provide.
 
 ## Configure dashboards and alerts in PostHog
 
@@ -224,8 +271,10 @@ as an execution failure.
 
 ## Verify after deployment
 
-- Confirm a workflow start and finish carry the correct workflow ID, published
-  node count, status, millisecond duration and environment in the event explorer.
+- Confirm a workflow start and finish carry the correct scope and workflow IDs,
+  the same invocation ID, published node count, status, millisecond duration and
+  environment in the event explorer. Run again and verify a different invocation
+  ID; no invocation ID is added to the execution request.
 - Confirm unexpected stream termination produces one `sse_disconnect`; normal
   completion and leaving the page do not. Activity recovery is not a reconnect.
 - Confirm a masked replay is available, a test exception appears in Error

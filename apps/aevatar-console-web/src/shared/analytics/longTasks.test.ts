@@ -253,6 +253,8 @@ describe('console Long Task reporting', () => {
     analytics.captureConsoleEvent('workflow_started', {
       workflowId: 'wf-alpha',
       nodeCount: 2,
+      scopeId: 'scope-alpha',
+      invocationId: 'invocation-alpha',
       start_source: 'run_started',
     });
     expect(observers).toHaveLength(0);
@@ -260,6 +262,8 @@ describe('console Long Task reporting', () => {
     expect(posthog.capture).toHaveBeenCalledWith('workflow_started', {
       workflowId: 'wf-alpha',
       nodeCount: 2,
+      scopeId: 'scope-alpha',
+      invocationId: 'invocation-alpha',
       start_source: 'run_started',
     });
   });
@@ -312,11 +316,15 @@ describe('console Long Task reporting', () => {
       analytics.captureConsoleEvent('workflow_started', {
         workflowId: 'wf-alpha',
         nodeCount: 2,
+        scopeId: 'scope-alpha',
+        invocationId: 'invocation-alpha',
         start_source: 'run_started',
       });
       expect(posthog.capture).toHaveBeenCalledWith('workflow_started', {
         workflowId: 'wf-alpha',
         nodeCount: 2,
+        scopeId: 'scope-alpha',
+        invocationId: 'invocation-alpha',
         start_source: 'run_started',
       });
     }

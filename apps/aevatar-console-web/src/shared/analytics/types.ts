@@ -41,12 +41,18 @@ export type ConsoleEventProperties = {
     $current_url: string;
   };
   workflow_started: {
+    scopeId: string;
     workflowId: string;
+    /** Client analytics correlation only; never a backend run or command ID. */
+    invocationId: string;
     nodeCount: number;
     start_source: WorkflowStartSource;
   };
   workflow_finished: {
+    scopeId: string;
     workflowId: string;
+    /** Reuses the same observer's workflow_started invocationId. */
+    invocationId: string;
     status: 'success' | 'failed';
     /** Elapsed execution time in milliseconds. */
     duration: number;

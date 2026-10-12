@@ -136,12 +136,16 @@ it('counts observed starts with the published node snapshot and one successful t
   expect(posthog.capture).toHaveBeenNthCalledWith(1, 'workflow_started', {
     workflowId: 'wf-alpha',
     nodeCount: 2,
+    scopeId: 'scope-alpha',
+    invocationId: expect.any(String),
     start_source: 'run_started',
   });
   expect(posthog.capture).toHaveBeenNthCalledWith(2, 'workflow_finished', {
     workflowId: 'wf-alpha',
     status: 'success',
     duration: 1250,
+    scopeId: 'scope-alpha',
+    invocationId: expect.any(String),
     start_source: 'run_started',
   });
   expect(posthog.capture).toHaveBeenCalledTimes(2);
@@ -167,6 +171,8 @@ it('preserves explicit failed completion status and does not count duplicate err
     workflowId: 'wf-alpha',
     status: 'failed',
     duration: 900,
+    scopeId: 'scope-alpha',
+    invocationId: expect.any(String),
     start_source: 'run_started',
   });
   expect(posthog.capture).toHaveBeenCalledTimes(2);
@@ -218,6 +224,8 @@ it('reports premature EOF without inventing failure and reconciles the exact run
       workflowId: 'wf-alpha',
       status: 'success',
       duration: 2000,
+      scopeId: 'scope-alpha',
+      invocationId: expect.any(String),
       start_source: 'run_started',
     }),
   );
@@ -279,12 +287,16 @@ it('counts executed steps when a published stream omits RUN_STARTED and deduplic
   expect(posthog.capture).toHaveBeenNthCalledWith(1, 'workflow_started', {
     workflowId: 'wf-alpha',
     nodeCount: 2,
+    scopeId: 'scope-alpha',
+    invocationId: expect.any(String),
     start_source: 'first_step',
   });
   expect(posthog.capture).toHaveBeenNthCalledWith(2, 'workflow_finished', {
     workflowId: 'wf-alpha',
     status: 'success',
     duration: 1200,
+    scopeId: 'scope-alpha',
+    invocationId: expect.any(String),
     start_source: 'first_step',
   });
   expect(posthog.capture).toHaveBeenCalledTimes(2);
@@ -337,6 +349,8 @@ it('reports a real failure after the first step without inventing a start from a
     workflowId: 'wf-alpha',
     status: 'failed',
     duration: 700,
+    scopeId: 'scope-alpha',
+    invocationId: expect.any(String),
     start_source: 'first_step',
   });
   expect(posthog.capture).toHaveBeenCalledTimes(2);
@@ -362,6 +376,8 @@ it('upgrades a first-step baseline from a delayed authoritative start without co
     workflowId: 'wf-alpha',
     status: 'success',
     duration: 1400,
+    scopeId: 'scope-alpha',
+    invocationId: expect.any(String),
     start_source: 'run_started',
   });
   expect(posthog.capture).toHaveBeenCalledTimes(2);
@@ -388,7 +404,83 @@ it('preserves the first-step baseline when a late RUN_STARTED lacks its server t
     workflowId: 'wf-alpha',
     status: 'success',
     duration: 1200,
+    scopeId: 'scope-alpha',
+    invocationId: expect.any(String),
     start_source: 'first_step',
   });
   expect(posthog.capture).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+  'available',
+  'throwing',
+] as const)('correlates each invocation separately without blocking runs when crypto is %s', async (cryptoAvailability) => {
+  if (cryptoAvailability === 'throwing') {
+    jest.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(() => {
+      throw new Error('Crypto unavailable');
+    });
+    // Repeated runs remain distinct even within one clock/random sample.
+    jest.spyOn(Date, 'now').mockReturnValue(startedAt);
+    jest.spyOn(Math, 'random').mockReturnValue(0.5);
+  }
+
+  const firstStream = createStream();
+  runtimeRunsApi.streamChat.mockResolvedValue(firstStream.response);
+  await startRun();
+  await act(async () => {
+    firstStream.frame({
+      timestamp: startedAt,
+      stepStarted: { stepName: 'first' },
+    });
+    firstStream.frame({ timestamp: startedAt + 100, runFinished: {} });
+    firstStream.close();
+  });
+
+  const secondStream = createStream();
+  runtimeRunsApi.streamChat.mockResolvedValue(secondStream.response);
+  const runButton = screen.getByRole('button', {
+    name: 'Run published workflow',
+  });
+  await waitFor(() => expect(runButton).toBeEnabled());
+  fireEvent.click(runButton);
+  await waitFor(() =>
+    expect(screen.getByLabelText('Run phase')).toHaveTextContent('accepted'),
+  );
+  await act(async () => {
+    secondStream.frame({
+      timestamp: startedAt,
+      stepStarted: { stepName: 'first' },
+    });
+    secondStream.frame({ timestamp: startedAt + 200, runFinished: {} });
+    secondStream.close();
+  });
+
+  expect(runtimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
+  expect(screen.getByLabelText('Run phase')).toHaveTextContent('stream_ended');
+  expect(posthog.capture).toHaveBeenCalledTimes(4);
+  const captures = jest.mocked(posthog.capture).mock.calls;
+  const firstInvocationId = captures[0][1]?.invocationId;
+  const secondInvocationId = captures[2][1]?.invocationId;
+  expect(firstInvocationId).toEqual(expect.any(String));
+  expect(firstInvocationId).not.toBe('');
+  expect(secondInvocationId).toEqual(expect.any(String));
+  expect(secondInvocationId).not.toBe(firstInvocationId);
+  expect(captures[1]).toEqual([
+    'workflow_finished',
+    expect.objectContaining({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      invocationId: firstInvocationId,
+      status: 'success',
+    }),
+  ]);
+  expect(captures[3]).toEqual([
+    'workflow_finished',
+    expect.objectContaining({
+      scopeId: 'scope-alpha',
+      workflowId: 'wf-alpha',
+      invocationId: secondInvocationId,
+      status: 'success',
+    }),
+  ]);
 });

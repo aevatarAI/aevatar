@@ -993,6 +993,7 @@ export function useWorkflowEditor(scopeId: string, routeWorkflowId: string) {
       const generation = ++runGenerationRef.current;
       const controller = new AbortController();
       const telemetry = createWorkflowTelemetry(
+        scopeId,
         target.workflowId,
         target.nodeCount,
       );
