@@ -1,5 +1,5 @@
-import enUSMessages from './en-US';
-import zhCNMessages from './zh-CN';
+import enUSMessages from './messages/en-US';
+import zhCNMessages from './messages/zh-CN';
 import routes from '../../config/routes';
 
 type ConsoleRoute = {

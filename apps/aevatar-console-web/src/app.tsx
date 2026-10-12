@@ -6,6 +6,7 @@ import React from 'react';
 import BrandLogo from '@/components/BrandLogo';
 import type { LiveOpsAttentionSnapshot } from '@/layouts/liveOpsAttention';
 import MainLayout from '@/layouts/MainLayout';
+import { ConsoleLocaleGate } from '@/shared/i18n/ConsoleLocaleGate';
 import {
   normalizeConsoleLocale,
   resolveAntdLocale,
@@ -46,6 +47,10 @@ import { getNavigationSelectedKeys } from './shared/navigation/navigationMenuSel
 import { queryClient } from './shared/query/queryClient';
 
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
+
+export function rootContainer(container: React.ReactNode) {
+  return <ConsoleLocaleGate>{container}</ConsoleLocaleGate>;
+}
 const FULLSCREEN_DISPLAY_ROUTES = new Set(['/runtime/mission-wall']);
 const WORKFLOW_ACTIVITY_VNEXT_ROUTE =
   /^\/scopes\/[^/]+\/(?:workflows|activity|channels|settings)(?:\/|$)/;

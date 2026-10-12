@@ -49,6 +49,9 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
   // targets: {
   //   ie: 11,
   // },
+  // Keep Umi's browser targets and standards-based compatibility, without
+  // eagerly installing experimental core-js proposals the console does not use.
+  polyfill: { imports: ['core-js/stable'] },
   /**
    * @name 路由的配置，不在路由中引入的文件不会编译
    * @description 只支持 path，component，routes，redirect，wrappers，title 的配置
