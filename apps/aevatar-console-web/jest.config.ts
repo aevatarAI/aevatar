@@ -85,6 +85,7 @@ const browserProjectConfig = createProjectConfig('browser');
 const nodeProjectConfig = createProjectConfig('node');
 
 const nodeTestFiles = [
+  '<rootDir>/src/shared/i18n/createLocaleCatalogLoader.test.ts',
   '<rootDir>/tests/jestDynamicImport.test.ts',
   '<rootDir>/src/routesConfig.test.ts',
   '<rootDir>/src/pages/MissionControl/runtimeAdapter.test.ts',

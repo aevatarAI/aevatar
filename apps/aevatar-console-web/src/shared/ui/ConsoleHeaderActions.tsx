@@ -15,8 +15,10 @@ import {
   sanitizeReturnTo,
 } from '@/shared/auth/session';
 import { normalizeConsoleLocale } from '@/shared/i18n/localeProvider';
+import { loadConsoleLocale } from '@/shared/i18n/loadConsoleLocale';
 import { history } from '@/shared/navigation/history';
 import AevatarTooltip from '@/shared/ui/AevatarTooltip';
+import { useConsoleToast } from '@/shared/ui/ConsoleToast';
 
 type ConsoleLocaleOption = {
   readonly key: 'zh-CN' | 'en-US';
@@ -61,6 +63,9 @@ export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
   dropdownRootClassName,
 }) => {
   const intl = useIntl();
+  const toast = useConsoleToast();
+  const changingLocale = React.useRef(false);
+  const [pending, setPending] = React.useState(false);
   const selectedLocale = normalizeConsoleLocale(intl.locale || getLocale());
   const selectedOption =
     CONSOLE_LOCALE_OPTIONS.find((option) => option.key === selectedLocale) ||
@@ -80,13 +85,23 @@ export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
           key: option.key,
           label: intl.formatMessage({ id: option.messageId }),
         })),
-        onClick: ({ key }) => {
+        onClick: async ({ key }) => {
           const nextLocale = key === 'en-US' ? 'en-US' : 'zh-CN';
-          if (nextLocale === selectedLocale) {
+          if (changingLocale.current || nextLocale === selectedLocale) {
             return;
           }
 
-          setLocale(nextLocale, false);
+          changingLocale.current = true;
+          setPending(true);
+          try {
+            await loadConsoleLocale(nextLocale);
+            setLocale(nextLocale, false);
+          } catch {
+            toast.error(intl.formatMessage({ id: 'common.locale.loadFailed' }));
+          } finally {
+            changingLocale.current = false;
+            setPending(false);
+          }
         },
         selectedKeys: [selectedLocale],
       }}
@@ -97,6 +112,7 @@ export const ConsoleLanguageSwitch: React.FC<ConsoleHeaderActionThemeProps> = ({
         aria-label={intl.formatMessage({ id: 'common.language.switch' })}
         className="console-header-actions__language"
         icon={<GlobalOutlined />}
+        loading={pending}
         style={{
           alignItems: 'center',
           display: 'inline-flex',

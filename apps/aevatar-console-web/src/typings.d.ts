@@ -37,6 +37,11 @@ declare module '@umijs/max' {
 
   export function getIntl(): ConsoleIntlShape;
   export function getLocale(): string;
+  export function addLocale(
+    locale: string,
+    messages: Readonly<Record<string, string>>,
+    extraLocales: { antd: import('antd/es/locale').Locale; momentLocale: string },
+  ): void;
   export function setLocale(locale: string, realReload?: boolean): void;
   export function useIntl(): ConsoleIntlShape;
   export const FormattedMessage: import('react').ComponentType<{

@@ -7,8 +7,8 @@ import {
 } from '@testing-library/react';
 import React from 'react';
 import { createIntl } from 'react-intl';
-import enUSMessages from '@/locales/en-US';
-import zhCNMessages from '@/locales/zh-CN';
+import enUSMessages from '@/locales/messages/en-US';
+import zhCNMessages from '@/locales/messages/zh-CN';
 import type { StudioStepInspectorDraft } from '@/shared/studio/document';
 import { getStudioNodeConfigurationSchema } from '@/shared/studio/nodeConfigFieldSchemas';
 import { workflowActivityVNextCss } from '../styles';

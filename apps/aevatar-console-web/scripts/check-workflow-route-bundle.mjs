@@ -5,6 +5,8 @@ import { runInNewContext } from 'node:vm';
 import { gzipSync } from 'node:zlib';
 
 const statsPath = resolve(process.argv[2] ?? 'dist/bundle-stats.json');
+const locale = process.argv[3] ?? 'en-US';
+assert(['en-US', 'zh-CN'].includes(locale), 'Expected en-US or zh-CN locale.');
 const stats = JSON.parse(readFileSync(statsPath, 'utf8'));
 const outputDirectory = dirname(statsPath);
 const html = readFileSync(resolve(outputDirectory, 'index.html'), 'utf8');
@@ -122,8 +124,14 @@ for (const { pathname, group, hasLayout } of bootstrapCases) {
 }
 const initialChunks = stats.chunks.filter((chunk) => chunk.initial);
 assert(initialChunks.length > 0, 'Missing initial chunks in production stats.');
+const localeGroup = stats.namedChunkGroups[`console-locale-${locale}`];
+assert(
+  localeGroup,
+  'Expected a separate chunk group for the selected language.',
+);
 const requiredIds = new Set([
   ...initialChunks.map((chunk) => chunk.id),
+  ...localeGroup.chunks,
   ...layoutGroup.chunks,
   ...routeGroup.chunks,
 ]);
@@ -137,7 +145,7 @@ assert.equal(
 );
 
 const modules = new Set();
-function collectModules(entries) {
+function collectModules(entries, target = modules) {
   for (const entry of entries ?? []) {
     // Incomplete stats must not turn an uninspected bundle into a passing check.
     assert(
@@ -145,19 +153,50 @@ function collectModules(entries) {
       'Module stats were truncated; use the build:stats configuration.',
     );
     if (entry.nameForCondition) {
-      modules.add(entry.nameForCondition.replaceAll('\\', '/'));
+      target.add(entry.nameForCondition.replaceAll('\\', '/'));
     } else if (entry.name) {
-      modules.add(
+      target.add(
         entry.name.replaceAll('\\', '/').replace(/ \+ \d+ modules$/, ''),
       );
     }
-    collectModules(entry.modules);
-    collectModules(entry.children);
+    collectModules(entry.modules, target);
+    collectModules(entry.children, target);
   }
 }
 for (const chunk of requiredChunks) collectModules(chunk.modules);
 const includesModule = (suffix) =>
   [...modules].some((name) => name.endsWith(suffix));
+const initialModules = new Set();
+for (const chunk of initialChunks)
+  collectModules(chunk.modules, initialModules);
+assert(
+  ![...initialModules].some((name) =>
+    /\/core-js\/modules\/esnext\./.test(name),
+  ),
+  'Experimental core-js proposals must not return to the initial entry.',
+);
+assert(
+  ![...initialModules].some((name) =>
+    /\/antd\/lib\/locale\/(en_US|zh_CN)\.js$/.test(name),
+  ),
+  'Use the same ESM Ant Design locales as Umi to avoid duplicate catalogs.',
+);
+assert(
+  ![...initialModules].some((name) =>
+    /\/locales\/messages\/(en-US|zh-CN)\.ts$/.test(name),
+  ),
+  'Full application language catalogs must stay out of the initial entry.',
+);
+assert(
+  includesModule(`/locales/messages/${locale}.ts`),
+  'The cold load measurement must include the full selected-language catalog.',
+);
+assert(
+  !includesModule(
+    `/locales/messages/${locale === 'en-US' ? 'zh-CN' : 'en-US'}.ts`,
+  ),
+  'The unused language must not be downloaded for the initial route.',
+);
 assert(
   includesModule('/workflows/WorkflowEditorPage.tsx') &&
     includesModule('/shared/graphs/GraphCanvas.tsx'),
@@ -215,7 +254,8 @@ console.log(
   JSON.stringify(
     {
       description:
-        'Cold workflow detail: HTML bootstrap + initial entry + Umi layout + editor route + actual preloads, deduplicated',
+        'Cold workflow detail: HTML bootstrap + initial entry + selected language + Umi layout + editor route + actual preloads, deduplicated',
+      locale,
       javascript: { files: jsFiles.length, ...measure(jsFiles) },
       css: { files: cssFiles.length, ...measure(cssFiles) },
       excludedModules: deferredModules.length,
