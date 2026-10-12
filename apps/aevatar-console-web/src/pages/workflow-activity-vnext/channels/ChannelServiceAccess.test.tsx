@@ -4,7 +4,7 @@ import { authFetch } from '@/shared/auth/fetch';
 import { persistAuthSession } from '@/shared/auth/session';
 import { createNyxIDServiceSession } from '../../../../tests/fixtures/nyxidServiceSession';
 import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
-import WorkflowActivityVNextPage from '../index';
+import WorkflowActivityVNextPage from '../../../../tests/WorkflowActivityRouteTestHarness';
 import { channelKeys } from './queries';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));

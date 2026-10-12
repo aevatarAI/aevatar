@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
-import enUSMessages from './en-US';
+import enUSMessages from './messages/en-US';
 
 const sourceRoot = path.resolve(__dirname, '..');
 const chineseTextPattern = /\p{Script=Han}/u;

@@ -2,8 +2,8 @@ import {
   enUSIntl,
   zhCNIntl,
 } from '@ant-design/pro-components';
-import enUS from 'antd/locale/en_US';
-import zhCN from 'antd/locale/zh_CN';
+import enUS from 'antd/es/locale/en_US';
+import zhCN from 'antd/es/locale/zh_CN';
 
 export type ConsoleLocale = 'en-US' | 'zh-CN';
 

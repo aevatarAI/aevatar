@@ -1,6 +1,6 @@
 import React from 'react';
-import enUSMessages from '../../src/locales/en-US';
-import zhCNMessages from '../../src/locales/zh-CN';
+import enUSMessages from '../../src/locales/messages/en-US';
+import zhCNMessages from '../../src/locales/messages/zh-CN';
 
 type MessageDescriptor = {
   readonly defaultMessage?: string;
@@ -42,9 +42,19 @@ export function getLocale(): string {
   return currentLocale;
 }
 
+export function addLocale(
+  locale: string,
+  messages: Readonly<Record<string, string>>,
+): void {
+  catalogs[locale] = { ...catalogs[locale], ...messages };
+  if (locale === currentLocale) {
+    localeListeners.forEach((listener) => { listener(); });
+  }
+}
+
 export function setLocale(locale: string): void {
   currentLocale = catalogs[locale] ? locale : 'en-US';
-  localeListeners.forEach((listener) => listener());
+  localeListeners.forEach((listener) => { listener(); });
 }
 
 export function useIntl() {

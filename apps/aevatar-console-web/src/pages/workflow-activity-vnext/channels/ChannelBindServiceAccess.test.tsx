@@ -7,7 +7,7 @@ import {
   createTestQueryClient,
   renderWithQueryClient,
 } from '../../../../tests/reactQueryTestUtils';
-import WorkflowActivityVNextPage from '../index';
+import WorkflowActivityVNextPage from '../../../../tests/WorkflowActivityRouteTestHarness';
 import { channelKeys } from './queries';
 
 jest.mock('@/shared/auth/fetch', () => ({ authFetch: jest.fn() }));
