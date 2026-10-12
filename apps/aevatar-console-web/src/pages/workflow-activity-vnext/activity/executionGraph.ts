@@ -119,7 +119,7 @@ export function buildExecutionGraph(
     branchLabel?: string,
   ) => {
     if (!stepById.has(sourceStepId) || !stepById.has(targetStepId)) return;
-    const key = `${sourceStepId}->${targetStepId}:${branchLabel ?? ''}`;
+    const key = JSON.stringify([sourceStepId, targetStepId, branchLabel ?? '']);
     if (seen.has(key)) return;
     seen.add(key);
     edges.push({
@@ -129,7 +129,7 @@ export function buildExecutionGraph(
         implicit,
         kind: branchLabel ? 'branch' : 'next',
       },
-      id: `edge:${sourceStepId}:${targetStepId}:${edges.length}`,
+      id: `edge:${key}`,
       label: branchLabel || undefined,
       markerEnd: {
         color: implicit ? '#94a3b8' : '#1677ff',
@@ -189,6 +189,11 @@ export function buildExecutionGraph(
       }
     });
   }
+
+  // Response ordering is not topology: keep React Flow IDs and fit keys stable.
+  edges.sort((left, right) =>
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+  );
 
   return { edges, nodes, orderedSteps };
 }
