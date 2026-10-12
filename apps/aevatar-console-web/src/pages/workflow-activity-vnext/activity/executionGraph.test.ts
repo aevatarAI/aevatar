@@ -166,6 +166,78 @@ const graph: WorkflowActivityRunGraph = {
 };
 
 describe('execution graph', () => {
+  it('reuses the complete graph when an equivalent response reorders its edges', () => {
+    const detail = buildDetail([rootStep, reviewStep, publishStep]);
+    const previous = buildExecutionGraph(detail, graph);
+    const reordered = buildExecutionGraph(detail, {
+      ...graph,
+      edges: [...graph.edges].reverse(),
+    });
+
+    expect(reordered.edges.map((edge) => edge.id)).toEqual(
+      previous.edges.map((edge) => edge.id),
+    );
+    expect(reconcileExecutionGraph(previous, reordered)).toBe(previous);
+  });
+
+  it('keeps distinct connections whose step IDs and branch labels contain separators', () => {
+    const stepIds = ['a', 'a->b', 'b->c', 'c', 'target', 'target:choice'];
+    const detail = buildDetail(stepIds.map((stepId) => buildStep({ stepId })));
+    const ambiguousGraph: WorkflowActivityRunGraph = {
+      edges: [
+        {
+          branchKey: '',
+          edgeId: 'edge-one',
+          edgeType: 'next',
+          fromNodeId: 'a->b',
+          toNodeId: 'c',
+        },
+        {
+          branchKey: '',
+          edgeId: 'edge-two',
+          edgeType: 'next',
+          fromNodeId: 'a',
+          toNodeId: 'b->c',
+        },
+        {
+          branchKey: '',
+          edgeId: 'edge-three',
+          edgeType: 'next',
+          fromNodeId: 'a',
+          toNodeId: 'target:choice',
+        },
+        {
+          branchKey: 'choice:',
+          edgeId: 'edge-four',
+          edgeType: 'branch',
+          fromNodeId: 'a',
+          toNodeId: 'target',
+        },
+      ],
+      nodes: stepIds.map((stepId) => ({
+        nodeId: stepId,
+        nodeType: 'step',
+        stepId,
+      })),
+      rootNodeId: 'a',
+    };
+
+    const result = buildExecutionGraph(detail, ambiguousGraph);
+
+    expect(result.edges).toHaveLength(4);
+    expect(new Set(result.edges.map((edge) => edge.id)).size).toBe(4);
+    expect(
+      result.edges.map((edge) => [edge.source, edge.target, edge.label]),
+    ).toEqual(
+      expect.arrayContaining([
+        ['step:a->b', 'step:c', undefined],
+        ['step:a', 'step:b->c', undefined],
+        ['step:a', 'step:target:choice', undefined],
+        ['step:a', 'step:target', 'choice:'],
+      ]),
+    );
+  });
+
   it('replaces only the status-changed node and ordered step while preserving unchanged graph references', () => {
     const initialDetail = buildDetail([rootStep, reviewStep, publishStep]);
     const previous = buildExecutionGraph(initialDetail, graph);
