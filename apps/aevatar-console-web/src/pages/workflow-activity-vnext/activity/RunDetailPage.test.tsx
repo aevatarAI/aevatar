@@ -1,4 +1,10 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import * as React from 'react';
 import { history } from '@/shared/navigation/history';
 import {
@@ -828,6 +834,81 @@ describe('Workflow Activity vNext run detail console', () => {
       beforeSelection?.onCanvasSelect,
     );
     expect(afterSelection?.onNodeSelect).toBe(beforeSelection?.onNodeSelect);
+  });
+
+  it('keeps a visited timeline mounted and reveals the latest selected step', async () => {
+    renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+    await screen.findByText('Approval timed out');
+    expect(screen.queryByText('Approval step failed')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Timeline' }));
+    const timeline = await screen.findByRole('tabpanel', { name: 'Timeline' });
+    expect(within(timeline).getByText('Approval step failed')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Select step:step-root' }),
+    );
+    expect(timeline).toBeInTheDocument();
+    expect(timeline).not.toBeVisible();
+    // Hidden panes retain committed content instead of rebuilding their rows.
+    expect(
+      within(timeline).getByText('Approval step failed'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Timeline' }));
+    expect(await screen.findByText('Root step started')).toBeVisible();
+    expect(screen.getByRole('tabpanel', { name: 'Timeline' })).toBe(timeline);
+    expect(
+      within(timeline).queryByText('Approval step failed'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('reveals fresh request parameters after a visited input pane was hidden', async () => {
+    const { queryClient } = renderWithQueryClient(
+      <RunDetailPage runId="run-source-alpha" scopeId="scope-alpha" />,
+    );
+    await screen.findByTestId('graph-canvas');
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Select step:step-root' }),
+    );
+    expect(screen.queryByText('Investigate')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Input' }));
+    const input = await screen.findByRole('tabpanel', { name: 'Input' });
+    expect(within(input).getByText('Investigate')).toBeVisible();
+    fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+
+    const refreshed = buildRunDetail();
+    act(() => {
+      queryClient.setQueryData(
+        [
+          'workflow-activity-vnext',
+          'run-detail',
+          'scope-alpha',
+          'run-source-alpha',
+        ],
+        {
+          ...refreshed,
+          steps: refreshed.steps.map((step) =>
+            step.stepId === 'step-root'
+              ? {
+                  ...step,
+                  requestParameters: { prompt: 'Updated investigation' },
+                }
+              : step,
+          ),
+        },
+      );
+    });
+    expect(input).not.toBeVisible();
+    expect(within(input).getByText('Investigate')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Input' }));
+    expect(await screen.findByText('Updated investigation')).toBeVisible();
+    expect(screen.getByRole('tabpanel', { name: 'Input' })).toBe(input);
+    expect(within(input).queryByText('Investigate')).not.toBeInTheDocument();
   });
 
   it('bounds the published-runs rail inside the run detail viewport and scrolls its history list', async () => {

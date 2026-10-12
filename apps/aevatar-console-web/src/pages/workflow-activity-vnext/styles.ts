@@ -412,6 +412,14 @@ export const workflowActivityVNextCss = `
   width: 100%;
 }
 .wa-vnext-run-detail__refresh-content { display: contents; }
+/* Plain single-line labels need no Typography overflow measurement. */
+.wa-vnext-run-detail__ellipsis {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .wa-vnext-run-detail__rail {
   background: var(--wa-surface);
   border-right: 1px solid var(--wa-line);

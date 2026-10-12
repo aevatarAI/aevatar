@@ -9,16 +9,7 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import {
-  Alert,
-  Button,
-  Empty,
-  Modal,
-  Space,
-  Tabs,
-  Tag,
-  Typography,
-} from 'antd';
+import { Alert, Button, Modal, Space, Tag, Typography } from 'antd';
 import React from 'react';
 import {
   WorkflowActivityApiError,
@@ -33,7 +24,6 @@ import type {
   WorkflowActivityRunGraph,
   WorkflowActivityRunSummary,
   WorkflowActivityStep,
-  WorkflowActivityTimelineEvent,
   WorkflowRunForkAcceptedReceipt,
 } from '@/shared/models/workflowActivity';
 import { history } from '@/shared/navigation/history';
@@ -53,6 +43,8 @@ import {
   getStepExecutionStatus,
   reconcileExecutionGraph,
 } from './executionGraph';
+import RunDetailInspectorTabs from './RunDetailInspectorTabs';
+import RunHistoryRail, { type RunHistoryEntry } from './RunHistoryRail';
 import {
   classifyRunFailure,
   type RunFailureAction,
@@ -62,12 +54,6 @@ import {
 import { getRunOriginLabel, getRunStatusPresentation } from './runPresentation';
 
 type RunStatusTone = 'default' | 'processing' | 'success' | 'warning' | 'error';
-
-type RunHistoryEntry = WorkflowActivityRunSummary & {
-  readonly context?: string;
-  readonly inputSummary?: string;
-  readonly workflowId?: string;
-};
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
@@ -237,49 +223,6 @@ function getSelectedStepDefaultId(
   }
 
   return steps[0]?.stepId ?? '';
-}
-
-function filterTimelineForStep(
-  timeline: readonly WorkflowActivityTimelineEvent[],
-  selectedStepId: string,
-): readonly WorkflowActivityTimelineEvent[] {
-  if (!selectedStepId) return timeline;
-  const scoped = timeline.filter(
-    (event) => trimOptional(event.stepId) === selectedStepId,
-  );
-  return scoped.length ? scoped : timeline;
-}
-
-function renderKeyValueRows(values: Readonly<Record<string, string>>) {
-  const entries = Object.entries(values).filter(
-    ([key, value]) => trimOptional(key) || trimOptional(value),
-  );
-  if (!entries.length) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />;
-  }
-
-  return (
-    <div className="wa-vnext-run-detail__kv">
-      {entries.map(([key, value]) => (
-        <div className="wa-vnext-run-detail__kv-row" key={key}>
-          <div className="wa-vnext-run-detail__kv-key">{key}</div>
-          <div className="wa-vnext-run-detail__kv-value">{value || 'n/a'}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function renderTextBlock(value: string) {
-  const normalized = value.trim();
-  if (!normalized) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />;
-  }
-  return <pre className="wa-vnext-run-detail__pre">{normalized}</pre>;
-}
-
-function formatRunTime(run: WorkflowActivityRunSummary): string {
-  return formatDateTime(run.updatedAtUtc);
 }
 
 function compareRunsByUpdatedTime(
@@ -668,14 +611,32 @@ const RunDetailPage: React.FC<{
   const pendingHistoryWorkflowName = trimOptional(
     fallbackHistoryRun?.workflowName,
   ).toLowerCase();
-  const pendingHistoryEntries =
-    routeWorkflowId || !pendingHistoryWorkflowName
-      ? historyEntries
-      : historyEntries.filter(
-          (entry) =>
-            trimOptional(entry.workflowName).toLowerCase() ===
-            pendingHistoryWorkflowName,
-        );
+  const pendingHistoryEntries = React.useMemo(
+    () =>
+      routeWorkflowId || !pendingHistoryWorkflowName
+        ? historyEntries
+        : historyEntries.filter(
+            (entry) =>
+              trimOptional(entry.workflowName).toLowerCase() ===
+              pendingHistoryWorkflowName,
+          ),
+    [historyEntries, pendingHistoryWorkflowName, routeWorkflowId],
+  );
+  const effectiveHistory = React.useMemo(() => {
+    const summary = detail.data?.summary;
+    if (!summary) return historyEntries;
+    const workflowName = trimOptional(summary.workflowName).toLowerCase();
+    const entries =
+      routeWorkflowId || !workflowName
+        ? historyEntries
+        : historyEntries.filter(
+            (entry) =>
+              trimOptional(entry.workflowName).toLowerCase() === workflowName,
+          );
+    return entries.some((entry) => entry.runId === summary.runId)
+      ? entries
+      : [summary, ...entries];
+  }, [detail.data?.summary, historyEntries, routeWorkflowId]);
 
   const openRun = React.useCallback(
     (targetRunId: string) => {
@@ -685,103 +646,6 @@ const RunDetailPage: React.FC<{
       setSelectedStepId('');
     },
     [routeRunQuery, scopeId],
-  );
-
-  const renderHistoryRail = (
-    workflowName: string,
-    entries: readonly RunHistoryEntry[],
-    selectedRunId: string,
-  ) => (
-    <aside className="wa-vnext-run-detail__rail">
-      <div className="wa-vnext-run-detail__rail-header">
-        <div className="wa-vnext-run-detail__rail-title">
-          <Typography.Title level={5} style={{ margin: 0 }}>
-            {t(
-              'pages.runs.memberPublishedRuns.publishedRuns',
-              'Published runs',
-            )}
-          </Typography.Title>
-          <Typography.Text ellipsis type="secondary">
-            {workflowName ||
-              t('workflowActivityVNext.common.unknown', 'Unknown')}
-          </Typography.Text>
-        </div>
-      </div>
-      <div className="wa-vnext-run-detail__rail-list">
-        {historyRuns.isPending ? (
-          <div className="wa-vnext__state wa-vnext__state--compact">
-            <p>
-              {t(
-                'workflowActivityVNext.run.historyLoading',
-                'Loading run history…',
-              )}
-            </p>
-          </div>
-        ) : historyRuns.isError ? (
-          <Alert
-            showIcon
-            type="error"
-            message={t(
-              'workflowActivityVNext.run.historyUnavailable',
-              'Run history is unavailable.',
-            )}
-            description={errorMessage(historyRuns.error)}
-          />
-        ) : entries.length ? (
-          entries.map((entry) => {
-            const selected = entry.runId === selectedRunId;
-            const selectedStatus = getRunStatusPresentation(entry.status);
-            return (
-              <button
-                aria-current={selected ? 'true' : undefined}
-                aria-label={t(
-                  'workflowActivityVNext.run.openRunAria',
-                  'Open {runId}',
-                  {
-                    runId: entry.runId,
-                  },
-                )}
-                className={`wa-vnext-run-detail__run${selected ? ' wa-vnext-run-detail__run--selected' : ''}`}
-                key={entry.runId}
-                onClick={() => openRun(entry.runId)}
-                type="button"
-              >
-                <div className="wa-vnext-run-detail__run-title">
-                  <Tag
-                    className={getRunBadgeClass(entry.status)}
-                    style={{ marginInlineEnd: 0 }}
-                  >
-                    {selectedStatus.label}
-                  </Tag>
-                  <Typography.Text ellipsis style={{ minWidth: 0 }}>
-                    {formatRunTime(entry)}
-                  </Typography.Text>
-                </div>
-                <Typography.Text ellipsis type="secondary">
-                  {entry.runOrigin ||
-                    t('workflowActivityVNext.common.unknown', 'Unknown')}
-                </Typography.Text>
-              </button>
-            );
-          })
-        ) : (
-          <div className="wa-vnext__state wa-vnext__state--compact">
-            <h3>
-              {t(
-                'workflowActivityVNext.run.noHistory',
-                'No published runs yet.',
-              )}
-            </h3>
-            <p>
-              {t(
-                'workflowActivityVNext.run.noHistoryDescription',
-                'This workflow has no other runs in the current history context.',
-              )}
-            </p>
-          </div>
-        )}
-      </div>
-    </aside>
   );
 
   if (detail.isPending) {
@@ -817,11 +681,15 @@ const RunDetailPage: React.FC<{
         >
           <div className="wa-vnext-run-detail wa-vnext-run-detail--bounded">
             <div className="wa-vnext-run-detail__refresh-content">
-              {renderHistoryRail(
-                fallbackHistoryRun.workflowName,
-                pendingHistoryEntries,
-                runId,
-              )}
+              <RunHistoryRail
+                workflowName={fallbackHistoryRun.workflowName}
+                entries={pendingHistoryEntries}
+                selectedRunId={runId}
+                isPending={historyRuns.isPending}
+                isError={historyRuns.isError}
+                error={historyRuns.error}
+                onOpenRun={openRun}
+              />
               <RunDetailLoadingStage announce />
             </div>
           </div>
@@ -898,11 +766,15 @@ const RunDetailPage: React.FC<{
               className="wa-vnext-run-detail__refresh-content"
               inert={refreshing}
             >
-              {renderHistoryRail(
-                fallbackHistoryRun.workflowName,
-                historyEntries,
-                fallbackHistoryRun.runId,
-              )}
+              <RunHistoryRail
+                workflowName={fallbackHistoryRun.workflowName}
+                entries={historyEntries}
+                selectedRunId={fallbackHistoryRun.runId}
+                isPending={historyRuns.isPending}
+                isError={historyRuns.isError}
+                error={historyRuns.error}
+                onOpenRun={openRun}
+              />
               <section className="wa-vnext-run-detail__stage">
                 <header className="wa-vnext-run-detail__stage-header">
                   <div className="wa-vnext-run-detail__stage-title">
@@ -920,7 +792,11 @@ const RunDetailPage: React.FC<{
                         }
                       </Tag>
                     </Space>
-                    <Typography.Text ellipsis type="secondary">
+                    <Typography.Text
+                      className="wa-vnext-run-detail__ellipsis"
+                      title={`${fallbackHistoryRun.workflowName || t('workflowActivityVNext.common.unknown', 'Unknown')} · ${getRunOriginLabel(fallbackHistoryRun.runOrigin)}`}
+                      type="secondary"
+                    >
                       {fallbackHistoryRun.workflowName ||
                         t('workflowActivityVNext.common.unknown', 'Unknown')}
                       {' · '}
@@ -1009,35 +885,10 @@ const RunDetailPage: React.FC<{
 
   const run = detail.data;
   const statusPresentation = getRunStatusPresentation(run.summary.status);
-  const normalizedWorkflowName = trimOptional(
-    run.summary.workflowName,
-  ).toLowerCase();
-  const scopedHistoryEntries = routeWorkflowId
-    ? historyEntries
-    : normalizedWorkflowName
-      ? historyEntries.filter(
-          (entry) =>
-            trimOptional(entry.workflowName).toLowerCase() ===
-            normalizedWorkflowName,
-        )
-      : historyEntries;
-  const currentRunHistoryEntry: RunHistoryEntry = run.summary;
-  const effectiveHistory = scopedHistoryEntries.some(
-    (entry) => entry.runId === run.summary.runId,
-  )
-    ? scopedHistoryEntries
-    : [currentRunHistoryEntry, ...scopedHistoryEntries];
-  const selectedHistoryRun =
-    effectiveHistory.find((entry) => entry.runId === run.summary.runId) ??
-    currentRunHistoryEntry;
   const selectedStep =
     graphView.orderedSteps.find((step) => step.stepId === selectedStepId) ??
     graphView.orderedSteps[0] ??
     null;
-  const scopedTimeline = filterTimelineForStep(
-    run.timeline,
-    selectedStep?.stepId ?? '',
-  );
   const runDurationMs = getRunDurationMs(run, graphView.orderedSteps);
   const selectedStepTitle = getStepDisplayName(selectedStep);
   const selectedStepDuration = formatDurationMs(selectedStep?.durationMs);
@@ -1146,11 +997,15 @@ const RunDetailPage: React.FC<{
           className="wa-vnext-run-detail__refresh-content"
           inert={refreshing}
         >
-          {renderHistoryRail(
-            run.summary.workflowName,
-            effectiveHistory,
-            selectedHistoryRun.runId,
-          )}
+          <RunHistoryRail
+            workflowName={run.summary.workflowName}
+            entries={effectiveHistory}
+            selectedRunId={run.summary.runId}
+            isPending={historyRuns.isPending}
+            isError={historyRuns.isError}
+            error={historyRuns.error}
+            onOpenRun={openRun}
+          />
           <section className="wa-vnext-run-detail__stage">
             <header className="wa-vnext-run-detail__stage-header">
               <div className="wa-vnext-run-detail__stage-title">
@@ -1168,7 +1023,11 @@ const RunDetailPage: React.FC<{
                     {formatDurationMs(runDurationMs)}
                   </Tag>
                 </Space>
-                <Typography.Text ellipsis type="secondary">
+                <Typography.Text
+                  className="wa-vnext-run-detail__ellipsis"
+                  title={`${run.summary.workflowName || t('workflowActivityVNext.common.unknown', 'Unknown')} · ${getRunOriginLabel(run.summary.runOrigin)}`}
+                  type="secondary"
+                >
                   {run.summary.workflowName ||
                     t('workflowActivityVNext.common.unknown', 'Unknown')}
                   {' · '}
@@ -1247,12 +1106,16 @@ const RunDetailPage: React.FC<{
                           {renderStepStatusIcon(step)}
                           <span style={{ minWidth: 0 }}>
                             <Typography.Text
-                              ellipsis
-                              style={{ display: 'block' }}
+                              className="wa-vnext-run-detail__ellipsis"
+                              title={getStepDisplayName(step)}
                             >
                               {getStepDisplayName(step)}
                             </Typography.Text>
-                            <Typography.Text ellipsis type="secondary">
+                            <Typography.Text
+                              className="wa-vnext-run-detail__ellipsis"
+                              title={step.stepType}
+                              type="secondary"
+                            >
                               {step.stepType ||
                                 t('workflowActivityVNext.run.step', 'Step')}
                             </Typography.Text>
@@ -1279,7 +1142,12 @@ const RunDetailPage: React.FC<{
                 <div className="wa-vnext-run-detail__inspector-header">
                   <Space size={8} style={{ minWidth: 0 }}>
                     <NodeIndexOutlined style={{ color: '#1677ff' }} />
-                    <Typography.Text ellipsis strong style={{ maxWidth: 360 }}>
+                    <Typography.Text
+                      className="wa-vnext-run-detail__ellipsis"
+                      title={selectedStepTitle}
+                      strong
+                      style={{ maxWidth: 360 }}
+                    >
                       {selectedStepTitle ||
                         t('workflowActivityVNext.run.details', 'Details')}
                     </Typography.Text>
@@ -1302,60 +1170,9 @@ const RunDetailPage: React.FC<{
                   ) : null}
                 </div>
                 <div className="wa-vnext-run-detail__inspector-body">
-                  <Tabs
-                    size="small"
-                    items={[
-                      {
-                        key: 'output',
-                        label: t('workflowActivityVNext.run.output', 'Output'),
-                        children: selectedStep
-                          ? renderTextBlock(
-                              selectedStep.error || selectedStep.outputPreview,
-                            )
-                          : renderTextBlock(run.finalError || run.finalOutput),
-                      },
-                      {
-                        key: 'input',
-                        label: t('workflowActivityVNext.run.input', 'Input'),
-                        children: selectedStep
-                          ? renderKeyValueRows(selectedStep.requestParameters)
-                          : renderTextBlock(run.input),
-                      },
-                      {
-                        key: 'timeline',
-                        label: t(
-                          'workflowActivityVNext.run.timeline',
-                          'Timeline',
-                        ),
-                        children: scopedTimeline.length ? (
-                          <div className="wa-vnext-run-detail__timeline">
-                            {scopedTimeline.map((event) => (
-                              <div
-                                className="wa-vnext-run-detail__timeline-row"
-                                key={`${event.timestampUtc}-${event.stage}-${event.kind}-${event.stepId}-${event.agentId}`}
-                              >
-                                <div className="wa-vnext-run-detail__timeline-key">
-                                  {formatDateTime(event.timestampUtc)}
-                                </div>
-                                <div className="wa-vnext-run-detail__timeline-value">
-                                  <Typography.Text strong>
-                                    {event.stage || event.kind || 'event'}
-                                  </Typography.Text>
-                                  <br />
-                                  <Typography.Text type="secondary">
-                                    {trimOptional(event.message) ||
-                                      trimOptional(event.agentId) ||
-                                      'event'}
-                                  </Typography.Text>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                        ),
-                      },
-                    ]}
+                  <RunDetailInspectorTabs
+                    run={run}
+                    selectedStep={selectedStep}
                   />
                 </div>
               </section>
