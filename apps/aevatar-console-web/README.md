@@ -21,6 +21,9 @@ URLs return 404. See [the route decision](docs/superpowers/specs/2026-09-21-cons
 
 ## Setup
 
+For frontend monitoring, Session Replay, workflow analytics, and PostHog
+dashboard/alert setup, see [Console monitoring with PostHog](docs/posthog.md).
+
 Run all frontend commands from `apps/aevatar-console-web`:
 
 ```bash

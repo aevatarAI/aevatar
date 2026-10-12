@@ -30,12 +30,12 @@ import {
   adaptActivityRunToExecutionLogs,
   isTerminalActivityRunStatus,
 } from '@/shared/workflows/activityExecution';
-import { adaptExecutionDetailToLogs } from '@/shared/workflows/executionDetail';
-import { useWorkflowPanelResize } from '@/shared/workflows/useWorkflowPanelResize';
 import {
   DeferredWorkflowPanel,
   WorkflowPanelLoadState,
 } from '@/shared/workflows/DeferredWorkflowPanel';
+import { adaptExecutionDetailToLogs } from '@/shared/workflows/executionDetail';
+import { useWorkflowPanelResize } from '@/shared/workflows/useWorkflowPanelResize';
 import type { WorkflowExecutionLogsModel } from '@/shared/workflows/WorkflowExecutionLogsPanel';
 import WorkflowPanelResizeHandle from '@/shared/workflows/WorkflowPanelResizeHandle';
 import WorkflowSidePanel from '@/shared/workflows/WorkflowSidePanel';
@@ -96,6 +96,7 @@ function restorePublishedInvocationTarget(
   workflowId: string,
   detail: Awaited<ReturnType<typeof scopesApi.getWorkflowDetail>> | undefined,
   draftYaml: string | undefined,
+  nodeCount: number | undefined,
 ): WorkflowPublishedInvocationTarget | null {
   const published = detail?.workflow;
   if (
@@ -105,6 +106,7 @@ function restorePublishedInvocationTarget(
     published.scopeId !== scopeId ||
     published.workflowId !== workflowId ||
     !draftYaml?.trim() ||
+    nodeCount === undefined ||
     detail.source?.workflowYaml.trim() !== draftYaml.trim() ||
     !hasNonBlankIdentifier(published.activeRevisionId) ||
     !hasNonBlankIdentifier(published.publishedServiceId)
@@ -113,6 +115,7 @@ function restorePublishedInvocationTarget(
   }
 
   return {
+    nodeCount,
     publishedServiceId: published.publishedServiceId,
     revisionId: published.activeRevisionId,
     workflowId: published.workflowId,
@@ -153,8 +156,11 @@ const WorkflowEditorPage: React.FC<{
   const [publicationError, setPublicationError] = React.useState<unknown>(null);
   const [publicationReceipt, setPublicationReceipt] =
     React.useState<WorkflowPublicationReceipt | null>(null);
-  const [publishedDocumentVersion, setPublishedDocumentVersion] =
-    React.useState<number | null>(null);
+  const [publishedDocumentSnapshot, setPublishedDocumentSnapshot] =
+    React.useState<{
+      readonly version: number;
+      readonly nodeCount: number;
+    } | null>(null);
   const [runPanelOpen, setRunPanelOpen] = React.useState(false);
   const [schedulePanelOpen, setSchedulePanelOpen] = React.useState(false);
   const [runConsoleVisible, setRunConsoleVisible] = React.useState(false);
@@ -360,19 +366,22 @@ const WorkflowEditorPage: React.FC<{
     activeWorkflowId,
     restoredPublication.data,
     editor.workflow?.yaml,
+    editor.document?.steps?.length,
   );
   const observedPublishedInvocationTarget =
     publicationReceipt &&
+    publishedDocumentSnapshot &&
     publicationObserved &&
     hasNonBlankIdentifier(publication.publishedServiceId)
       ? {
+          nodeCount: publishedDocumentSnapshot.nodeCount,
           publishedServiceId: publication.publishedServiceId,
           revisionId: publicationReceipt.revisionId,
           workflowId: publicationReceipt.workflowId,
         }
       : null;
   const publishedTargetDocumentVersion = publicationReceipt
-    ? publishedDocumentVersion
+    ? (publishedDocumentSnapshot?.version ?? null)
     : restoredPublishedInvocationTarget
       ? 0
       : null;
@@ -403,7 +412,7 @@ const WorkflowEditorPage: React.FC<{
     invalidatePublication();
     setPublicationError(null);
     setPublicationReceipt(null);
-    setPublishedDocumentVersion(null);
+    setPublishedDocumentSnapshot(null);
     setPublicationStage('idle');
   }, [invalidatePublication]);
 
@@ -650,7 +659,7 @@ const WorkflowEditorPage: React.FC<{
       publicationGeneration === publicationGenerationRef.current;
     setPublicationError(null);
     setPublicationReceipt(null);
-    setPublishedDocumentVersion(null);
+    setPublishedDocumentSnapshot(null);
     setPublicationStage('submitting');
 
     try {
@@ -726,7 +735,10 @@ const WorkflowEditorPage: React.FC<{
         revisionId: result.revisionId,
         workflowId: result.workflowId,
       });
-      setPublishedDocumentVersion(preparation.documentVersion);
+      setPublishedDocumentSnapshot({
+        version: preparation.documentVersion,
+        nodeCount: preparation.nodeCount,
+      });
       setPublicationStage('accepted');
     } catch (error) {
       if (!isCurrentPublication()) return;
