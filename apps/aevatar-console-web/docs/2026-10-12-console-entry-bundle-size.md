@@ -122,6 +122,31 @@ were not run. CI or a separately authorized focused integration run still needs
 to validate the rendered scenarios and shared Umi mock consumers, including the
 inspector test whose catalog imports moved.
 
+## CI regression and recurrence prevention
+
+The first PR CI run (`38197118102`) passed 1,997 tests and failed the two new
+rendered recovery cases before they could exercise their behavior. Both
+failures came from test setup, not failed product assertions:
+
+- Umi emits named exports as non-configurable getters, so `jest.spyOn` cannot
+  replace `loadConsoleLocale`. The header test now mocks that module boundary,
+  restoring the real loader implementation before every case and controlling
+  only the failed/pending download scenario.
+- Umi's mock-hoisting transform rewrites the React import before esbuild lowers
+  JSX, leaving an unbound `React` in these test files. Both new renders now use
+  the neighboring tests' explicit `React.createElement` convention.
+- The startup retry query accepts Ant Design's inserted spacing between the two
+  Chinese characters, matching the existing workflow-home test convention.
+
+The shared failure pattern was applying test syntax without checking the pinned
+transformer's emitted code. Similar-location searches covered all locale-loader
+consumers, locale spies, nearby UI tests, and localized retry queries. Existing
+behavioral assertions remain: pages wait for catalogs; failures preserve the
+current language; retry succeeds; duplicate clicks produce one download.
+No test is skipped and no timeout is increased. These same recovery cases in
+the `console-web` CI job are the regression gate; the shared Jest transformer
+and production bundle are unchanged by this test-only correction.
+
 ## Design baseline declaration
 
 ```text

@@ -5,7 +5,7 @@ import {
   clearStoredAuthSession,
   persistAuthSession,
 } from '@/shared/auth/session';
-import * as localeLoader from '@/shared/i18n/loadConsoleLocale';
+import { loadConsoleLocale } from '@/shared/i18n/loadConsoleLocale';
 import { ConsoleToastProvider } from './ConsoleToast';
 import {
   ConsoleAuthActions,
@@ -13,6 +13,13 @@ import {
 } from './ConsoleHeaderActions';
 
 const mockedHistoryPush = jest.fn();
+const mockedLoad = jest.mocked(loadConsoleLocale);
+
+// Umi emits non-configurable export getters; mock the module boundary instead
+// of trying to replace its named export with spyOn.
+jest.mock('@/shared/i18n/loadConsoleLocale', () => ({
+  loadConsoleLocale: jest.fn(),
+}));
 
 jest.mock('@/shared/navigation/history', () => ({
   history: {
@@ -24,6 +31,11 @@ describe('ConsoleHeaderActions', () => {
   beforeEach(() => {
     clearStoredAuthSession();
     mockedHistoryPush.mockReset();
+    mockedLoad.mockReset().mockImplementation(
+      jest.requireActual<typeof import('@/shared/i18n/loadConsoleLocale')>(
+        '@/shared/i18n/loadConsoleLocale',
+      ).loadConsoleLocale,
+    );
     setLocale('en-US', false);
     window.history.replaceState(
       {},
@@ -34,7 +46,6 @@ describe('ConsoleHeaderActions', () => {
 
   afterEach(() => {
     clearStoredAuthSession();
-    jest.restoreAllMocks();
   });
 
   it('preserves the current language while downloading or on failure, then allows retry', async () => {
@@ -43,11 +54,19 @@ describe('ConsoleHeaderActions', () => {
     const download = new Promise<void>((_resolve, reject) => {
       fail = reject;
     });
-    const retry = new Promise<void>((resolve) => { finish = resolve; });
-    const load = jest.spyOn(localeLoader, 'loadConsoleLocale')
+    const retry = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    mockedLoad
       .mockReturnValueOnce(download)
       .mockReturnValueOnce(retry);
-    render(<ConsoleToastProvider><ConsoleHeaderActions /></ConsoleToastProvider>);
+    render(
+      React.createElement(
+        ConsoleToastProvider,
+        null,
+        React.createElement(ConsoleHeaderActions),
+      ),
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Switch language' }));
     const chineseOption = screen.getByText('中文');
@@ -55,7 +74,7 @@ describe('ConsoleHeaderActions', () => {
     fireEvent.click(chineseOption);
     expect(getLocale()).toBe('en-US');
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument();
-    expect(load).toHaveBeenCalledTimes(1);
+    expect(mockedLoad).toHaveBeenCalledTimes(1);
 
     await act(async () => fail(new Error('Offline')));
     expect(getLocale()).toBe('en-US');
@@ -68,7 +87,7 @@ describe('ConsoleHeaderActions', () => {
     expect(getLocale()).toBe('en-US');
     await act(async () => finish());
     expect(getLocale()).toBe('zh-CN');
-    expect(load).toHaveBeenCalledTimes(2);
+    expect(mockedLoad).toHaveBeenCalledTimes(2);
   });
 
   it('renders a login entry when there is no restorable auth session', () => {

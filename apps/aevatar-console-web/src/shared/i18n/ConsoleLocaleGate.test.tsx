@@ -27,9 +27,11 @@ describe('ConsoleLocaleGate', () => {
       .mockReturnValueOnce(firstDownload)
       .mockReturnValueOnce(retryDownload);
     render(
-      <ConsoleLocaleGate>
-        <h1>Workflow editor</h1>
-      </ConsoleLocaleGate>,
+      React.createElement(
+        ConsoleLocaleGate,
+        null,
+        React.createElement('h1', null, 'Workflow editor'),
+      ),
     );
 
     expect(screen.getByRole('status')).toHaveTextContent('加载中…');
@@ -42,7 +44,7 @@ describe('ConsoleLocaleGate', () => {
     );
     expect(screen.queryByRole('heading')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    fireEvent.click(screen.getByRole('button', { name: /重\s*试/ }));
     expect(screen.getByRole('status')).toHaveTextContent('加载中…');
     expect(screen.queryByRole('heading')).not.toBeInTheDocument();
     await act(async () => finish());
