@@ -143,8 +143,25 @@ selected window is not part of this cohort.
 | --- | --- |
 | Total executions | Distinct invocation keys with observed execution-start evidence in the selected window. |
 | Execution failure rate | Failed invocations divided by successful plus failed invocations from that same start cohort. Show the known-terminal coverage alongside it. |
-| Workflow reuse rate | Workflow identity pairs with at least two distinct invocations in the window, divided by Workflow identity pairs with at least one. Failed or unfinished executions still count as executions. |
+| Workflow reuse rate | Unavailable. Reuse means another user copies a Workflow into their own scope and uses that copy; the current Console has no such copy flow or source-to-copy contract. |
 | Known-terminal coverage | Invocations with one unambiguous success or failure result, divided by all started invocations in the cohort. |
+
+Do not label repeated executions of the same Workflow as reuse. The current
+**Copy workflow reference** action only copies its ID to the clipboard. Public
+template instantiation creates a new draft from a catalog template, and importing
+YAML does not establish who originally authored it or which Workflow it came
+from. Run retry/fork lineage describes executions, not copies of another user's
+Workflow. None of these actions establishes the requested cross-scope reuse.
+No reuse event is emitted, and the dashboard must show this metric as unavailable,
+not as zero or as a percentage derived from execution counts.
+
+Measuring this reuse requires the product copy flow and a backend contract that
+preserves the source Workflow/scope, destination Workflow/scope, and the relevant
+creator/copier attribution after copying commits. Usage of the new copy must then
+be associated with that recorded origin. Define the eligible-source denominator
+and observation window before publishing a reuse percentage. Frontend analytics
+can observe a supported copy action once these contracts exist; it cannot infer
+provenance from equal names, YAML contents, IDs, or repeated runs.
 
 All zero-denominator percentages are unavailable (`NULL` / `—`), not zero.
 Report starts without a captured terminal as unknown endings; they may still be
