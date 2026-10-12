@@ -253,12 +253,14 @@ describe('console Long Task reporting', () => {
     analytics.captureConsoleEvent('workflow_started', {
       workflowId: 'wf-alpha',
       nodeCount: 2,
+      start_source: 'run_started',
     });
     expect(observers).toHaveLength(0);
     expect(onTTFB).toHaveBeenCalledTimes(1);
     expect(posthog.capture).toHaveBeenCalledWith('workflow_started', {
       workflowId: 'wf-alpha',
       nodeCount: 2,
+      start_source: 'run_started',
     });
   });
 
@@ -310,10 +312,12 @@ describe('console Long Task reporting', () => {
       analytics.captureConsoleEvent('workflow_started', {
         workflowId: 'wf-alpha',
         nodeCount: 2,
+        start_source: 'run_started',
       });
       expect(posthog.capture).toHaveBeenCalledWith('workflow_started', {
         workflowId: 'wf-alpha',
         nodeCount: 2,
+        start_source: 'run_started',
       });
     }
   });

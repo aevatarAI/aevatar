@@ -61,8 +61,8 @@ both when sharing a PostHog project with another application.
 | `long_task` | `duration_ms`, `blocking_time_ms`, `start_time_ms`, `$current_url`, `$pathname` | Native Long Tasks observer, including buffered startup entries. One event per reported task, with matching sanitized URL/path; no raw entries, iframe attribution or content are sent. |
 | `api_request` | `url`, `method`, `status`, `duration_ms`, `success`, `error_type` on failure | Shared `apiFetch` used by authenticated Console APIs, auth backend requests and NyxID connector requests. One event per network attempt; duration ends when response headers arrive or fetch rejects. |
 | `page_ttfb` | `ttfbMs`, `navigationType`, `metricId`, `$current_url` | `web-vitals` reports the document's Navigation Timing after load. Time is in **milliseconds**; `$current_url` is the sanitized document navigation URL, preserved across later SPA navigation. No raw performance entries are sent. |
-| `workflow_started` | `workflowId`, `nodeCount` | A real `RUN_STARTED` from the active workflow editor invocation. A queued observation can also be confirmed by the same run's Activity record. |
-| `workflow_finished` | `workflowId`, `status: success \| failed`, `duration` | Terminal SSE evidence, or an authoritative terminal Activity record for that exact run. `duration` is elapsed **milliseconds** from server timestamps; completion is deduplicated. |
+| `workflow_started` | `workflowId`, `nodeCount`, `start_source` | A real `RUN_STARTED`, the same run's Activity record, or the first `STEP_STARTED` when the stream omits a run-start frame. Clicks, HTTP acceptance and `aevatar.run.context` alone do not count as execution. |
+| `workflow_finished` | `workflowId`, `status: success \| failed`, `duration`, `start_source` | Terminal SSE evidence, or an authoritative terminal Activity record for that exact run. `duration` is elapsed **milliseconds** from the observed execution baseline; completion is deduplicated. |
 | `sse_disconnect` | `workflowId`, `reason: unexpected_eof \| stream_error` | Unexpected termination of the stream for a confirmed started workflow. Normal terminal EOF, user cancellation and navigation are excluded. |
 | `workflow_timeout` | `workflowId`, `timeoutMs` | Typed contract only; the current backend does not expose the run's configured timeout or a distinct timeout SSE contract. No guessed timeout event is emitted. |
 | `sse_reconnect` | `workflowId`, `retryCount` | Typed contract only; the current invocation API uses POST SSE and exposes no safe resume/reconnect operation. Activity recovery is a readback, so it emits no reconnect event. |
@@ -71,6 +71,17 @@ both when sharing a PostHog project with another application.
 identities must never be substituted. `nodeCount` counts the workflow nodes for
 the invocation, not members in a team. Duration is a distribution of observed
 finished workflows; P50 and P95 are percentiles, not an arithmetic mean.
+
+`start_source` is `run_started`, `activity`, or `first_step`. For streams without
+`RUN_STARTED`, a real `STEP_STARTED` confirms execution; its timestamp becomes
+the fallback duration baseline. This excludes submission and any wait before
+the first observed step. An earlier authoritative run-start or exact Activity
+timestamp can replace that fallback before completion without another start
+event; `workflow_finished.start_source` records the final duration basis.
+An arrival-time fallback never moves a first-step baseline forward. A terminal
+event with no execution-start evidence is not converted into an invented start
+or duration. Filter or break down duration by `start_source` when comparing
+complete-run timing with first-step timing; older events lack this property.
 
 `api_request` reports the request origin and path without URL credentials, query
 parameters or fragments. Methods are uppercase; `success` follows the HTTP

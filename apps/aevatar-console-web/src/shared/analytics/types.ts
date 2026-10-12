@@ -6,6 +6,8 @@ export type ApiRequestErrorType =
   | 'aborted'
   | 'timeout';
 
+export type WorkflowStartSource = 'run_started' | 'activity' | 'first_step';
+
 export type ConsoleEventProperties = {
   long_task: {
     duration_ms: number;
@@ -38,12 +40,18 @@ export type ConsoleEventProperties = {
     /** Sanitized document URL, which may differ from the current SPA route. */
     $current_url: string;
   };
-  workflow_started: { workflowId: string; nodeCount: number };
+  workflow_started: {
+    workflowId: string;
+    nodeCount: number;
+    start_source: WorkflowStartSource;
+  };
   workflow_finished: {
     workflowId: string;
     status: 'success' | 'failed';
     /** Elapsed execution time in milliseconds. */
     duration: number;
+    /** first_step excludes the wait before the first observed executing step. */
+    start_source: WorkflowStartSource;
   };
   workflow_timeout: { workflowId: string; timeoutMs: number };
   sse_disconnect: {

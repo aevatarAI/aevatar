@@ -53,6 +53,7 @@ describe('console analytics boundary', () => {
     analytics.captureConsoleEvent('workflow_started', {
       workflowId: 'wf-alpha',
       nodeCount: 2,
+      start_source: 'run_started',
     });
     expect(posthog.init).not.toHaveBeenCalled();
     expect(posthog.capture).not.toHaveBeenCalled();
@@ -77,6 +78,7 @@ describe('console analytics boundary', () => {
         workflowId: 'wf-alpha',
         status: 'success',
         duration: 1234,
+        start_source: 'run_started',
       }),
     ).not.toThrow();
   });
@@ -135,11 +137,13 @@ describe('console analytics boundary', () => {
     analytics.captureConsoleEvent('workflow_started', {
       workflowId: 'wf-alpha',
       nodeCount: 2,
+      start_source: 'run_started',
     });
     expect(onTTFB).toHaveBeenCalledTimes(1);
     expect(posthog.capture).toHaveBeenCalledWith('workflow_started', {
       workflowId: 'wf-alpha',
       nodeCount: 2,
+      start_source: 'run_started',
     });
   });
 

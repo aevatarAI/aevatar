@@ -1,7 +1,7 @@
 import { type AGUIEvent, AGUIEventType } from '@aevatar-react-sdk/types';
 import type { WorkflowActivityRunDetail } from '@/shared/models/workflowActivity';
 import { captureConsoleEvent } from './posthog';
-import type { ConsoleEventProperties } from './types';
+import type { ConsoleEventProperties, WorkflowStartSource } from './types';
 
 function eventTime(timestamp: number | undefined): number {
   return typeof timestamp === 'number' &&
@@ -15,6 +15,7 @@ function eventTime(timestamp: number | undefined): number {
 export function createWorkflowTelemetry(workflowId: string, nodeCount: number) {
   let runId = '';
   let startedAt: number | null = null;
+  let startSource: WorkflowStartSource | null = null;
   let terminal = false;
   let finished = false;
   let disconnected = false;
@@ -31,21 +32,40 @@ export function createWorkflowTelemetry(workflowId: string, nodeCount: number) {
     });
   };
 
-  const start = (timestamp: number) => {
-    if (startedAt !== null) return;
+  const start = (timestamp: number, source: WorkflowStartSource) => {
+    if (startedAt !== null) {
+      // A later authoritative observation can recover the time before the
+      // first step. Never move the baseline forward or emit a second start.
+      if (
+        !finished &&
+        startSource === 'first_step' &&
+        source !== 'first_step' &&
+        timestamp <= startedAt
+      ) {
+        startedAt = timestamp;
+        startSource = source;
+      }
+      return;
+    }
     startedAt = timestamp;
-    captureConsoleEvent('workflow_started', { workflowId, nodeCount });
+    startSource = source;
+    captureConsoleEvent('workflow_started', {
+      workflowId,
+      nodeCount,
+      start_source: source,
+    });
     reportDisconnect();
   };
 
   const finish = (status: 'success' | 'failed', timestamp: number) => {
     terminal = true;
-    if (finished || startedAt === null) return;
+    if (finished || startedAt === null || startSource === null) return;
     finished = true;
     captureConsoleEvent('workflow_finished', {
       workflowId,
       status,
       duration: Math.max(0, timestamp - startedAt),
+      start_source: startSource,
     });
   };
 
@@ -54,6 +74,7 @@ export function createWorkflowTelemetry(workflowId: string, nodeCount: number) {
       const record = event as unknown as Record<string, unknown>;
       if (
         event.type !== AGUIEventType.RUN_STARTED &&
+        event.type !== AGUIEventType.STEP_STARTED &&
         event.type !== AGUIEventType.RUN_FINISHED &&
         event.type !== AGUIEventType.RUN_ERROR &&
         record.type !== 'RUN_STOPPED'
@@ -66,7 +87,15 @@ export function createWorkflowTelemetry(workflowId: string, nodeCount: number) {
       const timestamp = eventTime(event.timestamp);
 
       if (event.type === AGUIEventType.RUN_STARTED) {
-        if (!terminal) start(timestamp);
+        if (!terminal) {
+          // The transport may supply an arrival-time fallback for missing
+          // timestamps. Such a value cannot replace an earlier first step.
+          start(timestamp, 'run_started');
+        }
+      } else if (event.type === AGUIEventType.STEP_STARTED) {
+        // Some workflow streams omit RUN_STARTED but report executed steps.
+        // An accepted run context alone is deliberately not execution proof.
+        if (!terminal) start(timestamp, 'first_step');
       } else if (event.type === AGUIEventType.RUN_ERROR) {
         finish('failed', timestamp);
       } else if (event.type === AGUIEventType.RUN_FINISHED) {
@@ -97,7 +126,7 @@ export function createWorkflowTelemetry(workflowId: string, nodeCount: number) {
     observeRun(run: WorkflowActivityRunDetail) {
       if (!runId || run.summary.runId !== runId || finished) return;
       const timestamp = Date.parse(run.summary.startedAtUtc ?? '');
-      if (Number.isFinite(timestamp)) start(timestamp);
+      if (Number.isFinite(timestamp)) start(timestamp, 'activity');
       const completedAt = Date.parse(run.summary.updatedAtUtc);
       if (!Number.isFinite(completedAt)) return;
       switch (run.summary.status.toLowerCase()) {

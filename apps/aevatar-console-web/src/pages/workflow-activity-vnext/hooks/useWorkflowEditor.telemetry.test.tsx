@@ -136,11 +136,13 @@ it('counts observed starts with the published node snapshot and one successful t
   expect(posthog.capture).toHaveBeenNthCalledWith(1, 'workflow_started', {
     workflowId: 'wf-alpha',
     nodeCount: 2,
+    start_source: 'run_started',
   });
   expect(posthog.capture).toHaveBeenNthCalledWith(2, 'workflow_finished', {
     workflowId: 'wf-alpha',
     status: 'success',
     duration: 1250,
+    start_source: 'run_started',
   });
   expect(posthog.capture).toHaveBeenCalledTimes(2);
 });
@@ -165,6 +167,7 @@ it('preserves explicit failed completion status and does not count duplicate err
     workflowId: 'wf-alpha',
     status: 'failed',
     duration: 900,
+    start_source: 'run_started',
   });
   expect(posthog.capture).toHaveBeenCalledTimes(2);
 });
@@ -215,6 +218,7 @@ it('reports premature EOF without inventing failure and reconciles the exact run
       workflowId: 'wf-alpha',
       status: 'success',
       duration: 2000,
+      start_source: 'run_started',
     }),
   );
   expect(posthog.capture).toHaveBeenCalledTimes(3);
@@ -243,4 +247,148 @@ it('records a sanitized stream failure but ignores navigation aborts and never r
   await act(async () => nextStream.close());
   expect(posthog.capture).toHaveBeenCalledTimes(2);
   expect(runtimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
+});
+
+it('counts executed steps when a published stream omits RUN_STARTED and deduplicates completion', async () => {
+  const stream = createStream();
+  runtimeRunsApi.streamChat.mockResolvedValue(stream.response);
+  await startRun();
+  await act(async () => {
+    stream.frame({
+      timestamp: startedAt,
+      custom: {
+        name: 'aevatar.run.context',
+        payload: { actorId: 'actor-alpha', commandId: 'cmd-alpha' },
+      },
+    });
+  });
+  expect(posthog.capture).not.toHaveBeenCalled();
+  await act(async () => {
+    stream.frame({
+      timestamp: startedAt + 200,
+      stepStarted: { stepName: 'first' },
+    });
+    stream.frame({
+      timestamp: startedAt + 400,
+      stepStarted: { stepName: 'second' },
+    });
+    stream.frame({ timestamp: startedAt + 1400, runFinished: {} });
+    stream.frame({ timestamp: startedAt + 1400, runFinished: {} });
+    stream.close();
+  });
+  expect(posthog.capture).toHaveBeenNthCalledWith(1, 'workflow_started', {
+    workflowId: 'wf-alpha',
+    nodeCount: 2,
+    start_source: 'first_step',
+  });
+  expect(posthog.capture).toHaveBeenNthCalledWith(2, 'workflow_finished', {
+    workflowId: 'wf-alpha',
+    status: 'success',
+    duration: 1200,
+    start_source: 'first_step',
+  });
+  expect(posthog.capture).toHaveBeenCalledTimes(2);
+  expect(workflowActivityApi.getRun).not.toHaveBeenCalled();
+});
+
+it('reports a real failure after the first step without inventing a start from acceptance alone', async () => {
+  const rejected = createStream();
+  runtimeRunsApi.streamChat.mockResolvedValue(rejected.response);
+  const view = await startRun();
+  await act(async () => {
+    rejected.frame({
+      timestamp: startedAt,
+      custom: {
+        name: 'aevatar.run.context',
+        payload: { actorId: 'actor-alpha' },
+      },
+    });
+    rejected.frame({
+      timestamp: startedAt + 100,
+      runError: {
+        code: 'ADMISSION_REJECTED',
+        message: 'Rejected before execution',
+      },
+    });
+    rejected.close();
+  });
+  expect(posthog.capture).not.toHaveBeenCalled();
+  view.unmount();
+
+  const executing = createStream();
+  runtimeRunsApi.streamChat.mockResolvedValue(executing.response);
+  await startRun();
+  await act(async () => {
+    executing.frame({
+      timestamp: startedAt + 200,
+      stepStarted: { stepName: 'first' },
+    });
+    executing.frame({
+      timestamp: startedAt + 900,
+      runError: { code: 'WORKFLOW_FAILED', message: 'Execution failed' },
+    });
+    executing.frame({
+      timestamp: startedAt + 900,
+      runError: { code: 'WORKFLOW_FAILED' },
+    });
+    executing.close();
+  });
+  expect(posthog.capture).toHaveBeenLastCalledWith('workflow_finished', {
+    workflowId: 'wf-alpha',
+    status: 'failed',
+    duration: 700,
+    start_source: 'first_step',
+  });
+  expect(posthog.capture).toHaveBeenCalledTimes(2);
+});
+
+it('upgrades a first-step baseline from a delayed authoritative start without counting twice', async () => {
+  const stream = createStream();
+  runtimeRunsApi.streamChat.mockResolvedValue(stream.response);
+  await startRun();
+  await act(async () => {
+    stream.frame({
+      timestamp: startedAt + 200,
+      stepStarted: { stepName: 'first' },
+    });
+    stream.frame({ timestamp: startedAt, runStarted: { runId: 'run-alpha' } });
+    stream.frame({
+      timestamp: startedAt + 1400,
+      runFinished: { runId: 'run-alpha' },
+    });
+    stream.close();
+  });
+  expect(posthog.capture).toHaveBeenLastCalledWith('workflow_finished', {
+    workflowId: 'wf-alpha',
+    status: 'success',
+    duration: 1400,
+    start_source: 'run_started',
+  });
+  expect(posthog.capture).toHaveBeenCalledTimes(2);
+});
+
+it('preserves the first-step baseline when a late RUN_STARTED lacks its server timestamp', async () => {
+  const stream = createStream();
+  runtimeRunsApi.streamChat.mockResolvedValue(stream.response);
+  await startRun();
+  jest.spyOn(Date, 'now').mockReturnValue(startedAt + 1000);
+  await act(async () => {
+    stream.frame({
+      timestamp: startedAt + 200,
+      stepStarted: { stepName: 'first' },
+    });
+    stream.frame({ runStarted: { runId: 'run-alpha' } });
+    stream.frame({
+      timestamp: startedAt + 1400,
+      runFinished: { runId: 'run-alpha' },
+    });
+    stream.close();
+  });
+  expect(posthog.capture).toHaveBeenLastCalledWith('workflow_finished', {
+    workflowId: 'wf-alpha',
+    status: 'success',
+    duration: 1200,
+    start_source: 'first_step',
+  });
+  expect(posthog.capture).toHaveBeenCalledTimes(2);
 });
