@@ -1,0 +1,50 @@
+name: fkst-review-policy
+
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  issue_comment:
+    types: [created, edited, deleted]
+
+concurrency:
+  group: fkst-review-policy-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  fkst-review-policy:
+    if: |
+      (
+        github.event_name == 'pull_request_review' &&
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
+      ) ||
+      (
+        github.event_name == 'pull_request_review_comment' &&
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        (vars.FKST_GITHUB_BOT_LOGIN == '' || github.actor != vars.FKST_GITHUB_BOT_LOGIN)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: FKST Review Policy Guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref || '' }}
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: bash tools/ci/fkst_host_policy_guard.sh

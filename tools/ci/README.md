@@ -37,7 +37,7 @@ This directory keeps CI gate scripts and smoke tests.
   - Job `changes`
     - Uses path filters to detect whether projection-provider or Kafka-runtime integration jobs must run.
   - Job `fkst-host-policy`
-    - Runs the host FKST policy gate for PR updates; PR-side comment/review automation is handled by the `github-devloop-pr` package in FKST supervise.
+    - Runs the host FKST policy gate for PR updates.
   - Job `fast-gates`
     - Runs static architecture and test-stability guards.
   - Test authority
@@ -60,3 +60,5 @@ This directory keeps CI gate scripts and smoke tests.
     - Uploads the filtered `artifacts/coverage/**/report/Cobertura.xml` file to Codecov when `CODECOV_TOKEN` is available, using the same assembly/file filters as the local quality gate; upload failures are non-blocking because the local coverage guard is the authoritative quality gate.
     - Triggered on `main/dev` pushes, nightly schedule, or manual dispatch.
   - Job `distributed-3node-smoke` -> `tools/ci/distributed_3node_smoke.sh`
+- `.github/workflows/fkst-review-policy.yml`
+  - Handles `pull_request_review`, `pull_request_review_comment`, and PR `issue_comment` events with a dedicated `fkst-review-policy` check name, so review/comment automation cannot create or cancel the branch-protected `fast-gates`, `console-web`, or `coverage-quality` required checks.
