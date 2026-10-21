@@ -239,8 +239,11 @@ python3 -m http.server 58147 --bind 127.0.0.1 \
   意外滚动、手机提示语被拆列的问题。截图保存在仓库外的本地体验产物目录。
 
 静态验证：提取 HTML 内脚本执行 `node --check`；`bash tools/docs/lint.sh`；
-`git diff --check`；对两个未跟踪文件额外检查 UTF-8、末尾换行及行尾空白。
-上述检查均通过。浏览器未捕获 warn/error；已检查 1440×900、1024×768、
+`git diff --check`；对两个新增文件额外检查 UTF-8、末尾换行及行尾空白。
+上述检查均通过。另复用主 checkout 已安装的 Biome，对这两个路径运行
+`biome lint --no-errors-on-unmatched --reporter=summary`：0 errors、5 条
+`noImportantStyles` warnings、31 条 `useTemplate` infos。浏览器未捕获
+warn/error；已检查 1440×900、1024×768、
 834×1112、390×844、360×844，页面宽度均未超过视口。
 
 本轮没有修改产品 TypeScript、构建或依赖，不新增产品单元测试；没有运行

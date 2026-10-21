@@ -168,17 +168,17 @@
   <header class="topbar"><span class="brand">Aevatar</span><span class="crumb">Workflows</span><span class="prototype-badge">本地交互原型 · 示例数据</span></header>
   <div class="shell">
     <aside class="rail" aria-label="当前工作区">
-      <div class="nav-item active" aria-current="page"><svg class="icon"><use href="#i-flow"/></svg>Workflows</div>
-      <div class="nav-item"><svg class="icon"><use href="#i-time"/></svg>Activity</div>
-      <div class="nav-item"><svg class="icon"><use href="#i-settings"/></svg>Settings</div>
+      <div class="nav-item active" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-flow"/></svg>Workflows</div>
+      <div class="nav-item"><svg class="icon" aria-hidden="true"><use href="#i-time"/></svg>Activity</div>
+      <div class="nav-item"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg>Settings</div>
     </aside>
     <main>
-      <div class="page-head"><div><h1>文档知识助手</h1><p class="page-sub">从前面的节点取数据，填进当前节点。</p></div><button class="btn" id="reset"><svg class="icon"><use href="#i-reset"/></svg>重新体验</button></div>
+      <div class="page-head"><div><h1>文档知识助手</h1><p class="page-sub">从前面的节点取数据，填进当前节点。</p></div><button type="button" class="btn" id="reset"><svg class="icon" aria-hidden="true"><use href="#i-reset"/></svg>重新体验</button></div>
       <div class="demo-tools"><label for="scenario">体验流程</label><select id="scenario"><option value="structured">有明确字段的输出</option><option value="linear">普通文本输出</option><option value="branch">分支汇合</option><option value="cycle">循环连线</option></select><span class="demo-note">只修改本页示例，刷新后重置。</span></div>
-      <div class="demo-checks" id="demo-checks"><span>试试来源变化</span><button class="btn" id="remove-field">移除 document_id 字段</button><button class="btn" id="delete-source">删除来源节点</button><button class="btn" id="disconnect-source">改连线，绕过当前节点</button><button class="btn" id="rename-source">来源节点改名</button><div class="demo-status" id="demo-status" role="status">在输入框里输入 ${steps，候选会自动出现。</div></div>
+      <div class="demo-checks" id="demo-checks"><span>试试来源变化</span><button type="button" class="btn" id="remove-field">移除 document_id 字段</button><button type="button" class="btn" id="delete-source">删除来源节点</button><button type="button" class="btn" id="disconnect-source">改连线，绕过当前节点</button><button type="button" class="btn" id="rename-source">来源节点改名</button><div class="demo-status" id="demo-status" role="status">在输入框里输入 ${steps，候选会自动出现。</div></div>
       <div class="workspace">
         <section class="canvas" aria-label="示例工作流画布"><div class="canvas-head"><strong>示例流程</strong><span>点击节点配置</span></div><div class="graph" id="graph" aria-label="流程节点"></div><div class="legend"><span><i></i>当前节点的上游</span><span><i class="neutral"></i>其他节点</span></div></section>
-        <section class="inspector" aria-labelledby="inspector-title"><header class="inspector-head"><h2 id="inspector-title"></h2><code id="current-id"></code></header><div class="form-body" id="form"></div><footer class="inspector-foot"><span class="edit-state" id="edit-state" role="status">尚未修改</span><div class="footer-actions"><button class="btn" id="restore">还原此节点</button><button class="btn primary" id="apply" disabled>应用到示例</button></div></footer></section>
+        <section class="inspector" aria-labelledby="inspector-title"><header class="inspector-head"><h2 id="inspector-title"></h2><code id="current-id"></code></header><div class="form-body" id="form"></div><footer class="inspector-foot"><span class="edit-state" id="edit-state" role="status">尚未修改</span><div class="footer-actions"><button type="button" class="btn" id="restore">还原此节点</button><button type="button" class="btn primary" id="apply" disabled>应用到示例</button></div></footer></section>
       </div>
       <p class="experience"><strong>可以这样试：</strong>点击右侧输入框，输入 <code>${steps</code> 或 <code>${steps.prepare_document.</code>，输入框下会自动显示候选。来源变化后，候选也会更新。</p>
     </main>
