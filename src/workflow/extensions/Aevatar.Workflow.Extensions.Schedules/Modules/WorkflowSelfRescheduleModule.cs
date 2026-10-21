@@ -2,12 +2,28 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Abstractions.Primitives;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Extensions.Schedules.Modules;
 
 public sealed class WorkflowSelfRescheduleModule : IEventModule<IWorkflowExecutionContext>
 {
+    public static WorkflowPrimitiveDefinition Definition { get; } = new(
+        "Ensures a workflow schedule through the actor-owned scheduled-dispatch mainline.",
+        [
+            new("schedule_id", WorkflowPrimitiveParameterType.String, "Schedule id", Required: true),
+            new("cron_expression", WorkflowPrimitiveParameterType.String, "Cron expression", Required: true),
+            new("timezone", WorkflowPrimitiveParameterType.String, "Timezone", DefaultValue: "UTC"),
+            new("workflow_name", WorkflowPrimitiveParameterType.String, "Workflow name",
+                "Required when service_id is not supplied."),
+            new("service_id", WorkflowPrimitiveParameterType.String, "Published service",
+                "Required when workflow_name is not supplied."),
+            new("scope_id", WorkflowPrimitiveParameterType.String, "Scope", Required: true),
+            new("prompt", WorkflowPrimitiveParameterType.String, "Prompt", "Defaults to the step input.",
+                Control: WorkflowPrimitiveParameterControl.Textarea),
+        ]);
+
     private const string CanonicalStepType = "self_reschedule";
     private const string AliasStepType = "schedule_workflow";
     private const string HeaderPrefix = "header.";

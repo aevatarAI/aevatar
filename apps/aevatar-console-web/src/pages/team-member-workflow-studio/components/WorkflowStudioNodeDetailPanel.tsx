@@ -16,14 +16,17 @@ import {
   applyStudioNodeConfigurationValuesWithValidation,
   formatRawStudioNodeConfiguration,
   getStudioNodeConfigurationSchema,
+  hasStudioNodeConfigurationSchema,
   readStudioNodeConfigurationValues,
-  shouldShowRawStudioNodeConfiguration,
   type StudioStructuredNodeConfigField,
 } from "@/shared/studio/nodeConfigFields";
 import { formatConsoleMessage, t } from "@/shared/i18n/messages";
 import type { StudioStepInspectorDraft } from "@/shared/studio/document";
-import { parseInspectorParameters } from "@/shared/studio/document";
+import { parseInspectorParameters, resolveStepParameterName } from "@/shared/studio/document";
 import { formatStudioStepTypeLabel } from "@/shared/studio/graph";
+import { isNodeConfigurationExpression } from "@/shared/studio/nodeConfiguration";
+import NodeConfigurationCatalogStatus from "@/shared/studio/NodeConfigurationCatalogStatus";
+import { useNodeConfigurationDescriptor } from "@/shared/studio/useNodeConfigurationDescriptor";
 
 type WorkflowStudioNodeDetailPanelProps = {
   readonly error?: string;
@@ -201,71 +204,25 @@ function readCurrentParameters(
   }
 }
 
-function mergeSchemaParameters(
-  current: Record<string, unknown>,
-  next: Record<string, unknown>,
-): Record<string, unknown> {
-  return {
-    ...current,
-    ...next,
-  };
-}
-
 function useConfigurationState(stepDraft: StudioStepInspectorDraft | null) {
   const [configurationValues, setConfigurationValues] = React.useState<
     Record<string, string>
   >({});
   const [rawConfigurationText, setRawConfigurationText] = React.useState("");
-  const [schemaParameters, setSchemaParameters] = React.useState<
-    Record<string, unknown>
-  >({});
   const [structuredError, setStructuredError] = React.useState("");
   const [rawError, setRawError] = React.useState("");
-  const schemaParametersRef = React.useRef<Record<string, unknown>>({});
-  const stepKeyRef = React.useRef("");
-
-  const rememberSchemaParameters = React.useCallback(
-    (parameters: Record<string, unknown>): Record<string, unknown> => {
-      const nextSchemaParameters = mergeSchemaParameters(
-        schemaParametersRef.current,
-        parameters,
-      );
-      schemaParametersRef.current = nextSchemaParameters;
-      setSchemaParameters(nextSchemaParameters);
-      return nextSchemaParameters;
-    },
-    [],
-  );
-
   React.useEffect(() => {
     if (!stepDraft) {
       setConfigurationValues({});
       setRawConfigurationText("");
-      schemaParametersRef.current = {};
-      stepKeyRef.current = "";
-      setSchemaParameters({});
       setRawError("");
       setStructuredError("");
       return;
     }
 
     const parameters = readDraftParameters(stepDraft);
-    const stepKey = `${stepDraft.id}\u0000${stepDraft.type}`;
-    const nextSchemaParameters =
-      stepKeyRef.current === stepKey
-        ? mergeSchemaParameters(schemaParametersRef.current, parameters)
-        : parameters;
-    schemaParametersRef.current = nextSchemaParameters;
-    stepKeyRef.current = stepKey;
-    setConfigurationValues(
-      readStudioNodeConfigurationValues(
-        stepDraft.type,
-        parameters,
-        nextSchemaParameters,
-      ),
-    );
+    setConfigurationValues({});
     setRawConfigurationText(formatRawStudioNodeConfiguration(parameters));
-    setSchemaParameters(nextSchemaParameters);
     setRawError("");
     setStructuredError("");
   }, [stepDraft?.id, stepDraft?.parametersText, stepDraft?.type]);
@@ -274,11 +231,9 @@ function useConfigurationState(stepDraft: StudioStepInspectorDraft | null) {
     configurationValues,
     rawConfigurationText,
     rawError,
-    schemaParameters,
     setConfigurationValues,
     setRawConfigurationText,
     setRawError,
-    rememberSchemaParameters,
     setStructuredError,
     structuredError,
   };
@@ -302,14 +257,14 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     configurationValues,
     rawConfigurationText,
     rawError,
-    schemaParameters,
     setConfigurationValues,
     setRawConfigurationText,
     setRawError,
-    rememberSchemaParameters,
     setStructuredError,
     structuredError,
   } = useConfigurationState(stepDraft);
+  const { descriptor, query: descriptorQuery } =
+    useNodeConfigurationDescriptor(stepDraft?.type);
 
   React.useEffect(() => {
     if (!resizing) {
@@ -327,9 +282,36 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     };
   }, [resizing]);
 
+  const stepType = stepDraft?.type ?? '';
+  const schema = getStudioNodeConfigurationSchema(stepType, descriptor);
+  const hasSchema = hasStudioNodeConfigurationSchema(stepType, descriptor);
+  const coveredParameters = new Set(schema.fields.map((field) =>
+    resolveStepParameterName(stepType, field.parameterName),
+  ));
+  const uncoveredEdits = Object.fromEntries(Object.entries(configurationValues)
+    .filter(([name]) => !coveredParameters.has(name)));
+  const parameters = {
+    ...(stepDraft ? readCurrentParameters(stepDraft, rawConfigurationText) : {}),
+    ...uncoveredEdits,
+  };
+  const fieldValues = readStudioNodeConfigurationValues(stepType, parameters, descriptor);
+  for (const field of schema.fields) {
+    const parameterName = resolveStepParameterName(stepType, field.parameterName);
+    if (Object.hasOwn(configurationValues, parameterName)) {
+      fieldValues[field.name] = configurationValues[parameterName];
+    }
+  }
+  const hasSemanticFields = schema.fields.length > 0;
+  const currentStructuredError = structuredError
+    ? applyStudioNodeConfigurationValuesWithValidation(stepType, parameters, fieldValues, descriptor).errors[0] ?? ''
+    : '';
+  const displayedRawConfiguration = Object.keys(uncoveredEdits).length && !rawError
+    ? formatRawStudioNodeConfiguration(parameters)
+    : rawConfigurationText;
+
   React.useEffect(() => {
-    onConfigurationErrorChange(structuredError || rawError);
-  }, [onConfigurationErrorChange, rawError, structuredError]);
+    onConfigurationErrorChange(currentStructuredError || rawError);
+  }, [onConfigurationErrorChange, rawError, currentStructuredError]);
 
   if (!stepDraft) {
     return null;
@@ -368,16 +350,9 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     "--workflow-node-inspector-text": token.colorText,
     "--workflow-node-inspector-text-strong": token.colorTextHeading,
   };
-  const parameters = readCurrentParameters(stepDraft, rawConfigurationText);
-  const schema = getStudioNodeConfigurationSchema(stepDraft.type, schemaParameters);
-  const hasSemanticFields = schema.fields.length > 0;
-  const showRawConfiguration = shouldShowRawStudioNodeConfiguration(
-    stepDraft.type,
-    schemaParameters,
-  );
   const nodeTypeLabel = formatStudioStepTypeLabel(stepDraft.type);
   const branchesSummary = summarizeBranches(stepDraft.branchesText);
-  const activeError = structuredError || rawError || error || "";
+  const activeError = currentStructuredError || rawError || error || "";
 
   const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -422,22 +397,26 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
 
   const updateFieldValue = (fieldName: string, value: string) => {
     const nextValues = {
-      ...configurationValues,
+      ...fieldValues,
       [fieldName]: value,
     };
     const result = applyStudioNodeConfigurationValuesWithValidation(
       stepDraft.type,
       parameters,
       nextValues,
-      schemaParameters,
+      descriptor,
     );
 
-    setConfigurationValues(nextValues);
+    const field = schema.fields.find((entry) => entry.name === fieldName);
+    const parameterName = resolveStepParameterName(
+      stepDraft.type,
+      field?.parameterName ?? fieldName,
+    );
+    setConfigurationValues((current) => ({ ...current, [parameterName]: value }));
     setStructuredError(result.errors[0] ?? "");
     setRawError("");
     if (result.valid) {
       setRawConfigurationText(formatRawStudioNodeConfiguration(result.parameters));
-      rememberSchemaParameters(result.parameters);
     }
   };
 
@@ -445,8 +424,8 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     const result = applyStudioNodeConfigurationValuesWithValidation(
       stepDraft.type,
       parameters,
-      configurationValues,
-      schemaParameters,
+      fieldValues,
+      descriptor,
     );
     const nextError = result.errors[0] ?? "";
     setStructuredError(nextError);
@@ -457,7 +436,6 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
 
     const nextRawText = formatRawStudioNodeConfiguration(result.parameters);
     setRawConfigurationText(nextRawText);
-    rememberSchemaParameters(result.parameters);
     onConfigurationChange(nextRawText);
   };
 
@@ -465,20 +443,13 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     try {
       const nextParameters = applyRawStudioNodeConfiguration(
         stepDraft.type,
-        rawConfigurationText,
+        displayedRawConfiguration,
       );
       const nextRawText = formatRawStudioNodeConfiguration(nextParameters);
       setRawError("");
       setStructuredError("");
       setRawConfigurationText(nextRawText);
-      const nextSchemaParameters = rememberSchemaParameters(nextParameters);
-      setConfigurationValues(
-        readStudioNodeConfigurationValues(
-          stepDraft.type,
-          nextParameters,
-          nextSchemaParameters,
-        ),
-      );
+      setConfigurationValues({});
       onConfigurationChange(nextRawText);
     } catch (error) {
       setRawError(
@@ -495,17 +466,10 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
   const updateRawConfigurationText = (value: string) => {
     setRawConfigurationText(value);
     try {
-      const nextParameters = applyRawStudioNodeConfiguration(stepDraft.type, value);
-      const nextSchemaParameters = rememberSchemaParameters(nextParameters);
+      applyRawStudioNodeConfiguration(stepDraft.type, value);
       setRawError("");
       setStructuredError("");
-      setConfigurationValues(
-        readStudioNodeConfigurationValues(
-          stepDraft.type,
-          nextParameters,
-          nextSchemaParameters,
-        ),
-      );
+      setConfigurationValues({});
     } catch (error) {
       setRawError(
         error instanceof Error
@@ -519,9 +483,9 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
   };
 
   const renderFieldControl = (field: StudioStructuredNodeConfigField) => {
-    const value = configurationValues[field.name] ?? "";
+    const value = fieldValues[field.name] ?? "";
     const control = field.control ?? field.kind;
-    if (control === "select") {
+    if (control === "select" && !isNodeConfigurationExpression(value)) {
       return (
         <Select
           aria-label={formatConsoleMessage(field.label)}
@@ -535,11 +499,11 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
       );
     }
 
-    if (control === "boolean") {
+    if (control === "boolean" && ["", "true", "false"].includes(value)) {
       return (
         <Switch
           aria-label={formatConsoleMessage(field.label)}
-          checked={value === "true"}
+          checked={(value || String(field.defaultValue ?? "")) === "true"}
           onChange={(checked) => updateFieldValue(field.name, String(checked))}
         />
       );
@@ -554,7 +518,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           placeholder={
             field.placeholder ? formatConsoleMessage(field.placeholder) : undefined
           }
-          status={structuredError ? "error" : undefined}
+          status={currentStructuredError ? "error" : undefined}
           value={value}
         />
       );
@@ -575,7 +539,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           placeholder={
             field.placeholder ? formatConsoleMessage(field.placeholder) : undefined
           }
-          status={structuredError ? "error" : undefined}
+          status={currentStructuredError ? "error" : undefined}
           value={value}
         />
       );
@@ -588,7 +552,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
         placeholder={
           field.placeholder ? formatConsoleMessage(field.placeholder) : undefined
         }
-        status={structuredError ? "error" : undefined}
+        status={currentStructuredError ? "error" : undefined}
         value={value}
       />
     );
@@ -760,7 +724,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
               </Typography.Paragraph>
             </div>
             <Button
-              disabled={Boolean(structuredError)}
+              disabled={Boolean(currentStructuredError)}
               onClick={applyConfigurationToDraft}
               size="small"
               type="primary"
@@ -772,7 +736,16 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
             </Button>
           </Space>
 
-          {hasSemanticFields ? (
+          <NodeConfigurationCatalogStatus
+            cached={Boolean(descriptor)}
+                fallback={!descriptor && hasSchema}
+            failed={descriptorQuery.isError}
+            loading={descriptorQuery.isPending}
+            missing={!descriptor}
+            onRetry={() => { void descriptorQuery.refetch(); }}
+            retrying={descriptorQuery.isFetching}
+          />
+          {descriptorQuery.isPending ? null : hasSemanticFields ? (
             schema.fields.map((field) => (
               <div key={field.name} style={fieldStackStyle}>
                 <Typography.Text strong style={{ color: token.colorText }}>
@@ -786,7 +759,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
                 ) : null}
               </div>
             ))
-          ) : (
+          ) : hasSchema ? (
             <Alert
               message={t(
                 "teamMemberWorkflowStudio.nodeDetail.noSemanticFields",
@@ -795,7 +768,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
               showIcon
               type="info"
             />
-          )}
+          ) : null}
 
           {activeError ? (
             <Alert
@@ -806,8 +779,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           ) : null}
         </section>
 
-        {showRawConfiguration ? (
-          <Collapse
+        <Collapse
             bordered={false}
             items={[
               {
@@ -839,7 +811,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
                         fontFamily:
                           "SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace",
                       }}
-                      value={rawConfigurationText}
+                      value={displayedRawConfiguration}
                     />
                     <Button
                       disabled={Boolean(rawError)}
@@ -861,7 +833,6 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
               borderRadius: token.borderRadius,
             }}
           />
-        ) : null}
         </div>
       </aside>
     </>

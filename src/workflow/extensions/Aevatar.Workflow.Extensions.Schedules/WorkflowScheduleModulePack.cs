@@ -8,7 +8,7 @@ public sealed class WorkflowScheduleModulePack : IWorkflowModulePack
 {
     private static readonly IReadOnlyList<WorkflowModuleRegistration> ModuleRegistrations =
     [
-        WorkflowModuleRegistration.Create<WorkflowSelfRescheduleModule>("self_reschedule", "schedule_workflow"),
+        WorkflowModuleRegistration.Create<WorkflowSelfRescheduleModule>(WorkflowSelfRescheduleModule.Definition, "self_reschedule", "schedule_workflow"),
     ];
 
     public string Name => "workflow.extensions.schedules";

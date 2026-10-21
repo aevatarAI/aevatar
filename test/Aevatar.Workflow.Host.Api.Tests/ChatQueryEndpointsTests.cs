@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.Capabilities;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Primitives;
 using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -168,6 +169,19 @@ public sealed class ChatQueryEndpointsTests
                                 Description = "Workflow name.",
                                 Default = string.Empty,
                                 Enum = ["child", "parent", "child"],
+                                Label = "Workflow name",
+                                Control = WorkflowPrimitiveParameterControl.Select,
+                                Placeholder = "child_workflow",
+                            },
+                            new WorkflowPrimitiveParameterCapability
+                            {
+                                Name = "timeout_ms",
+                                Type = "int",
+                                Label = "Timeout ms",
+                                Control = WorkflowPrimitiveParameterControl.Number,
+                                Minimum = 1,
+                                Maximum = 10,
+                                Integer = true,
                             },
                         ],
                     },
@@ -198,6 +212,18 @@ public sealed class ChatQueryEndpointsTests
         body.Should().Contain("sub_workflow");
         body.Should().Contain("child_example");
         body.Should().NotContain("ignored_non_example");
+        using var json = JsonDocument.Parse(body);
+        var parameter = json.RootElement[0].GetProperty("parameters")[0];
+        parameter.GetProperty("label").GetString().Should().Be("Workflow name");
+        parameter.GetProperty("control").GetString().Should().Be("select");
+        parameter.GetProperty("placeholder").GetString().Should().Be("child_workflow");
+        var numericParameter = json.RootElement[0].GetProperty("parameters")[1];
+        numericParameter.GetProperty("control").GetString().Should().Be("number");
+        numericParameter.GetProperty("minimum").GetDouble().Should().Be(1);
+        numericParameter.GetProperty("maximum").GetDouble().Should().Be(10);
+        numericParameter.GetProperty("integer").GetBoolean().Should().BeTrue();
+        parameter.GetProperty("enumValues").EnumerateArray().Select(value => value.GetString())
+            .Should().Equal("child", "parent");
         service.Calls.Should().ContainInOrder("GetCapabilities", "ListWorkflowCatalog");
         service.CancellationTokens.Should().OnlyContain(token => token == cts.Token);
     }
@@ -224,6 +250,14 @@ public sealed class ChatQueryEndpointsTests
             Capabilities = new WorkflowCapabilitiesDocument
             {
                 SchemaVersion = "capabilities.v1",
+                Primitives =
+                [
+                    new WorkflowPrimitiveCapability
+                    {
+                        Name = "delay",
+                        Parameters = [new() { Name = "duration_ms", Type = "int", Control = WorkflowPrimitiveParameterControl.Number }],
+                    },
+                ],
             },
         };
         using var cts = new CancellationTokenSource();
@@ -233,7 +267,11 @@ public sealed class ChatQueryEndpointsTests
         var detail = await ChatQueryEndpoints.GetWorkflowDetail("direct", service, cts.Token);
 
         (await ExecuteAsync(catalog)).Should().Contain("direct");
-        (await ExecuteAsync(capabilities)).Should().Contain("capabilities.v1");
+        var capabilitiesBody = await ExecuteAsync(capabilities);
+        capabilitiesBody.Should().Contain("capabilities.v1");
+        using var capabilitiesJson = JsonDocument.Parse(capabilitiesBody);
+        capabilitiesJson.RootElement.GetProperty("primitives")[0].GetProperty("parameters")[0]
+            .GetProperty("control").GetString().Should().Be("number");
         (await ExecuteAsync(detail)).Should().Contain("direct");
         service.Calls.Should().ContainInOrder(
             "ListWorkflowCatalog",

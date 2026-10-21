@@ -1,5 +1,6 @@
 import {
   decodeWorkflowCapabilitiesResponse,
+  decodeWorkflowPrimitiveDescriptorsResponse,
   decodeWorkflowTemplateDetailResponse,
   decodeWorkflowTemplateListResponse,
 } from '../runtimeDecoders';
@@ -21,6 +22,29 @@ const template = {
   requiresLlmProvider: true,
   freshness,
 };
+
+describe('primitive descriptor form contracts', () => {
+  const descriptor = {
+    name: 'extension_step', aliases: [], category: 'general', description: '',
+    exampleWorkflows: [],
+    parameters: [{
+      name: 'count', type: 'int', required: false, description: 'Batch size.',
+      default: '3', enumValues: [], label: 'Batch size', control: 'number',
+      placeholder: '3', minimum: 1, maximum: 10, integer: true,
+    }],
+  };
+
+  it('preserves backend form hints and constraints at the API boundary', () => {
+    expect(decodeWorkflowPrimitiveDescriptorsResponse([descriptor])).toEqual([descriptor]);
+  });
+
+  it('rejects unsupported controls instead of silently rendering a different input', () => {
+    expect(() => decodeWorkflowPrimitiveDescriptorsResponse([{
+      ...descriptor,
+      parameters: [{ ...descriptor.parameters[0], control: 'unsupported-control' }],
+    }])).toThrow('control');
+  });
+});
 
 describe('decodeWorkflowCapabilitiesResponse', () => {
   it('decodes primitive capabilities without the removed closedWorldBlocked field', () => {

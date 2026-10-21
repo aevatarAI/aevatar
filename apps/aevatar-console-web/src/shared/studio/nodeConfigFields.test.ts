@@ -1,181 +1,171 @@
+import type { WorkflowPrimitiveDescriptor } from '@/shared/models/runtime/query';
 import {
   buildNodeConfigFields,
-  formatNodeConfigFieldCopy,
   updateNodeConfigFieldParametersText,
   validateNodeConfigParametersText,
 } from './nodeConfigFields';
 
-describe('nodeConfigFields', () => {
-  it('adapts connector fields without requiring the renderer to know the node type', () => {
-    const fieldSet = buildNodeConfigFields({
-      connectors: [
-        {
-          enabled: true,
-          name: 'web-search',
-          retry: 0,
-          timeoutMs: 10000,
-          type: 'http',
-        },
-      ],
-      nodeType: 'connector_call',
-      parametersText: JSON.stringify({ connector: 'web-search', limit: 3 }),
-    });
+const descriptor: WorkflowPrimitiveDescriptor = {
+  name: 'custom_step',
+  aliases: [],
+  category: 'general',
+  description: '',
+  exampleWorkflows: [],
+  parameters: [
+    {
+      name: 'config',
+      type: 'object',
+      control: 'json',
+      label: 'Configuration',
+      required: false,
+      description: '',
+      default: '',
+      enumValues: [],
+    },
+  ],
+};
 
-    expect(fieldSet.parseError).toBe('');
-    expect(fieldSet.fields.map((field) => field.name)).toEqual(
-      expect.arrayContaining(['connector', 'operation', 'limit']),
-    );
-    expect(fieldSet.fields.find((field) => field.name === 'connector')).toMatchObject({
-      kind: 'select',
-      options: [{ label: 'web-search - http', value: 'web-search' }],
-      value: 'web-search',
-    });
-    expect(fieldSet.fields.find((field) => field.name === 'limit')).toMatchObject({
-      kind: 'text',
-      value: '3',
-      valueType: 'number',
-    });
+describe('legacy Studio descriptor adapter', () => {
+  it('writes fallback edits to the canonical parameter instead of the display field name', () => {
+    const parametersText = '{"prompt_prefix":"Before","retained":true}';
+    const field = buildNodeConfigFields({
+      nodeType: 'llm_call',
+      parametersText,
+    }).fields[0];
+    expect(field).toMatchObject({ name: 'prompt_prefix', value: 'Before' });
+    expect(
+      JSON.parse(
+        updateNodeConfigFieldParametersText({
+          field,
+          nodeType: 'llm_call',
+          parametersText,
+          rawValue: 'After',
+        }),
+      ),
+    ).toEqual({ prompt_prefix: 'After', retained: true });
   });
 
-  it('maps runtime prompt descriptors to prompt_prefix for llm_call', () => {
-    const fieldSet = buildNodeConfigFields({
-      nodeType: 'llm_call',
-      parametersText: JSON.stringify({ prompt: 'Legacy prompt' }),
-      primitiveDescriptor: {
-        aliases: [],
-        category: 'ai',
-        description: 'Call an LLM.',
-        exampleWorkflows: [],
-        name: 'llm_call',
-        parameters: [
-          {
-            default: '',
-            description: 'Prompt override',
-            enumValues: [],
-            name: 'prompt',
-            required: false,
-            type: 'string',
-          },
-        ],
-      },
+  it('uses the same server fields and preserves other parameters during JSON edits', () => {
+    const parametersText = JSON.stringify({
+      config: { mode: 'strict' },
+      retained: 3,
     });
-
-    expect(fieldSet.fields).toHaveLength(1);
-    expect(fieldSet.fields[0]).toMatchObject({
-      name: 'prompt_prefix',
-      value: 'Legacy prompt',
-    });
-    expect(formatNodeConfigFieldCopy(fieldSet.fields[0].label)).toBe(
-      'Prompt instruction',
-    );
-
-    const nextText = updateNodeConfigFieldParametersText({
-      field: fieldSet.fields[0],
-      nodeType: 'llm_call',
-      parametersText: JSON.stringify({ prompt: 'Legacy prompt' }),
-      rawValue: 'Translate the input.',
-    });
-
-    expect(JSON.parse(nextText)).toEqual({
-      prompt_prefix: 'Translate the input.',
-    });
-  });
-
-  it('keeps llm prompt descriptors text-editable even when runtime metadata reports json', () => {
-    const fieldSet = buildNodeConfigFields({
-      nodeType: 'llm_call',
-      parametersText: JSON.stringify({}),
-      primitiveDescriptor: {
-        aliases: [],
-        category: 'ai',
-        description: 'Call an LLM.',
-        exampleWorkflows: [],
-        name: 'llm_call',
-        parameters: [
-          {
-            default: '{}',
-            description: 'Prompt override',
-            enumValues: [],
-            name: 'prompt',
-            required: false,
-            type: 'json',
-          },
-        ],
-      },
-    });
-
-    expect(fieldSet.fields[0]).toMatchObject({
-      kind: 'text',
-      name: 'prompt_prefix',
-      value: '',
-      valueType: 'string',
-    });
-
-    const nextText = updateNodeConfigFieldParametersText({
-      field: fieldSet.fields[0],
-      nodeType: 'llm_call',
-      parametersText: JSON.stringify({}),
-      rawValue: 'Summarize the customer request in one sentence.',
-    });
-
-    expect(JSON.parse(nextText)).toEqual({
-      prompt_prefix: 'Summarize the customer request in one sentence.',
-    });
-  });
-
-  it('infers unknown-node fields and edits object or array values through JSON fallback', () => {
-    const fieldSet = buildNodeConfigFields({
+    const fields = buildNodeConfigFields({
       nodeType: 'custom_step',
-      parametersText: JSON.stringify({
-        config: { mode: 'strict' },
-        tags: ['risk'],
-      }),
-    });
-
-    expect(fieldSet.fields.find((field) => field.name === 'config')).toMatchObject({
+      parametersText,
+      primitiveDescriptor: descriptor,
+    }).fields;
+    expect(fields).toHaveLength(1);
+    expect(fields[0]).toMatchObject({
+      name: 'config',
       kind: 'json',
-      value: '{\n  "mode": "strict"\n}',
       valueType: 'object',
     });
-    expect(fieldSet.fields.find((field) => field.name === 'tags')).toMatchObject({
-      kind: 'json',
-      value: '[\n  "risk"\n]',
-      valueType: 'array',
-    });
+    expect(
+      JSON.parse(
+        updateNodeConfigFieldParametersText({
+          field: fields[0],
+          nodeType: 'custom_step',
+          parametersText,
+          rawValue: '{"mode":"relaxed"}',
+        }),
+      ),
+    ).toEqual({ config: { mode: 'relaxed' }, retained: 3 });
+  });
 
-    const nextText = updateNodeConfigFieldParametersText({
-      field: fieldSet.fields.find((field) => field.name === 'config')!,
+  it('retains invalid JSON text so the apply path cannot silently accept it', () => {
+    const parametersText = '{"config":{}}';
+    const field = buildNodeConfigFields({
       nodeType: 'custom_step',
-      parametersText: JSON.stringify({
-        config: { mode: 'strict' },
-        tags: ['risk'],
-      }),
-      rawValue: '{\n  "mode": "relaxed"\n}',
+      parametersText,
+      primitiveDescriptor: descriptor,
+    }).fields[0];
+    const nextText = updateNodeConfigFieldParametersText({
+      field,
+      nodeType: 'custom_step',
+      parametersText,
+      rawValue: '{"mode":',
     });
+    expect(validateNodeConfigParametersText(nextText)).toBeTruthy();
+  });
 
-    expect(JSON.parse(nextText)).toEqual({
-      config: { mode: 'relaxed' },
-      tags: ['risk'],
+  it('preserves object and array template literals through legacy JSON and sibling edits', () => {
+    const templateDescriptor: WorkflowPrimitiveDescriptor = {
+      ...descriptor,
+      parameters: [
+        ...descriptor.parameters,
+        { ...descriptor.parameters[0], name: 'items', type: 'array' },
+        { ...descriptor.parameters[0], name: 'arguments', type: 'string' },
+        {
+          ...descriptor.parameters[0],
+          name: 'typed_json',
+          type: 'json',
+          control: 'text',
+        },
+        {
+          ...descriptor.parameters[0],
+          name: 'message',
+          type: 'string',
+          control: 'text',
+        },
+      ],
+    };
+    const parameters = {
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Workflow expressions are authored as literal strings.
+      config: { message: '${input}' },
+      items: ['{{ steps.previous }}'],
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Workflow expressions are authored as literal strings.
+      arguments: '{ "message": "${input}" }',
+      typed_json: { message: '{{ steps.previous }}' },
+      message: 'before',
+    };
+    let parametersText = JSON.stringify(parameters);
+    const fields = buildNodeConfigFields({
+      nodeType: 'custom_step',
+      parametersText,
+      primitiveDescriptor: templateDescriptor,
+    }).fields;
+
+    for (const field of fields) {
+      parametersText = updateNodeConfigFieldParametersText({
+        field,
+        nodeType: 'custom_step',
+        parametersText,
+        rawValue: field.name === 'message' ? 'after' : field.value,
+      });
+    }
+
+    expect(JSON.parse(parametersText)).toEqual({
+      ...parameters,
+      message: 'after',
     });
   });
 
-  it('keeps invalid object edits in parametersText so the existing apply path blocks them', () => {
-    const fieldSet = buildNodeConfigFields({
+  it('keeps whole-field runtime expressions in legacy JSON fields', () => {
+    const expressionDescriptor: WorkflowPrimitiveDescriptor = {
+      ...descriptor,
+      parameters: [
+        ...descriptor.parameters,
+        { ...descriptor.parameters[0], name: 'items', type: 'array' },
+      ],
+    };
+    const parameters = { config: '{{ steps.previous }}', items: '$input' };
+    let parametersText = JSON.stringify(parameters);
+    const fields = buildNodeConfigFields({
       nodeType: 'custom_step',
-      parametersText: JSON.stringify({ config: { mode: 'strict' } }),
-    });
-    const configField = fieldSet.fields.find((field) => field.name === 'config');
-    if (!configField) {
-      throw new Error('Expected config field.');
+      parametersText,
+      primitiveDescriptor: expressionDescriptor,
+    }).fields;
+
+    for (const field of fields) {
+      parametersText = updateNodeConfigFieldParametersText({
+        field,
+        nodeType: 'custom_step',
+        parametersText,
+        rawValue: field.value,
+      });
     }
 
-    const nextText = updateNodeConfigFieldParametersText({
-      field: configField,
-      nodeType: 'custom_step',
-      parametersText: JSON.stringify({ config: { mode: 'strict' } }),
-      rawValue: '{ "mode": ',
-    });
-
-    expect(validateNodeConfigParametersText(nextText)).toBeTruthy();
+    expect(JSON.parse(parametersText)).toEqual(parameters);
   });
 });

@@ -79,6 +79,12 @@ public static class WorkflowPrimitiveCatalog
             : normalized;
     }
 
+    public static IReadOnlyList<string> GetAliases(string canonicalType) =>
+        CanonicalTypeMap
+            .Where(pair => string.Equals(pair.Value, canonicalType, StringComparison.OrdinalIgnoreCase))
+            .Select(pair => pair.Key)
+            .ToList();
+
     public static bool IsStepTypeParameterKey(string key) =>
         key.EndsWith("_step_type", StringComparison.OrdinalIgnoreCase) ||
         key.Equals("step", StringComparison.OrdinalIgnoreCase);

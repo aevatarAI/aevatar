@@ -10,6 +10,8 @@ import React from 'react';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
+import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
+import { workflowNodeDescriptorFixtures } from '../../../tests/workflowPrimitiveDescriptorFixtures';
 import { history } from '@/shared/navigation/history';
 import { StudioApiError, studioApi } from '@/shared/studio/api';
 import {
@@ -25,6 +27,10 @@ const mockConsoleToast = {
   success: jest.fn(),
   warning: jest.fn(),
 };
+
+jest.mock('@/shared/api/runtimeQueryApi', () => ({
+  runtimeQueryApi: { listPrimitives: jest.fn() },
+}));
 
 jest.mock('@/shared/ui/ConsoleToast', () => ({
   useConsoleToast: () => mockConsoleToast,
@@ -616,6 +622,7 @@ function mockNewWorkflowMemberCreateFixtures() {
 describe('TeamMemberWorkflowStudioPage', () => {
   beforeEach(() => {
     jest.resetAllMocks();
+    jest.mocked(runtimeQueryApi.listPrimitives).mockResolvedValue(workflowNodeDescriptorFixtures);
     window.history.replaceState({}, '', '/');
     mockTeam();
     mockSerializeYaml();
@@ -865,7 +872,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('graph-canvas')).toHaveTextContent('nodes:1');
     });
-    fireEvent.change(screen.getByLabelText('Instruction'), {
+    fireEvent.change(await screen.findByLabelText('Instruction'), {
       target: { value: '' },
     });
 
@@ -3527,16 +3534,16 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(screen.queryByText('llm_call')).toBeNull();
     expect(screen.queryByText('Input')).toBeNull();
     expect(within(inspector).getByText('Configuration')).toBeTruthy();
-    expect(screen.getByLabelText('Instruction')).toHaveValue(
+    expect(await screen.findByLabelText('Instruction')).toHaveValue(
       'Triage the request',
     );
     expect(screen.queryByText('Parameters')).toBeNull();
     expect(screen.queryByLabelText('Raw node configuration')).toBeNull();
-    expect(screen.queryByText('Advanced raw configuration')).toBeNull();
+    expect(screen.getByText('Advanced raw configuration')).toBeVisible();
     expect(screen.queryByText(/prompt_prefix/)).toBeNull();
     expect(screen.queryByText('Output')).toBeNull();
 
-    fireEvent.change(screen.getByLabelText('Instruction'), {
+    fireEvent.change(await screen.findByLabelText('Instruction'), {
       target: { value: 'Updated instruction' },
     });
     expect(screen.getByLabelText('Instruction')).toHaveValue(
@@ -4002,7 +4009,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
     expect(screen.getByText('LLM call')).toBeTruthy();
     expect(screen.queryByText('llm_call')).toBeNull();
     expect(screen.queryByLabelText('Raw node configuration')).toBeNull();
-    expect(screen.queryByText('Advanced raw configuration')).toBeNull();
+    expect(screen.getByText('Advanced raw configuration')).toBeVisible();
 
     fireEvent.change(screen.getByLabelText('TTL seconds'), {
       target: { value: '900' },
@@ -6915,7 +6922,7 @@ describe('TeamMemberWorkflowStudioPage', () => {
       target: { value: 'Workflow Alpha Published' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'node:step:triage' }));
-    fireEvent.change(screen.getByLabelText('Instruction'), {
+    fireEvent.change(await screen.findByLabelText('Instruction'), {
       target: { value: '' },
     });
 
