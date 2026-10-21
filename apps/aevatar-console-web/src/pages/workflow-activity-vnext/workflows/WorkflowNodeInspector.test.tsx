@@ -6,9 +6,6 @@ import {
   within,
 } from '@testing-library/react';
 import React from 'react';
-import { createIntl } from 'react-intl';
-import enUSMessages from '@/locales/messages/en-US';
-import zhCNMessages from '@/locales/messages/zh-CN';
 import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
 import type { WorkflowPrimitiveDescriptor } from '@/shared/models/runtime/query';
 import {
@@ -172,13 +169,18 @@ describe('WorkflowNodeInspector', () => {
     );
 
     fireEvent.click(screen.getByText('Advanced JSON'));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Raw configuration' }), {
-      target: {
-        value: JSON.stringify({ tool: 'nyxid_proxy', arguments: '$input' }),
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Raw configuration' }),
+      {
+        target: {
+          value: JSON.stringify({ tool: 'nyxid_proxy', arguments: '$input' }),
+        },
       },
-    });
+    );
 
-    expect(screen.getByRole('textbox', { name: 'Arguments' })).toHaveValue('$input');
+    expect(screen.getByRole('textbox', { name: 'Arguments' })).toHaveValue(
+      '$input',
+    );
     expect(
       screen.queryByRole('textbox', { name: 'Arguments JSON' }),
     ).not.toBeInTheDocument();
@@ -190,7 +192,9 @@ describe('WorkflowNodeInspector', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Apply step' }));
 
     await waitFor(() => expect(onConfigurationChange).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(onConfigurationChange.mock.calls[0][0] as string)).toEqual({
+    expect(
+      JSON.parse(onConfigurationChange.mock.calls[0][0] as string),
+    ).toEqual({
       tool: 'nyxid_proxy',
       arguments: `\${args}`,
     });
@@ -224,7 +228,15 @@ describe('WorkflowNodeInspector', () => {
   });
 
   it('states when a step has no settings instead of leaving an empty panel', () => {
-    renderInspector(voteDraft);
+    renderInspector(
+      voteDraft,
+      undefined,
+      workflowNodeDescriptorFixtures.map((descriptor) =>
+        descriptor.name === 'vote'
+          ? { ...descriptor, parameters: [] }
+          : descriptor,
+      ),
+    );
 
     expect(
       screen.getByText('No settings are needed for this step.'),
