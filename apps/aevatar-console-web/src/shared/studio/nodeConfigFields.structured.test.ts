@@ -171,6 +171,7 @@ describe('descriptor-driven node configuration', () => {
       parameter('count', { type: 'int', control: 'number', default: '10' }),
       parameter('enabled', { type: 'bool', control: 'boolean' }),
       parameter('payload', { type: 'object', control: 'json' }),
+      parameter('items', { type: 'array', control: 'json' }),
       parameter('optional', { default: 'server-default' }),
     ]);
     const parameters = {
@@ -178,6 +179,7 @@ describe('descriptor-driven node configuration', () => {
       // biome-ignore lint/suspicious/noTemplateCurlyInString: Workflow expressions are authored as literal strings.
       enabled: '${flags.enabled}',
       payload: '{{ steps.previous }}',
+      items: '$input',
     };
     const values = readStudioNodeConfigurationValues(
       'extension_step',
@@ -274,6 +276,43 @@ describe('descriptor-driven node configuration', () => {
       valid: true,
       errors: [],
       parameters,
+    });
+  });
+
+  it('preserves object and array template literals while editing sibling parameters', () => {
+    const descriptor = primitive('extension_step', [
+      parameter('payload', { type: 'object', control: 'json' }),
+      parameter('items', { type: 'array', control: 'json' }),
+      parameter('arguments', { type: 'string', control: 'json' }),
+      parameter('typed_json', { type: 'json', control: 'text' }),
+      parameter('message'),
+    ]);
+    const parameters = {
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Workflow expressions are authored as literal strings.
+      payload: { message: '${input}' },
+      items: ['{{ steps.previous }}'],
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Workflow expressions are authored as literal strings.
+      arguments: '{ "message": "${input}" }',
+      typed_json: { message: '{{ steps.previous }}' },
+      message: 'before',
+    };
+    const values = readStudioNodeConfigurationValues(
+      'extension_step',
+      parameters,
+      descriptor,
+    );
+
+    expect(
+      applyStudioNodeConfigurationValuesWithValidation(
+        'extension_step',
+        parameters,
+        { ...values, message: 'after' },
+        descriptor,
+      ),
+    ).toEqual({
+      valid: true,
+      errors: [],
+      parameters: { ...parameters, message: 'after' },
     });
   });
 });

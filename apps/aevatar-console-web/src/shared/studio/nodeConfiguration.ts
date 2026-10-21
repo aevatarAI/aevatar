@@ -287,7 +287,8 @@ function readFieldValueFromInput(
     return invalid('required', '{label} is required.');
   }
 
-  if (isNodeConfigurationExpression(value)) {
+  const isExpression = isNodeConfigurationExpression(value);
+  if (isExpression && !['array', 'object', 'json'].includes(parseKind)) {
     return { include: true, value };
   }
 
@@ -319,6 +320,7 @@ function readFieldValueFromInput(
         }
         return { include: true, value: isString ? value : parsed };
       } catch {
+        if (isExpression) return { include: true, value };
         return invalid('json', '{label} must be valid JSON.');
       }
     }

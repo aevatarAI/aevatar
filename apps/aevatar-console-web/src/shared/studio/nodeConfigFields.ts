@@ -153,12 +153,21 @@ function coerceFieldValue(field: NodeConfigField, rawValue: string): unknown {
   const trimmed = rawValue.trim();
   const valueType = field.valueType.trim().toLowerCase();
 
-  if (isNodeConfigurationExpression(rawValue)) return rawValue;
-
-  if (field.kind === 'json') {
-    const parsed: unknown = JSON.parse(rawValue);
-    return valueType === 'string' ? rawValue : parsed;
+  if (
+    field.kind === 'json' ||
+    ['json', 'object', 'array', 'map'].includes(valueType)
+  ) {
+    try {
+      const parsed: unknown = JSON.parse(rawValue);
+      return valueType === 'string' ? rawValue : parsed;
+    } catch (error) {
+      if (isNodeConfigurationExpression(rawValue)) return rawValue;
+      if (field.kind === 'json') throw error;
+      return rawValue;
+    }
   }
+
+  if (isNodeConfigurationExpression(rawValue)) return rawValue;
 
   if (valueType === 'bool' || valueType === 'boolean') {
     return trimmed.toLowerCase() === 'true';
@@ -176,21 +185,6 @@ function coerceFieldValue(field: NodeConfigField, rawValue: string): unknown {
     if (Number.isInteger(parsed) && !Number.isSafeInteger(parsed))
       return rawValue;
     return Number.isFinite(parsed) ? parsed : trimmed;
-  }
-
-  if (
-    (valueType === 'json' ||
-      valueType === 'object' ||
-      valueType === 'array' ||
-      valueType === 'map') &&
-    ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-      (trimmed.startsWith('[') && trimmed.endsWith(']')))
-  ) {
-    try {
-      return JSON.parse(trimmed) as unknown;
-    } catch {
-      return trimmed;
-    }
   }
 
   return rawValue;

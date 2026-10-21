@@ -129,10 +129,13 @@ case calibration because they protect distinct failure modes:
 | Expressions and absent defaults | Runtime references are coerced, or defaults are materialized |
 | Missing descriptor fallback | Older or unavailable catalogues make known nodes unusable |
 | JSON strings and whitespace | Round-trip conversion changes runtime input semantics |
+| Structured JSON with nested templates | Applying a sibling edit converts an object or array into a string when its contents include runtime references |
 | Large integer literals | JavaScript silently rounds a valid workflow parameter |
 | Legacy adapter with remote fields | The older Studio surface keeps a parallel field source |
 | Legacy fallback canonical edits | A presentation field name is written as a runtime parameter |
 | Invalid JSON in the legacy adapter | An unfinished raw edit is silently accepted |
+| Legacy structured JSON with nested templates | JSON and sibling edits stringify object or array containers, including when the value type differs from its display control |
+| Legacy whole-field JSON expressions | Parsing structured literals rejects an execution-time reference that supplies the entire object or array |
 | Decoder authoring hints | The network boundary drops controls or constraints |
 | Decoder unknown control rejection | Unsupported server controls produce misleading forms |
 | vNext remote field editing | The rendered inspector still uses its shipped field list |

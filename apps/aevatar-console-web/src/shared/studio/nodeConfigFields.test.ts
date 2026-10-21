@@ -88,4 +88,84 @@ describe('legacy Studio descriptor adapter', () => {
     });
     expect(validateNodeConfigParametersText(nextText)).toBeTruthy();
   });
+
+  it('preserves object and array template literals through legacy JSON and sibling edits', () => {
+    const templateDescriptor: WorkflowPrimitiveDescriptor = {
+      ...descriptor,
+      parameters: [
+        ...descriptor.parameters,
+        { ...descriptor.parameters[0], name: 'items', type: 'array' },
+        { ...descriptor.parameters[0], name: 'arguments', type: 'string' },
+        {
+          ...descriptor.parameters[0],
+          name: 'typed_json',
+          type: 'json',
+          control: 'text',
+        },
+        {
+          ...descriptor.parameters[0],
+          name: 'message',
+          type: 'string',
+          control: 'text',
+        },
+      ],
+    };
+    const parameters = {
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Workflow expressions are authored as literal strings.
+      config: { message: '${input}' },
+      items: ['{{ steps.previous }}'],
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Workflow expressions are authored as literal strings.
+      arguments: '{ "message": "${input}" }',
+      typed_json: { message: '{{ steps.previous }}' },
+      message: 'before',
+    };
+    let parametersText = JSON.stringify(parameters);
+    const fields = buildNodeConfigFields({
+      nodeType: 'custom_step',
+      parametersText,
+      primitiveDescriptor: templateDescriptor,
+    }).fields;
+
+    for (const field of fields) {
+      parametersText = updateNodeConfigFieldParametersText({
+        field,
+        nodeType: 'custom_step',
+        parametersText,
+        rawValue: field.name === 'message' ? 'after' : field.value,
+      });
+    }
+
+    expect(JSON.parse(parametersText)).toEqual({
+      ...parameters,
+      message: 'after',
+    });
+  });
+
+  it('keeps whole-field runtime expressions in legacy JSON fields', () => {
+    const expressionDescriptor: WorkflowPrimitiveDescriptor = {
+      ...descriptor,
+      parameters: [
+        ...descriptor.parameters,
+        { ...descriptor.parameters[0], name: 'items', type: 'array' },
+      ],
+    };
+    const parameters = { config: '{{ steps.previous }}', items: '$input' };
+    let parametersText = JSON.stringify(parameters);
+    const fields = buildNodeConfigFields({
+      nodeType: 'custom_step',
+      parametersText,
+      primitiveDescriptor: expressionDescriptor,
+    }).fields;
+
+    for (const field of fields) {
+      parametersText = updateNodeConfigFieldParametersText({
+        field,
+        nodeType: 'custom_step',
+        parametersText,
+        rawValue: field.value,
+      });
+    }
+
+    expect(JSON.parse(parametersText)).toEqual(parameters);
+  });
 });
