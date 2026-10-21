@@ -47,6 +47,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Work Orders](canon/work-orders.md)
 - [Workflow 可见性模型：公共模板目录 vs scope 私有资源](canon/workflow-catalog-visibility.md)
 - [Workflow Delivery Control Plane](canon/workflow-delivery.md)
+- [Workflow Primitive Descriptors and Configuration Forms](canon/workflow-primitive-descriptors.md)
 - [Workflow Primitives 参考手册](canon/workflow-primitives.md)
 - [工作流引擎设计与实践](canon/workflow-runtime.md)
 
