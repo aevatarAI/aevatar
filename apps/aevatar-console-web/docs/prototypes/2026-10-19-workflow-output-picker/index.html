@@ -481,9 +481,12 @@
       if (/[{}\s]/.test(typed) || (!'steps'.startsWith(typed) && !typed.startsWith('steps.'))) return null;
       // Replace just this token, not the surrounding sentence or a second reference.
       const close = text.indexOf('}', caret), nested = text.indexOf('${', caret);
+      const tail = close >= caret ? text.slice(caret, close) : '';
+      // An ambiguous closed tail must be edited before autocomplete can replace it.
+      if (close >= caret && (nested < 0 || close < nested) && !tail.includes('{') && /\s/.test(tail)) return null;
       // Closed expressions may contain a mistyped path; replace their whole tail.
       // Unclosed prefixes preserve the existing sentence to the right of the caret.
-      const end = close >= caret && (nested < 0 || close < nested) && !/\s/.test(text.slice(caret, close)) ? close + 1 : caret;
+      const end = close >= caret && (nested < 0 || close < nested) && !/[\s{]/.test(text.slice(caret, close)) ? close + 1 : caret;
       return { start, end, typed };
     }
     function completionFor(token, targetId) {
