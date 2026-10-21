@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>变量输入联想 · Aevatar 交互原型</title>
+  <style>
+    :root {
+      --ink: #1f2937; --muted: #667085; --line: #dce1e9; --soft: #f5f7fa;
+      --blue: #2563eb; --blue-soft: #eff5ff; --nav: #111c2e; --white: #fff;
+      --amber: #915800; --amber-soft: #fff8e9; --green: #13754c;
+      --radius: 6px; --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+      font-family: AlibabaSans, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      color: var(--ink); font-size: 13px; line-height: 1.5;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--white); }
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+    button, input, textarea, select { border-radius: var(--radius); }
+    button { transition: background .12s, border-color .12s; }
+    button:active:not(:disabled) { filter: brightness(.96); }
+    button:disabled { cursor: default; color: #8590a2; background: #f2f4f7; }
+    button:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #93b4fa; outline-offset: 2px; }
+    input:focus, textarea:focus { outline: 2px solid #adc7ff; border-color: var(--blue); }
+    input, textarea, select { min-width: 0; color: var(--ink); border: 1px solid #cdd4df; background: var(--white); }
+    input, select { min-height: 36px; padding: 7px 10px; }
+    input::placeholder, textarea::placeholder { color: #7d8797; }
+    textarea { width: 100%; min-height: 168px; resize: vertical; padding: 10px 12px; line-height: 1.75; }
+    code { font-family: var(--mono); font-size: 11px; overflow-wrap: anywhere; }
+    svg.icon { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    .topbar { height: 52px; display: flex; gap: 20px; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--line); }
+    .brand { font-size: 19px; font-weight: 750; letter-spacing: -.5px; }
+    .crumb { color: var(--muted); border-left: 1px solid var(--line); padding-left: 20px; }
+    .prototype-badge { margin-left: auto; color: var(--amber); background: var(--amber-soft); border: 1px solid #eedbb5; padding: 3px 9px; font-size: 11px; border-radius: 4px; white-space: nowrap; }
+    .shell { display: grid; grid-template-columns: 184px minmax(0,1fr); min-height: calc(100vh - 52px); }
+    .rail { background: var(--nav); color: #b6c0d0; padding: 22px 12px; }
+    .nav-item { height: 38px; display: flex; gap: 10px; align-items: center; padding: 0 12px; margin-bottom: 10px; font-size: 12px; }
+    .nav-item.active { background: #2c3b50; color: white; border-radius: var(--radius); font-weight: 600; }
+    main { padding: 26px 32px 24px; min-width: 0; }
+    .page-head { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 22px; }
+    h1 { margin: 0 0 6px; font-size: 24px; line-height: 1.25; letter-spacing: -.5px; }
+    .page-sub { color: var(--muted); font-size: 12px; margin: 0; }
+    .btn { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 12px; border: 1px solid #cdd4df; background: white; color: var(--ink); white-space: nowrap; }
+    .btn:hover:not(:disabled) { background: var(--soft); border-color: #a8b5c9; }
+    .btn.primary { background: var(--blue); color: white; border-color: var(--blue); }
+    .btn.primary:hover:not(:disabled) { background: #1d52c7; }
+    .btn.primary:disabled { background: #edf0f5; border-color: #dce1e9; color: #8590a2; }
+    .demo-tools { border: 1px solid var(--line); border-bottom: 0; background: #fafbfd; padding: 10px 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-radius: var(--radius) var(--radius) 0 0; }
+    .demo-tools label { font-weight: 600; font-size: 12px; }
+    .demo-tools select { min-height: 32px; padding-top: 4px; padding-bottom: 4px; width: 150px; }
+    .demo-note { color: var(--muted); font-size: 11px; margin-left: auto; }
+    .workspace { display: grid; grid-template-columns: minmax(260px,1fr) 460px; border: 1px solid var(--line); border-radius: 0 0 var(--radius) var(--radius); min-height: 630px; overflow: hidden; }
+    .canvas { min-width: 0; position: relative; background-color: #f6f8fb; background-image: radial-gradient(#d8dfe9 .8px,transparent .8px); background-size: 16px 16px; padding: 18px; }
+    .canvas-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; color: #526073; font-size: 11px; }
+    .canvas-head strong { color: var(--ink); font-size: 12px; font-weight: 600; }
+    .graph { min-height: 540px; margin-top: 16px; position: relative; }
+    .graph svg.edges { width: 100%; height: 100%; position: absolute; overflow: visible; pointer-events: none; }
+    .node { position: absolute; left: 50%; width: min(292px, calc(100% - 24px)); transform: translateX(-50%); text-align: left; background: white; border: 1px solid #d5deea; border-left: 3px solid #91a0b7; padding: 12px; box-shadow: 0 2px 5px #223a5810; }
+    .node:hover { border-color: #8eafe9; background: #fbfdff; }
+    .node.upstream { border-left-color: #7aa5f4; }
+    .node.selected { border: 2px solid var(--blue); border-left-width: 3px; padding: 11px 12px; box-shadow: 0 0 0 3px #2563eb0c; }
+    .node-top { display: flex; gap: 9px; align-items: center; }
+    .node-icon { width: 27px; height: 27px; display: grid; place-items: center; background: #edf3fd; color: #4b7ccc; border-radius: 4px; }
+    .node[data-type="llm_call"] .node-icon { background: #f0edff; color: #7861b5; }
+    .node[data-type="tool_call"] .node-icon { background: #eaf6f1; color: #348568; }
+    .node-identity { min-width: 0; flex: 1; }
+    .node-identity code { font-size: 10.5px; font-weight: 650; display: block; }
+    .node-type { font-size: 10px; color: var(--muted); margin-top: 1px; }
+    .current-mark { color: var(--blue); font-size: 10px; white-space: nowrap; }
+    .node-summary { font-size: 10px; color: var(--muted); border-top: 1px solid #edf0f5; margin-top: 9px; padding-top: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .graph.branch .node { width: min(230px,calc(100% - 20px)); }
+    .graph.branch .node.fork { width: calc(50% - 12px); padding: 9px; }
+    .graph.branch .node.fork .node-icon { display: none; }
+    .graph.branch .node.fork code { font-size: 9.5px; }
+    .graph.branch .node.fork .node-summary { font-size: 10px; }
+    .branch-label { position: absolute; color: var(--muted); font-size: 10px; transform: translateX(-50%); }
+    .legend { display: flex; gap: 14px; color: var(--muted); font-size: 10px; align-items: center; justify-content: center; padding-top: 10px; }
+    .legend span { display: inline-flex; gap: 5px; align-items: center; }
+    .legend i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; background: #7aa5f4; }
+    .legend i.neutral { background: #aab5c4; }
+    .inspector { background: white; border-left: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+    .inspector-head { padding: 20px 22px 17px; border-bottom: 1px solid var(--line); }
+    h2 { font-size: 16px; line-height: 1.4; margin: 0 0 5px; }
+    .inspector-head code { color: var(--muted); font-size: 11px; }
+    .form-body { padding: 22px; flex: 1; }
+    .form-row { margin-bottom: 24px; }
+    .field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    label.field-label { font-size: 12px; font-weight: 600; }
+    .value-field { width: 100%; font-family: var(--mono); font-size: 12px; }
+    textarea.value-field { font-family: inherit; font-size: 13px; }
+    .helper { font-size: 11px; color: var(--muted); margin: 7px 0 0; }
+    .readonly { background: #f9fafb; color: #5d6777; }
+    .section-label { font-size: 12px; font-weight: 600; margin: 0 0 10px; }
+    .json-group { padding-left: 14px; border-left: 2px solid #e4e9f1; }
+    .json-path { font-family: var(--mono); font-size: 11px; color: #526073; display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+    .type { display: inline-block; background: #f0f2f6; color: #647084; border-radius: 3px; padding: 1px 5px; font-size: 10px; font-weight: 400; }
+    .refs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+    .ref { color: #33598d; background: #f1f6fe; border: 1px solid #dce8fd; font-size: 10px; padding: 3px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+    .ref code { font-size: 10px; }
+    .demo-checks { padding: 10px 14px; border: 1px solid var(--line); border-bottom: 0; display: flex; gap: 6px 10px; align-items: center; flex-wrap: wrap; background: white; }
+    .demo-checks > span { color: var(--muted); font-size: 11px; }
+    .demo-checks .btn { min-height: 30px; font-size: 11px; padding: 4px 8px; }
+    .demo-status { font-size: 11px; color: #526073; flex-basis: 100%; }
+    .field-tip { display: flex; gap: 5px; align-items: flex-start; margin: 7px 0 0; color: #61708a; font-size: 11px; line-height: 1.6; }
+    .field-tip code { color: #4668a4; font-size: 10px; }
+    .autocomplete { position: relative; z-index: 4; margin-top: 5px; border: 1px solid #cfd9e8; border-radius: 6px; background: white; box-shadow: 0 8px 22px #18315020; overflow: hidden; }
+    .autocomplete-head { overflow-wrap: anywhere; padding: 8px 10px 6px; color: var(--muted); background: #fafbfd; border-bottom: 1px solid #edf0f5; font-size: 10px; }
+    .autocomplete-list { max-height: 230px; overflow-y: auto; padding: 4px; }
+    .autocomplete-item { width: 100%; display: flex; align-items: flex-start; gap: 8px; padding: 8px; text-align: left; border: 1px solid transparent; background: white; color: var(--ink); border-radius: 4px; }
+    .autocomplete-item:hover, .autocomplete-item.active { background: var(--blue-soft); border-color: #d8e6ff; outline: none; }
+    .autocomplete-item .item-main { min-width: 0; flex: 1; }
+    .autocomplete-item code { display: block; font-size: 11px; font-weight: 650; overflow-wrap: anywhere; }
+    .autocomplete-item .item-meta { overflow-wrap: anywhere; margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .autocomplete-item .item-path { color: #5275b5; font-family: var(--mono); font-size: 10px; white-space: nowrap; }
+    .autocomplete-empty { padding: 13px 10px; color: var(--muted); font-size: 11px; }
+    .autocomplete-kbd { padding: 6px 10px; border-top: 1px solid #edf0f5; color: var(--muted); background: #fafbfd; font-size: 10px; }
+    .undo { background: none; border: 0; color: var(--blue); padding: 4px 0; font-size: 11px; margin-top: 4px; }
+    .undo:hover { text-decoration: underline; }
+    details { margin-top: 26px; border-top: 1px solid #e8ecf2; padding-top: 14px; }
+    summary { cursor: pointer; font-size: 11px; color: #526073; }
+    pre { font-family: var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; background: #f7f9fc; padding: 12px; border: 1px solid #e6ebf2; border-radius: 4px; font-size: 11px; line-height: 1.75; }
+    .inspector-foot { border-top: 1px solid var(--line); padding: 14px 22px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .edit-state { font-size: 11px; color: var(--muted); }
+    .footer-actions { display: flex; gap: 8px; }
+    .footer-actions .btn { font-size: 12px; }
+    .experience { font-size: 11px; color: var(--muted); margin: 12px 0 0; }
+    .experience strong { color: #526073; font-weight: 500; }
+    .conditional { color: var(--amber); background: var(--amber-soft); padding: 1px 5px; font-size: 9px; border-radius: 3px; }
+    .ref-note { margin-top: 8px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .autocomplete-item .item-path { white-space: normal; overflow-wrap: anywhere; max-width: 100px; text-align: right; }
+    .autocomplete-head code { font-size: 10px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    @media (max-width: 1199px) { .shell { grid-template-columns: 0 minmax(0,1fr); } .rail { overflow: hidden; padding: 0; } main { padding: 22px 24px; } .workspace { grid-template-columns: minmax(250px,1fr) 420px; } }
+    @media (max-width: 767px) {
+      .topbar { padding: 0 16px; gap: 12px; } .brand { font-size: 17px; } .crumb { display: none; }
+      main { padding: 20px 16px; } h1 { font-size: 21px; } .page-head { align-items: flex-start; gap: 8px; margin-bottom: 18px; }
+      .page-head .btn { padding: 6px 8px; font-size: 11px; } .page-head .btn svg { display: none; }
+      .demo-tools { padding: 10px; gap: 8px; } .demo-note { width: 100%; margin: 0; }
+      .workspace { display: flex; flex-direction: column; } .canvas { padding: 14px 10px 10px; }
+      .graph { display: flex; overflow-x: auto; gap: 18px; min-height: auto; padding: 10px 4px 14px; margin-top: 8px; align-items: center; }
+      .graph .node, .graph.branch .node, .graph.branch .node.fork { position: relative; top: auto !important; left: auto !important; transform: none; flex: 0 0 236px; width: 236px; }
+      .graph.branch .node.fork .node-icon { display: grid; } .graph.branch .node.fork code { font-size: 10.5px; }
+      .graph svg.edges, .branch-label { display: none; } .legend { display: none; }
+      .inspector { border-left: 0; border-top: 1px solid var(--line); } .inspector-head { padding: 17px 16px 14px; } .form-body { padding: 20px 16px; }
+      .inspector-foot { padding: 12px 16px; flex-wrap: wrap; } .footer-actions { margin-left: auto; }
+      .experience { line-height: 1.8; } .field-head { gap: 5px; }
+      .autocomplete-item { min-height: 52px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" style="display:none">
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0m0 12a4 4 0 0 0 6 0l5-5a4 4 0 0 0-6-6l-1 1" transform="translate(1 -1) scale(.9)"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h4"/></symbol>
+    <symbol id="i-tool" viewBox="0 0 24 24"><path d="m8 9 3 3-3 3m6 0h3"/><rect x="3" y="4" width="18" height="16" rx="2"/></symbol>
+    <symbol id="i-ai" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"/></symbol>
+    <symbol id="i-flow" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M6 9v9h9M9 6h9v9"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 1 8M4 4v6h6"/></symbol>
+    <symbol id="i-time" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="currentColor"/><circle cx="15" cy="12" r="2" fill="currentColor"/><circle cx="9" cy="18" r="2" fill="currentColor"/></symbol>
+  </svg>
+  <header class="topbar"><span class="brand">Aevatar</span><span class="crumb">Workflows</span><span class="prototype-badge">本地交互原型 · 示例数据</span></header>
+  <div class="shell">
+    <aside class="rail" aria-label="当前工作区">
+      <div class="nav-item active" aria-current="page"><svg class="icon"><use href="#i-flow"/></svg>Workflows</div>
+      <div class="nav-item"><svg class="icon"><use href="#i-time"/></svg>Activity</div>
+      <div class="nav-item"><svg class="icon"><use href="#i-settings"/></svg>Settings</div>
+    </aside>
+    <main>
+      <div class="page-head"><div><h1>文档知识助手</h1><p class="page-sub">从前面的节点取数据，填进当前节点。</p></div><button class="btn" id="reset"><svg class="icon"><use href="#i-reset"/></svg>重新体验</button></div>
+      <div class="demo-tools"><label for="scenario">体验流程</label><select id="scenario"><option value="structured">有明确字段的输出</option><option value="linear">普通文本输出</option><option value="branch">分支汇合</option><option value="cycle">循环连线</option></select><span class="demo-note">只修改本页示例，刷新后重置。</span></div>
+      <div class="demo-checks" id="demo-checks"><span>试试来源变化</span><button class="btn" id="remove-field">移除 document_id 字段</button><button class="btn" id="delete-source">删除来源节点</button><button class="btn" id="disconnect-source">改连线，绕过当前节点</button><button class="btn" id="rename-source">来源节点改名</button><div class="demo-status" id="demo-status" role="status">在输入框里输入 ${steps，候选会自动出现。</div></div>
+      <div class="workspace">
+        <section class="canvas" aria-label="示例工作流画布"><div class="canvas-head"><strong>示例流程</strong><span>点击节点配置</span></div><div class="graph" id="graph" aria-label="流程节点"></div><div class="legend"><span><i></i>当前节点的上游</span><span><i class="neutral"></i>其他节点</span></div></section>
+        <section class="inspector" aria-labelledby="inspector-title"><header class="inspector-head"><h2 id="inspector-title"></h2><code id="current-id"></code></header><div class="form-body" id="form"></div><footer class="inspector-foot"><span class="edit-state" id="edit-state" role="status">尚未修改</span><div class="footer-actions"><button class="btn" id="restore">还原此节点</button><button class="btn primary" id="apply" disabled>应用到示例</button></div></footer></section>
+      </div>
+      <p class="experience"><strong>可以这样试：</strong>点击右侧输入框，输入 <code>${steps</code> 或 <code>${steps.prepare_document.</code>，输入框下会自动显示候选。来源变化后，候选也会更新。</p>
+    </main>
+  </div>
+  <div class="sr-only" role="status" aria-live="polite" id="announcement"></div>
+  <script>
+    // Isolated design fixture. Nothing in this file is imported by product code.
+    // The production integration will reuse document.ts graph helpers.
+    const $ = (id) => document.getElementById(id);
+    const typeLabels = { assign: '赋值', tool_call: '工具调用', llm_call: 'AI 调用', conditional: '条件判断', transform: '转换' };
+    const titles = { assign: '配置赋值', tool_call: '配置工具调用', llm_call: '配置 AI 调用', conditional: '配置条件判断', transform: '配置转换' };
+    const iconNames = { assign: 'box', tool_call: 'tool', llm_call: 'ai', conditional: 'flow', transform: 'box' };
+    const initialSteps = [
+      { id: 'configure_lark_document', type: 'assign', parameters: { target: 'lark_document_id', value: 'doc_demo_123' }, next: 'configure_page_title' },
+      { id: 'configure_page_title', type: 'assign', parameters: { target: 'wiki_page_title', value: '团队知识库' }, next: 'read_docx_content' },
+      { id: 'read_docx_content', type: 'tool_call', parameters: { tool: 'nyxid_proxy', document_id: '', response_mode: 'json' }, next: 'summarize_content' },
+      { id: 'summarize_content', type: 'llm_call', parameters: { prompt_prefix: '请根据下面的文档内容，整理一份简明摘要：\n\n补充要求：保留原文中的关键事实。' }, next: 'send_summary' },
+      { id: 'send_summary', type: 'transform', parameters: { op: 'uppercase' } },
+    ];
+    const branchSteps = [
+      { id: 'check_document_source', type: 'conditional', parameters: { condition: '来源是否为飞书' }, branches: { true: 'read_lark_document', false: 'read_uploaded_text' } },
+      { id: 'read_lark_document', type: 'tool_call', parameters: { tool: 'nyxid_proxy', document_id: '', response_mode: 'json' }, next: 'summarize_content' },
+      { id: 'read_uploaded_text', type: 'assign', parameters: { target: 'uploaded_text', value: '用户上传的文档内容（示例）' }, next: 'summarize_content' },
+      { id: 'summarize_content', type: 'llm_call', parameters: { prompt_prefix: '请总结下面的文档：\n' }, next: 'send_summary' },
+      { id: 'send_summary', type: 'transform', parameters: { op: 'uppercase' } },
+    ];
+    const structuredSteps = [
+      { id: 'prepare_document', type: 'assign', parameters: { target: 'document_config', value: '{"document_id":"doc_demo_123","page_title":"团队知识库"}' }, next: 'configure_page_title' },
+      ...initialSteps.slice(1),
+    ];
+    let workflow, currentId, applied, completion = null;
+    let demoSourceId = 'prepare_document';
+    const undoStates = new Map();
+    const clone = (value) => JSON.parse(JSON.stringify(value));
+    function icon(name) { const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); el.setAttribute('class', 'icon'); el.setAttribute('aria-hidden', 'true'); const use = document.createElementNS(el.namespaceURI, 'use'); use.setAttribute('href', '#i-' + name); el.append(use); return el; }
+    function element(tag, className, text) { const el = document.createElement(tag); if (className) el.className = className; if (text !== undefined) el.textContent = text; return el; }
+    function announce(message) { $('announcement').textContent = message; }
+    function edgesFor(steps) {
+      const ids = new Set(steps.map((step) => step.id));
+      return steps.flatMap((step, index) => {
+        const targets = [step.next, ...Object.values(step.branches || {})].filter(Boolean);
+        if (!step.next && !Object.keys(step.branches || {}).length && steps[index + 1]) targets.push(steps[index + 1].id);
+        return [...new Set(targets)].filter((id) => ids.has(id)).map((target) => [step.id, target]);
+      });
+    }
+    function upstream(targetId = currentId) {
+      const steps = workflow.steps, edges = edgesFor(steps), ids = steps.map((step) => step.id);
+      const next = new Map(ids.map((id) => [id, []])), prev = new Map(ids.map((id) => [id, []]));
+      edges.forEach(([from, to]) => { next.get(from).push(to); prev.get(to).push(from); });
+      const indegree = new Map(ids.map((id) => [id, prev.get(id).length]));
+      const queue = ids.filter((id) => !indegree.get(id)), order = [];
+      while (queue.length) { queue.sort((a,b) => ids.indexOf(a) - ids.indexOf(b)); const id = queue.shift(); order.push(id); next.get(id).forEach((to) => { indegree.set(to, indegree.get(to) - 1); if (!indegree.get(to)) queue.push(to); }); }
+      if (order.length !== ids.length) return { cycle: true, candidates: [], edges };
+      function reachable(start, adjacency, blocked) { const visited = new Set(), pending = [start]; while (pending.length) { const id = pending.pop(); if (id === blocked || visited.has(id)) continue; visited.add(id); pending.push(...(adjacency.get(id) || [])); } return visited; }
+      const ancestors = reachable(targetId, prev), fromEntry = reachable(ids[0], next);
+      const candidates = order.filter((id) => id !== targetId && ancestors.has(id) && fromEntry.has(id)).map((id) => ({ ...steps.find((step) => step.id === id), conditional: reachable(ids[0], next, id).has(targetId) }));
+      return { cycle: false, candidates, edges };
+    }
+    // One catalogue backs autocomplete, manual-input checks, and apply checks.
+    // Field names come only from a deterministic literal producer, never from tool inputs.
+    function outputsFor(step) {
+      const outputs = [{ path: 'output', label: '完整输出', type: '文本' }];
+      if (step.type !== 'assign' || typeof step.parameters.value !== 'string') return outputs;
+      const literal = step.parameters.value;
+      if (literal.startsWith('$') || literal.includes('${')) return outputs;
+      try {
+        const value = JSON.parse(literal);
+        if (!value || Array.isArray(value) || typeof value !== 'object') return outputs;
+        for (const [name, item] of Object.entries(value)) {
+          // Conservative, unambiguous top-level names for this first design.
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+          const type = item === null ? '空值' : Array.isArray(item) ? '数组 · JSON 文本' : typeof item === 'object' ? '对象 · JSON 文本' : {string:'文本',number:'数字',boolean:'布尔值'}[typeof item];
+          outputs.push({ path: 'json.' + name, label: name, type });
+        }
+      } catch { /* Unknown output shape: only complete output is available. */ }
+      return outputs;
+    }
+    function expressionFor(id, path) { return '${steps.' + id + '.' + path + '}'; }
+    function parseReferences(text) {
+      const refs = []; let cursor = 0;
+      while (cursor < text.length) {
+        const start = text.indexOf('${', cursor); if (start < 0) break;
+        if (text[start - 1] === '$') { cursor = start + 2; continue; }
+        const close = text.indexOf('}', start + 2), nested = text.indexOf('${', start + 2);
+        if (close < 0 || (nested >= 0 && nested < close)) {
+          const end = nested >= 0 ? nested : text.length;
+          refs.push({ raw: text.slice(start, end), start, end, syntax: true }); cursor = end; continue;
+        }
+        const end = close + 1, body = text.slice(start + 2, close);
+        refs.push({ raw: text.slice(start, end), body, start, end, syntax: !body || /[{}\s]/.test(body) });
+        cursor = end;
+      }
+      return refs;
+    }
+    function sourceFor(body, steps = workflow.steps) {
+      if (!body?.startsWith('steps.')) return null;
+      // Exact known IDs first; do not split IDs by dots or rewrite ordinary text.
+      const step = [...steps].sort((a,b) => b.id.length - a.id.length).find(item => body.startsWith('steps.' + item.id + '.'));
+      return step ? { step, path: body.slice(('steps.' + step.id + '.').length) } : null;
+    }
+    function checkReference(ref, targetId) {
+      if (ref.syntax) return { ...ref, valid: false, reason: '引用格式不完整，请重新选择。' };
+      if (!ref.body.startsWith('steps.')) return { ...ref, valid: false, reason: '这个引用不在本原型的可用变量目录中，请从上游重新选择。' };
+      const source = sourceFor(ref.body);
+      if (!source) return { ...ref, valid: false, reason: '来源节点不存在，可能已被删除或写错。' };
+      const { step, path } = source;
+      if (workflow.steps.filter(item => item.id === step.id).length !== 1) return { ...ref, valid: false, reason: '来源节点 ID 重复，无法确定引用的是哪一个。' };
+      const state = upstream(targetId);
+      if (state.cycle) return { ...ref, valid: false, reason: '流程存在循环，暂时无法确认上游关系。' };
+      const candidate = state.candidates.find(item => item.id === step.id);
+      if (!candidate) return { ...ref, valid: false, reason: step.id === targetId ? '不能引用当前节点自己的输出。' : '这个节点不在当前节点的上游，请检查连线。' };
+      const outputs = outputsFor(step), output = outputs.find(item => item.path === path);
+      if (!output) return { ...ref, valid: false, reason: path.startsWith('json.')
+        ? outputs.length > 1 ? '来源节点没有「' + path.slice(5) + '」这个字段。' : '这个节点没有已定义的输出字段，无法确认「' + path.slice(5) + '」存在。请选择完整输出。'
+        : '没有这个输出入口，请从列表选择已有输出。' };
+      return { ...ref, valid: true, sourceId: step.id, output, conditional: candidate.conditional };
+    }
+    function checkText(text, targetId) { return parseReferences(text).map(ref => checkReference(ref, targetId)); }
+    function stringValues(value, path = []) {
+      if (typeof value === 'string') return [{ path, value }];
+      if (!value || typeof value !== 'object') return [];
+      return Object.entries(value).flatMap(([key, child]) => stringValues(child, [...path, key]));
+    }
+    function issuesFor(step) {
+      return stringValues(step.parameters).flatMap(({path,value}) => checkText(value, step.id).filter(ref => !ref.valid).map(ref => ({...ref, stepId: step.id, path})));
+    }
+    function setScenario() {
+      closeCompletion();
+      const scenario = $('scenario').value;
+      workflow = { name: 'enterprise_knowledge_assistant', steps: clone(scenario === 'branch' ? branchSteps : scenario === 'structured' ? structuredSteps : initialSteps) };
+      if (scenario === 'cycle') workflow.steps[3].next = 'configure_page_title';
+      currentId = scenario === 'branch' ? 'summarize_content' : 'read_docx_content';
+      applied = clone(workflow); demoSourceId = 'prepare_document'; undoStates.clear();
+      $('demo-checks').hidden = scenario !== 'structured';
+      $('demo-status').textContent = '在输入框里输入 ${steps，候选会自动出现。';
+      render();
+    }
+    function currentStep() { return workflow.steps.find((step) => step.id === currentId); }
+    function renderGraph() {
+      const graph = $('graph'); graph.replaceChildren(); const branch = $('scenario').value === 'branch'; graph.classList.toggle('branch', branch);
+      const state = upstream(), ancestors = new Set(state.candidates.map((step) => step.id));
+      const nodes = new Map();
+      workflow.steps.forEach((step, index) => {
+        const node = element('button', 'node' + (step.id === currentId ? ' selected' : ancestors.has(step.id) ? ' upstream' : ''));
+        node.type = 'button'; node.dataset.type = step.type; node.setAttribute('aria-label', step.id + '，' + typeLabels[step.type]); node.setAttribute('aria-pressed', String(step.id === currentId));
+        const top = element('div', 'node-top'), symbol = element('span', 'node-icon'); symbol.append(icon(iconNames[step.type]));
+        const identity = element('span', 'node-identity'); identity.append(element('code', '', step.id), element('div', 'node-type', typeLabels[step.type])); top.append(symbol, identity);
+        if (step.id === currentId) top.append(element('span', 'current-mark', '当前'));
+        node.append(top);
+        const p = step.parameters;
+        const summary = step.type === 'assign' ? p.target + ' = ' + p.value : step.type === 'tool_call' ? 'tool: ' + p.tool : step.type === 'llm_call' ? p.prompt_prefix.replace(/\n/g, ' ') : step.type === 'conditional' ? p.condition : 'op: ' + p.op;
+        node.append(element('div', 'node-summary', summary));
+        node.style.top = (index * 108) + 'px';
+        if (branch) { const positions = [[50,0],[25,145],[75,145],[50,290],[50,420]]; node.style.left = positions[index][0] + '%'; node.style.top = positions[index][1] + 'px'; if (index === 1 || index === 2) node.classList.add('fork'); }
+        node.addEventListener('click', () => { closeCompletion(); currentId = step.id; render(); });
+        graph.append(node); nodes.set(step.id,node);
+      });
+      const svg = document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.setAttribute('class','edges'); svg.setAttribute('aria-hidden','true'); graph.prepend(svg);
+      const rect = graph.getBoundingClientRect();
+      for (const [from,to] of state.edges) {
+        const a=nodes.get(from).getBoundingClientRect(), b=nodes.get(to).getBoundingClientRect();
+        const x1=a.left+a.width/2-rect.left, y1=a.bottom-rect.top, x2=b.left+b.width/2-rect.left, y2=b.top-rect.top;
+        const path=document.createElementNS(svg.namespaceURI,'path');
+        path.setAttribute('d', y2 > y1 ? `M${x1},${y1} C${x1},${y1+28} ${x2},${y2-28} ${x2},${y2}` : `M${a.right-rect.left},${a.top+a.height/2-rect.top} C${rect.width-7},${y1} ${rect.width-7},${y2} ${b.right-rect.left},${b.top+b.height/2-rect.top}`);
+        path.setAttribute('fill','none'); path.setAttribute('stroke',state.cycle ? '#c79552' : '#93acd2'); path.setAttribute('stroke-width','1.5'); svg.append(path);
+      }
+      if (branch) { const yes=element('span','branch-label','飞书文档'); yes.style.cssText='left:25%;top:119px'; const no=element('span','branch-label','上传的文本'); no.style.cssText='left:75%;top:119px'; graph.append(yes,no); }
+      if (matchMedia('(max-width: 767px)').matches) { const selected=nodes.get(currentId); graph.scrollLeft=Math.max(0,selected.offsetLeft-(graph.clientWidth-selected.offsetWidth)/2); }
+    }
+    function render() { renderForm(); refreshValidation(); }
+    function addField(parent, key, label, multiline = false, help = '') {
+      const row = element('div', 'form-row'), head = element('div', 'field-head');
+      const id = 'value-' + key, fieldLabel = element('label', 'field-label', label);
+      fieldLabel.htmlFor = id; head.append(fieldLabel);
+      const input = element(multiline ? 'textarea' : 'input', 'value-field');
+      input.id = id; input.dataset.paramKey = key; input.value = currentStep().parameters[key] || '';
+      if (!multiline) input.type = 'text';
+      else input.setAttribute('aria-multiline', 'true');
+      input.placeholder = '输入固定内容，或输入 ${steps 引用前面节点'; input.spellcheck = false;
+      input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list');
+      input.setAttribute('aria-expanded', 'false'); input.setAttribute('aria-haspopup', 'listbox');
+      input.setAttribute('autocomplete', 'off');
+      const popup = element('div', 'autocomplete'); popup.id = id + '-suggestions'; popup.hidden = true;
+      const tip = element('p', 'field-tip'); tip.id = id + '-tip';
+      const tipText = element('span'); tipText.append(document.createTextNode('想用前面节点的数据？输入 '), element('code', '', '${steps'), document.createTextNode('，再从下面选择节点和字段。'));
+      tip.append(icon('link'), tipText);
+      const extras = element('div'); extras.id = id + '-extras';
+      input.setAttribute('aria-describedby', tip.id + ' ' + extras.id);
+      input.setAttribute('aria-controls', id + '-options');
+      let composing = false;
+      input.addEventListener('compositionstart', () => { composing = true; closeCompletion(); });
+      input.addEventListener('compositionend', () => { composing = false; updateCompletion(input, key); });
+      input.addEventListener('input', () => {
+        currentStep().parameters[key] = input.value; undoStates.delete(id);
+        refreshValidation(); updatePreview();
+        if (!composing) updateCompletion(input, key);
+      });
+      for (const event of ['focus', 'click']) input.addEventListener(event, () => { if (!composing) updateCompletion(input, key); });
+      input.addEventListener('keyup', event => {
+        if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Backspace', 'Delete'].includes(event.key) && !composing) updateCompletion(input, key);
+      });
+      input.addEventListener('blur', () => closeCompletion());
+      input.addEventListener('select', () => { if (input.selectionStart !== input.selectionEnd) closeCompletion(); });
+      input.addEventListener('keydown', event => {
+        if (composing || event.isComposing || event.keyCode === 229) return;
+        if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z' && undoStates.has(id)) {
+          event.preventDefault(); undoInsertion(input, key); return;
+        }
+        if (event.key === 'Escape' && completion?.input === input) { event.preventDefault(); closeCompletion(); return; }
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          if (completion?.input !== input) updateCompletion(input, key);
+          if (!completion?.options.length) return;
+          event.preventDefault();
+          completion.index = (completion.index + (event.key === 'ArrowDown' ? 1 : -1) + completion.options.length) % completion.options.length;
+          markActiveOption(); return;
+        }
+        if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey && completion?.input === input && completion.options.length) {
+          const token = tokenAt(input), option = completion.options[completion.index];
+          if (token && completionFor(token, currentId).options.some(item => item.value === option.value)) {
+            event.preventDefault(); chooseCompletion(completion.index);
+          } else closeCompletion();
+        }
+      });
+      row.append(head, input, popup, tip);
+      if (help) row.append(element('p', 'helper', help));
+      row.append(extras); parent.append(row); updateFieldExtras(input, key);
+    }
+    function updateFieldExtras(input, key) {
+      const extras = $(input.id + '-extras'); if (!extras) return;
+      extras.replaceChildren();
+      const refs = checkText(input.value, currentId), invalid = refs.filter(ref => !ref.valid);
+      // Suggestions guide typing; do not paint unfinished expressions red.
+      input.removeAttribute('aria-invalid');
+      if (!invalid.length) {
+        for (const ref of refs) {
+          const chip = element('div', 'ref');
+          chip.append(document.createTextNode('来自 '), element('code', '', ref.sourceId), document.createTextNode(' · ' + ref.output.label));
+          if (ref.conditional) chip.append(element('div', 'ref-warning', '这个分支执行后才会有值。'));
+          extras.append(chip);
+        }
+      }
+      if (undoStates.has(input.id)) {
+        const undo = element('button', 'undo', '撤销补全'); undo.type = 'button';
+        undo.addEventListener('click', () => undoInsertion(input, key)); extras.append(undo);
+      }
+    }
+    function replaceReference(input, key, start, end, replacement, saveUndo = true) {
+      const old = input.value;
+      if (saveUndo) undoStates.set(input.id, { value: old, start: input.selectionStart, end: input.selectionEnd });
+      input.value = old.slice(0, start) + replacement + old.slice(end);
+      currentStep().parameters[key] = input.value;
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(start + replacement.length, start + replacement.length);
+      refreshValidation(); updatePreview();
+    }
+    function refreshValidation() {
+      for (const input of $('form').querySelectorAll('[data-param-key]')) updateFieldExtras(input, input.dataset.paramKey);
+      updateDirty(); renderGraph(); updateDemoControls();
+    }
+    function undoInsertion(input, key) {
+      const old = undoStates.get(input.id); if (!old) return;
+      closeCompletion(); input.value = old.value; currentStep().parameters[key] = old.value; undoStates.delete(input.id);
+      input.focus({ preventScroll: true }); input.setSelectionRange(old.start, old.end);
+      refreshValidation(); updatePreview(); announce('已撤销补全');
+    }
+    function renderForm() {
+      closeCompletion();
+      const step=currentStep(); $('inspector-title').textContent=titles[step.type];$('current-id').textContent=step.id;
+      const form=$('form');form.replaceChildren();
+      if(step.type==='tool_call') {
+        const row=element('div','form-row'),label=element('label','field-label','工具名');label.htmlFor='tool-name';const input=element('input','value-field readonly');input.id='tool-name';input.value=step.parameters.tool;input.readOnly=true;row.append(label,input);input.style.marginTop='8px';form.append(row);
+        form.append(element('div','section-label','调用参数'));
+        const group=element('div','json-group'),path=element('div','json-path','path_params');path.append(element('span','type','Object'));group.append(path);
+        form.append(group);addField(group,'document_id','document_id',false,'String · 文档 ID');
+      } else if(step.type==='llm_call') addField(form,'prompt_prefix','指令',true,'可以把节点输出插在文字中间，也可以单独作为整段输入。');
+      else if(step.type==='assign') {
+        const row=element('div','form-row'),label=element('label','field-label','变量名'),input=element('input','value-field readonly');label.htmlFor='target-name';input.id='target-name';input.readOnly=true;input.value=step.parameters.target;input.style.marginTop='8px';row.append(label,input);form.append(row);addField(form,'value','值',true,'该节点会把这里的值存到上面的变量名下。');
+      } else if(step.type==='conditional') addField(form,'condition','判断内容',true);
+      else {form.append(element('p','helper','这个示例节点没有需要插入引用的文本参数。可以点击上面的工具调用或 AI 节点体验。'));}
+      const details=element('details'),summary=element('summary','','查看本地配置');details.append(summary);const pre=element('pre');pre.id='config-preview';details.append(pre);form.append(details);updatePreview();
+    }
+    function updatePreview() {
+      const step=currentStep(),p=step.parameters;
+      const parameters=step.type==='tool_call'?{tool:p.tool,arguments:{path_params:{document_id:p.document_id},response_mode:p.response_mode}}:p;
+      if($('config-preview'))$('config-preview').textContent=JSON.stringify({id:step.id,type:step.type,parameters},null,2);
+    }
+    function updateDirty() {
+      const baseline = applied.steps.find(step => step.id === currentId);
+      const dirty = JSON.stringify(currentStep().parameters) !== JSON.stringify(baseline?.parameters);
+      const issues = issuesFor(currentStep()), cycle = upstream().cycle;
+      $('apply').disabled = !dirty || !!issues.length || cycle;
+      $('edit-state').textContent = issues.length ? '请先选完可用的引用' : cycle ? '先修复循环连线' : dirty ? '有未应用的修改' : '本地示例';
+    }
+    function tokenAt(input) {
+      const text = input.value, caret = input.selectionStart ?? text.length;
+      if (input.selectionStart !== input.selectionEnd) return null;
+      const start = text.lastIndexOf('${', caret - 1);
+      if (start < 0 || text[start - 1] === '$' || caret < start + 2) return null;
+      const typed = text.slice(start + 2, caret);
+      if (/[{}\s]/.test(typed) || (!'steps'.startsWith(typed) && !typed.startsWith('steps.'))) return null;
+      // Replace just this token, not the surrounding sentence or a second reference.
+      const close = text.indexOf('}', caret), nested = text.indexOf('${', caret);
+      // Closed expressions may contain a mistyped path; replace their whole tail.
+      // Unclosed prefixes preserve the existing sentence to the right of the caret.
+      const end = close >= caret && (nested < 0 || close < nested) && !/\s/.test(text.slice(caret, close)) ? close + 1 : caret;
+      return { start, end, typed };
+    }
+    function completionFor(token, targetId) {
+      const state = upstream(targetId);
+      if (state.cycle) return { options: [], heading: '暂时无法列出上游', note: '流程连线形成了循环，调整连线后再引用。' };
+      const candidates = state.candidates.filter(step => workflow.steps.filter(item => item.id === step.id).length === 1);
+      if (!candidates.length) return { options: [], heading: '前面还没有可引用的节点', note: '连接前面的节点后，它们的输出会出现在这里。也可以直接填写固定内容。' };
+      const body = token.typed;
+      const source = sourceFor(body, candidates);
+      const query = body.startsWith('steps.') ? body.slice(6).toLowerCase() : '';
+      // A longer, dotted ID may still be in progress; keep it selectable alongside fields.
+      const nodes = candidates.filter(step => step.id.toLowerCase().startsWith(query)).map(step => ({ kind: 'node', step, label: step.id, detail: typeLabels[step.type] + (step.conditional ? ' · 分支执行后有值' : ''), value: '${steps.' + step.id + '.' }));
+      const fields = source ? outputsFor(source.step).filter(output => output.path.toLowerCase().startsWith(source.path.toLowerCase()) || output.label.toLowerCase().startsWith(source.path.toLowerCase())).map(output => ({ kind: 'field', step: source.step, output, label: output.label, detail: output.path + ' · ' + output.type, value: expressionFor(source.step.id, output.path) })) : [];
+      const options = [...nodes, ...fields];
+      const heading = source ? source.step.id + ' 的输出' : '可引用的上游节点';
+      const note = !options.length ? '没有匹配的节点或字段，删掉部分名称再试试。这里只列出当前可用的输出。'
+        : source ? outputsFor(source.step).length > 1 ? '字段来自这个赋值节点当前填写的固定 JSON。' : '这个节点还没有定义输出字段，可以引用完整输出。'
+        : '先选节点，再选它的输出。';
+      return { options, heading, note };
+    }
+    function closeCompletion() {
+      if (!completion) return;
+      completion.popup.hidden = true; completion.input.setAttribute('aria-expanded', 'false');
+      completion.input.removeAttribute('aria-activedescendant'); completion = null;
+    }
+    function updateCompletion(input, key) {
+      const token = tokenAt(input);
+      if (!token || document.activeElement !== input) { closeCompletion(); return; }
+      const previous = completion?.input === input ? completion.options[completion.index]?.value : null;
+      closeCompletion();
+      const popup = $(input.id + '-suggestions'), state = completionFor(token, currentId);
+      popup.replaceChildren(); popup.hidden = false;
+      completion = { input, key, token, popup, options: state.options, index: Math.max(0, state.options.findIndex(option => option.value === previous)), stepId: currentId };
+      const heading = element('div', 'autocomplete-head', state.heading); popup.append(heading);
+      const list = element('div', 'autocomplete-list'); list.id = input.id + '-options'; list.setAttribute('role', 'listbox'); list.setAttribute('aria-label', state.heading);
+      state.options.forEach((option, index) => {
+        const item = element('div', 'autocomplete-item'); item.id = list.id + '-' + index;
+        item.setAttribute('role', 'option'); item.setAttribute('aria-selected', 'false');
+        const main = element('div', 'item-main'); main.append(element('code', '', option.label), element('div', 'item-meta', option.detail));
+        item.append(icon(iconNames[option.step.type]), main, element('span', 'item-path', option.kind === 'node' ? '选择输出 →' : '补全 ↵'));
+        item.addEventListener('pointerdown', event => event.preventDefault());
+        item.addEventListener('click', () => chooseCompletion(index));
+        list.append(item);
+      });
+      if (!state.options.length) popup.append(element('div', 'autocomplete-empty', state.note));
+      popup.append(list);
+      if (state.options.length) popup.append(element('div', 'autocomplete-head', state.note));
+      popup.append(element('div', 'autocomplete-kbd', '↑ ↓ 选择 · Enter / Tab 确认 · Esc 收起'));
+      input.setAttribute('aria-expanded', 'true'); markActiveOption();
+      announce(state.heading + '，' + state.options.length + ' 个候选');
+    }
+    function markActiveOption() {
+      if (!completion) return;
+      const items = completion.popup.querySelectorAll('[role="option"]');
+      items.forEach((item, index) => {
+        const active = index === completion.index; item.classList.toggle('active', active); item.setAttribute('aria-selected', String(active));
+        if (active) {
+          completion.input.setAttribute('aria-activedescendant', item.id);
+          const list = item.parentElement, top = item.offsetTop - list.offsetTop;
+          if (top < list.scrollTop) list.scrollTop = top;
+          else if (top + item.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + item.offsetHeight - list.clientHeight;
+        }
+      });
+    }
+    function chooseCompletion(index) {
+      const active = completion, selected = active?.options[index];
+      if (!selected || active.stepId !== currentId || !active.input.isConnected) { closeCompletion(); return; }
+      // Re-read the live document before inserting; an old item is never proof of existence.
+      const token = tokenAt(active.input), fresh = token && completionFor(token, currentId).options.find(option => option.value === selected.value);
+      if (!fresh) { updateCompletion(active.input, active.key); return; }
+      if (fresh.kind === 'field' && !checkText(fresh.value, currentId)[0]?.valid) { updateCompletion(active.input, active.key); return; }
+      closeCompletion();
+      replaceReference(active.input, active.key, token.start, token.end, fresh.value, !undoStates.has(active.input.id));
+      if (fresh.kind === 'node') updateCompletion(active.input, active.key);
+      else announce('已引用 ' + fresh.step.id + ' 的' + fresh.output.label);
+    }
+    function mapStrings(value, rewrite) {
+      if (typeof value === 'string') return rewrite(value);
+      if (Array.isArray(value)) return value.map(child=>mapStrings(child,rewrite));
+      if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key,child])=>[key,mapStrings(child,rewrite)]));
+      return value;
+    }
+    function updateDemoControls() {
+      const source = workflow.steps.find(step=>step.id===demoSourceId);
+      $('delete-source').disabled = !source;
+      $('disconnect-source').disabled = !source || source.next==='send_summary';
+      $('rename-source').disabled = !source || demoSourceId==='document_settings';
+      $('remove-field').disabled = !source || !outputsFor(source).some(output=>output.path==='json.document_id');
+    }
+    function mutateDemo(action) {
+      closeCompletion();
+      const source=workflow.steps.find(step=>step.id===demoSourceId); if(!source)return;
+      const oldId=source.id;
+      if (action==='rename') {
+        const newId='document_settings';
+        if (workflow.steps.some(step=>step.id===newId)) {announce('节点 ID 已存在。');return;}
+        for(const document of [workflow,applied]) {
+          const oldSteps=clone(document.steps);
+          for(const step of document.steps) {
+            step.parameters=mapStrings(step.parameters,text=>{
+              let result='',cursor=0;
+              for(const ref of parseReferences(text)) {
+                const src=sourceFor(ref.body,oldSteps);
+                if(ref.syntax||src?.step.id!==oldId)continue;
+                result+=text.slice(cursor,ref.start)+expressionFor(newId,src.path);cursor=ref.end;
+              }
+              return result+text.slice(cursor);
+            });
+            if(step.next===oldId)step.next=newId;
+            if(step.branches)for(const key of Object.keys(step.branches))if(step.branches[key]===oldId)step.branches[key]=newId;
+            if(step.id===oldId)step.id=newId;
+          }
+        }
+        if(currentId===oldId)currentId=newId;
+        demoSourceId=newId;
+        $('demo-status').textContent='来源已改名为 document_settings；所有节点里的对应引用和连线已同步更新。';
+      } else if(action==='field') {
+        for(const document of [workflow,applied]) {
+          const step=document.steps.find(item=>item.id===oldId);
+          try {const data=JSON.parse(step.parameters.value);delete data.document_id;step.parameters.value=JSON.stringify(data);} catch { /* Demo has no editable declared field. */ }
+        }
+        $('demo-status').textContent='document_id 已从来源的固定 JSON 中移除。输入联想不再提供这个字段，已有引用也会重新检查。';
+      } else if(action==='delete') {
+        for(const document of [workflow,applied]) {
+          const successor=document.steps.find(step=>step.id===oldId).next;
+          document.steps=document.steps.filter(step=>step.id!==oldId);
+          for(const step of document.steps) {
+            if(step.next===oldId)step.next=successor;
+            if(step.branches)for(const key of Object.keys(step.branches))if(step.branches[key]===oldId)step.branches[key]=successor;
+          }
+        }
+        if(currentId===oldId)currentId='read_docx_content';
+        $('demo-status').textContent='来源节点已删除；已有引用保留；请回到输入框，重新选择可用的来源。';
+      } else if(action==='disconnect') {
+        for(const document of [workflow,applied]) document.steps.find(step=>step.id===oldId).next='send_summary';
+        $('demo-status').textContent='来源现在直接连到最后一个节点，已绕过工具和 AI 节点；它仍存在，但不再是它们的上游。';
+      }
+      undoStates.clear();render();announce($('demo-status').textContent);
+    }
+    $('scenario').addEventListener('change',setScenario);
+    $('reset').addEventListener('click',()=>{setScenario();announce('已重置本地示例');});
+    $('restore').addEventListener('click',()=>{currentStep().parameters=clone(applied.steps.find((step)=>step.id===currentId).parameters);undoStates.clear();render();announce('已还原此节点');});
+    $('apply').addEventListener('click',()=>{
+      if(issuesFor(currentStep()).length || upstream().cycle) {refreshValidation();announce('还有无效引用，不能应用。');return;}
+      applied.steps.find(step=>step.id===currentId).parameters=clone(currentStep().parameters);
+      refreshValidation();$('edit-state').textContent='已应用到本地示例';announce('已应用到本地示例');
+    });
+    $('remove-field').addEventListener('click',()=>mutateDemo('field'));
+    $('delete-source').addEventListener('click',()=>mutateDemo('delete'));
+    $('disconnect-source').addEventListener('click',()=>mutateDemo('disconnect'));
+    $('rename-source').addEventListener('click',()=>mutateDemo('rename'));
+    let resizeFrame;addEventListener('resize',()=>{cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(()=>{renderGraph();});});
+    setScenario();
+  </script>
+</body>
+</html>
