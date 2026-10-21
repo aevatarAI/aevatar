@@ -1,5 +1,6 @@
 using Aevatar.Configuration;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Abstractions.Primitives;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Projection.Workflows;
@@ -11,80 +12,6 @@ namespace Aevatar.Workflow.Infrastructure.Capabilities;
 //   New principle: Removed dead capability flag; output describes available primitives only
 internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapabilitiesPort
 {
-    private static readonly IReadOnlyDictionary<string, PrimitiveMetadataDescriptor> PrimitiveDescriptors =
-        new Dictionary<string, PrimitiveMetadataDescriptor>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["wait_signal"] = new(
-                "Suspends workflow execution until an external signal arrives.",
-                [
-                    new PrimitiveParameterDescriptor("signal_name", "string", true, "Signal name used to resume this waiter."),
-                    new PrimitiveParameterDescriptor("timeout_ms", "int", false, "Maximum wait duration in milliseconds, capped at 86400000."),
-                ]),
-            ["workflow_call"] = new(
-                "Invokes another workflow definition as a sub-workflow.",
-                [
-                    new PrimitiveParameterDescriptor("workflow", "string", true, "Referenced workflow name."),
-                    new PrimitiveParameterDescriptor("lifecycle", "string", false, "sync or async child lifecycle mode.", EnumValuesInput: ["sync", "async"]),
-                ]),
-            ["connector_call"] = new(
-                "Invokes an external connector configured in connectors.json.",
-                ConnectorParameterDescriptors()),
-            ["secure_connector_call"] = new(
-                "Invokes an external connector with secure payload handling.",
-                ConnectorParameterDescriptors()),
-            ["llm_call"] = new(
-                "Runs an LLM role step and returns generated output.",
-                [
-                    new PrimitiveParameterDescriptor("prompt", "string", false, "Prompt template or prompt override."),
-                ]),
-            ["evaluate"] = new(
-                "Runs an evaluation/judge step over current context.",
-                [
-                    new PrimitiveParameterDescriptor("criteria", "string", false, "Evaluation criteria."),
-                ]),
-            ["reflect"] = new(
-                "Runs a reflection step to refine prior output.",
-                [
-                    new PrimitiveParameterDescriptor("prompt", "string", false, "Reflection prompt."),
-                ]),
-            ["self_reschedule"] = new(
-                "Ensures a workflow schedule through the actor-owned scheduled-dispatch mainline.",
-                [
-                    new PrimitiveParameterDescriptor("schedule_id", "string", true, "Stable schedule id owned by ScheduledDispatchGAgent."),
-                    new PrimitiveParameterDescriptor("cron_expression", "string", true, "Cron expression for future workflow runs."),
-                    new PrimitiveParameterDescriptor("timezone", "string", false, "IANA or system timezone id.", DefaultValue: "UTC"),
-                    new PrimitiveParameterDescriptor("workflow_name", "string", false, "Workflow service name when service_id is not supplied."),
-                    new PrimitiveParameterDescriptor("service_id", "string", false, "Explicit workflow service id."),
-                    new PrimitiveParameterDescriptor("scope_id", "string", true, "Scope or tenant id for the workflow service invocation."),
-                    new PrimitiveParameterDescriptor("prompt", "string", false, "Prompt for the scheduled workflow chat request."),
-                ]),
-        };
-
-    private static IReadOnlyList<PrimitiveParameterDescriptor> ConnectorParameterDescriptors() =>
-    [
-        new("connector", "string", true, "Connector name."),
-        new("operation", "string", false, "Connector-specific operation or method."),
-        new("approval.policy", "string", false, "Set to required to suspend before connector execution.", EnumValuesInput: ["required"]),
-        new("approval.service_ref", "string", false, "NyxID connected-service reference bound to the approval."),
-        new("approval.node_id", "string", false, "Required NyxID node routing identity."),
-        new("approval.http_verb", "string", false, "Normalized external action HTTP verb."),
-        new("approval.resource", "string", false, "Redacted external resource identity."),
-        new("approval.permission_scope", "string", false, "Permission scope granted by this single action approval."),
-        new("approval.expiration_seconds", "int", false, "Local approval validity window in seconds."),
-        new(
-            "approval.status_check_interval_seconds",
-            "int",
-            false,
-            "Durable remote status check interval in seconds.",
-            DefaultValue: $"{ConnectorApprovalOptionsDefinition.DefaultStatusCheckIntervalSeconds}"),
-        new("approval.destructive", "bool", false, "Whether the action is destructive."),
-        new("approval.team_id", "string", false, "Owning Studio team identity."),
-        new("approval.member_id", "string", false, "Owning Studio member identity."),
-        new("approval.workflow_id", "string", false, "Workflow definition identity."),
-        new("approval.published_service_id", "string", false, "Published service runtime identity."),
-        new("approval.policy_reason", "string", false, "Stable reason code for requiring approval."),
-    ];
-
     private readonly IEnumerable<IWorkflowModulePack> _modulePacks;
     private readonly WorkflowCatalogReadModelQueryPort _catalogQueryPort;
     private readonly WorkflowCatalogReadModelMapper _mapper;
@@ -129,6 +56,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
     {
         var aliasByCanonical = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         var runtimeModuleByCanonical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var descriptorByCanonical = new Dictionary<string, WorkflowPrimitiveDefinition>(StringComparer.OrdinalIgnoreCase);
         var modulePacks = _modulePacks.ToList();
         if (modulePacks.Count == 0)
             modulePacks.Add(new WorkflowCoreModulePack());
@@ -150,12 +78,25 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                 aliases.Add(canonical);
                 aliases.Add(name);
                 runtimeModuleByCanonical.TryAdd(canonical, registration.ModuleType.Name);
+                if (registration.Descriptor is { } contributedDescriptor)
+                    descriptorByCanonical[canonical] = contributedDescriptor;
             }
         }
 
         var canonicalTypes = new HashSet<string>(WorkflowPrimitiveCatalog.BuiltInCanonicalTypes, StringComparer.OrdinalIgnoreCase);
         foreach (var canonical in aliasByCanonical.Keys)
             canonicalTypes.Add(canonical);
+
+        foreach (var canonical in canonicalTypes)
+        {
+            if (!aliasByCanonical.TryGetValue(canonical, out var acceptedNames))
+                aliasByCanonical[canonical] = acceptedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { canonical };
+            acceptedNames.UnionWith(WorkflowPrimitiveCatalog.GetAliases(canonical));
+        }
+        var acceptedStepTypes = aliasByCanonical.Values.SelectMany(names => names)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         return canonicalTypes
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
@@ -164,9 +105,9 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                 var aliases = aliasByCanonical.TryGetValue(canonical, out var aliasSet)
                     ? aliasSet.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList()
                     : [canonical];
-                var descriptor = PrimitiveDescriptors.TryGetValue(canonical, out var knownDescriptor)
-                    ? knownDescriptor
-                    : new PrimitiveMetadataDescriptor($"Core workflow primitive `{canonical}`.", []);
+                var descriptor = descriptorByCanonical.GetValueOrDefault(canonical)
+                    ?? WorkflowPrimitiveDefinitions.Find(canonical)
+                    ?? new WorkflowPrimitiveDefinition($"Workflow primitive `{canonical}`.", []);
                 return new WorkflowPrimitiveCapability
                 {
                     Name = canonical,
@@ -178,16 +119,48 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                         .Select(parameter => new WorkflowPrimitiveParameterCapability
                         {
                             Name = parameter.Name,
-                            Type = parameter.Type,
+                            Type = parameter.Type switch
+                            {
+                                WorkflowPrimitiveParameterType.String => "string",
+                                WorkflowPrimitiveParameterType.Integer => "int",
+                                WorkflowPrimitiveParameterType.Number => "number",
+                                WorkflowPrimitiveParameterType.Boolean => "bool",
+                                WorkflowPrimitiveParameterType.Array => "array",
+                                WorkflowPrimitiveParameterType.Object => "object",
+                                _ => throw new ArgumentOutOfRangeException(nameof(parameter.Type)),
+                            },
                             Required = parameter.Required,
                             Description = parameter.Description,
                             Default = parameter.DefaultValue,
-                            Enum = parameter.EnumValues.ToList(),
+                            Enum = parameter.UsesPrimitiveNames
+                                ? acceptedStepTypes.ToList()
+                                : parameter.EnumValues?.ToList() ?? [],
+                            Label = parameter.Label,
+                            Control = ResolveControl(parameter),
+                            Placeholder = parameter.Placeholder,
+                            Minimum = parameter.Minimum,
+                            Maximum = parameter.Maximum,
+                            Integer = parameter.Type == WorkflowPrimitiveParameterType.Integer,
                         })
                         .ToList(),
                 };
             })
             .ToList();
+    }
+
+    private static WorkflowPrimitiveParameterControl ResolveControl(WorkflowPrimitiveParameterDefinition parameter)
+    {
+        if (parameter.Control != WorkflowPrimitiveParameterControl.Auto)
+            return parameter.Control;
+        if (parameter.UsesPrimitiveNames || parameter.EnumValues is { Count: > 0 })
+            return WorkflowPrimitiveParameterControl.Select;
+        return parameter.Type switch
+        {
+            WorkflowPrimitiveParameterType.Integer or WorkflowPrimitiveParameterType.Number => WorkflowPrimitiveParameterControl.Number,
+            WorkflowPrimitiveParameterType.Boolean => WorkflowPrimitiveParameterControl.Boolean,
+            WorkflowPrimitiveParameterType.Array or WorkflowPrimitiveParameterType.Object => WorkflowPrimitiveParameterControl.Json,
+            _ => WorkflowPrimitiveParameterControl.Text,
+        };
     }
 
     private static List<WorkflowConnectorCapability> BuildConnectorCapabilities(
@@ -257,18 +230,4 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
             _ => "general",
         };
 
-    private sealed record PrimitiveMetadataDescriptor(
-        string Description,
-        IReadOnlyList<PrimitiveParameterDescriptor> Parameters);
-
-    private sealed record PrimitiveParameterDescriptor(
-        string Name,
-        string Type,
-        bool Required,
-        string Description,
-        string DefaultValue = "",
-        IReadOnlyList<string>? EnumValuesInput = null)
-    {
-        public IReadOnlyList<string> EnumValues { get; } = EnumValuesInput ?? [];
-    }
 }

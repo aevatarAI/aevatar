@@ -1,6 +1,8 @@
 using System.Text.Json.Serialization;
+using System.Text.Json;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Primitives;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -10,6 +12,11 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 
 public static class ChatQueryEndpoints
 {
+    private static readonly JsonSerializerOptions CapabilityJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
     public static void Map(RouteGroupBuilder group)
     {
         group.MapGet("/agents", ListAgents)
@@ -113,7 +120,7 @@ public static class ChatQueryEndpoints
     internal static async Task<IResult> GetCapabilities(
         IWorkflowExecutionQueryApplicationService queryService,
         CancellationToken ct = default) =>
-        Results.Ok(await queryService.GetCapabilitiesAsync(ct));
+        Results.Json(await queryService.GetCapabilitiesAsync(ct), CapabilityJsonOptions);
 
     internal static async Task<IResult> GetWorkflowDetail(
         string workflowName,
@@ -423,7 +430,30 @@ public static class ChatQueryEndpoints
             parameter.Enum
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(static value => value, StringComparer.OrdinalIgnoreCase)
-                .ToList());
+                .ToList(),
+            parameter.Label,
+            parameter.Control switch
+            {
+                WorkflowPrimitiveParameterControl.Auto when parameter.Enum.Count > 0 => "select",
+                WorkflowPrimitiveParameterControl.Auto => parameter.Type switch
+                {
+                    "int" or "integer" or "number" or "double" or "float" => "number",
+                    "bool" or "boolean" => "boolean",
+                    "array" or "object" => "json",
+                    _ => "text",
+                },
+                WorkflowPrimitiveParameterControl.Text => "text",
+                WorkflowPrimitiveParameterControl.Textarea => "textarea",
+                WorkflowPrimitiveParameterControl.Number => "number",
+                WorkflowPrimitiveParameterControl.Boolean => "boolean",
+                WorkflowPrimitiveParameterControl.Select => "select",
+                WorkflowPrimitiveParameterControl.Json => "json",
+                _ => throw new ArgumentOutOfRangeException(nameof(parameter.Control)),
+            },
+            parameter.Placeholder,
+            parameter.Minimum,
+            parameter.Maximum,
+            parameter.Integer);
 }
 
 // Refactor (iter165/cluster-003-workflow-actor-shaped-query-surface):
@@ -555,7 +585,13 @@ public sealed record WorkflowPrimitiveParameterDescriptorHttpResponse(
     bool Required,
     string Description,
     string Default,
-    List<string> EnumValues);
+    List<string> EnumValues,
+    string Label = "",
+    string Control = "text",
+    string Placeholder = "",
+    double? Minimum = null,
+    double? Maximum = null,
+    bool Integer = false);
 
 public sealed record WorkflowPrimitiveDescriptorHttpResponse(
     string Name,

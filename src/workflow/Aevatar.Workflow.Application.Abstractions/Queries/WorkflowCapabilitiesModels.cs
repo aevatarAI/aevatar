@@ -1,3 +1,5 @@
+using Aevatar.Workflow.Abstractions.Primitives;
+
 namespace Aevatar.Workflow.Application.Abstractions.Queries;
 
 // Refactor (iter72/cluster-072-workflow-closed-world-false-capability):
@@ -48,6 +50,18 @@ public sealed class WorkflowPrimitiveParameterCapability
     public string Default { get; set; } = string.Empty;
 
     public List<string> Enum { get; set; } = [];
+
+    public string Label { get; set; } = string.Empty;
+
+    public WorkflowPrimitiveParameterControl Control { get; set; }
+
+    public string Placeholder { get; set; } = string.Empty;
+
+    public double? Minimum { get; set; }
+
+    public double? Maximum { get; set; }
+
+    public bool Integer { get; set; }
 }
 
 public sealed class WorkflowConnectorCapability

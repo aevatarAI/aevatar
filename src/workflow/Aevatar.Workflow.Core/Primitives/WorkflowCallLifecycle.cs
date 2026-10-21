@@ -5,12 +5,7 @@ internal static class WorkflowCallLifecycle
     public const string Singleton = "singleton";
     public const string Transient = "transient";
     public const string Scope = "scope";
-    private static readonly IReadOnlySet<string> SupportedValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        Singleton,
-        Transient,
-        Scope,
-    };
+    public static IReadOnlyList<string> AllowedValues { get; } = Array.AsReadOnly(new[] { Singleton, Transient, Scope });
 
     public static string AllowedValuesText => $"{Singleton}/{Transient}/{Scope}";
 
@@ -19,7 +14,7 @@ internal static class WorkflowCallLifecycle
         if (string.IsNullOrWhiteSpace(lifecycle))
             return true;
 
-        return SupportedValues.Contains(lifecycle.Trim());
+        return AllowedValues.Contains(lifecycle.Trim(), StringComparer.OrdinalIgnoreCase);
     }
 
     public static string Normalize(string? lifecycle)

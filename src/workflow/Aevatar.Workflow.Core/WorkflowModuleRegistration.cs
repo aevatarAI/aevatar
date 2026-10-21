@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Aevatar.Workflow.Abstractions.Primitives;
 
 namespace Aevatar.Workflow.Core;
 
@@ -12,16 +13,20 @@ public sealed class WorkflowModuleRegistration
     private WorkflowModuleRegistration(
         Type moduleType,
         Func<IServiceProvider, IEventModule<IWorkflowExecutionContext>> factory,
-        IReadOnlyList<string> names)
+        IReadOnlyList<string> names,
+        WorkflowPrimitiveDefinition? descriptor = null)
     {
         ModuleType = moduleType;
         _factory = factory;
         Names = names;
+        Descriptor = descriptor;
     }
 
     public Type ModuleType { get; }
 
     public IReadOnlyList<string> Names { get; }
+
+    public WorkflowPrimitiveDefinition? Descriptor { get; }
 
     public static WorkflowModuleRegistration Create<TModule>(params string[] names)
         where TModule : class, IEventModule<IWorkflowExecutionContext>
@@ -31,6 +36,17 @@ public sealed class WorkflowModuleRegistration
             typeof(TModule),
             sp => ActivatorUtilities.CreateInstance<TModule>(sp),
             cleanedNames);
+    }
+
+    public static WorkflowModuleRegistration Create<TModule>(WorkflowPrimitiveDefinition descriptor, params string[] names)
+        where TModule : class, IEventModule<IWorkflowExecutionContext>
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        return new WorkflowModuleRegistration(
+            typeof(TModule),
+            sp => ActivatorUtilities.CreateInstance<TModule>(sp),
+            NormalizeNames(names),
+            descriptor);
     }
 
     public IEventModule<IWorkflowExecutionContext> Create(IServiceProvider serviceProvider)
