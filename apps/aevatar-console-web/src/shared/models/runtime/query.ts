@@ -59,6 +59,14 @@ export interface WorkflowCapabilities {
   workflows: WorkflowCapabilityWorkflow[];
 }
 
+export type WorkflowPrimitiveParameterControl =
+  | 'text'
+  | 'textarea'
+  | 'number'
+  | 'boolean'
+  | 'select'
+  | 'json';
+
 export interface WorkflowPrimitiveParameterDescriptor {
   name: string;
   type: string;
@@ -66,6 +74,12 @@ export interface WorkflowPrimitiveParameterDescriptor {
   description: string;
   default: string;
   enumValues: string[];
+  label?: string;
+  control?: WorkflowPrimitiveParameterControl;
+  placeholder?: string;
+  minimum?: number | null;
+  maximum?: number | null;
+  integer?: boolean;
 }
 
 export interface WorkflowPrimitiveDescriptor {

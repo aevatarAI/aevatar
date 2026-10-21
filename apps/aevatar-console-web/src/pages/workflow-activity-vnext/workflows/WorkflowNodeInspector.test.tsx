@@ -1,6 +1,6 @@
 import {
+  act,
   fireEvent,
-  render,
   screen,
   waitFor,
   within,
@@ -9,10 +9,20 @@ import React from 'react';
 import { createIntl } from 'react-intl';
 import enUSMessages from '@/locales/messages/en-US';
 import zhCNMessages from '@/locales/messages/zh-CN';
+import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
+import type { WorkflowPrimitiveDescriptor } from '@/shared/models/runtime/query';
+import {
+  createTestQueryClient,
+  renderWithQueryClient,
+} from '../../../../tests/reactQueryTestUtils';
+import { workflowNodeDescriptorFixtures } from '../../../../tests/workflowPrimitiveDescriptorFixtures';
 import type { StudioStepInspectorDraft } from '@/shared/studio/document';
-import { getStudioNodeConfigurationSchema } from '@/shared/studio/nodeConfigFieldSchemas';
 import { workflowActivityVNextCss } from '../styles';
 import WorkflowNodeInspector from './WorkflowNodeInspector';
+
+jest.mock('@/shared/api/runtimeQueryApi', () => ({
+  runtimeQueryApi: { listPrimitives: jest.fn() },
+}));
 
 const llmDraft: StudioStepInspectorDraft = {
   kind: 'step',
@@ -48,19 +58,28 @@ const voteDraft: StudioStepInspectorDraft = {
 function renderInspector(
   stepDraft: StudioStepInspectorDraft,
   onConfigurationChange = jest.fn().mockReturnValue(true),
+  descriptors = workflowNodeDescriptorFixtures,
 ) {
-  render(
+  const queryClient = createTestQueryClient();
+  queryClient.setQueryData(['primitive-library'], descriptors);
+  renderWithQueryClient(
     <WorkflowNodeInspector
       onClose={jest.fn()}
       onConfigurationChange={onConfigurationChange}
       onConfigurationErrorChange={jest.fn()}
       stepDraft={stepDraft}
     />,
+    queryClient,
   );
-  return { onConfigurationChange };
+  return { onConfigurationChange, queryClient };
 }
 
 describe('WorkflowNodeInspector', () => {
+  beforeEach(() => {
+    jest
+      .mocked(runtimeQueryApi.listPrimitives)
+      .mockResolvedValue(workflowNodeDescriptorFixtures);
+  });
   it('leads with purpose and keeps technical details secondary', () => {
     renderInspector(llmDraft);
 
@@ -140,6 +159,43 @@ describe('WorkflowNodeInspector', () => {
     expect(onConfigurationChange).not.toHaveBeenCalled();
   });
 
+  it('allows argument expressions after replacing invalid arguments JSON', async () => {
+    const onConfigurationChange = jest.fn().mockReturnValue(true);
+    renderInspector(toolDraft, onConfigurationChange);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'JSON' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Arguments JSON' }), {
+      target: { value: '{"query":' },
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Apply step' })).toBeDisabled(),
+    );
+
+    fireEvent.click(screen.getByText('Advanced JSON'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Raw configuration' }), {
+      target: {
+        value: JSON.stringify({ tool: 'nyxid_proxy', arguments: '$input' }),
+      },
+    });
+
+    expect(screen.getByRole('textbox', { name: 'Arguments' })).toHaveValue('$input');
+    expect(
+      screen.queryByRole('textbox', { name: 'Arguments JSON' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply step' })).toBeEnabled();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Arguments' }), {
+      target: { value: `\${args}` },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply step' }));
+
+    await waitFor(() => expect(onConfigurationChange).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(onConfigurationChange.mock.calls[0][0] as string)).toEqual({
+      tool: 'nyxid_proxy',
+      arguments: `\${args}`,
+    });
+  });
+
   it('does not apply a tool call after a duplicate argument name is rejected', async () => {
     const onConfigurationChange = jest.fn().mockReturnValue(true);
     const duplicateDraft = {
@@ -181,32 +237,230 @@ describe('WorkflowNodeInspector', () => {
     );
   });
 
-  it('formats the JSON arguments example without ICU errors', () => {
-    const argumentsPlaceholder = getStudioNodeConfigurationSchema(
-      'tool_call',
-      {},
-    ).fields.find((field) => field.name === 'arguments')?.placeholder;
-
-    expect(argumentsPlaceholder).toBeDefined();
-    if (!argumentsPlaceholder) throw new Error('Arguments placeholder missing');
-
-    for (const [locale, messages] of [
-      [
-        'en-US',
+  it('uses backend fields instead of merging the built-in fields and preserves unknown values', async () => {
+    const remoteDescriptor: WorkflowPrimitiveDescriptor = {
+      ...workflowNodeDescriptorFixtures[0],
+      parameters: [
         {
-          [argumentsPlaceholder.id]: argumentsPlaceholder.defaultMessage,
+          name: 'server_note',
+          label: 'Server-defined setting',
+          type: 'string',
+          required: false,
+          description: '',
+          default: '',
+          enumValues: [],
         },
       ],
-      ['en-US', enUSMessages],
-      ['zh-CN', zhCNMessages],
-    ] as const) {
-      const onError = jest.fn();
-      const intl = createIntl({ locale, messages, onError });
+    };
+    jest
+      .mocked(runtimeQueryApi.listPrimitives)
+      .mockResolvedValue([remoteDescriptor]);
+    const { onConfigurationChange } = renderInspector(llmDraft, undefined, [
+      remoteDescriptor,
+    ]);
 
-      expect(intl.formatMessage(argumentsPlaceholder)).toBe(
-        '{"query":"$input"}',
-      );
-      expect(onError).not.toHaveBeenCalled();
-    }
+    expect(
+      screen.queryByRole('textbox', { name: 'Instruction' }),
+    ).not.toBeInTheDocument();
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Server-defined setting' }),
+      {
+        target: { value: 'From the API' },
+      },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply step' }));
+
+    await waitFor(() => expect(onConfigurationChange).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(onConfigurationChange.mock.calls[0][0])).toEqual({
+      prompt_prefix: 'Summarize the input',
+      server_note: 'From the API',
+    });
+  });
+
+  it('keeps an invalid built-in edit when retry loads fields with canonical parameter names', async () => {
+    const signalDescriptor: WorkflowPrimitiveDescriptor = {
+      name: 'wait_signal',
+      aliases: [],
+      category: 'control',
+      description: '',
+      exampleWorkflows: [],
+      parameters: [
+        {
+          name: 'signal_name',
+          label: 'Signal name',
+          type: 'string',
+          required: true,
+          description: '',
+          default: '',
+          enumValues: [],
+        },
+        {
+          name: 'timeout_ms',
+          label: 'Timeout ms',
+          type: 'int32',
+          required: false,
+          description: '',
+          default: '',
+          enumValues: [],
+        },
+      ],
+    };
+    jest
+      .mocked(runtimeQueryApi.listPrimitives)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce([signalDescriptor]);
+    const onConfigurationChange = jest.fn().mockReturnValue(true);
+    renderWithQueryClient(
+      <WorkflowNodeInspector
+        onClose={jest.fn()}
+        onConfigurationChange={onConfigurationChange}
+        onConfigurationErrorChange={jest.fn()}
+        stepDraft={{
+          ...llmDraft,
+          type: 'wait_signal',
+          parametersText: '{"signal_name":"approval","timeout_ms":100}',
+        }}
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        "Couldn't load the latest settings. Showing built-in settings.",
+      ),
+    ).toBeVisible();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Signal name' }), {
+      target: { value: '' },
+    });
+    expect(screen.getByRole('button', { name: 'Apply step' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() =>
+      expect(
+        screen.queryByText(
+          "Couldn't load the latest settings. Showing built-in settings.",
+        ),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole('textbox', { name: 'Signal name' })).toHaveValue(
+      '',
+    );
+    expect(screen.getByRole('button', { name: 'Apply step' })).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Signal name' }), {
+      target: { value: 'resumed' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply step' }));
+
+    await waitFor(() => expect(onConfigurationChange).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(onConfigurationChange.mock.calls[0][0])).toEqual({
+      signal_name: 'resumed',
+      timeout_ms: 100,
+    });
+  });
+
+  it('preserves removed field edits as advanced JSON and clears obsolete validation when the descriptor is empty', async () => {
+    const descriptor: WorkflowPrimitiveDescriptor = {
+      name: 'wait_signal',
+      aliases: [],
+      category: 'control',
+      description: '',
+      exampleWorkflows: [],
+      parameters: [],
+    };
+    jest
+      .mocked(runtimeQueryApi.listPrimitives)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce([descriptor]);
+    const onConfigurationChange = jest.fn().mockReturnValue(true);
+    renderWithQueryClient(
+      <WorkflowNodeInspector
+        onClose={jest.fn()}
+        onConfigurationChange={onConfigurationChange}
+        onConfigurationErrorChange={jest.fn()}
+        stepDraft={{
+          ...llmDraft,
+          type: 'wait_signal',
+          parametersText: '{"signal_name":"approval","timeout_ms":100}',
+        }}
+      />,
+    );
+    await screen.findByText(
+      "Couldn't load the latest settings. Showing built-in settings.",
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Signal name' }), {
+      target: { value: '' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Timeout ms' }), {
+      target: { value: 'changed while invalid' },
+    });
+    expect(screen.getByRole('button', { name: 'Apply step' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(
+      await screen.findByText('No settings are needed for this step.'),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('textbox', { name: 'Signal name' }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply step' })).toBeEnabled();
+    fireEvent.click(screen.getByText('Advanced JSON'));
+    expect(
+      JSON.parse(
+        (
+          (await screen.findByRole('textbox', {
+            name: 'Raw configuration',
+          })) as HTMLTextAreaElement
+        ).value,
+      ),
+    ).toEqual({
+      signal_name: '',
+      timeout_ms: 'changed while invalid',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply step' }));
+    await waitFor(() => expect(onConfigurationChange).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(onConfigurationChange.mock.calls[0][0])).toEqual({
+      signal_name: '',
+      timeout_ms: 'changed while invalid',
+    });
+  });
+
+  it('keeps advanced JSON edits when the initial descriptor arrives', async () => {
+    let resolveCatalog!: (value: WorkflowPrimitiveDescriptor[]) => void;
+    jest.mocked(runtimeQueryApi.listPrimitives).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCatalog = resolve;
+        }),
+    );
+    renderWithQueryClient(
+      <WorkflowNodeInspector
+        onClose={jest.fn()}
+        onConfigurationChange={jest.fn()}
+        onConfigurationErrorChange={jest.fn()}
+        stepDraft={llmDraft}
+      />,
+    );
+    expect(screen.getByText('Loading settings')).toBeVisible();
+    fireEvent.click(screen.getByText('Advanced JSON'));
+    fireEvent.change(
+      await screen.findByRole('textbox', { name: 'Raw configuration' }),
+      {
+        target: {
+          value: '{"prompt_prefix":"Edited before loading","future_option":7}',
+        },
+      },
+    );
+
+    await act(async () => {
+      resolveCatalog(workflowNodeDescriptorFixtures);
+    });
+
+    expect(
+      await screen.findByRole('textbox', { name: 'Instruction' }),
+    ).toHaveValue('Edited before loading');
+    expect(
+      screen.getByRole('textbox', { name: 'Raw configuration' }),
+    ).toHaveValue(
+      '{"prompt_prefix":"Edited before loading","future_option":7}',
+    );
+    expect(screen.getByRole('button', { name: 'Apply step' })).toBeEnabled();
   });
 });

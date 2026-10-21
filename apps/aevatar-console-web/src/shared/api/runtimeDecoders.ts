@@ -39,6 +39,7 @@ import type {
   WorkflowLlmStatus,
   WorkflowPrimitiveCapability,
   WorkflowPrimitiveDescriptor,
+  WorkflowPrimitiveParameterControl,
   WorkflowPrimitiveParameterDescriptor,
 } from "@/shared/models/runtime/query";
 import type {
@@ -720,7 +721,42 @@ function decodeWorkflowPrimitiveParameterDescriptor(
     description: expectString(record.description, `${label}.description`),
     default: expectString(record.default, `${label}.default`),
     enumValues: expectStringArray(record.enumValues, `${label}.enumValues`),
+    ...(record.label !== undefined && {
+      label: expectString(record.label, `${label}.label`),
+    }),
+    ...(record.control !== undefined && {
+      control: decodeWorkflowPrimitiveParameterControl(record.control, `${label}.control`),
+    }),
+    ...(record.placeholder !== undefined && {
+      placeholder: expectString(record.placeholder, `${label}.placeholder`),
+    }),
+    ...(record.minimum !== undefined && {
+      minimum: expectNullableNumber(record.minimum, `${label}.minimum`),
+    }),
+    ...(record.maximum !== undefined && {
+      maximum: expectNullableNumber(record.maximum, `${label}.maximum`),
+    }),
+    ...(record.integer !== undefined && {
+      integer: expectBoolean(record.integer, `${label}.integer`),
+    }),
   };
+}
+
+function decodeWorkflowPrimitiveParameterControl(
+  value: unknown,
+  label: string,
+): WorkflowPrimitiveParameterControl {
+  switch (value) {
+    case 'text':
+    case 'textarea':
+    case 'number':
+    case 'boolean':
+    case 'select':
+    case 'json':
+      return value;
+    default:
+      throw new Error(`${label} must be a supported parameter control.`);
+  }
 }
 
 function decodeWorkflowPrimitiveDescriptor(

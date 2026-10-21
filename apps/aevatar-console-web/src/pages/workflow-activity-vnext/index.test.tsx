@@ -12,6 +12,8 @@ import {
   clearStoredAuthSession,
   persistAuthSession,
 } from '@/shared/auth/session';
+import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
+import { workflowNodeDescriptorFixtures } from '../../../tests/workflowPrimitiveDescriptorFixtures';
 import { history } from '@/shared/navigation/history';
 import {
   cleanupTestQueryClients,
@@ -19,6 +21,14 @@ import {
 } from '../../../tests/reactQueryTestUtils';
 import WorkflowActivityVNextPage from '../../../tests/WorkflowActivityRouteTestHarness';
 import { workflowActivityVNextCss } from './styles';
+
+jest.mock('@/shared/api/runtimeQueryApi', () => ({
+  runtimeQueryApi: { listPrimitives: jest.fn() },
+}));
+
+beforeEach(() => {
+  jest.mocked(runtimeQueryApi.listPrimitives).mockResolvedValue(workflowNodeDescriptorFixtures);
+});
 
 jest.mock('@/shared/api/workflowScheduleApi', () => ({
   workflowScheduleApi: {
@@ -4116,14 +4126,14 @@ describe('Workflow Activity vNext editor', () => {
     const inspector = await screen.findByRole('complementary', {
       name: 'Configure step-root',
     });
-    expect(within(inspector).getByLabelText('Instruction')).toHaveValue(
+    expect(await within(inspector).findByLabelText('Instruction')).toHaveValue(
       'Original prompt',
     );
     expect(
       within(inspector).queryByLabelText('Raw configuration'),
     ).not.toBeInTheDocument();
     expect(within(inspector).getByText('Advanced JSON')).toBeVisible();
-    fireEvent.change(within(inspector).getByLabelText('Instruction'), {
+    fireEvent.change(await within(inspector).findByLabelText('Instruction'), {
       target: { value: 'Updated prompt' },
     });
     fireEvent.click(
@@ -4191,7 +4201,7 @@ describe('Workflow Activity vNext editor', () => {
     const inspector = await screen.findByRole('complementary', {
       name: 'Configure step-root',
     });
-    fireEvent.change(within(inspector).getByLabelText('Instruction'), {
+    fireEvent.change(await within(inspector).findByLabelText('Instruction'), {
       target: { value: 'Updated prompt' },
     });
 
@@ -4608,7 +4618,7 @@ describe('Workflow Activity vNext editor', () => {
     const inspector = await screen.findByRole('complementary', {
       name: 'Configure step-root',
     });
-    const instruction = within(inspector).getByLabelText('Instruction');
+    const instruction = await within(inspector).findByLabelText('Instruction');
     fireEvent.change(instruction, { target: { value: 'Updated prompt' } });
     fireEvent.click(
       within(inspector).getByRole('button', { name: 'Apply step' }),
@@ -6040,7 +6050,7 @@ describe('Workflow Activity vNext editor', () => {
     const inspector = await screen.findByRole('complementary', {
       name: 'Configure step-root',
     });
-    fireEvent.change(within(inspector).getByLabelText('Instruction'), {
+    fireEvent.change(await within(inspector).findByLabelText('Instruction'), {
       target: { value: 'Updated prompt' },
     });
     fireEvent.click(
@@ -6080,7 +6090,7 @@ describe('Workflow Activity vNext editor', () => {
     const inspector = await screen.findByRole('complementary', {
       name: 'Configure step-root',
     });
-    fireEvent.change(within(inspector).getByLabelText('Instruction'), {
+    fireEvent.change(await within(inspector).findByLabelText('Instruction'), {
       target: { value: 'Updated prompt' },
     });
 
@@ -6146,7 +6156,7 @@ describe('Workflow Activity vNext editor', () => {
     const rootInspector = await screen.findByRole('complementary', {
       name: 'Configure step-root',
     });
-    fireEvent.change(within(rootInspector).getByLabelText('Instruction'), {
+    fireEvent.change(await within(rootInspector).findByLabelText('Instruction'), {
       target: { value: 'Updated prompt' },
     });
     const secondNode = await screen.findByRole('button', {
@@ -6198,7 +6208,7 @@ describe('Workflow Activity vNext editor', () => {
     const inspector = await screen.findByRole('complementary', {
       name: 'Configure step-root',
     });
-    fireEvent.change(within(inspector).getByLabelText('Instruction'), {
+    fireEvent.change(await within(inspector).findByLabelText('Instruction'), {
       target: { value: 'Updated prompt' },
     });
     fireEvent.click(screen.getAllByRole('link', { name: 'Activity' })[0]);
