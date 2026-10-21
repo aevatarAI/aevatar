@@ -1,7 +1,7 @@
 import { defineConfig } from '@umijs/max';
 
 // Opt-in production stats; no analyzer server and no module source/credentials.
-export default defineConfig({
+const config: ReturnType<typeof defineConfig> = defineConfig({
   analyze: {
     analyzerMode: 'disabled',
     generateStatsFile: true,
@@ -22,3 +22,5 @@ export default defineConfig({
     },
   },
 });
+
+export default config;
