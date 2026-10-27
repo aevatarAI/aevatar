@@ -422,7 +422,43 @@ public sealed class EditorControllerSerializationTests
         var body = await response.Content.ReadAsStringAsync();
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         body.Should().Contain($"\"path\":\"/steps/0/capability/{selector}\"");
-        body.Should().Contain("\"code\":\"invalid_field\"");
+        body.Should().Contain("\"code\":\"yaml_structure\"");
+    }
+
+    [Theory]
+    [InlineData("true: finish\nfalse: {}", "/steps/0/branches/false")]
+    [InlineData("- condition: true\n  next: finish\n- condition: false", "/steps/0/branches/1")]
+    public async Task ParseYaml_WhenOnlyOneBranchIsMalformed_ShouldRejectEntireDocument(
+        string branches,
+        string expectedPath)
+    {
+        using var host = await StartHostAsync();
+        var client = host.GetTestClient();
+        var indentedBranches = string.Join('\n', branches.Split('\n').Select(line => $"      {line}"));
+
+        using var response = await client.PostAsJsonAsync("/api/editor/parse-yaml", new
+        {
+            yaml = $$"""
+                   name: mixed_branches
+                   steps:
+                     - id: choose
+                       type: conditional
+                       branches:
+                   {{indentedBranches}}
+                     - id: finish
+                       type: assign
+                   """,
+            availableStepTypes = new[] { "conditional", "assign" },
+        });
+
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var json = JsonDocument.Parse(body);
+        json.RootElement.TryGetProperty("document", out _).Should().BeFalse();
+        json.RootElement.TryGetProperty("graph", out _).Should().BeFalse();
+        json.RootElement.GetProperty("findings").EnumerateArray().Should().ContainSingle(finding =>
+            finding.GetProperty("path").GetString() == expectedPath &&
+            finding.GetProperty("code").GetString() == "yaml_structure");
     }
 
     private static object BuildPlainParameterRequest() => new

@@ -23,6 +23,11 @@ public sealed class WorkflowYamlValidatorImpl : IWorkflowYamlValidator
                 Description: def.Description,
                 Diagnostics: []);
         }
+        catch (WorkflowYamlStructureException ex)
+        {
+            return new(false, null, null, 0, 0, null,
+                [new("error", ex.Message, Field: ex.Path)]);
+        }
         catch (Exception ex)
         {
             return new(false, null, null, 0, 0, null,

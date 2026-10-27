@@ -72,8 +72,8 @@ owner: eanzhao
 
 ```
 BindWorkflowDefinition(yaml)
-  -> WorkflowParser.Parse (YAML -> WorkflowDefinition)
-  -> WorkflowValidator.Validate (结构校验)
+  -> WorkflowParser.Parse (资源限制 -> YAML 语法 -> 原始 AST 结构 -> WorkflowDefinition 映射)
+  -> WorkflowValidator.Validate (定义语义与引用校验)
   -> BindWorkflowRunDefinition(yaml/run binding + capability admission plan)
   -> InstallCognitiveModules on WorkflowRunGAgent:
        IWorkflowModuleDependencyExpander[]: 推导模块名集合
@@ -81,6 +81,32 @@ BindWorkflowDefinition(yaml)
        IWorkflowModuleConfigurator[]: 配置实例
        WorkflowExecutionBridgeModule: 接入 Foundation 事件管线
 ```
+
+### YAML 结构校验边界
+
+Workflow YAML 使用同一条解析主干：先限制输入资源，再解析 YAML 语法，然后校验原始 AST 的结构，通过后才映射为 `WorkflowDefinition`，最后由 `WorkflowValidator` 校验定义语义。结构校验必须发生在默认值补齐、别名归一化与对象映射之前，防止错误节点在转换时变成空集合、缺失字段或默认值，导致后续语义校验失去原始错误证据。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    Y["Workflow YAML"] --> R["资源限制"]
+    R --> P["YAML 语法解析"]
+    P --> S["原始 AST 结构校验"]
+    S --> M["WorkflowDefinition 映射"]
+    M --> V["定义语义与引用校验"]
+    V --> A["Definition admission 与 actor 命令"]
+    S -->|"结构错误"| E["yaml_structure + 字段路径"]
+```
+
+`WorkflowParser.Parse` 是运行时的权威入口；`WorkflowParser.ValidateStructure(YamlStream)` 让 Studio 的 AST 解析复用同一套结构规则。接收 AST 的方法不替代输入资源限制，调用方仍须先执行 `WorkflowYamlResourceGuard` 与 YAML 语法解析。Studio 在构造编辑文档、归一化或序列化之前检查原始 AST，不能先删去非法节点再用转换结果证明原文有效。所有使用 canonical parser 的保存、preview、绑定、发布和执行路径都经过该结构边界；是否允许保存未通过语义校验的编辑草稿，仍由对应资源入口明确决定。
+
+结构规则从 parser 的 `Raw` 强类型 YAML 合约派生静态字段名与容器形状，覆盖根 mapping、角色和步骤列表、嵌套 children、configuration、retry、capability 与 response projection 等对象。未知静态字段以及预期 scalar、mapping 或 sequence 却给出其他节点类型的输入，在映射前拒绝。`branches` 是有明确格式的控制流字段：只接受分支 mapping 或分支条目列表。mapping 格式的分支目标支持非空 scalar，或只声明一个目标别名的单层 mapping；列表中的每一项必须是 mapping，并分别给出一个非空 scalar 条件与目标。递归目标 mapping 不属于该格式，禁止通过跳过不完整条目或静默覆盖重复条件来修复输入。角色、步骤和目标是否存在、原语是否合法、控制流规则是否成立，继续由映射后的语义 validator 负责。
+
+权限与交互字段即使在 parser 中采用 `object` 接收，也不作为任意结构开放：`allowed_tools`、`tool_sets` 只支持 scalar 或 scalar 列表，包括既有的 JSON array string 格式；列表中禁止 object 与 null 元素。`interaction_spec`、`interaction_template_spec` 及 inline presentation 的 actions、fields、cards 依据既有 Protobuf descriptor 校验对象、列表和字段结构，保留 mapper 已支持的字段别名与 JSON object/array string 格式，拒绝未知交互字段及非法列表元素。相同语义字段的别名不得重复声明，交互 bool 字段只接受 `true` 或 `false`；`template_variable` 则明确保留既有格式：复杂变量值转换成 JSON 字符串后写入 typed string map。step-level 字段与 `parameters` 中对应的保留字段复用同一组规则。
+
+可选字段的显式 YAML `null` 与省略保持同一语义，例如 `configuration: null` 或 `children: null`；带引号的 `"null"` 或显式 `!!str null` 仍是字符串。可选字段允许 null 不代表 typed list 可以包含空元素：`roles`、`steps`、`children`、response projection operation 与交互对象等列表一旦包含 null 元素，必须报告元素路径并拒绝。`parameters` 是明确的原语参数扩展边界，除上述有正式语义的保留字段外，合法的 mapping、sequence、scalar 与 null 值继续保留，不以禁止复杂参数值代替结构校验；这些值的业务含义仍由所属原语合约与语义校验解释。
+
+结构错误使用 `WorkflowYamlStructureException`：节点形状错误携带 `yaml_structure`，未知字段携带 `unknown_field`，两者均保留原始字段路径，例如 `/steps/0/children/1`。路径采用 JSON Pointer 转义，键中的 `~` 与 `/` 分别表示为 `~0` 与 `~1`。Studio 将错误码与路径保留到 `ValidationFinding`，让作者能区分 YAML 语法错误、原始节点结构错误和 definition 语义错误。结构失败不得回退为忽略字段、空分支、默认类型或成功的归一化结果。
 
 ### Normalized execution state rollout
 

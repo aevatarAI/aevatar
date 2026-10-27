@@ -73,7 +73,6 @@ public sealed class WorkflowParserCoverageTests
                     next: done
                   - when: retry
                     to: fallback
-                  - if: ignored
               - id: fallback
                 type: assign
                 parameters:

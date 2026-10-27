@@ -4,6 +4,7 @@ using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Studio.Domain.Studio.Services;
 using RuntimeWorkflowPrimitiveCatalog = Aevatar.Workflow.Core.Primitives.WorkflowPrimitiveCatalog;
 using RuntimeWorkflowParser = Aevatar.Workflow.Core.Primitives.WorkflowParser;
+using RuntimeWorkflowYamlStructureException = Aevatar.Workflow.Core.Primitives.WorkflowYamlStructureException;
 using RuntimeWorkflowValidator = Aevatar.Workflow.Core.Validation.WorkflowValidator;
 
 namespace Aevatar.Studio.Application.Studio.Services;
@@ -41,15 +42,19 @@ public sealed class WorkflowEditorService
             return new ParseYamlResponse(null, null, parse.Findings);
         }
 
+        var runtimeFindings = ValidateRuntimeYaml(
+            request.Yaml,
+            request.AvailableStepTypes);
         var findings = MergeFindings(
             parse.Findings,
             ValidateDocument(
                 parse.Document,
                 request.AvailableWorkflowNames,
                 request.AvailableStepTypes),
-            ValidateRuntimeYaml(
-                request.Yaml,
-                request.AvailableStepTypes));
+            runtimeFindings);
+
+        if (runtimeFindings.Any(static finding => finding.Code is "yaml_structure" or "unknown_field"))
+            return new ParseYamlResponse(null, null, findings);
 
         return new ParseYamlResponse(
             parse.Document,
@@ -166,6 +171,13 @@ public sealed class WorkflowEditorService
                     "Runtime validation rejected this YAML.",
                     code: "runtime_validation"))
                 .ToList();
+        }
+        catch (RuntimeWorkflowYamlStructureException ex)
+        {
+            return
+            [
+                ValidationFinding.Error(ex.Path, ex.Message, code: ex.Code),
+            ];
         }
         catch (Exception ex)
         {
