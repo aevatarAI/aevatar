@@ -6,8 +6,10 @@ using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 using YamlDotNet.RepresentationModel;
+using WorkflowParser = Aevatar.Workflow.Core.Primitives.WorkflowParser;
 using WorkflowYamlResourceGuard = Aevatar.Workflow.Core.Primitives.WorkflowYamlResourceGuard;
 using WorkflowYamlResourceLimitException = Aevatar.Workflow.Core.Primitives.WorkflowYamlResourceLimitException;
+using WorkflowYamlStructureException = Aevatar.Workflow.Core.Primitives.WorkflowYamlStructureException;
 
 namespace Aevatar.Studio.Infrastructure.Serialization;
 
@@ -68,6 +70,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
             stream = new YamlStream();
             using var reader = new StringReader(yaml);
             stream.Load(reader);
+            WorkflowParser.ValidateStructure(stream);
         }
         catch (WorkflowYamlResourceLimitException exception)
         {
@@ -81,14 +84,14 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 null,
                 [ValidationFinding.Error("/", $"YAML syntax error: {exception.Message}", code: "yaml_syntax")]);
         }
-
-        if (stream.Documents.Count == 0 || stream.Documents[0].RootNode is not YamlMappingNode root)
+        catch (WorkflowYamlStructureException exception)
         {
             return new WorkflowParseResult(
                 null,
-                [ValidationFinding.Error("/", "Workflow YAML must contain a root mapping.", code: "yaml_root_mapping")]);
+                [ValidationFinding.Error(exception.Path, exception.Message, code: exception.Code)]);
         }
 
+        var root = (YamlMappingNode)stream.Documents[0].RootNode;
         ReportUnknownKeys(root, _profile.AllowedRootFields, string.Empty, findings);
 
         var document = new WorkflowDocument

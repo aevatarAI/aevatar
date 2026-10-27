@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NodeDeserializers;
 using YamlDotNet.Serialization.NamingConventions;
 using YamlDotNet.RepresentationModel;
 using Aevatar.Foundation.Abstractions.Interactions;
@@ -19,10 +20,14 @@ namespace Aevatar.Workflow.Core.Primitives;
 /// <summary>
 /// YAML 工作流解析器。使用 snake_case 命名约定将 YAML 解析为强类型工作流定义。
 /// </summary>
-public sealed class WorkflowParser
+public sealed partial class WorkflowParser
 {
     private static readonly IDeserializer D = new DeserializerBuilder()
-        .WithNamingConvention(UnderscoredNamingConvention.Instance).Build();
+        .WithNamingConvention(UnderscoredNamingConvention.Instance)
+        .WithNodeDeserializer<ExplicitTagAwareNullNodeDeserializer>(
+            inner => new ExplicitTagAwareNullNodeDeserializer(inner),
+            registration => registration.InsteadOf<NullNodeDeserializer>())
+        .Build();
     private static readonly (string Key, Func<RawStep, object?> Getter)[] RootParameterMappings =
     [
         ("workers", static step => step.Workers),
@@ -87,7 +92,10 @@ public sealed class WorkflowParser
     public WorkflowDefinition Parse(string yaml)
     {
         WorkflowYamlResourceGuard.Validate(yaml);
-        ValidateRootSchema(yaml);
+        var stream = new YamlStream();
+        using (var reader = new StringReader(yaml))
+            stream.Load(reader);
+        ValidateStructure(stream);
         var raw = D.Deserialize<Raw>(yaml) ?? throw new InvalidOperationException("YAML 为空");
         return new WorkflowDefinition
         {
@@ -102,29 +110,6 @@ public sealed class WorkflowParser
             },
             OnFailure = MapOnFailure(raw.OnFailure),
         };
-    }
-
-    private static void ValidateRootSchema(string yaml)
-    {
-        YamlStream stream = new();
-        using var reader = new StringReader(yaml);
-        stream.Load(reader);
-
-        if (stream.Documents.Count == 0)
-            return;
-
-        if (stream.Documents[0].RootNode is not YamlMappingNode root)
-            return;
-
-        foreach (var key in root.Children.Keys.OfType<YamlScalarNode>())
-        {
-            var rootField = key.Value;
-            if (WorkflowYamlRootSchema.IsAcceptedRootField(rootField))
-                continue;
-
-            throw new InvalidOperationException(
-                $"Unsupported workflow YAML root field '{rootField}'. Allowed root fields: {WorkflowYamlRootSchema.FormatAcceptedRootFields()}.");
-        }
     }
 
     private static RoleDefinition MapRole(RawRole role)
